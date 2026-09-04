@@ -34,7 +34,21 @@ func (g *gen) block(b *ast.CodeBlock) {
 	g.scopes = g.scopes[:len(g.scopes)-1]
 }
 
+// stmt lowers one statement inside a formal scope of its own, so
+// that the borrows its expressions opened close with it.
 func (g *gen) stmt(s ast.Stmt) {
+	g.pushFormal()
+	g.stmtBody(s)
+	if g.blk != nil && g.blk.Term() == nil {
+		g.pop()
+		return
+	}
+	// The statement left the block — a return has already unwound
+	// every scope, this one included.
+	g.scopes = g.scopes[:len(g.scopes)-1]
+}
+
+func (g *gen) stmtBody(s ast.Stmt) {
 	switch n := s.(type) {
 	case *ast.DeclStmt:
 		if d, ok := n.D.(*ast.VarDecl); ok {

@@ -7,8 +7,13 @@ package vil
 type Op string
 
 // The instructions. Grouped as SIL groups them, named as SIL names
-// them. This is the set the first subset needs; the rest arrive under
-// their own names when a construct requires them.
+// them.
+//
+// The set is wider than what can be emitted: an opcode with no
+// builder method in builder.go is vocabulary rather than something a
+// module can hold, and it arrives with its text form when a construct
+// needs it. What can be built is what vil/text prints and what
+// vil/text's form tests hold to SIL's spelling.
 const (
 	// Allocation and deallocation.
 	AllocStack   Op = "alloc_stack"
@@ -125,8 +130,35 @@ func (o Op) Consumes(i int) bool {
 		return i == 0 // the value, not the address
 	case DeallocRef, DeallocBox:
 		return i == 0
-	case Enum, Struct, Tuple, Apply, TryApply, PartialApply:
-		return true // every operand is forwarded into the result
+	// An aggregate takes ownership of what is put into it.
+	case Enum, Struct, Tuple:
+		return true
+	// A call is the one instruction whose answer is not in the
+	// opcode: whether an argument is consumed is what the callee's
+	// parameter convention says, and only the callee's type knows.
+	// ConsumesArgument is the question with the type in hand.
+	case Apply, TryApply, PartialApply:
+		return false
+	}
+	return false
+}
+
+// ConsumesArgument reports whether a call takes ownership of the
+// argument at index i, given the callee's type. Operand zero of a
+// call is the callee itself and is never consumed; the rest are the
+// arguments, and each is consumed exactly when its parameter is
+// declared @owned or @in.
+func ConsumesArgument(callee *FuncType, i int) bool {
+	if callee == nil || i == 0 {
+		return false
+	}
+	i--
+	if i >= len(callee.Params) {
+		return false
+	}
+	switch callee.Params[i].Convention {
+	case ParamOwned, ParamIn:
+		return true
 	}
 	return false
 }

@@ -295,13 +295,37 @@ func useIndex(v *vil.Value) map[*vil.Inst]int {
 // consumesValue reports whether an instruction takes ownership of
 // this particular operand — which position it is in decides, since
 // store consumes its value and not its address.
+//
+// A call is asked differently. What an apply does with an argument is
+// not in its opcode but in the callee's convention, so the callee's
+// type is what answers.
 func consumesValue(in *vil.Inst, v *vil.Value) bool {
+	switch in.Op() {
+	case vil.Apply, vil.TryApply, vil.PartialApply:
+		callee := calleeType(in)
+		for i, a := range in.Args() {
+			if a == v && vil.ConsumesArgument(callee, i) {
+				return true
+			}
+		}
+		return false
+	}
 	for i, a := range in.Args() {
 		if a == v && in.Op().Consumes(i) {
 			return true
 		}
 	}
 	return false
+}
+
+// calleeType is the lowered function type a call is calling.
+func calleeType(in *vil.Inst) *vil.FuncType {
+	args := in.Args()
+	if len(args) == 0 || args[0] == nil {
+		return nil
+	}
+	f, _ := args[0].Type().Formal().(*vil.FuncType)
+	return f
 }
 
 // endsBorrow reports whether an instruction closes a borrow scope.

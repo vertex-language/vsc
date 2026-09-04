@@ -39,6 +39,15 @@
 //  2. A guaranteed value is used only within the borrow scope that
 //     produced it.
 //
+// # Held to it
+//
+// Three tests, and they check different things. vil/text's form tests
+// hold every instruction that can be emitted to the text SIL writes
+// for it. vil/verify's failure corpus holds the rules, one case per
+// rule. And vil/gen's corpus takes programs through both compilers
+// and requires the output to agree, which is the only one of the
+// three that can catch this package and Swift drifting apart.
+//
 // # Shape
 //
 // A Module holds Funcs, Globals, VTables and WitnessTables. A Func

@@ -211,8 +211,10 @@ func (b *Block) PartialApply(callee *Value, t Type, args ...*Value) *Value {
 		append([]*Value{callee}, args...), t).Result()
 }
 
-// Metatype names a type as a value.
-func (b *Block) Metatype(t Type) *Value {
+// Metatype names a type as a value. The result is thin: the type is
+// known here, so there is nothing to carry.
+func (b *Block) Metatype(instance Type) *Value {
+	t := ThinMetatype(instance.Formal())
 	return b.add(Metatype, Aux{Type: t}, nil, t).Result()
 }
 

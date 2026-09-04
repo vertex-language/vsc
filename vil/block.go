@@ -116,6 +116,10 @@ func resultOwnership(op Op, aux Aux, t Type, args []*Value) Ownership {
 			return args[0].own
 		}
 		return Guaranteed
+	// A reference to a thin function owns nothing: the code is not
+	// allocated and cannot be released.
+	case FunctionRef, WitnessMethod, ClassMethod, Metatype:
+		return None
 	// An address is not a value: nothing owns it, and what it points
 	// at is owned by whoever allocated it.
 	case AllocStack, ProjectBox, RefElementAddr, StructElementAddr,

@@ -252,8 +252,14 @@ func (p *printer) operands(in *vil.Inst) {
 	case vil.ProjectBox:
 		p.printf(" %s, %d", p.refs(args), aux.Int)
 
-	case vil.Struct, vil.Tuple:
+	case vil.Struct:
 		p.printf(" %s (%s)", aux.Type, p.refs(args))
+
+	// A tuple is written without its type — `tuple (%0, %1)` — which
+	// the operands already say. The empty one is a function's
+	// missing result.
+	case vil.Tuple:
+		p.printf(" (%s)", p.refs(args))
 
 	case vil.Enum:
 		p.printf(" %s, #%s", aux.Type, aux.Member)

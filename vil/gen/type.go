@@ -53,6 +53,3 @@ func resultConvention(t vil.Type) vil.ResultConvention {
 	}
 	return vil.ResultOwned
 }
-
-// addressType is the VIL type of a parameter passed as an address.
-func addressType(t vil.Type) vil.Type { return t.Address() }

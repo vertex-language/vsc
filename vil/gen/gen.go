@@ -89,8 +89,17 @@ type local struct {
 }
 
 // A scope collects what has to be undone when it ends.
+//
+// Two kinds, and SILGen has both. A lexical scope is a block: what it
+// declares lives until the braces close. A formal scope is one
+// statement: the borrows an expression needed to be evaluated end
+// when the statement that evaluated it is done, not when the block
+// is. `let kept = b` borrows b to copy it, and that borrow is over
+// once the binding exists — holding it to the end of the function
+// would be a borrow nothing is reading.
 type scope struct {
 	cleanups []cleanup
+	formal   bool
 }
 
 // A cleanup is one thing to emit on the way out: a value to destroy,
@@ -101,20 +110,32 @@ type cleanup struct {
 }
 
 func (g *gen) push()       { g.scopes = append(g.scopes, &scope{}) }
+func (g *gen) pushFormal() { g.scopes = append(g.scopes, &scope{formal: true}) }
 func (g *gen) top() *scope { return g.scopes[len(g.scopes)-1] }
 
-// destroyLater registers an owned value to be destroyed where the
-// current scope ends.
+// lexical is the innermost scope that is not one statement's.
+func (g *gen) lexical() *scope {
+	for i := len(g.scopes) - 1; i >= 0; i-- {
+		if !g.scopes[i].formal {
+			return g.scopes[i]
+		}
+	}
+	return g.scopes[0]
+}
+
+// destroyLater registers an owned value to be destroyed where its
+// lexical scope ends — the block, not the statement. A value that
+// lives in a name lives as long as the name does.
 func (g *gen) destroyLater(v *vil.Value) {
 	if v == nil || v.Ownership() != vil.Owned {
 		return
 	}
-	s := g.top()
+	s := g.lexical()
 	s.cleanups = append(s.cleanups, cleanup{destroy: v})
 }
 
-// endBorrowLater registers a borrow to be closed where the current
-// scope ends.
+// endBorrowLater registers a borrow to be closed where the statement
+// that opened it ends.
 func (g *gen) endBorrowLater(v *vil.Value) {
 	s := g.top()
 	s.cleanups = append(s.cleanups, cleanup{endBorrow: v})
@@ -181,6 +202,7 @@ func (g *gen) function(d *ast.FuncDecl) {
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes = nil
 	g.push()
+	g.blk = f.Entry()
 
 	// The parameters, in order, with the conventions their types and
 	// their ownership give them.
@@ -193,14 +215,18 @@ func (g *gen) function(d *ast.FuncDecl) {
 			g.locals[params[i]] = &local{value: v, typ: t}
 		}
 		if name := p.Name; name != "" {
-			g.blockOf(f).DebugValue(v, name, "let", "argno "+itoa(i+1))
+			g.blk.DebugValue(v, name, "let", "argno "+itoa(i+1))
 		}
+		// An @owned parameter belongs to the callee, so the callee
+		// releases it. A @guaranteed one belongs to the caller and is
+		// alive for the whole call, which is what its convention
+		// promises and why it needs no cleanup here.
+		g.destroyLater(v)
 	}
 	if sig.Results != nil && !isVoid(sig.Results) {
 		f.SetResult(lowerType(sig.Results), resultConvention(lowerType(sig.Results)))
 	}
 
-	g.blk = f.Entry()
 	if d.Body != nil {
 		g.block(d.Body)
 	}
@@ -211,13 +237,6 @@ func (g *gen) function(d *ast.FuncDecl) {
 		g.blk.Return(g.void())
 	}
 	g.fn = nil
-}
-
-// blockOf is the block instructions go into while a function's
-// parameters are being declared.
-func (g *gen) blockOf(f *vil.Func) *vil.Block {
-	g.blk = f.Entry()
-	return g.blk
 }
 
 // void is the empty tuple every function without a result returns.

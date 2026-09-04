@@ -114,12 +114,7 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			if p.Label != nil {
 				label = p.Label.Text(c.file)
 			}
-			ownership := types.DefaultOwnership
-			for _, m := range p.Mods {
-				if m.Kind == token.INOUT {
-					ownership = types.InOut
-				}
-			}
+			ownership := c.ownershipOf(p.Mods)
 			params[i] = &types.Param{
 				Name:      name,
 				Label:     label,
@@ -606,6 +601,30 @@ func (c *checker) declareFunctions(decls []ast.Decl, scope *Scope) {
 	}
 }
 
+// ownershipOf reads a parameter's modifiers. What a callee does with
+// what it is given is the ownership model's half that crosses a call,
+// and it is written here: `borrowing` reads it for the call,
+// `consuming` takes it, `inout` writes through it. The underscored
+// spellings are the older names for the first two, and every module
+// interface in an SDK is written with them.
+func (c *checker) ownershipOf(mods []*ast.Modifier) types.OwnershipKind {
+	for _, m := range mods {
+		if m.Kind == token.INOUT {
+			return types.InOut
+		}
+		if m.Name == nil {
+			continue
+		}
+		switch m.Name.Text(c.file) {
+		case "consuming", "__owned":
+			return types.Consuming
+		case "borrowing", "__shared":
+			return types.Borrowing
+		}
+	}
+	return types.DefaultOwnership
+}
+
 // throwsOf reads a ThrowsClause. Swift says two things here and this
 // keeps them apart: whether the function throws, and what it throws.
 // `throws(Never)` says it does not throw, which is the spelling a
@@ -661,12 +680,7 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 			} else if label != "_" {
 				name = label
 			}
-			ownership := types.DefaultOwnership
-			for _, m := range p.Mods {
-				if m.Kind == token.INOUT {
-					ownership = types.InOut
-				}
-			}
+			ownership := c.ownershipOf(p.Mods)
 			params[i] = &types.Param{
 				Name:      name,
 				Label:     label,

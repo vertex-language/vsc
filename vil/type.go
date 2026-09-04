@@ -26,7 +26,6 @@ func Address(t types.Type) Type { return Type{formal: t, addr: true} }
 
 func (t Type) Formal() types.Type { return t.formal }
 func (t Type) IsAddress() bool    { return t.addr }
-func (t Type) IsObject() bool     { return !t.addr }
 
 // Object returns t as a value type; Address returns it as an address.
 func (t Type) Object() Type  { return Type{formal: t.formal} }
@@ -63,6 +62,12 @@ func trivial(t types.Type) bool {
 	switch n := t.Underlying().(type) {
 	case *BoxType:
 		return false // an allocation is owned whatever it holds
+	case *MetatypeType:
+		return true // a type is not a value that owns anything
+	// A thin function is a code address and nothing else. A thick one
+	// carries the context a closure captured, and something owns it.
+	case *FuncType:
+		return n.Convention != Thick
 	case *types.Basic:
 		return n.Kind() != types.String
 	case *Builtin:
@@ -110,6 +115,36 @@ func (b *BoxType) String() string {
 		return "{ var <invalid> }"
 	}
 	return "{ var " + b.elem.String() + " }"
+}
+
+// A MetatypeType is a type as a value: `@thin Int.Type`.
+//
+// The representation is part of the type, as it is in SIL. A thin
+// metatype is nothing at runtime — the type is known statically and
+// the value carries no bits. A thick one carries the metadata a
+// generic or an existential needs to find its witnesses.
+type MetatypeType struct {
+	instance types.Type
+	repr     string // "thin" or "thick"
+}
+
+// ThinMetatype is the metatype of a type known statically.
+func ThinMetatype(instance types.Type) Type {
+	return Object(&MetatypeType{instance: instance, repr: "thin"})
+}
+
+// ThickMetatype is the metatype of a type carried at runtime.
+func ThickMetatype(instance types.Type) Type {
+	return Object(&MetatypeType{instance: instance, repr: "thick"})
+}
+
+func (m *MetatypeType) Underlying() types.Type { return m }
+func (m *MetatypeType) Instance() types.Type   { return m.instance }
+func (m *MetatypeType) String() string {
+	if m.instance == nil {
+		return "@" + m.repr + " <invalid>.Type"
+	}
+	return "@" + m.repr + " " + m.instance.String() + ".Type"
 }
 
 // A Builtin is one of the types the IR has and the source language

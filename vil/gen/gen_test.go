@@ -218,44 +218,88 @@ bb0(%0 : $Int, %1 : $Int):
 	}
 }
 
-// TestAgreesWithSwiftc is the oracle. The same source goes through
-// both compilers, both outputs are normalized, and the functions this
-// package covers must come out the same.
+// The corpus, and the oracle.
 //
-// Only functions with no literal in them: an integer literal in Swift
-// is a call to Int.init(_builtinIntegerLiteral:), and until core/
-// declares it this emits the builtin literal alone. That is a
-// difference of one apply, and it is the reason core/ comes first in
-// the sequence rather than this.
+// testdata holds programs, each naming in its first line the function
+// to compare. Every one is lowered by this package and by swiftc, and
+// after the harness normalizes the two — symbols, value numbers, the
+// def-use comments — they must be the same text.
+//
+// What is in the corpus is what matches today, which is the ownership
+// machinery: borrowed and owned parameters, bindings that keep
+// references, calls, struct and class members, functions with no
+// result. That is the part worth holding still, because it is the
+// part that is hard to get right and quiet when it is wrong.
+//
+// What is not in it, and why: anything with an operator or a literal.
+// In raw SIL both are calls into the standard library — `a + b` is an
+// apply of Int's `+`, `0` is an apply of its literal initializer —
+// and this compiler emits the form those calls leave behind once the
+// first mandatory pass has inlined them. So the two differ at the raw
+// stage by exactly the calls, and at the canonical stage by the
+// ownership form and whatever else the optimizer did. Closing that is
+// core/ declaring the primitive types, which is written down in
+// core's own documentation as the next thing it needs.
+
+// TestAgreesWithSwiftc runs the corpus past both compilers.
 func TestAgreesWithSwiftc(t *testing.T) {
 	swiftc, err := exec.LookPath("swiftc")
 	if err != nil {
 		t.Skip("no swiftc on PATH")
 	}
-
-	programs := []struct{ name, fn, src string }{
-		{"borrowed parameter", "borrows", `
-final class Box { var n: Int = 0 }
-func borrows(_ b: Box) -> Int { return b.n }
-`},
-		{"a let that keeps a reference", "keeps", `
-final class Box { var n: Int = 0 }
-func keeps(_ b: Box) -> Box {
-    let kept = b
-    return kept
-}
-`},
-	}
-
-	for _, p := range programs {
-		t.Run(p.name, func(t *testing.T) {
-			ours := text.Normalize(funcText(t, lower(t, p.src), p.fn))
-			theirs := text.Normalize(swiftSIL(t, swiftc, p.src, p.fn))
+	for _, path := range corpus(t) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			src, fn := program(t, path)
+			ours := text.Normalize(funcText(t, lower(t, src), fn))
+			theirs := text.Normalize(swiftSIL(t, swiftc, src, fn))
 			if ours != theirs {
 				t.Errorf("VIL and SIL disagree.\n--- vil\n%s\n--- sil\n%s", ours, theirs)
 			}
 		})
 	}
+}
+
+// TestCorpusVerifies holds the same programs to the ownership rules,
+// with or without a toolchain to compare against. Matching swiftc and
+// being sound are different claims, and this is the one that does not
+// need swiftc installed to make.
+func TestCorpusVerifies(t *testing.T) {
+	for _, path := range corpus(t) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			src, _ := program(t, path)
+			m := lower(t, src)
+			if err := verify.Module(m); err != nil {
+				t.Errorf("%v\n\n%s", err, text.String(m))
+			}
+		})
+	}
+}
+
+// corpus is every program in testdata.
+func corpus(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob("testdata/*.swift")
+	if err != nil || len(files) == 0 {
+		t.Skip("no corpus")
+	}
+	return files
+}
+
+// program reads one corpus file: its source, and the function its
+// first line names.
+func program(t *testing.T, path string) (src, fn string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src = string(b)
+	first, _, _ := strings.Cut(src, "\n")
+	name, ok := strings.CutPrefix(strings.TrimSpace(first), "// vil:")
+	if !ok {
+		t.Fatalf("%s: the first line must name the function to compare, as `// vil: name`", path)
+	}
+	return src, strings.TrimSpace(name)
 }
 
 // swiftSIL runs swiftc over the same source and returns the one
