@@ -495,7 +495,8 @@ them exist.
 | [`vil/`](vil/) | the ownership IR: a clone of Swift's SIL, its text form, its rules, and the lowering into it | started |
 | [`vil/pass/`](vil/pass/) | the passes that must run: verification, and erasing the ownership form | started |
 | [`lower/`](lower/) | lowered VIL to VIR; host/device split | started |
-| `.` | the phases composed, the target tables, isel, object writing, linking | planned |
+| [`.`](vsc.go) | the phases composed | started |
+| [`build/`](build/) | VIR to an object file, per target; its own module | started |
 | [`core/`](core/) | the built-in module: the operators, and what a primitive is made of | started |
 | [`mangle/`](mangle/) | Swift'''s symbol mangling, cloned | started |
 | `cli/` · `cmd/vsc/` | verb dispatch and the executable | planned |

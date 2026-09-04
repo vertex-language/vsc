@@ -46,20 +46,33 @@ import (
 
 // File lowers one checked file into a raw VIL module.
 func File(name string, f *ast.File, info *analyzer.Info) (*vil.Module, []token.Diagnostic) {
+	return Files(name, []*ast.File{f}, info)
+}
+
+// Files lowers a whole module: every file in it, into one VIL module.
+//
+// A module is the unit a symbol is named against and the unit access
+// control is measured in, so the files are lowered together rather
+// than one at a time and joined afterwards.
+func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []token.Diagnostic) {
 	m := vil.NewModule(name, vil.StageRaw)
 	m.Import("Builtin")
 
-	g := &gen{m: m, info: info, file: f.Unit, module: name}
-	for _, stmt := range f.Stmts {
-		decl, ok := stmt.(*ast.DeclStmt)
-		if !ok {
-			continue
+	var diags []token.Diagnostic
+	for _, f := range files {
+		g := &gen{m: m, info: info, file: f.Unit, module: name}
+		for _, stmt := range f.Stmts {
+			decl, ok := stmt.(*ast.DeclStmt)
+			if !ok {
+				continue
+			}
+			if fn, ok := decl.D.(*ast.FuncDecl); ok {
+				g.function(fn)
+			}
 		}
-		if fn, ok := decl.D.(*ast.FuncDecl); ok {
-			g.function(fn)
-		}
+		diags = append(diags, g.diags...)
 	}
-	return m, g.diags
+	return m, diags
 }
 
 // symbol is the name a function is given in the module, which is the
