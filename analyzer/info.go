@@ -1,0 +1,75 @@
+package analyzer
+
+import (
+	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/token"
+	"github.com/vertex-language/vsc/types"
+)
+
+// Info holds the results of semantic analysis for a parsed unit or package.
+type Info struct {
+	// Types maps each evaluated expression to its resolved semantic type.
+	Types map[ast.Expr]types.Type
+
+	// Defs maps each identifier that defines a symbol to that symbol.
+	Defs map[*ast.Ident]Symbol
+
+	// Uses maps each identifier that refers to a symbol to that symbol.
+	Uses map[*ast.Ident]Symbol
+
+	// Scopes maps AST nodes (File, CodeBlock, StructDecl, etc.) to their lexical scope.
+	Scopes map[ast.Node]*Scope
+
+	// Folded maps each flat SequenceExpr to its precedence-folded expression tree.
+	Folded map[*ast.SequenceExpr]ast.Expr
+
+	// Diagnostics holds all warnings and errors produced during analysis.
+	Diagnostics []token.Diagnostic
+}
+
+// NewInfo allocates an empty Info container.
+func NewInfo() *Info {
+	return &Info{
+		Types:       make(map[ast.Expr]types.Type),
+		Defs:        make(map[*ast.Ident]Symbol),
+		Uses:        make(map[*ast.Ident]Symbol),
+		Scopes:      make(map[ast.Node]*Scope),
+		Folded:      make(map[*ast.SequenceExpr]ast.Expr),
+		Diagnostics: nil,
+	}
+}
+
+// TypeOf returns the type of expression e, or nil if unrecorded.
+func (info *Info) TypeOf(e ast.Expr) types.Type {
+	if info.Types == nil {
+		return nil
+	}
+	return info.Types[e]
+}
+
+// SymbolOf returns the symbol defined or used by ident, or nil.
+func (info *Info) SymbolOf(id *ast.Ident) Symbol {
+	if s, ok := info.Defs[id]; ok {
+		return s
+	}
+	if s, ok := info.Uses[id]; ok {
+		return s
+	}
+	return nil
+}
+
+// ScopeOf returns the Scope associated with node n, or nil.
+func (info *Info) ScopeOf(n ast.Node) *Scope {
+	if info.Scopes == nil {
+		return nil
+	}
+	return info.Scopes[n]
+}
+
+// FoldedOf returns the folded tree for a SequenceExpr, or the sequence itself if not folded.
+func (info *Info) FoldedOf(seq *ast.SequenceExpr) ast.Expr {
+	if f, ok := info.Folded[seq]; ok {
+		return f
+	}
+	return seq
+}
