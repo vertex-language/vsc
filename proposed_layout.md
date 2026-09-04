@@ -9,9 +9,13 @@ was built.
 
 The question it exists to answer: **is one `lower` package enough?**
 
-Nearly. One lowering, and one thing above it that does not exist yet
-and is not an IR. The first draft of this document said no and pointed
-at Swift's SIL; the numbers below are why that was too quick.
+No. There is an ownership IR above it — `vil`, a clone of Swift's SIL
+— and [proposed_vil.md](proposed_vil.md) is its design. This document
+is the argument that got there and the layout around it.
+
+The audit below is worth keeping even though the decision went the
+other way, because it says what `vil` is *for*: two thirds of SIL is
+VIR's job, and the third that is not is the whole reason to build it.
 
 ---
 
@@ -63,41 +67,39 @@ core of what SIL is doing for us, and it is much smaller than SIL.
 
 ---
 
-## Where the CFG lives
+## Where the ownership work lives
 
-Three places it could go, and the costs are the whole decision.
+Three places it could have gone, and the costs were the whole
+decision.
 
-**In `analyzer`.** A CFG whose nodes are AST expressions, with the
-dataflow passes over it. No new IR, no instruction set, no text form,
-no verifier, no parser. Diagnostics come out naming source constructs
-because the nodes *are* source constructs — which is the thing every
-mandatory pass has to do and the thing a lowered form makes hardest.
-Lowering then emits retain and release conservatively, the way SILGen
-does before anything optimizes them.
+**In `analyzer`, as a CFG.** A control-flow graph whose nodes are AST
+expressions, with the dataflow passes over it. No new IR, no
+instruction set, no text form, no verifier, no parser. Diagnostics
+come out naming source constructs because the nodes *are* source
+constructs. The smallest thing that could work.
 
-**In a SIL of our own.** Buys an SSA form to do dataflow on, which is
-genuinely easier than an AST-shaped CFG, and buys the `swiftc
--emit-sil` diff oracle. Costs an IR that duplicates two thirds of VIR,
-plus its text form, verifier and parser — and every one of those is a
-thing to keep correct forever.
+**In an IR of its own.** Costs an IR that duplicates two thirds of
+VIR, plus its text form, verifier and parser — every one of them a
+thing to keep correct forever. Buys an SSA form to do dataflow on, and
+buys the `swiftc -emit-sil` diff.
 
-**In VIR.** Cheapest to imagine and the worst idea here, for one
-reason that has nothing to do with Swift: **VIR is shared with `vcc`
-and `v++`.** Teaching it ownership means teaching a C compiler's IR a
+**In VIR.** Cheapest to imagine and the worst idea here, for a reason
+that has nothing to do with Swift: **VIR is shared with `vcc` and
+`v++`.** Teaching it ownership means teaching a C compiler's IR a
 concept C does not have, and every pass in `ir/lower` would carry it.
 An IR shared by three languages should hold what all three mean.
 
-**The recommendation is the first.** Build the CFG in `analyzer`, keep
-`lower` as one package, emit conservative ARC on the way down, and do
-not build a second IR until something forces it.
+**It went to the second, and the reason is the oracle.** The CFG would
+have been smaller and would have been ours to get right alone. A
+faithful clone of SIL is bigger and is checked by `swiftc -emit-sil`
+line for line: every ownership question the middle end has to answer
+already has an answer that can be diffed rather than argued about.
+That is the same trade the parser and the checker took, and it has
+paid twice.
 
-What would force it, concretely: an ARC optimizer good enough to
-matter, or specialization that needs to clone bodies rather than
-re-lower them. Both are optimizations. Neither is due before a program
-runs end to end. And if that day comes, the cheap version is not SIL —
-it is teaching VIR to recognise `retain` and `release` as calls with a
-known meaning, which is metadata on a call rather than an ownership
-model in the type system.
+What did not change is the third option. Ownership does not go into
+VIR. VIL is where Vertex's ownership lives, and VIR stays the
+machine-level IR all three compilers lower into.
 
 ---
 
@@ -105,19 +107,23 @@ model in the type system.
 
 ```
   ast + types + analyzer          the checked program        (done)
-     └── analyzer/cfg             definite init, exclusivity,
-            │                     move-only, reachability
-            │  lower              ARC emitted conservatively,
-            ▼                     generics specialized by re-lowering
+            │
+            │  vil/gen
+            ▼
+      vil  (raw, ossa)             classes are classes,
+            │                      values are owned or borrowed,
+            │  vil/pass            generics are still generic
+            ▼
+      vil  (canonical)             checked, ARC placed,
+            │                      specialized, host/device split
+            │  lower
+            ▼
       vir                          typed SSA, machine-level     (exists)
             │
             │  ir/lower  (in the ir repository)
             ▼
       isel → regalloc → object → link                          (exists)
 ```
-
-One lowering. The middle end is a graph and some dataflow, not a
-second compiler.
 
 ---
 
@@ -139,40 +145,25 @@ day replace.
 **Build this first.** It is what widens the subset everything else is
 tested against.
 
-### `analyzer/cfg` — control flow, and the passes over it
+### `vil/` — the ownership IR
 
-A control-flow graph over the checked tree: blocks of AST statements,
-edges for every way control moves — branches, loops, `guard`, `defer`,
-`throw`, `break` to a label, the arms of a `switch`. Then the dataflow
-passes that can reject a program:
+Swift's SIL, cloned. The instructions under their own names, the text
+form, the ownership model, the two stages, and the passes that move
+between them. It is the whole middle end and it has its own document:
+[proposed_vil.md](proposed_vil.md).
 
-- definite initialization, including `self` in an initializer
-- `~Copyable` and `consuming`: every owned value consumed once
-- exclusive access to memory
-- unreachable code and missing returns
-- escaping-closure capture
+The diagnostics that a CFG would have carried — definite
+initialization, `~Copyable`, exclusivity, reachability — are passes
+over VIL in `vil/pass`, which is where Swift runs them and therefore
+where `swiftc -emit-sil` can be asked whether we got them right.
 
-A subpackage of `analyzer` rather than its own top-level package,
-because it answers the same kind of question the rest of `analyzer`
-does — is this program legal — and reports it the same way, against
-source positions, in the same `Info`. Its output is diagnostics plus
-one thing `lower` needs: **where each value's last use is**, which is
-what makes conservative ARC placeable without a second IR.
+### `lower/` — canonical VIL to VIR
 
-This is the package that does not exist yet and is the whole middle
-end. It is a few thousand lines, not a compiler.
-
-### `lower/` — checked AST to VIR
-
-One package, as the README always said. It walks the tree with
-`Info` and the CFG's answers in hand and emits VIR: classes become
-pointers, existentials become boxes, enums become tags and payloads,
-the layout `types` computed becomes offsets, generic functions are
-lowered once per instantiation from the same AST with a substitution
-map, and retain/release go where the CFG said the lifetimes end.
-
-The reason this can be one package is that everything it needs to
-*decide* was decided above it. It is a translation.
+One package. By the time it runs, ownership is resolved, ARC is
+placed, generics are specialized and every type is concrete, so this
+is a translation rather than a decision: classes become pointers,
+existentials become boxes, enums become tags and payloads, and the
+layout `types` computed becomes offsets.
 
 ### `runtime/` — what ARC calls
 
@@ -201,15 +192,6 @@ The rule that keeps this honest is that the root package is the only
 place that knows the order of the phases, and every command runs the
 same ones.
 
-### `sil/` — if and when
-
-Not now. If an ARC optimizer or a cloning specializer ever earns it,
-what to build is an SSA form of the twelve ownership opcodes above and
-nothing else — the other twenty-five are VIR's, and duplicating them
-is how a middle end becomes a second compiler.
-
----
-
 ## What does not move
 
 The six packages here stay as they are. Two things that might look
@@ -228,38 +210,27 @@ under `analyzer`, rather than more branches in the checker.
 
 ---
 
-## What the oracle can still tell us
+## What the oracles are now
 
-Not having a SIL costs one thing, and it is worth being precise about
-what.
+Three, and each phase has one.
 
 ```console
-$ swiftc -emit-silgen f.swift     # raw SIL, ownership form
-$ swiftc -emit-sil    f.swift     # canonical SIL, after the mandatory passes
+$ swiftc -typecheck   f.swift     # is this program Swift?          → analyzer
+$ swiftc -emit-silgen f.swift     # what does lowering produce?     → vil/gen
+$ swiftc -emit-sil    f.swift     # where do the retains belong?    → vil/pass
 ```
 
-What is lost: a mechanical diff. Without a matching text form there is
-nothing to compare line against line, the way the parser compares
-verdicts.
+Plus the one that needs no swiftc: every module interface in every
+installed SDK must parse.
 
-What is kept, and it is most of the value: **swiftc will tell you the
-answer to any ownership question you can phrase as a program.** Is
-this parameter `@owned` or `@guaranteed`? Where does the release of
-this temporary belong — before or after the call? Does this `defer`
-run before or after the return value is copied? Read the SIL, and the
-answer is there, in a form that names the source constructs.
+`-emit-silgen` is the one that pays for VIL. It answers, mechanically,
+every question lowering has to make a decision about — whether a
+parameter is `@owned` or `@guaranteed`, where the release of a
+temporary belongs, what a `defer` extends the lifetime of, how
+`switch_enum` delivers a payload. Without a matching text form those
+are questions you read and interpret; with one they are a diff.
 
-That is how the ownership rules in `analyzer/cfg` should be written:
-one small program per rule, its SIL read once to learn what Swift
-decided, and the rule then written and tested against the *behaviour*
-— which values must be released, which must not — rather than against
-Swift's text.
-
-The other two oracles do not change. Every module interface in every
-installed SDK must still parse, and `swiftc -typecheck` must still
-agree with the checker about which programs are Swift.
-
-And when a program finally runs, there is a third and better one:
+And once a program runs there is a fourth, better than all of them:
 compile it with `vsc`, compile it with `swiftc`, run both, compare
 what they print. An ARC bug is a leak or a crash, and neither is
 subtle.
@@ -270,25 +241,22 @@ subtle.
 
 1. **`core/`** — the built-in module. Widens the subset everything
    else is tested against, and needs nothing new.
-2. **`analyzer/cfg`** — the graph and the reachability pass, then
-   definite initialization on it. Both are testable against
-   `swiftc -typecheck` the day they are written, because both are
-   diagnostics.
-3. **`lower/`** — enough to lower the subset `core/` covers, plus the
-   root package far enough to run `fib.vs` end to end. This is the
-   spine: once a program runs, every later change is testable by
-   running it.
-4. **ARC**, on the lifetimes the CFG already computes, with
-   `runtime/` behind it. The first program that allocates and frees
-   correctly is the milestone that matters.
-5. **`~Copyable`, exclusivity, the rest of the mandatory passes** —
-   each one a pass on a graph that already exists.
-6. **`module/`**, then optimization, then a `sil/` only if something
-   forces it.
+2. **`vil/` + `vil/text`** — the IR and its text form. The printer and
+   parser first, because they are the instrument everything after is
+   built with.
+3. **`vil/verify`** — SSA, dominance, then the two ownership rules.
+4. **`vil/gen`** for the subset `core/` covers, diffed against
+   `swiftc -emit-silgen` from the first function.
+5. **`lower/`** — canonical VIL to VIR, plus the root package far
+   enough to run `fib.vs` end to end. The spine, before any pass
+   exists.
+6. **`vil/pass`** — definite initialization first, then ARC, against
+   `swiftc -emit-sil`.
+7. **`runtime/`**, then **`module/`**, then **`vil/opt`**.
 
-The thing to resist is building a middle end before the spine runs. A
-compiler that cannot yet produce a program has no way to tell a
-correct optimization from a plausible one.
+The thing to resist is building the pass pipeline before the spine
+runs. A compiler that cannot yet produce a program has no way to tell
+a correct optimization from a plausible one.
 
 ---
 
@@ -299,16 +267,17 @@ Forks where Swift's answer may not be ours:
 - **Is specialization mandatory?** Swift can run generics
   unspecialized through witness tables and a runtime. That needs
   metadata and a runtime we may not want. Mandatory specialization is
-  simpler and closes off separate compilation of generic code.
+  simpler and closes off separate compilation of generic code — and it
+  decides how much of `vil`'s generic machinery has to survive into
+  canonical stage.
 - **Is the runtime Vertex or intrinsics?** Above.
-- **Does the CFG need SSA?** Dataflow over an AST-shaped graph is
-  fiddlier than over SSA — no value numbering, no phi nodes, aliasing
-  answered by hand. If definite initialization and move-only checking
-  turn out to want SSA badly enough, that is the thing that would
-  justify a small ownership IR, and it is the honest trigger to watch
-  for rather than a decision to make now.
+- **Does `vil` keep addresses?** Swift's SIL has both value and
+  address instructions, with a late pass lowering one to the other.
+  Cloning it means cloning both. Starting value-only does not survive
+  contact with `inout`, so the answer is probably yes from the start,
+  which is also what keeps the diff honest.
 - **Where does the host/device split go?** `kernel` and `graph` bodies
-  need to become their own module. On the tree it is a walk; after
-  lowering it is two VIR modules. Probably the latter, since VIR is
-  what a device backend consumes — which would make it `lower`'s job
-  and not a phase of its own.
+  need to become their own module. As a `vil/pass` it happens where
+  the language semantics are still visible; as part of `lower` it
+  happens where the device backend's input is. Probably the former,
+  since a kernel's captures are an ownership question.
