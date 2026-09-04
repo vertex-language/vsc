@@ -58,7 +58,28 @@ var swiftTypes = map[string]Type{
 	"Void":      Typ[Void],
 	"Never":     Typ[Never],
 	"Any":       &Existential{},
+
+	// The protocols the compiler knows itself, rather than reading
+	// from a library: what `throws` throws, what crosses an isolation
+	// boundary, and the two a type suppresses with `~`.
+	"Error":     ErrorProtocol,
+	"Sendable":  SendableProtocol,
+	"Copyable":  CopyableProtocol,
+	"Escapable": EscapableProtocol,
+	"AnyObject": AnyObjectProtocol,
 }
+
+// The compiler-known protocols. They are not declared in any source
+// this compiler reads, and the language would not work without them:
+// a throw needs an Error, and `~Copyable` needs a Copyable to
+// suppress.
+var (
+	ErrorProtocol     = &Protocol{Name: "Error"}
+	SendableProtocol  = &Protocol{Name: "Sendable"}
+	CopyableProtocol  = &Protocol{Name: "Copyable"}
+	EscapableProtocol = &Protocol{Name: "Escapable"}
+	AnyObjectProtocol = &Protocol{Name: "AnyObject"}
+)
 
 // vertexTypes are the additional lowercase spellings. Each is an
 // alias for one of the names above and denotes the same type.

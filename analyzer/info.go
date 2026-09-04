@@ -23,6 +23,12 @@ type Info struct {
 	// Folded maps each flat SequenceExpr to its precedence-folded expression tree.
 	Folded map[*ast.SequenceExpr]ast.Expr
 
+	// Values maps each literal to the value it denotes: a BasicLit or
+	// a StringLit with nothing to interpolate, and every run of text
+	// inside an interpolated one, so that a consumer reads the pieces
+	// of `"a\(b)c"` in order.
+	Values map[ast.Node]Value
+
 	// Diagnostics holds all warnings and errors produced during analysis.
 	Diagnostics []token.Diagnostic
 }
@@ -35,6 +41,7 @@ func NewInfo() *Info {
 		Uses:        make(map[*ast.Ident]Symbol),
 		Scopes:      make(map[ast.Node]*Scope),
 		Folded:      make(map[*ast.SequenceExpr]ast.Expr),
+		Values:      make(map[ast.Node]Value),
 		Diagnostics: nil,
 	}
 }

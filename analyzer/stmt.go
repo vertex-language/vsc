@@ -71,8 +71,12 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		}
 
 	case *ast.ForInStmt:
+		// The element type comes from the sequence. Only Array is
+		// modelled as one so far; anything else — a range, a
+		// dictionary, a type conforming to Sequence — says nothing
+		// this compiler can read yet.
 		seqType := c.checkExpr(s.Seq, nil, scope)
-		var elemType types.Type = types.Typ[types.Int]
+		elemType := types.Type(types.Typ[types.Invalid])
 		if arr, ok := seqType.Underlying().(*types.Array); ok {
 			elemType = arr.Elem
 		}
@@ -137,17 +141,57 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 	switch p := pat.(type) {
 	case *ast.ValueBindingPattern:
 		c.declarePattern(p.Pat, subjectType, p.Kind == token.LET, scope)
+	// `case .circle(let r)` binds r to the case's associated value,
+	// not to the enum: what is matched and what is bound are
+	// different types, and only the case says which.
 	case *ast.EnumCasePattern:
-		if p.Args != nil {
-			for _, el := range p.Args.Elems {
-				c.declareCasePattern(el.Pat, subjectType, scope)
-			}
+		if p.Args == nil {
+			return
+		}
+		assoc := c.associatedTypeOf(subjectType, p.Name)
+		elems := p.Args.Elems
+		for i, el := range elems {
+			c.declareCasePattern(el.Pat, elementAt(assoc, i, len(elems)), scope)
 		}
 	case *ast.TuplePattern:
 		for _, el := range p.Elems {
 			c.declareCasePattern(el.Pat, subjectType, scope)
 		}
 	}
+}
+
+// associatedTypeOf is the type of the values a case of t carries.
+func (c *checker) associatedTypeOf(t types.Type, name *ast.Ident) types.Type {
+	if t == nil || name == nil {
+		return nil
+	}
+	en, ok := t.Underlying().(*types.Enum)
+	if !ok {
+		return nil
+	}
+	want := name.Text(c.file)
+	for _, cs := range en.Cases {
+		if cs.Name == want {
+			return cs.AssociatedType
+		}
+	}
+	return nil
+}
+
+// elementAt picks the type one sub-pattern of a case matches: the
+// whole associated type where the case carries one value, and the
+// element at i where it carries several.
+func elementAt(assoc types.Type, i, n int) types.Type {
+	if assoc == nil {
+		return nil
+	}
+	if n == 1 {
+		return assoc
+	}
+	if tup, ok := assoc.Underlying().(*types.Tuple); ok && i < len(tup.Elements) {
+		return tup.Elements[i].Type
+	}
+	return nil
 }
 
 func (c *checker) collectMatchedCases(pat ast.Pattern, matched map[string]bool, hasDefault *bool) {
@@ -182,6 +226,9 @@ func (c *checker) checkCodeBlock(block *ast.CodeBlock, parent *Scope) {
 	}
 	blockScope := NewScope(parent, block.Pos(), block.End())
 	c.info.Scopes[block] = blockScope
+	// A function declared in a block is visible throughout it, before
+	// its declaration as well as after, so the names come first.
+	c.declareFunctions(block.Stmts, blockScope)
 	for _, s := range block.Stmts {
 		c.checkStmt(s, blockScope)
 	}
@@ -219,7 +266,7 @@ func (c *checker) checkCondition(cond ast.Node, scope *Scope) {
 			}
 		}
 		if innerType == nil {
-			innerType = types.Typ[types.Int]
+			innerType = types.Typ[types.Invalid]
 		}
 		isConst := cn.Kind == token.LET
 		c.declarePattern(cn.Pat, innerType, isConst, scope)
@@ -254,8 +301,11 @@ func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
 			if declType == nil {
 				declType = initType
 			}
+			// A binding with neither an annotation nor an initializer
+			// this compiler can read has no type, and saying Int
+			// would be inventing one.
 			if declType == nil {
-				declType = types.Typ[types.Int]
+				declType = types.Typ[types.Invalid]
 			}
 			c.declarePatternInit(b.Pat, declType, isConst, hasInit, scope)
 		}
@@ -264,54 +314,55 @@ func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
 		c.checkFuncBody(d, scope)
 
 	case *ast.StructDecl:
-		typeScope := c.info.Scopes[d]
-		if d.Body != nil && typeScope != nil {
-			for _, mem := range d.Body.Members {
-				if f, ok := mem.(*ast.FuncDecl); ok {
-					c.checkFuncBody(f, typeScope)
-				}
-			}
-		}
+		c.checkMembers(d, d.Body, c.declaredType(d.Name, scope))
 
 	case *ast.ClassDecl:
-		typeScope := c.info.Scopes[d]
-		if d.Body != nil && typeScope != nil {
-			for _, mem := range d.Body.Members {
-				if f, ok := mem.(*ast.FuncDecl); ok {
-					c.checkFuncBody(f, typeScope)
-				}
-			}
-		}
+		c.checkMembers(d, d.Body, c.declaredType(d.Name, scope))
 
 	case *ast.ActorDecl:
-		typeScope := c.info.Scopes[d]
-		sym := scope.Lookup(d.Name.Text(c.file))
-		var actorClass *types.Class
-		if sym != nil {
-			if cl, ok := sym.Type().(*types.Class); ok {
-				actorClass = cl
-			}
-		}
-		prevActor := c.currActor
-		c.currActor = actorClass
-		defer func() { c.currActor = prevActor }()
+		c.checkMembers(d, d.Body, c.declaredType(d.Name, scope))
 
-		if d.Body != nil && typeScope != nil {
-			for _, mem := range d.Body.Members {
-				if f, ok := mem.(*ast.FuncDecl); ok {
-					c.checkFuncBody(f, typeScope)
-				}
-			}
-		}
+	case *ast.EnumDecl:
+		c.checkMembers(d, d.Body, c.declaredType(d.Name, scope))
 
 	case *ast.ExtensionDecl:
-		typeScope := c.info.Scopes[d]
-		if d.Body != nil && typeScope != nil {
-			for _, mem := range d.Body.Members {
-				if f, ok := mem.(*ast.FuncDecl); ok {
-					c.checkFuncBody(f, typeScope)
-				}
-			}
+		c.checkMembers(d, d.Body, c.resolveType(d.Type, scope))
+	}
+}
+
+// declaredType is the type a nominal declaration's name denotes.
+func (c *checker) declaredType(name *ast.Ident, scope *Scope) types.Type {
+	if name == nil {
+		return nil
+	}
+	if sym := scope.Lookup(name.Text(c.file)); sym != nil {
+		return sym.Type()
+	}
+	return nil
+}
+
+// checkMembers checks the bodies of a type's members, with self bound
+// to the type they are written in. Every nominal declaration and an
+// extension reach this the same way, because inside the braces they
+// are the same thing: declarations with a self.
+func (c *checker) checkMembers(d ast.Decl, body *ast.MemberBlock, self types.Type) {
+	typeScope := c.info.Scopes[d]
+	if body == nil || typeScope == nil {
+		return
+	}
+
+	prevType, prevActor := c.currType, c.currActor
+	c.currType = self
+	if cl, ok := self.(*types.Class); ok && cl.IsActor {
+		c.currActor = cl
+	} else {
+		c.currActor = nil
+	}
+	defer func() { c.currType, c.currActor = prevType, prevActor }()
+
+	for _, mem := range body.Members {
+		if f, ok := mem.(*ast.FuncDecl); ok {
+			c.checkFuncBody(f, typeScope)
 		}
 	}
 }
@@ -336,6 +387,7 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 	if d.Body != nil {
 		bodyScope := NewScope(fnScope, d.Body.Pos(), d.Body.End())
 		c.info.Scopes[d.Body] = bodyScope
+		c.declareFunctions(d.Body.Stmts, bodyScope)
 		for _, st := range d.Body.Stmts {
 			c.checkStmt(st, bodyScope)
 		}

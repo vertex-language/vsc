@@ -67,6 +67,12 @@ type FuncSymbol struct {
 	sig  *types.Signature
 	pos  token.Pos
 	decl ast.Decl
+
+	// others are the declarations that share this name. Swift lets
+	// them, as long as they do not share a signature, so a name in
+	// scope is not one function but a set of them and a call picks
+	// from it.
+	others []*FuncSymbol
 }
 
 func NewFunc(name string, sig *types.Signature, pos token.Pos) *FuncSymbol {
@@ -83,6 +89,14 @@ func (f *FuncSymbol) SetDecl(d ast.Decl)                { f.decl = d }
 func (f *FuncSymbol) String() string {
 	return fmt.Sprintf("func %s%s", f.name, f.sig)
 }
+
+// Overloads returns every declaration of this name, this one first.
+func (f *FuncSymbol) Overloads() []*FuncSymbol {
+	return append([]*FuncSymbol{f}, f.others...)
+}
+
+// AddOverload records another declaration of the same name.
+func (f *FuncSymbol) AddOverload(g *FuncSymbol) { f.others = append(f.others, g) }
 
 // TypeNameSymbol represents a named type (struct, class, enum, protocol, typealias).
 type TypeNameSymbol struct {

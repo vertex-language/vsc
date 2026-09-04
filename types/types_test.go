@@ -77,7 +77,7 @@ func TestCompositeTypes(t *testing.T) {
 		},
 		Results: Typ[Bool],
 		Async:   true,
-		Throws:  Typ[Never],
+		Throws:  true,
 	}
 	expectedSig := "(borrowing a x: Int, _ y: String...) async throws -> Bool"
 	if sig.String() != expectedSig {
@@ -545,15 +545,30 @@ func TestProtocolConformance(t *testing.T) {
 		t.Errorf("Point should conform to Equatable")
 	}
 
-	// Structural conformance via fields matching requirements
-	if !ConformsTo(stPoint, protoPrintable) {
-		t.Errorf("Point should structurally conform to Printable")
+	// Conformance is nominal. Point has a description of the right
+	// type and does not conform to Printable, because it never said
+	// it did — the same answer Swift gives.
+	if ConformsTo(stPoint, protoPrintable) {
+		t.Errorf("Point has the shape of Printable but never declared it")
 	}
 
-	// Existential assignment
+	// Declaring it is what makes it so.
+	stLabel := &Struct{
+		Name:         "Label",
+		Conformances: []*Protocol{protoPrintable},
+		Fields:       []*Field{{Name: "description", Type: Typ[String]}},
+	}
+	if !ConformsTo(stLabel, protoPrintable) {
+		t.Errorf("Label declares Printable and should conform to it")
+	}
+
+	// Existential assignment follows conformance.
 	anyPrintable := &Existential{Protocols: []*Protocol{protoPrintable}}
-	if !AssignableTo(stPoint, anyPrintable) {
-		t.Errorf("Point should be assignable to any Printable")
+	if AssignableTo(stPoint, anyPrintable) {
+		t.Errorf("Point should not be assignable to any Printable")
+	}
+	if !AssignableTo(stLabel, anyPrintable) {
+		t.Errorf("Label should be assignable to any Printable")
 	}
 
 	// Class conformance
@@ -610,5 +625,30 @@ func TestUniverseTiers(t *testing.T) {
 		if LookupSwiftUniverse(lower) != nil {
 			t.Errorf("%s is a Vertex spelling and must not be in the Swift universe", lower)
 		}
+	}
+}
+
+// TestThrowsIsTwoFacts holds the signature to Swift's model of
+// throwing: whether a function throws, and what it throws, are
+// separate, and `throws(Never)` is the spelling of one that does not
+// throw at all.
+func TestThrowsIsTwoFacts(t *testing.T) {
+	plain := &Signature{Results: Typ[Void]}
+	untyped := &Signature{Results: Typ[Void], Throws: true}
+	typed := &Signature{Results: Typ[Void], Throws: true, Thrown: NewNamed("MyError", "", nil)}
+
+	if got := plain.String(); got != "() -> Void" {
+		t.Errorf("non-throwing printed as %q", got)
+	}
+	if got := untyped.String(); got != "() throws -> Void" {
+		t.Errorf("untyped throws printed as %q", got)
+	}
+	if got := typed.String(); got != "() throws(MyError) -> Void" {
+		t.Errorf("typed throws printed as %q", got)
+	}
+
+	// None of the three is the same type as another.
+	if Identical(plain, untyped) || Identical(untyped, typed) || Identical(plain, typed) {
+		t.Errorf("signatures differing only in what they throw are not identical")
 	}
 }

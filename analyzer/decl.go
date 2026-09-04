@@ -128,19 +128,13 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 				Variadic:  p.Ellipsis != token.NoPos,
 			}
 		}
-		var throws types.Type
-		if t.Throws != nil {
-			if t.Throws.Type != nil {
-				throws = c.resolveType(t.Throws.Type, scope)
-			} else {
-				throws = types.Typ[types.Never] // general throws
-			}
-		}
+		throws, thrown := c.throwsOf(t.Throws, scope)
 		return &types.Signature{
 			Params:  params,
 			Results: c.resolveType(t.Result, scope),
 			Async:   t.Async != token.NoPos,
 			Throws:  throws,
+			Thrown:  thrown,
 		}
 
 	case *ast.AnyType:
@@ -326,6 +320,88 @@ func (c *checker) declareTypes(stmts []ast.Stmt, scope *Scope) {
 	}
 }
 
+// declareGenericParams binds a declaration's generic parameters in
+// its own scope, so that the members written in terms of them —
+// `struct Wrapper<T> { var value: T }` — resolve. The names are bound
+// before the constraints are read, because a constraint may name
+// another parameter of the same list.
+func (c *checker) declareGenericParams(g *ast.GenericParams, scope *Scope) []*types.TypeParam {
+	if g == nil {
+		return nil
+	}
+	out := make([]*types.TypeParam, 0, len(g.Params))
+	for _, p := range g.Params {
+		if p.Name == nil {
+			continue
+		}
+		name := p.Name.Text(c.file)
+		tp := &types.TypeParam{Name: name}
+		scope.Insert(NewTypeName(name, tp, p.Name.Pos()))
+		c.info.Defs[p.Name] = NewTypeName(name, tp, p.Name.Pos())
+		out = append(out, tp)
+	}
+	for i, p := range g.Params {
+		if p.Inherit == nil || i >= len(out) {
+			continue
+		}
+		for _, item := range p.Inherit.Items {
+			if t := c.resolveType(item.Type, scope); t != nil {
+				out[i].Constraints = append(out[i].Constraints, t)
+			}
+		}
+	}
+	return out
+}
+
+// associatedType is the type of an enum case's associated values:
+// the one it has, or a tuple of them, which is the shape a pattern
+// destructures and the shape the case's initializer takes.
+func (c *checker) associatedType(params []*ast.Param, scope *Scope) types.Type {
+	switch len(params) {
+	case 0:
+		return nil
+	case 1:
+		return c.resolveType(params[0].Type, scope)
+	}
+	t := &types.Tuple{}
+	for _, p := range params {
+		elem := &types.TupleElement{Type: c.resolveType(p.Type, scope)}
+		if p.Label != nil {
+			elem.Name = p.Label.Text(c.file)
+		}
+		t.Elements = append(t.Elements, elem)
+	}
+	return t
+}
+
+// storedField reads one binding of a type's `let` or `var` member and
+// returns the fields it declares, binding their names in the type's
+// scope on the way. A binding with no annotation takes the type of
+// its initializer, which is how `var n = 0` is a field of type Int.
+func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Scope) []*types.Field {
+	pat := b.Pat
+	var fieldType types.Type
+	if tp, ok := pat.(*ast.TypedPattern); ok {
+		// The annotation is read in the type's own scope: a member
+		// may be written in terms of the type's generic parameters.
+		fieldType = c.resolveType(tp.Type, typeScope)
+		pat = tp.Pat
+	} else if b.Value != nil {
+		fieldType = c.checkExpr(b.Value, nil, typeScope)
+	}
+	c.declarePattern(b.Pat, fieldType, isConst, typeScope)
+
+	idPat, ok := pat.(*ast.IdentPattern)
+	if !ok {
+		return nil
+	}
+	return []*types.Field{{
+		Name:    idPat.Name.Text(c.file),
+		Type:    fieldType,
+		IsConst: isConst,
+	}}
+}
+
 // resolveTypeMembers populates fields, enum cases, and superclasses for declared nominal types.
 func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 	for _, stmt := range stmts {
@@ -342,6 +418,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 			st := sym.Type().(*types.Struct)
 			typeScope := NewScope(scope, d.Pos(), d.End())
 			c.info.Scopes[d] = typeScope
+			st.TypeParams = c.declareGenericParams(d.Generics, typeScope)
 
 			if d.Inherit != nil {
 				for _, item := range d.Inherit.Items {
@@ -358,26 +435,8 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 					case *ast.VarDecl:
 						isConst := m.Kind == token.LET
 						for _, b := range m.Bindings {
-							var fieldType types.Type
-							if tp, ok := b.Pat.(*ast.TypedPattern); ok {
-								fieldType = c.resolveType(tp.Type, scope)
-							}
-							c.declarePattern(b.Pat, fieldType, isConst, typeScope)
-							if idPat, ok := b.Pat.(*ast.IdentPattern); ok {
-								st.Fields = append(st.Fields, &types.Field{
-									Name:    idPat.Name.Text(c.file),
-									Type:    fieldType,
-									IsConst: isConst,
-								})
-							} else if tp, ok := b.Pat.(*ast.TypedPattern); ok {
-								if idPat, ok := tp.Pat.(*ast.IdentPattern); ok {
-									st.Fields = append(st.Fields, &types.Field{
-										Name:    idPat.Name.Text(c.file),
-										Type:    fieldType,
-										IsConst: isConst,
-									})
-								}
-							}
+							st.Fields = append(st.Fields,
+								c.storedField(b, isConst, typeScope)...)
 						}
 					case *ast.FuncDecl:
 						fName := m.Name.Text(c.file)
@@ -402,6 +461,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 			cl := sym.Type().(*types.Class)
 			typeScope := NewScope(scope, d.Pos(), d.End())
 			c.info.Scopes[d] = typeScope
+			cl.TypeParams = c.declareGenericParams(d.Generics, typeScope)
 
 			if d.Inherit != nil {
 				for i, item := range d.Inherit.Items {
@@ -424,26 +484,8 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 					case *ast.VarDecl:
 						isConst := m.Kind == token.LET
 						for _, b := range m.Bindings {
-							var fieldType types.Type
-							if tp, ok := b.Pat.(*ast.TypedPattern); ok {
-								fieldType = c.resolveType(tp.Type, scope)
-							}
-							c.declarePattern(b.Pat, fieldType, isConst, typeScope)
-							if idPat, ok := b.Pat.(*ast.IdentPattern); ok {
-								cl.Fields = append(cl.Fields, &types.Field{
-									Name:    idPat.Name.Text(c.file),
-									Type:    fieldType,
-									IsConst: isConst,
-								})
-							} else if tp, ok := b.Pat.(*ast.TypedPattern); ok {
-								if idPat, ok := tp.Pat.(*ast.IdentPattern); ok {
-									cl.Fields = append(cl.Fields, &types.Field{
-										Name:    idPat.Name.Text(c.file),
-										Type:    fieldType,
-										IsConst: isConst,
-									})
-								}
-							}
+							cl.Fields = append(cl.Fields,
+								c.storedField(b, isConst, typeScope)...)
 						}
 					case *ast.FuncDecl:
 						fName := m.Name.Text(c.file)
@@ -468,6 +510,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 			cl := sym.Type().(*types.Class)
 			typeScope := NewScope(scope, d.Pos(), d.End())
 			c.info.Scopes[d] = typeScope
+			cl.TypeParams = c.declareGenericParams(d.Generics, typeScope)
 
 			if d.Inherit != nil {
 				for _, item := range d.Inherit.Items {
@@ -484,26 +527,8 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 					case *ast.VarDecl:
 						isConst := m.Kind == token.LET
 						for _, b := range m.Bindings {
-							var fieldType types.Type
-							if tp, ok := b.Pat.(*ast.TypedPattern); ok {
-								fieldType = c.resolveType(tp.Type, scope)
-							}
-							c.declarePattern(b.Pat, fieldType, isConst, typeScope)
-							if idPat, ok := b.Pat.(*ast.IdentPattern); ok {
-								cl.Fields = append(cl.Fields, &types.Field{
-									Name:    idPat.Name.Text(c.file),
-									Type:    fieldType,
-									IsConst: isConst,
-								})
-							} else if tp, ok := b.Pat.(*ast.TypedPattern); ok {
-								if idPat, ok := tp.Pat.(*ast.IdentPattern); ok {
-									cl.Fields = append(cl.Fields, &types.Field{
-										Name:    idPat.Name.Text(c.file),
-										Type:    fieldType,
-										IsConst: isConst,
-									})
-								}
-							}
+							cl.Fields = append(cl.Fields,
+								c.storedField(b, isConst, typeScope)...)
 						}
 					case *ast.FuncDecl:
 						fName := m.Name.Text(c.file)
@@ -528,6 +553,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 			en := sym.Type().(*types.Enum)
 			typeScope := NewScope(scope, d.Pos(), d.End())
 			c.info.Scopes[d] = typeScope
+			en.TypeParams = c.declareGenericParams(d.Generics, typeScope)
 
 			if d.Inherit != nil {
 				for _, item := range d.Inherit.Items {
@@ -544,10 +570,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 					case *ast.EnumCaseDecl:
 						for _, el := range m.Elements {
 							caseName := el.Name.Text(c.file)
-							var assocType types.Type
-							if len(el.Params) > 0 {
-								assocType = c.resolveType(el.Params[0].Type, scope)
-							}
+							assocType := c.associatedType(el.Params, typeScope)
 							enCase := &types.EnumCase{
 								Name:           caseName,
 								AssociatedType: assocType,
@@ -593,15 +616,62 @@ func (c *checker) declareFunctions(stmts []ast.Stmt, scope *Scope) {
 		}
 		if f, ok := declStmt.D.(*ast.FuncDecl); ok {
 			name := f.Name.Text(c.file)
-			sig := c.buildFuncSig(f.Sig, scope)
+			sig := c.buildGenericFuncSig(f, scope)
 			sym := NewFunc(name, sig, f.Name.Pos())
 			sym.SetDecl(f)
+			// Two functions may share a name as long as they do not
+			// share a signature. Only the second of an identical pair
+			// is a redeclaration.
 			if old := scope.Insert(sym); old != nil {
-				c.errorf(f.Name.Pos(), "invalid redeclaration of '%s'", name)
+				prev, ok := old.(*FuncSymbol)
+				switch {
+				case !ok || types.Identical(prev.Signature(), sig):
+					c.errorf(f.Name.Pos(), "invalid redeclaration of '%s'", name)
+				default:
+					prev.AddOverload(sym)
+				}
 			}
 			c.info.Defs[f.Name] = sym
 		}
 	}
+}
+
+// throwsOf reads a ThrowsClause. Swift says two things here and this
+// keeps them apart: whether the function throws, and what it throws.
+// `throws(Never)` says it does not throw, which is the spelling a
+// generic signature reaches when its error type is substituted away.
+func (c *checker) throwsOf(clause *ast.ThrowsClause, scope *Scope) (throws bool, thrown types.Type) {
+	if clause == nil {
+		return false, nil
+	}
+	if clause.Type == nil {
+		return true, nil
+	}
+	thrown = c.resolveType(clause.Type, scope)
+	if types.Identical(thrown, types.Typ[types.Never]) {
+		return false, nil
+	}
+	return true, thrown
+}
+
+// buildGenericFuncSig reads a function's signature in a scope of its
+// own, so that the generic parameters it declares are in scope for
+// the types it is written with. The scope is recorded on the
+// declaration: the body is checked inside it, where the parameters
+// mean the same thing.
+func (c *checker) buildGenericFuncSig(f *ast.FuncDecl, scope *Scope) *types.Signature {
+	if f.Generics == nil {
+		return c.buildFuncSig(f.Sig, scope)
+	}
+	genScope := c.info.Scopes[f]
+	if genScope == nil {
+		genScope = NewScope(scope, f.Pos(), f.End())
+		c.info.Scopes[f] = genScope
+	}
+	tps := c.declareGenericParams(f.Generics, genScope)
+	sig := c.buildFuncSig(f.Sig, genScope)
+	sig.TypeParams = tps
+	return sig
 }
 
 func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature {
@@ -640,19 +710,13 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 	if sig.Result != nil {
 		res = c.resolveType(sig.Result.Type, scope)
 	}
-	var throws types.Type
-	if sig.Throws != nil {
-		if sig.Throws.Type != nil {
-			throws = c.resolveType(sig.Throws.Type, scope)
-		} else {
-			throws = types.Typ[types.Never]
-		}
-	}
+	throws, thrown := c.throwsOf(sig.Throws, scope)
 	return &types.Signature{
 		Params:  params,
 		Results: res,
 		Async:   sig.Async != token.NoPos,
 		Throws:  throws,
+		Thrown:  thrown,
 	}
 }
 

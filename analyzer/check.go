@@ -14,6 +14,8 @@ type checker struct {
 	info        *Info
 	resolved    map[ast.Type]types.Type
 	currFuncRet types.Type
+	currType    types.Type // the type whose members are being checked
+	negated     map[ast.Expr]bool
 	currActor   *types.Class
 	inAwait     bool
 }
@@ -67,8 +69,9 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 	pkgScope := NewScope(universeScope, token.NoPos, token.NoPos)
 
 	c := &checker{
-		pg:   pg,
-		info: info,
+		pg:      pg,
+		info:    info,
+		negated: make(map[ast.Expr]bool),
 	}
 
 	// Multi-pass analysis over all compilation units:

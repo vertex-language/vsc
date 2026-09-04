@@ -129,11 +129,20 @@ func (p *Param) String() string {
 }
 
 // Signature represents a function or closure type.
+//
+// Throwing is two facts, because Swift's is. A function that throws
+// says so, and it may also name what it throws: `throws(E)` is a
+// typed throw, plain `throws` names nothing and means any error, and
+// `throws(Never)` is how the language spells a function that does not
+// throw at all — so a thrown type of Never is not a throwing
+// function, and the two fields keep that from being a puzzle.
 type Signature struct {
-	Params  []*Param
-	Results Type
-	Async   bool
-	Throws  Type // nil if non-throwing; Typ[Never] / Error type or specific type if typed throws
+	TypeParams []*TypeParam // the generic parameters, if the function has any
+	Params     []*Param
+	Results    Type
+	Async      bool
+	Throws     bool // the function may throw
+	Thrown     Type // what it throws, or nil where `throws` named nothing
 }
 
 func (s *Signature) Underlying() Type { return s }
@@ -150,11 +159,11 @@ func (s *Signature) String() string {
 	if s.Async {
 		sb.WriteString(" async")
 	}
-	if s.Throws != nil {
-		if s.Throws == Typ[Never] {
+	if s.Throws {
+		if s.Thrown == nil {
 			sb.WriteString(" throws")
 		} else {
-			sb.WriteString(fmt.Sprintf(" throws(%s)", s.Throws.String()))
+			sb.WriteString(fmt.Sprintf(" throws(%s)", s.Thrown.String()))
 		}
 	}
 	sb.WriteString(" -> ")

@@ -9,7 +9,16 @@ func Identical(x, y Type) bool {
 		return false
 	}
 
-	// Unwrap Named wrappers if both are not named nominal types, or check underlying
+	// A typealias is another spelling of the type it names, not a new
+	// one, so it is looked through. A Named with nothing under it is
+	// a name this compiler could not resolve, and stays opaque.
+	if n, ok := x.(*Named); ok && n.underlying != nil {
+		return Identical(n.Underlying(), y)
+	}
+	if n, ok := y.(*Named); ok && n.underlying != nil {
+		return Identical(x, n.Underlying())
+	}
+
 	switch xt := x.(type) {
 	case *Basic:
 		if yt, ok := y.(*Basic); ok {
@@ -68,10 +77,13 @@ func Identical(x, y Type) bool {
 			if len(xt.Params) != len(yt.Params) || xt.Async != yt.Async {
 				return false
 			}
-			if (xt.Throws == nil) != (yt.Throws == nil) {
+			if xt.Throws != yt.Throws {
 				return false
 			}
-			if xt.Throws != nil && !Identical(xt.Throws, yt.Throws) {
+			if (xt.Thrown == nil) != (yt.Thrown == nil) {
+				return false
+			}
+			if xt.Thrown != nil && !Identical(xt.Thrown, yt.Thrown) {
 				return false
 			}
 			if !Identical(xt.Results, yt.Results) {
@@ -105,7 +117,13 @@ func Identical(x, y Type) bool {
 	return false
 }
 
-// ConformsTo reports whether type t conforms to protocol proto.
+// ConformsTo reports whether t conforms to proto.
+//
+// Conformance is nominal, as it is in Swift: a type conforms to a
+// protocol because it was declared to, in its own declaration or in
+// an extension, and never because its members happen to line up. Two
+// types with the same shape are not interchangeable, which is the
+// whole point of a protocol being a name.
 func ConformsTo(t Type, proto *Protocol) bool {
 	if t == nil || proto == nil {
 		return false
@@ -131,25 +149,16 @@ func ConformsTo(t Type, proto *Protocol) bool {
 		return containsProto(tt.Inherited)
 
 	case *Struct:
-		if containsProto(tt.Conformances) {
-			return true
-		}
-		return satisfiesRequirements(tt.Fields, tt.Methods, proto)
+		return containsProto(tt.Conformances)
 
 	case *Class:
 		if containsProto(tt.Conformances) {
 			return true
 		}
-		if tt.Superclass != nil && ConformsTo(tt.Superclass, proto) {
-			return true
-		}
-		return satisfiesRequirements(tt.Fields, tt.Methods, proto)
+		return tt.Superclass != nil && ConformsTo(tt.Superclass, proto)
 
 	case *Enum:
-		if containsProto(tt.Conformances) {
-			return true
-		}
-		return satisfiesRequirements(nil, tt.Methods, proto)
+		return containsProto(tt.Conformances)
 
 	case *GenericInstance:
 		return ConformsTo(tt.Base, proto)
@@ -179,34 +188,6 @@ func ConformsTo(t Type, proto *Protocol) bool {
 	default:
 		return false
 	}
-}
-
-func satisfiesRequirements(fields []*Field, methods []*Method, proto *Protocol) bool {
-	if len(proto.Requirements) == 0 {
-		return false
-	}
-	for _, req := range proto.Requirements {
-		satisfied := false
-		if req.Sig != nil {
-			for _, m := range methods {
-				if m.Name == req.Name && Identical(m.Sig, req.Sig) {
-					satisfied = true
-					break
-				}
-			}
-		} else if req.Type != nil {
-			for _, f := range fields {
-				if f.Name == req.Name && AssignableTo(f.Type, req.Type) {
-					satisfied = true
-					break
-				}
-			}
-		}
-		if !satisfied {
-			return false
-		}
-	}
-	return true
 }
 
 // AssignableTo reports whether a value of type from is assignable to a variable of type to.
