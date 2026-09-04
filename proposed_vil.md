@@ -5,10 +5,12 @@ names, the same text form, the same ownership model, the same two
 stages. Where Swift writes `copy_value`, VIL writes `copy_value`.
 Where Swift writes `bb0(%0 : @guaranteed $Box)`, so does VIL.
 
-This document sketched the package before it was written. `vil/` and
-`vil/text/` now exist: the types, values, instructions, blocks,
-functions and modules, the builder, and the printer. What remains of
-the sequence at the end is `vil/verify`, `vil/gen` and `vil/pass`.
+This document sketched the package before it was written. `vil/`,
+`vil/text/` and `vil/verify/` now exist: the types, values,
+instructions, blocks, functions and modules; the builder; the printer;
+and the rules — structural, dominance, and the two the IR exists for.
+What remains of the sequence at the end is `vil/gen` and `vil/pass`,
+and the parser that lets tests be written in `.vil` rather than in Go.
 
 ## Why cloning exactly is the point
 

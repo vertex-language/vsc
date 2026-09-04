@@ -8,6 +8,7 @@ import (
 
 	"github.com/vertex-language/vsc/types"
 	"github.com/vertex-language/vsc/vil"
+	"github.com/vertex-language/vsc/vil/verify"
 )
 
 // The differential harness.
@@ -123,6 +124,11 @@ func TestMatchesSwiftSIL(t *testing.T) {
 	if w := normalize(string(want)); got != w {
 		t.Errorf("VIL and SIL disagree.\n--- vil\n%s\n--- sil\n%s", got, w)
 	}
+	// Anything that prints as the SIL swiftc printed must also be
+	// sound by our own rules. If it is not, one of the two is wrong.
+	if err := verify.Func(f); err != nil {
+		t.Errorf("prints as SIL but does not verify: %v", err)
+	}
 }
 
 // TestOwnedParameter is `func consumes(_ b: __owned Box) -> Box`: the
@@ -152,6 +158,9 @@ func TestOwnedParameter(t *testing.T) {
 	got := normalize(funcText(t, f))
 	if w := normalize(string(want)); got != w {
 		t.Errorf("VIL and SIL disagree.\n--- vil\n%s\n--- sil\n%s", got, w)
+	}
+	if err := verify.Func(f); err != nil {
+		t.Errorf("prints as SIL but does not verify: %v", err)
 	}
 
 	// And the ownership the builder gave each value is the ownership
