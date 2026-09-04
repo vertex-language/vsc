@@ -92,3 +92,45 @@ func TestCheckAgreesWithSwiftc(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryExpressionIsVisited holds the checker to walking all of a
+// program. Not every expression can be given a type — a member of a
+// type this compiler does not model is Invalid, and says so — but
+// every one must be looked at, because an expression the checker
+// never reaches is a region of the program nothing downstream can be
+// built from.
+//
+// The exception is an operator's own symbol. A SequenceExpr holds its
+// operators as expressions so that the tree says what was written;
+// they are not values and have no type.
+func TestEveryExpressionIsVisited(t *testing.T) {
+	files, _ := filepath.Glob("../tests/check/ok-*.swift")
+	if len(files) == 0 {
+		t.Skip("no semantic corpus")
+	}
+	for _, path := range files {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			src, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := token.NewFile(path, src)
+			file, _ := parser.ParseFile(f, 0)
+			info, _ := Check([]*ast.File{file})
+
+			ast.Inspect(file, func(n ast.Node) bool {
+				e, ok := n.(ast.Expr)
+				if !ok {
+					return true
+				}
+				if _, isOp := e.(*ast.OperatorExpr); isOp {
+					return true
+				}
+				if _, found := info.Types[e]; !found {
+					t.Errorf("%T at %s was never checked", e, f.Position(e.Pos()))
+				}
+				return true
+			})
+		})
+	}
+}

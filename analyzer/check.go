@@ -81,7 +81,7 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 		if f.Unit != nil {
 			c.file = f.Unit
 		}
-		c.declarePrecedenceAndOperators(f.Stmts)
+		c.declarePrecedenceAndOperators(declsOf(f.Stmts))
 	}
 
 	// Pass 2: Nominal types (structs, classes, enums, protocols, typealiases)
@@ -89,7 +89,7 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 		if f.Unit != nil {
 			c.file = f.Unit
 		}
-		c.declareTypes(f.Stmts, pkgScope)
+		c.declareTypes(declsOf(f.Stmts), pkgScope)
 	}
 
 	// Pass 3: Type members, fields, enum cases, superclasses
@@ -97,7 +97,7 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 		if f.Unit != nil {
 			c.file = f.Unit
 		}
-		c.resolveTypeMembers(f.Stmts, pkgScope)
+		c.resolveTypeMembers(declsOf(f.Stmts), pkgScope)
 	}
 
 	// Pass 3.5: Extensions
@@ -105,7 +105,7 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 		if f.Unit != nil {
 			c.file = f.Unit
 		}
-		c.resolveExtensions(f.Stmts, pkgScope)
+		c.resolveExtensions(declsOf(f.Stmts), pkgScope)
 	}
 
 	// Pass 4: Top-level function declarations
@@ -113,7 +113,7 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 		if f.Unit != nil {
 			c.file = f.Unit
 		}
-		c.declareFunctions(f.Stmts, pkgScope)
+		c.declareFunctions(declsOf(f.Stmts), pkgScope)
 	}
 
 	// Pass 4.5: Validate protocol conformances

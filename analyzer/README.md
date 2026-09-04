@@ -64,6 +64,21 @@ diagnostic. `typeErrorf` is how that stays quiet: a diagnostic whose
 subject is Invalid is not reported, so one mistake is reported once
 and nothing downstream of it is guessed at.
 
+## Every expression, once
+
+A checker that never reaches a piece of a program is worse than one
+that reaches it and gives up: nothing downstream can be built from a
+region that was never looked at. So every declaration that holds a
+body is walked — a computed property's accessors, an initializer, a
+deinitializer, a subscript, an observer, a nested type — and so is
+every statement that holds one: `do` and its catches, `defer`, a
+labelled loop, the branches of a `#if`.
+
+`TestEveryExpressionIsVisited` is the invariant. Over the accepting
+corpus, every expression that is not an operator's own symbol has a
+recorded type; about 95% of them have a real one, and the rest are
+Invalid for the reasons above.
+
 ## The oracle
 
 `tests/check` holds programs written inside what is modelled, named

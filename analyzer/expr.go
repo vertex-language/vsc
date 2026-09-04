@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/token"
@@ -26,6 +27,52 @@ func (c *checker) checkExpr(expr ast.Expr, expected types.Type, scope *Scope) ty
 	}
 	c.info.Types[expr] = typ
 	return typ
+}
+
+// reconcileLiterals settles the type of a numeric literal against
+// what it is combined with. A literal has no type of its own in
+// Swift: `celsius * 9` is Double arithmetic and `9 * celsius` is the
+// same arithmetic written the other way round, because in both the
+// literal is what gives way.
+func (c *checker) reconcileLiterals(x ast.Expr, lhs types.Type, y ast.Expr, rhs types.Type) (types.Type, types.Type) {
+	if types.Identical(lhs, rhs) {
+		return lhs, rhs
+	}
+	if t, ok := c.adopt(x, rhs); ok {
+		return t, rhs
+	}
+	if t, ok := c.adopt(y, lhs); ok {
+		return lhs, t
+	}
+	return lhs, rhs
+}
+
+// adopt re-reads a numeric literal as the type it is being combined
+// with, and records that reading. It reports whether the literal took
+// the type.
+func (c *checker) adopt(e ast.Expr, want types.Type) (types.Type, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || want == nil {
+		return nil, false
+	}
+	var untyped types.Type
+	switch lit.Kind {
+	case token.INT_LIT:
+		untyped = types.Typ[types.UntypedInt]
+	case token.FLOAT_LIT:
+		untyped = types.Typ[types.UntypedFloat]
+	default:
+		return nil, false
+	}
+	// Only a concrete numeric type is adopted. An optional is not:
+	// `maybe() ?? 0` gives 0 the wrapped type, not the optional one,
+	// and that is the coalescing rule's business rather than this.
+	b, ok := want.Underlying().(*types.Basic)
+	if !ok || b.Info()&types.IsNumeric == 0 || !types.AssignableTo(untyped, want) {
+		return nil, false
+	}
+	c.info.Types[e] = want
+	return want, true
 }
 
 // resolveOverload picks the declaration a call names, where the name
@@ -101,25 +148,30 @@ func (c *checker) labelFits(arg *ast.CallArg, param *types.Param) bool {
 // makes a Box<Int>, which the memberwise initializer's parameters —
 // the stored properties, in order — are enough to work out.
 func (c *checker) inferInstance(instance types.Type, call *ast.CallExpr, scope *Scope) types.Type {
-	params := typeParamsOf(instance)
-	if len(params) == 0 || call.Args == nil {
+	if call.Args == nil {
 		return instance
 	}
 	fields := storedFieldsOf(instance)
-	if len(fields) == 0 {
-		return instance
-	}
+	params := typeParamsOf(instance)
 
+	// The arguments are read whatever comes of them: they are
+	// expressions, and every expression in a program is checked even
+	// where what it is passed to is not yet modelled.
 	subst := make(map[*types.TypeParam]types.Type, len(params))
-	quiet := len(c.info.Diagnostics)
 	for i, arg := range call.Args.Args {
 		field := fieldFor(fields, arg, c.file, i)
-		if field == nil {
-			continue
+		var want types.Type
+		if field != nil && len(params) == 0 {
+			want = field.Type
 		}
-		types.Unify(field.Type, c.checkExpr(arg.X, nil, scope), subst)
+		argType := c.checkExpr(arg.X, want, scope)
+		if field != nil {
+			types.Unify(field.Type, argType, subst)
+		}
 	}
-	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	if len(params) == 0 || len(fields) == 0 {
+		return instance
+	}
 
 	args := make([]types.Type, len(params))
 	for i, p := range params {
@@ -207,6 +259,20 @@ func (c *checker) lookupMember(t types.Type, name string) types.Type {
 		return types.Substitute(member, subst)
 	}
 	switch b := t.Underlying().(type) {
+	// A tuple's elements are named by number, and by their label
+	// where the type gave them one.
+	case *types.Tuple:
+		if i, err := strconv.Atoi(name); err == nil {
+			if i >= 0 && i < len(b.Elements) {
+				return known(b.Elements[i].Type)
+			}
+			return nil
+		}
+		for _, elem := range b.Elements {
+			if elem.Name == name {
+				return known(elem.Type)
+			}
+		}
 	case *types.Struct:
 		for _, f := range b.Fields {
 			if f.Name == name {
@@ -322,6 +388,23 @@ func (c *checker) checkPrefix(e *ast.PrefixExpr, expected types.Type, scope *Sco
 // must produce one, and they must agree: the type of the whole is the
 // type of the first branch that has one.
 func (c *checker) checkStmtExpr(e *ast.StmtExpr, expected types.Type, scope *Scope) types.Type {
+	// What it branches on is checked whatever its branches produce.
+	switch s := e.Stmt.(type) {
+	case *ast.IfStmt:
+		for cur := ast.Stmt(s); cur != nil; {
+			ifStmt, ok := cur.(*ast.IfStmt)
+			if !ok {
+				break
+			}
+			for _, cond := range ifStmt.Conds {
+				c.checkCondition(cond, scope)
+			}
+			cur = ifStmt.Else
+		}
+	case *ast.SwitchStmt:
+		c.checkExpr(s.Subject, nil, scope)
+	}
+
 	var result types.Type
 	for _, blk := range branchBlocks(e.Stmt) {
 		t := c.checkBranchValue(blk, expected, scope)
@@ -593,6 +676,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 
 		lhs := c.checkExpr(e.X, nil, scope)
 		rhs := c.checkExpr(e.Y, nil, scope)
+		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs)
 
 		switch opName {
 		case "==", "!=", "<", "<=", ">", ">=":
@@ -715,6 +799,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if meta, ok := calleeType.(*types.Metatype); ok {
 			return c.inferInstance(meta.Instance, e, scope)
 		}
+		// Whatever is being called, the arguments are expressions.
+		if e.Args != nil {
+			for _, arg := range e.Args.Args {
+				c.checkExpr(arg.X, nil, scope)
+			}
+		}
 		c.typeErrorf(e.Pos(), "cannot call value of non-function type '%s'", calleeType)
 		return types.Typ[types.Invalid]
 
@@ -745,19 +835,25 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 
 	case *ast.SubscriptExpr:
 		baseType := c.checkExpr(e.X, nil, scope)
-		if arr, ok := baseType.Underlying().(*types.Array); ok {
-			if len(e.Args) > 0 {
-				c.checkExpr(e.Args[0].X, types.Typ[types.Int], scope)
-			}
-			return arr.Elem
+		var index types.Type
+		var result types.Type = types.Typ[types.Invalid]
+		switch b := baseType.Underlying().(type) {
+		case *types.Array:
+			index, result = types.Typ[types.Int], b.Elem
+		case *types.Dictionary:
+			index, result = b.Key, &types.Optional{Wrapped: b.Value}
 		}
-		if dict, ok := baseType.Underlying().(*types.Dictionary); ok {
-			if len(e.Args) > 0 {
-				c.checkExpr(e.Args[0].X, dict.Key, scope)
+		// The arguments are read whatever the base turns out to be:
+		// a user-declared subscript is not modelled yet, and its
+		// arguments are expressions all the same.
+		for i, arg := range e.Args {
+			want := index
+			if i > 0 {
+				want = nil
 			}
-			return &types.Optional{Wrapped: dict.Value}
+			c.checkExpr(arg.X, want, scope)
 		}
-		return types.Typ[types.Invalid]
+		return result
 
 	case *ast.ArrayLit:
 		var elemType types.Type

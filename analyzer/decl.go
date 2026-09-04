@@ -169,13 +169,36 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 }
 
 // declarePrecedenceAndOperators discovers precedencegroup and operator declarations.
-func (c *checker) declarePrecedenceAndOperators(stmts []ast.Stmt) {
+// declsOf is the declarations a statement list holds. A declaration
+// reaches the parser as a statement wherever a statement may go, and
+// the passes below read declarations, not statements.
+func declsOf(stmts []ast.Stmt) []ast.Decl {
+	out := make([]ast.Decl, 0, len(stmts))
 	for _, stmt := range stmts {
-		declStmt, ok := stmt.(*ast.DeclStmt)
-		if !ok {
-			continue
+		if d, ok := stmt.(*ast.DeclStmt); ok {
+			out = append(out, d.D)
 		}
-		switch d := declStmt.D.(type) {
+	}
+	return out
+}
+
+// memberDecls is the declarations a type's body holds.
+func memberDecls(body *ast.MemberBlock) []ast.Decl {
+	if body == nil {
+		return nil
+	}
+	out := make([]ast.Decl, 0, len(body.Members))
+	for _, mem := range body.Members {
+		if d, ok := mem.(ast.Decl); ok {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func (c *checker) declarePrecedenceAndOperators(decls []ast.Decl) {
+	for _, d := range decls {
+		switch d := d.(type) {
 		case *ast.PrecedenceGroupDecl:
 			groupName := d.Name.Text(c.file)
 			grp := &PrecedenceGroup{
@@ -212,13 +235,9 @@ func (c *checker) declarePrecedenceAndOperators(stmts []ast.Stmt) {
 }
 
 // declareTypes discovers all nominal type declarations (Struct, Class, Enum, Protocol, Typealias).
-func (c *checker) declareTypes(stmts []ast.Stmt, scope *Scope) {
-	for _, stmt := range stmts {
-		declStmt, ok := stmt.(*ast.DeclStmt)
-		if !ok {
-			continue
-		}
-		switch d := declStmt.D.(type) {
+func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
+	for _, d := range decls {
+		switch d := d.(type) {
 		case *ast.StructDecl:
 			name := d.Name.Text(c.file)
 			st := &types.Struct{Name: name, Copyable: true}
@@ -403,13 +422,23 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 }
 
 // resolveTypeMembers populates fields, enum cases, and superclasses for declared nominal types.
-func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
-	for _, stmt := range stmts {
-		declStmt, ok := stmt.(*ast.DeclStmt)
-		if !ok {
-			continue
-		}
-		switch d := declStmt.D.(type) {
+// declareNested declares the types written inside a type's body and
+// reads their members, in the enclosing type's scope. A nested type
+// is a type: it is reached as `Outer.Inner` from outside and by its
+// own name from within, and its members are read the same way any
+// other type's are.
+func (c *checker) declareNested(body *ast.MemberBlock, typeScope *Scope) {
+	nested := memberDecls(body)
+	if len(nested) == 0 {
+		return
+	}
+	c.declareTypes(nested, typeScope)
+	c.resolveTypeMembers(nested, typeScope)
+}
+
+func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
+	for _, d := range decls {
+		switch d := d.(type) {
 		case *ast.StructDecl:
 			sym := scope.Lookup(d.Name.Text(c.file))
 			if sym == nil {
@@ -419,6 +448,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 			typeScope := NewScope(scope, d.Pos(), d.End())
 			c.info.Scopes[d] = typeScope
 			st.TypeParams = c.declareGenericParams(d.Generics, typeScope)
+			c.declareNested(d.Body, typeScope)
 
 			if d.Inherit != nil {
 				for _, item := range d.Inherit.Items {
@@ -462,6 +492,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 			typeScope := NewScope(scope, d.Pos(), d.End())
 			c.info.Scopes[d] = typeScope
 			cl.TypeParams = c.declareGenericParams(d.Generics, typeScope)
+			c.declareNested(d.Body, typeScope)
 
 			if d.Inherit != nil {
 				for i, item := range d.Inherit.Items {
@@ -511,6 +542,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 			typeScope := NewScope(scope, d.Pos(), d.End())
 			c.info.Scopes[d] = typeScope
 			cl.TypeParams = c.declareGenericParams(d.Generics, typeScope)
+			c.declareNested(d.Body, typeScope)
 
 			if d.Inherit != nil {
 				for _, item := range d.Inherit.Items {
@@ -554,6 +586,7 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 			typeScope := NewScope(scope, d.Pos(), d.End())
 			c.info.Scopes[d] = typeScope
 			en.TypeParams = c.declareGenericParams(d.Generics, typeScope)
+			c.declareNested(d.Body, typeScope)
 
 			if d.Inherit != nil {
 				for _, item := range d.Inherit.Items {
@@ -608,13 +641,9 @@ func (c *checker) resolveTypeMembers(stmts []ast.Stmt, scope *Scope) {
 }
 
 // declareFunctions discovers top-level functions and signatures.
-func (c *checker) declareFunctions(stmts []ast.Stmt, scope *Scope) {
-	for _, stmt := range stmts {
-		declStmt, ok := stmt.(*ast.DeclStmt)
-		if !ok {
-			continue
-		}
-		if f, ok := declStmt.D.(*ast.FuncDecl); ok {
+func (c *checker) declareFunctions(decls []ast.Decl, scope *Scope) {
+	for _, d := range decls {
+		if f, ok := d.(*ast.FuncDecl); ok {
 			name := f.Name.Text(c.file)
 			sig := c.buildGenericFuncSig(f, scope)
 			sym := NewFunc(name, sig, f.Name.Pos())
@@ -742,6 +771,12 @@ func (c *checker) declarePatternInit(pat ast.Pattern, typ types.Type, isConst bo
 			sym.SetInitialized(isInitialized)
 			scope.Insert(sym)
 			c.info.Defs[idExpr.Name] = sym
+			// The name is written as an expression — `for x in xs`
+			// binds x through one — so it carries a type like any
+			// other, and a consumer reading the tree finds it there.
+			if typ != nil {
+				c.info.Types[idExpr] = typ
+			}
 		}
 
 	case *ast.TypedPattern:
@@ -764,13 +799,9 @@ func (c *checker) declarePattern(pat ast.Pattern, typ types.Type, isConst bool, 
 }
 
 // resolveExtensions processes extension declarations and attaches conformances and members.
-func (c *checker) resolveExtensions(stmts []ast.Stmt, scope *Scope) {
-	for _, stmt := range stmts {
-		declStmt, ok := stmt.(*ast.DeclStmt)
-		if !ok {
-			continue
-		}
-		ext, ok := declStmt.D.(*ast.ExtensionDecl)
+func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
+	for _, d := range decls {
+		ext, ok := d.(*ast.ExtensionDecl)
 		if !ok {
 			continue
 		}

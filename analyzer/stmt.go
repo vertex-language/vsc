@@ -18,6 +18,55 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 	case *ast.DeclStmt:
 		c.checkDecl(s.D, scope)
 
+	// A label names a loop or a switch for break and continue to
+	// reach; what it labels is an ordinary statement.
+	case *ast.LabeledStmt:
+		c.checkStmt(s.Stmt, scope)
+
+	// do, defer, and the catch clauses. A catch binds `error` unless
+	// it names a pattern of its own, which is the one name Swift
+	// introduces without the program writing it.
+	case *ast.DoStmt:
+		c.checkCodeBlock(s.Body, scope)
+		for _, cl := range s.Catches {
+			catchScope := NewScope(scope, cl.Pos(), cl.End())
+			c.info.Scopes[cl] = catchScope
+			for _, item := range cl.Items {
+				if item.Pat != nil {
+					c.declarePattern(item.Pat, types.ErrorProtocol, true, catchScope)
+				}
+				if item.Where != nil {
+					c.checkExpr(item.Where.Cond, types.Typ[types.Bool], catchScope)
+				}
+			}
+			if len(cl.Items) == 0 {
+				catchScope.Insert(NewVar("error", types.ErrorProtocol, cl.Pos(), true, types.DefaultOwnership))
+			}
+			c.checkCodeBlock(cl.Body, catchScope)
+		}
+
+	case *ast.DeferStmt:
+		c.checkCodeBlock(s.Body, scope)
+
+	case *ast.ThrowStmt:
+		c.checkExpr(s.X, nil, scope)
+
+	case *ast.DiscardStmt:
+		c.checkExpr(s.X, nil, scope)
+
+	case *ast.YieldStmt:
+		c.checkExpr(s.X, nil, scope)
+
+	// Every branch of a #if is read. Which one the target selects is
+	// a question for the phase that evaluates the condition; a name
+	// used in the branch not taken is still a name.
+	case *ast.IfConfigStmt:
+		for _, cl := range s.Clauses {
+			for _, st := range cl.Stmts {
+				c.checkStmt(st, scope)
+			}
+		}
+
 	case *ast.ExprStmt:
 		c.checkExpr(s.X, nil, scope)
 
@@ -228,7 +277,7 @@ func (c *checker) checkCodeBlock(block *ast.CodeBlock, parent *Scope) {
 	c.info.Scopes[block] = blockScope
 	// A function declared in a block is visible throughout it, before
 	// its declaration as well as after, so the names come first.
-	c.declareFunctions(block.Stmts, blockScope)
+	c.declareFunctions(declsOf(block.Stmts), blockScope)
 	for _, s := range block.Stmts {
 		c.checkStmt(s, blockScope)
 	}
@@ -361,10 +410,180 @@ func (c *checker) checkMembers(d ast.Decl, body *ast.MemberBlock, self types.Typ
 	defer func() { c.currType, c.currActor = prevType, prevActor }()
 
 	for _, mem := range body.Members {
-		if f, ok := mem.(*ast.FuncDecl); ok {
-			c.checkFuncBody(f, typeScope)
+		c.checkMember(mem, typeScope, self)
+	}
+}
+
+// checkMember checks one member of a type. Every kind that has a body
+// is walked: a computed property's accessors, an initializer, a
+// deinitializer and a subscript hold as much of a program as a method
+// does, and a nested type holds a program of its own.
+func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
+	switch m := mem.(type) {
+	case *ast.FuncDecl:
+		c.checkFuncBody(m, typeScope)
+
+	case *ast.InitDecl:
+		c.checkBodyWithParams(m, m.Sig, m.Body, typeScope, self)
+
+	case *ast.DeinitDecl:
+		c.checkBodyWithParams(m, nil, m.Body, typeScope, nil)
+
+	case *ast.SubscriptDecl:
+		sig := &ast.FuncSig{Lparen: m.Lparen, Params: m.Params, Rparen: m.Rparen, Result: m.Result}
+		var result types.Type
+		if m.Result != nil {
+			result = c.resolveType(m.Result.Type, typeScope)
+		}
+		scope := c.checkBodyWithParams(m, sig, m.Body, typeScope, result)
+		c.checkAccessors(m.Accessors, scope, result)
+
+	case *ast.VarDecl:
+		for _, b := range m.Bindings {
+			c.checkBinding(b, typeScope)
+		}
+
+	// A case's raw value is an expression, and one of the few whose
+	// type is fixed by the enum's own declaration.
+	case *ast.EnumCaseDecl:
+		for _, el := range m.Elements {
+			if el.Value != nil {
+				c.checkExpr(el.Value, rawValueOf(self), typeScope)
+			}
+		}
+
+	// A nested type is a type: its members are checked in its own
+	// scope, with its own self.
+	case *ast.StructDecl:
+		c.checkMembers(m, m.Body, c.declaredType(m.Name, typeScope))
+	case *ast.ClassDecl:
+		c.checkMembers(m, m.Body, c.declaredType(m.Name, typeScope))
+	case *ast.ActorDecl:
+		c.checkMembers(m, m.Body, c.declaredType(m.Name, typeScope))
+	case *ast.EnumDecl:
+		c.checkMembers(m, m.Body, c.declaredType(m.Name, typeScope))
+	case *ast.ExtensionDecl:
+		c.checkMembers(m, m.Body, c.resolveType(m.Type, typeScope))
+	}
+}
+
+// rawValueOf is the type an enum's cases are numbered or named with.
+func rawValueOf(t types.Type) types.Type {
+	if t == nil {
+		return nil
+	}
+	if en, ok := t.Underlying().(*types.Enum); ok {
+		return en.RawType
+	}
+	return nil
+}
+
+// checkBinding checks what a stored or computed property is made of:
+// its initializer, and the accessors that stand in for one.
+func (c *checker) checkBinding(b *ast.PatternBinding, scope *Scope) {
+	var declared types.Type
+	if tp, ok := b.Pat.(*ast.TypedPattern); ok {
+		declared = c.resolveType(tp.Type, scope)
+	}
+	if b.Value != nil {
+		valueType := c.checkExpr(b.Value, declared, scope)
+		if declared != nil && !types.AssignableTo(valueType, declared) {
+			c.typeErrorf(b.Value.Pos(), "cannot convert value of type '%s' to specified type '%s'", valueType, declared)
 		}
 	}
+	// `var v: Int { … }` is a getter written without the word.
+	if b.Body != nil {
+		c.checkReturningBlock(b.Body, scope, declared)
+	}
+	c.checkAccessors(b.Accessors, scope, declared)
+}
+
+// checkAccessors checks a get, set, willSet and didSet block. A setter
+// and an observer take the new value as a parameter, named or not:
+// `newValue` and `oldValue` are the names Swift gives them when the
+// declaration does not.
+func (c *checker) checkAccessors(block *ast.AccessorBlock, scope *Scope, valueType types.Type) {
+	if block == nil {
+		return
+	}
+	for _, a := range block.Accessors {
+		if a.Body == nil {
+			continue // the form a protocol writes: no body to check
+		}
+		accScope := NewScope(scope, a.Pos(), a.End())
+		c.info.Scopes[a] = accScope
+		if name := c.accessorValueName(a); name != "" {
+			accScope.Insert(NewVar(name, valueType, a.Pos(), true, types.DefaultOwnership))
+		}
+		result := valueType
+		if !c.accessorReturns(a) {
+			result = types.Typ[types.Void]
+		}
+		c.checkReturningBlock(a.Body, accScope, result)
+	}
+}
+
+// accessorValueName is the name an accessor's incoming value is bound
+// to, or "" for one that takes none.
+func (c *checker) accessorValueName(a *ast.Accessor) string {
+	if a.Keyword == nil {
+		return ""
+	}
+	switch a.Keyword.Text(c.file) {
+	case "set", "_modify":
+		if a.Name != nil {
+			return a.Name.Text(c.file)
+		}
+		return "newValue"
+	case "willSet":
+		if a.Name != nil {
+			return a.Name.Text(c.file)
+		}
+		return "newValue"
+	case "didSet":
+		if a.Name != nil {
+			return a.Name.Text(c.file)
+		}
+		return "oldValue"
+	}
+	return ""
+}
+
+// accessorReturns reports whether an accessor produces the property's
+// value rather than acting on it.
+func (c *checker) accessorReturns(a *ast.Accessor) bool {
+	if a.Keyword == nil {
+		return false
+	}
+	switch a.Keyword.Text(c.file) {
+	case "get", "_read", "unsafeAddress", "unsafeMutableAddress":
+		return true
+	}
+	return false
+}
+
+// checkBodyWithParams checks a body whose parameters are declared by
+// sig, in a scope of its own, and returns that scope.
+func (c *checker) checkBodyWithParams(d ast.Node, sig *ast.FuncSig, body *ast.CodeBlock, scope *Scope, result types.Type) *Scope {
+	inner := NewScope(scope, d.Pos(), d.End())
+	c.info.Scopes[d] = inner
+	if sig != nil {
+		for _, p := range c.buildFuncSig(sig, scope).Params {
+			inner.Insert(NewVar(p.Name, p.Type, d.Pos(), true, p.Ownership))
+		}
+	}
+	if body != nil {
+		c.checkReturningBlock(body, inner, result)
+	}
+	return inner
+}
+
+// checkReturningBlock checks a block whose returns produce result.
+func (c *checker) checkReturningBlock(body *ast.CodeBlock, scope *Scope, result types.Type) {
+	prev := c.currFuncRet
+	c.currFuncRet = result
+	defer func() { c.currFuncRet = prev }()
+	c.checkCodeBlock(body, scope)
 }
 
 func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
@@ -387,7 +606,7 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 	if d.Body != nil {
 		bodyScope := NewScope(fnScope, d.Body.Pos(), d.Body.End())
 		c.info.Scopes[d.Body] = bodyScope
-		c.declareFunctions(d.Body.Stmts, bodyScope)
+		c.declareFunctions(declsOf(d.Body.Stmts), bodyScope)
 		for _, st := range d.Body.Stmts {
 			c.checkStmt(st, bodyScope)
 		}
