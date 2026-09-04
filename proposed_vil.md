@@ -6,11 +6,19 @@ stages. Where Swift writes `copy_value`, VIL writes `copy_value`.
 Where Swift writes `bb0(%0 : @guaranteed $Box)`, so does VIL.
 
 This document sketched the package before it was written. `vil/`,
-`vil/text/` and `vil/verify/` now exist: the types, values,
-instructions, blocks, functions and modules; the builder; the printer;
-and the rules — structural, dominance, and the two the IR exists for.
-What remains of the sequence at the end is `vil/gen` and `vil/pass`,
-and the parser that lets tests be written in `.vil` rather than in Go.
+`vil/text/`, `vil/verify/` and `vil/gen/` now exist: the IR, the
+printer, the rules, and the lowering that produces it. A borrowed
+parameter and a `let` that keeps a reference already lower to what
+`swiftc -emit-silgen` prints for the same source, instruction for
+instruction.
+
+What remains of the sequence at the end is `core/`, `vil/pass` and the
+parser that lets tests be written in `.vil` rather than in Go. `core/`
+is the one that widens everything: a literal in Swift is a call to an
+initializer a library declares, so until it exists `vil/gen` emits the
+form the mandatory passes produce instead — which means a function
+with a literal in it is diffed against `swiftc -emit-sil` rather than
+`-emit-silgen`.
 
 ## Why cloning exactly is the point
 

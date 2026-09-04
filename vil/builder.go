@@ -63,9 +63,13 @@ func (b *Block) DeallocRef(v *Value) *Inst {
 	return b.add(DeallocRef, Aux{}, []*Value{v})
 }
 
-// AllocBox allocates a heap box for a captured or escaping variable.
-func (b *Block) AllocBox(t Type, attrs ...string) *Value {
-	return b.add(AllocBox, Aux{Type: t, Attrs: attrs}, nil, t.Object()).Result()
+// AllocBox allocates a heap box for a variable, which is what a
+// `var` is in raw VIL: a box, borrowed for the variable's scope, and
+// projected to get at what it holds.
+func (b *Block) AllocBox(elem Type, name string, attrs ...string) *Value {
+	boxed := Box(elem.Formal())
+	return b.add(AllocBox, Aux{Type: boxed, Name: name, Attrs: attrs}, nil,
+		boxed).Result()
 }
 
 // ProjectBox yields the address of what a box holds.
@@ -84,6 +88,13 @@ func (b *Block) Load(addr *Value, attr string) *Value {
 // address held anything before: init, or assign.
 func (b *Block) Store(v, addr *Value, attr string) *Inst {
 	return b.add(Store, Aux{Attrs: []string{attr}}, []*Value{v, addr})
+}
+
+// Assign stores to an address that already holds a value, which is
+// what an assignment to a var is before definite initialization has
+// decided whether it was the first one.
+func (b *Block) Assign(v, addr *Value) *Inst {
+	return b.add(Assign, Aux{}, []*Value{v, addr})
 }
 
 // CopyAddr copies between addresses, which is how an address-only

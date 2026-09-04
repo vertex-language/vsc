@@ -217,12 +217,30 @@ func (p *printer) operands(in *vil.Inst) {
 	case vil.Metatype:
 		p.printf(" %s", aux.Type)
 
-	case vil.AllocStack, vil.AllocRef, vil.AllocBox:
+	case vil.AllocStack, vil.AllocRef:
 		p.printf("%s %s", attrPrefix(aux.Attrs), aux.Type)
 
-	case vil.Load, vil.Store, vil.CopyAddr, vil.BeginAccess,
-		vil.BeginBorrow, vil.MoveValue, vil.MarkUninitialized:
+	case vil.Load, vil.BeginAccess, vil.BeginBorrow, vil.MoveValue,
+		vil.MarkUninitialized:
 		p.printf("%s %s", attrPrefix(aux.Attrs), p.refs(args))
+
+	// `store %1 to [trivial] %2`. The destination comes after the
+	// word, not after a comma, and the attribute sits between them.
+	case vil.Store, vil.CopyAddr:
+		p.printf(" %s to%s %s", p.ref(args[0]), attrPrefix(aux.Attrs), p.ref(args[1]))
+
+	case vil.Assign:
+		p.printf(" %s to %s", p.ref(args[0]), p.ref(args[1]))
+
+	// `alloc_box ${ var Int }, var, name "total"`.
+	case vil.AllocBox:
+		p.printf(" %s", aux.Type)
+		for _, a := range aux.Attrs {
+			p.printf(", %s", a)
+		}
+		if aux.Name != "" {
+			p.printf(", name %q", aux.Name)
+		}
 
 	case vil.StructExtract, vil.StructElementAddr, vil.RefElementAddr,
 		vil.UncheckedEnumData, vil.ClassMethod:

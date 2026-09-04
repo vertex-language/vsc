@@ -492,7 +492,7 @@ them exist.
 | [`scanner/`](scanner/) | tokenization, literal decoding | |
 | [`parser/`](parser/) · [`ast/`](ast/) | tokens to AST; the syntax tree | |
 | [`analyzer/`](analyzer/) · [`types/`](types/) | name resolution, types, layout, ownership | |
-| [`vil/`](vil/) | the ownership IR: a clone of Swift's SIL | started |
+| [`vil/`](vil/) | the ownership IR: a clone of Swift's SIL, its text form, its rules, and the lowering into it | started |
 | `lower/` | canonical VIL to VIR; host/device split | planned |
 | `.` | the phases composed, the target tables, isel, object writing, linking | planned |
 | `core/` | the built-in package | planned |

@@ -23,6 +23,7 @@ const (
 	Load              Op = "load"
 	Store             Op = "store"
 	CopyAddr          Op = "copy_addr"
+	Assign            Op = "assign"
 	DestroyAddr       Op = "destroy_addr"
 	BeginAccess       Op = "begin_access"
 	EndAccess         Op = "end_access"
@@ -115,7 +116,7 @@ func (o Op) Consumes(i int) bool {
 	switch o {
 	case DestroyValue, Return, Throw, MoveValue, EndLifetime:
 		return i == 0
-	case Store:
+	case Store, Assign:
 		return i == 0 // the value, not the address
 	case DeallocRef, DeallocBox:
 		return i == 0

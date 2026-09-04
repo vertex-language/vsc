@@ -61,6 +61,8 @@ func trivial(t types.Type) bool {
 		return true
 	}
 	switch n := t.Underlying().(type) {
+	case *BoxType:
+		return false // an allocation is owned whatever it holds
 	case *types.Basic:
 		return n.Kind() != types.String
 	case *Builtin:
@@ -90,6 +92,24 @@ func trivial(t types.Type) bool {
 		return true
 	}
 	return false
+}
+
+// A BoxType is a heap box holding one variable: `{ var Int }`. It is
+// what a `var` is in raw VIL, and it is a type of its own rather than
+// its contents — a box is an allocation, so something owns it even
+// when what it holds owns nothing.
+type BoxType struct{ elem types.Type }
+
+// Box is the type of a box holding t.
+func Box(t types.Type) Type { return Object(&BoxType{elem: t}) }
+
+func (b *BoxType) Underlying() types.Type { return b }
+func (b *BoxType) Elem() types.Type       { return b.elem }
+func (b *BoxType) String() string {
+	if b.elem == nil {
+		return "{ var <invalid> }"
+	}
+	return "{ var " + b.elem.String() + " }"
 }
 
 // A Builtin is one of the types the IR has and the source language
