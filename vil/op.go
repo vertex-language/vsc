@@ -34,6 +34,13 @@ const (
 	EndAccess         Op = "end_access"
 	MarkUninitialized Op = "mark_uninitialized"
 
+	// Reference counting: what the ownership instructions become once
+	// the ownership form has been lowered away. Everything above the
+	// eliminator reasons in copy and destroy; everything below it
+	// counts.
+	StrongRetain  Op = "strong_retain"
+	StrongRelease Op = "strong_release"
+
 	// Ownership.
 	CopyValue      Op = "copy_value"
 	DestroyValue   Op = "destroy_value"
