@@ -128,7 +128,7 @@ func TestBorrowedParameter(t *testing.T) {
 final class Box { var n: Int = 0 }
 func borrows(_ b: Box) -> Int { return b.n }
 `)
-	want := `sil hidden [ossa] @borrows : $@convention(thin) (@guaranteed Box) -> Int {
+	want := `sil hidden [ossa] @f0 : $@convention(thin) (@guaranteed Box) -> Int {
 bb0(%0 : @guaranteed $Box):
   debug_value %0, let, name "b", argno 1
   %1 = ref_element_addr %0, #Box.n
@@ -136,9 +136,8 @@ bb0(%0 : @guaranteed $Box):
   %3 = load [trivial] %2
   end_access %2
   return %3
-} // end sil function 'borrows'
-`
-	if got := funcText(t, m, "borrows"); got != want {
+}`
+	if got := normText(t, m, "borrows"); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
@@ -154,7 +153,7 @@ func keeps(_ b: Box) -> Box {
     return kept
 }
 `)
-	want := `sil hidden [ossa] @keeps : $@convention(thin) (@guaranteed Box) -> @owned Box {
+	want := `sil hidden [ossa] @f0 : $@convention(thin) (@guaranteed Box) -> @owned Box {
 bb0(%0 : @guaranteed $Box):
   debug_value %0, let, name "b", argno 1
   %1 = copy_value %0
@@ -165,9 +164,8 @@ bb0(%0 : @guaranteed $Box):
   end_borrow %3
   destroy_value %2
   return %4
-} // end sil function 'keeps'
-`
-	if got := funcText(t, m, "keeps"); got != want {
+}`
+	if got := normText(t, m, "keeps"); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
@@ -180,7 +178,7 @@ func TestArithmeticIsBuiltins(t *testing.T) {
 	m := lower(t, `
 func add(_ a: Int, _ b: Int) -> Int { return a + b }
 `)
-	want := `sil hidden [ossa] @add : $@convention(thin) (Int, Int) -> Int {
+	want := `sil hidden [ossa] @f0 : $@convention(thin) (Int, Int) -> Int {
 bb0(%0 : $Int, %1 : $Int):
   debug_value %0, let, name "a", argno 1
   debug_value %1, let, name "b", argno 2
@@ -193,9 +191,8 @@ bb0(%0 : $Int, %1 : $Int):
   cond_fail %7, "arithmetic overflow"
   %8 = struct $Int (%6)
   return %8
-} // end sil function 'add'
-`
-	if got := funcText(t, m, "add"); got != want {
+}`
+	if got := normText(t, m, "add"); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
@@ -206,7 +203,7 @@ func TestComparisonIsABuiltin(t *testing.T) {
 	m := lower(t, `
 func lt(_ a: Int, _ b: Int) -> Bool { return a < b }
 `)
-	want := `sil hidden [ossa] @lt : $@convention(thin) (Int, Int) -> Bool {
+	want := `sil hidden [ossa] @f0 : $@convention(thin) (Int, Int) -> Bool {
 bb0(%0 : $Int, %1 : $Int):
   debug_value %0, let, name "a", argno 1
   debug_value %1, let, name "b", argno 2
@@ -215,9 +212,8 @@ bb0(%0 : $Int, %1 : $Int):
   %4 = builtin "cmp_slt_Int64"(%2, %3) : $Builtin.Int1
   %5 = struct $Bool (%4)
   return %5
-} // end sil function 'lt'
-`
-	if got := funcText(t, m, "lt"); got != want {
+}`
+	if got := normText(t, m, "lt"); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
@@ -339,9 +335,19 @@ func swiftSIL(t *testing.T, swiftc, src, fn string) string {
 	return strings.Join(keep, "\n") + "\n"
 }
 
+// normText is funcText with the symbols normalized to positions, for
+// the tests that are about what a function does rather than what it
+// is called. A mangled name in a golden string is unreadable and
+// changes whenever the signature does, which is noise in a test about
+// the instructions.
+func normText(t *testing.T, m *vil.Module, name string) string {
+	t.Helper()
+	return text.Normalize(funcText(t, m, name))
+}
+
 func funcText(t *testing.T, m *vil.Module, name string) string {
 	t.Helper()
-	f := m.Lookup(name)
+	f := m.LookupSource(name)
 	if f == nil {
 		t.Fatalf("no function %q in the module:\n%s", name, text.String(m))
 	}

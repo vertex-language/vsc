@@ -1,7 +1,10 @@
 package mangle
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"strconv"
+	"strings"
 
 	"github.com/vertex-language/vsc/types"
 )
@@ -38,6 +41,10 @@ type Decl struct {
 	// Static says the function belongs to the type rather than to an
 	// instance, which the mangling spells with an extra Z.
 	Static bool
+	// Discriminator is set for a declaration that is private to one
+	// file, and tells two same-named private declarations in different
+	// files apart. Discriminator computes one.
+	Discriminator string
 }
 
 // Function is the symbol a function is given.
@@ -49,6 +56,12 @@ func Function(d Decl) (string, error) {
 	}
 	if err := m.identifier(d.Name); err != nil {
 		return "", err
+	}
+	if d.Discriminator != "" {
+		if err := m.identifier(d.Discriminator); err != nil {
+			return "", err
+		}
+		m.write("LL")
 	}
 	if err := m.signature(d.Signature); err != nil {
 		return "", err
@@ -401,4 +414,23 @@ func (m *mangler) runLen() int {
 func (m *mangler) endRun() {
 	m.runCount = 0
 	m.subAt = -1
+}
+
+// --- private declarations ---
+
+// A private declaration is file-local, so two files in one module may
+// each declare one with the same name and they must not collide. Swift
+// separates them by writing a discriminator after the name and marking
+// the result LL, and this does the same.
+//
+// The value is the one deliberate difference from swiftc. Swift's own
+// discriminator is a hash it computes its own way, and the string only
+// has to be stable and distinct per file: a private symbol never
+// leaves the object file it is in, so nothing outside can depend on
+// which string it was. Matching Swift's exactly would be worth doing
+// the day a private symbol has to be resolved across compilers, and
+// that day has not come.
+func Discriminator(path string) string {
+	sum := md5.Sum([]byte(path))
+	return "_" + strings.ToUpper(hex.EncodeToString(sum[:]))
 }

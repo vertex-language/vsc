@@ -25,14 +25,16 @@ var target = ir.AArch64MacOS
 
 // TestFib is the whole compiler in one test: Swift in, VIR out.
 //
-// It is worth reading the expected text rather than trusting it. The
+// The symbol is the mangled one, because that is what a linker will
+// be asked for. It is worth reading the expected text rather than
+// trusting it. The
 // comparison became a branch, the arithmetic became an add and a
 // separate test of whether it overflowed, the trap the language
 // promises became a block that traps, and the recursion became a
 // call. Nothing of Swift is left in it.
 func TestFib(t *testing.T) {
 	got := vir(t, "testdata/fib.swift")
-	want := `internal func @fib(%a0 i64) i64 {
+	want := `internal func @$s1t3fibyS2iF(%a0 i64) i64 {
 @entry:
   %0 = i64.const 2
   %1 = i64.slt %a0, %0
@@ -54,14 +56,14 @@ func TestFib(t *testing.T) {
   trap
 
 @cont1:
-  %5 = call @fib(%3)
+  %5 = call @$s1t3fibyS2iF(%3)
   %6 = i64.const 2
   %7 = i64.sub %a0, %6
   %8 = i64.ssubo %a0, %6
   brif %8, @trap, @cont2
 
 @cont2:
-  %9 = call @fib(%7)
+  %9 = call @$s1t3fibyS2iF(%7)
   %10 = i64.add %5, %9
   %11 = i64.saddo %5, %9
   brif %11, @trap, @cont3

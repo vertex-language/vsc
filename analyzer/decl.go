@@ -570,6 +570,7 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			*methods = append(*methods, &types.Method{Name: name, Sig: sig})
 			sym := NewFunc(name, sig, m.Name.Pos())
 			sym.SetDecl(m)
+			sym.SetAccess(c.accessOf(m.Mods))
 			typeScope.Insert(sym)
 			c.info.Defs[m.Name] = sym
 		}
@@ -584,6 +585,7 @@ func (c *checker) declareFunctions(decls []ast.Decl, scope *Scope) {
 			sig := c.buildGenericFuncSig(f, scope)
 			sym := NewFunc(name, sig, f.Name.Pos())
 			sym.SetDecl(f)
+			sym.SetAccess(c.accessOf(f.Mods))
 			// Two functions may share a name as long as they do not
 			// share a signature. Only the second of an identical pair
 			// is a redeclaration.

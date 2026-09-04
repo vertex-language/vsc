@@ -157,3 +157,32 @@ func TestRefusals(t *testing.T) {
 		})
 	}
 }
+
+// TestDiscriminator: a private declaration carries one, so that two
+// files in a module may each declare a private function of the same
+// name without the two symbols colliding.
+func TestDiscriminator(t *testing.T) {
+	a := Discriminator("a.swift")
+	b := Discriminator("b.swift")
+	if a == b {
+		t.Error("two files share a discriminator")
+	}
+	if a != Discriminator("a.swift") {
+		t.Error("a file's discriminator is not stable")
+	}
+	if len(a) != 33 || a[0] != '_' {
+		t.Errorf("the shape is %q, want an underscore and 32 more", a)
+	}
+
+	got, err := Function(Decl{
+		Module: "acc", Name: "c", Discriminator: a,
+		Signature: &types.Signature{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "$s3acc1c33" + a + "LLyyF"
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}

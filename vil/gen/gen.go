@@ -38,6 +38,7 @@ package gen
 import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/mangle"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 	"github.com/vertex-language/vsc/vil"
@@ -48,7 +49,7 @@ func File(name string, f *ast.File, info *analyzer.Info) (*vil.Module, []token.D
 	m := vil.NewModule(name, vil.StageRaw)
 	m.Import("Builtin")
 
-	g := &gen{m: m, info: info, file: f.Unit}
+	g := &gen{m: m, info: info, file: f.Unit, module: name}
 	for _, stmt := range f.Stmts {
 		decl, ok := stmt.(*ast.DeclStmt)
 		if !ok {
@@ -61,11 +62,68 @@ func File(name string, f *ast.File, info *analyzer.Info) (*vil.Module, []token.D
 	return m, g.diags
 }
 
+// symbol is the name a function is given in the module, which is the
+// mangled one: SIL names a function by its symbol, and two functions
+// that differ only in their types have to be told apart.
+//
+// A function this compiler cannot mangle yet has no symbol, and
+// saying so is better than inventing one -- a symbol that is merely
+// plausible links, and links to the wrong thing.
+func (g *gen) symbol(sym *analyzer.FuncSymbol) string {
+	d := mangle.Decl{
+		Module:    g.module,
+		Name:      sym.Name(),
+		Signature: sym.Signature(),
+	}
+	// A private declaration is file-local, so its symbol says which
+	// file, and two modules' worth of private helpers with the same
+	// name stay apart.
+	switch sym.Access() {
+	case analyzer.Private, analyzer.FilePrivate:
+		d.Discriminator = mangle.Discriminator(g.file.Name())
+	}
+	name, err := mangle.Function(d)
+	if err != nil {
+		g.diags = append(g.diags, token.Diagnostic{
+			Pos:      sym.Pos(),
+			End:      sym.Pos(),
+			Severity: token.Error,
+			Message:  "cannot name '" + sym.Name() + "': " + err.Error(),
+		})
+		return sym.Name()
+	}
+	return name
+}
+
+// linkageOf is the linkage an access level gives a symbol.
+//
+// The two ends of the range are what matter to a linker: a public
+// symbol is one another module may resolve, and a private one may not
+// leave the file it was written in. In between, internal and package
+// are both hidden from outside the module -- SIL keeps them apart
+// because a package is a set of modules built together and can share
+// what a stranger cannot.
+//
+// `open` is `public` here. What it adds is about overriding rather
+// than about visibility, and a linker has no opinion on overriding.
+func linkageOf(a analyzer.Access) vil.Linkage {
+	switch a {
+	case analyzer.Public, analyzer.Open:
+		return vil.Public
+	case analyzer.Package:
+		return vil.PackageLinkage
+	case analyzer.Private, analyzer.FilePrivate:
+		return vil.Private
+	}
+	return vil.Hidden
+}
+
 // A gen lowers one file.
 type gen struct {
-	m    *vil.Module
-	info *analyzer.Info
-	file *token.File
+	m      *vil.Module
+	info   *analyzer.Info
+	file   *token.File
+	module string
 
 	fn     *vil.Func
 	blk    *vil.Block
@@ -238,14 +296,14 @@ func (g *gen) emitCleanups(s *scope) {
 
 // function lowers one declaration.
 func (g *gen) function(d *ast.FuncDecl) {
-	name := d.Name.Text(g.file)
 	sym, _ := g.info.Defs[d.Name].(*analyzer.FuncSymbol)
 	if sym == nil {
 		return
 	}
 	sig := sym.Signature()
 
-	f := g.m.Func(name).SetLinkage(vil.Hidden).SetAttr("ossa")
+	f := g.m.Func(g.symbol(sym)).SetSourceName(sym.Name()).
+		SetLinkage(linkageOf(sym.Access())).SetAttr("ossa")
 	g.fn = f
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes = nil

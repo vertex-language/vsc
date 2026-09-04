@@ -67,11 +67,15 @@ func (l *lowerer) declare(f *vil.Func) error {
 	if err := l.applySig(f, out, sig); err != nil {
 		return err
 	}
+	// Only a public symbol leaves the object file. Package linkage is
+	// visible to the modules built alongside this one, which is a
+	// question for whoever links them and not one an object file can
+	// answer, so it is internal here too.
 	switch f.Linkage() {
-	case vil.Private, vil.Hidden:
-		out.Internal()
-	default:
+	case vil.Public, vil.PublicExternal:
 		out.Export()
+	default:
+		out.Internal()
 	}
 	l.callee[f.Name()] = out
 	return nil

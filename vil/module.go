@@ -34,7 +34,18 @@ func NewModule(name string, stage Stage) *Module {
 	return &Module{name: name, stage: stage, byName: map[string]*Func{}}
 }
 
-func (m *Module) Name() string                   { return m.name }
+func (m *Module) Name() string { return m.name }
+
+// LookupSource finds a function by the name it has in the source
+// rather than by its symbol.
+func (m *Module) LookupSource(name string) *Func {
+	for _, f := range m.funcs {
+		if f.SourceName() == name {
+			return f
+		}
+	}
+	return nil
+}
 func (m *Module) Stage() Stage                   { return m.stage }
 func (m *Module) Funcs() []*Func                 { return m.funcs }
 func (m *Module) Globals() []*Global             { return m.globals }

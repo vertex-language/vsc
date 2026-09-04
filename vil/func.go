@@ -6,6 +6,7 @@ type Linkage string
 
 const (
 	Public         Linkage = ""
+	PackageLinkage Linkage = "package"
 	Hidden         Linkage = "hidden"
 	Private        Linkage = "private"
 	Shared         Linkage = "shared"
@@ -20,6 +21,7 @@ const (
 type Func struct {
 	m       *Module
 	name    string
+	source  string
 	linkage Linkage
 	typ     *FuncType
 	attrs   []string
@@ -27,12 +29,25 @@ type Func struct {
 	nextID  int
 }
 
-func (f *Func) Module() *Module  { return f.m }
-func (f *Func) Name() string     { return f.name }
-func (f *Func) Linkage() Linkage { return f.linkage }
-func (f *Func) Type() *FuncType  { return f.typ }
-func (f *Func) Blocks() []*Block { return f.blocks }
-func (f *Func) Attrs() []string  { return f.attrs }
+func (f *Func) Module() *Module { return f.m }
+func (f *Func) Name() string    { return f.name }
+
+// SourceName is what the function was called where it was written,
+// before mangling. Nothing is emitted from it: it is what a
+// diagnostic should say, since `$s1t3fibyS2iF` is the right answer to
+// a linker and the wrong one to a person.
+func (f *Func) SourceName() string {
+	if f.source == "" {
+		return f.name
+	}
+	return f.source
+}
+
+func (f *Func) SetSourceName(s string) *Func { f.source = s; return f }
+func (f *Func) Linkage() Linkage             { return f.linkage }
+func (f *Func) Type() *FuncType              { return f.typ }
+func (f *Func) Blocks() []*Block             { return f.blocks }
+func (f *Func) Attrs() []string              { return f.attrs }
 
 // IsDeclaration reports whether the function has a body here.
 func (f *Func) IsDeclaration() bool { return len(f.blocks) == 0 }

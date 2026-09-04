@@ -151,7 +151,7 @@ func swiftSIL(t *testing.T, swiftc, src, fn string) string {
 
 func funcText(t *testing.T, m *vil.Module, name string) string {
 	t.Helper()
-	f := m.Lookup(name)
+	f := m.LookupSource(name)
 	if f == nil {
 		t.Fatalf("no function %q in the module:\n%s", name, text.String(m))
 	}

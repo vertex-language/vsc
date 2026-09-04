@@ -163,5 +163,5 @@ func needsTrap(f *vil.Func) bool {
 }
 
 func (c *fn) fail(err error, op vil.Op, what string) error {
-	return &Error{Err: err, Func: c.src.Name(), Op: op, What: what}
+	return &Error{Err: err, Func: c.src.SourceName(), Op: op, What: what}
 }

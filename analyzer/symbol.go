@@ -66,10 +66,11 @@ func (v *VarSymbol) String() string {
 
 // FuncSymbol is a function or a method.
 type FuncSymbol struct {
-	name string
-	sig  *types.Signature
-	pos  token.Pos
-	decl ast.Decl
+	name   string
+	sig    *types.Signature
+	pos    token.Pos
+	decl   ast.Decl
+	access Access
 
 	// others are the declarations that share this name. Swift lets
 	// them, as long as they do not share a signature, so a name in
@@ -88,6 +89,12 @@ func (f *FuncSymbol) Signature() *types.Signature { return f.sig }
 func (f *FuncSymbol) Pos() token.Pos              { return f.pos }
 func (f *FuncSymbol) Decl() ast.Decl              { return f.decl }
 func (f *FuncSymbol) SetDecl(d ast.Decl)          { f.decl = d }
+
+// Access is how far the declaration can be seen. It is what decides
+// the linkage of the symbol the function is given, and so whether
+// anything outside this module can call it.
+func (f *FuncSymbol) Access() Access     { return f.access }
+func (f *FuncSymbol) SetAccess(a Access) { f.access = a }
 func (f *FuncSymbol) String() string {
 	return fmt.Sprintf("func %s%s", f.name, f.sig)
 }

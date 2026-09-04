@@ -286,7 +286,7 @@ func (g *gen) call(e *ast.CallExpr) *vil.Value {
 	if sym == nil {
 		return nil
 	}
-	callee := g.m.Func(sym.Name())
+	callee := g.m.Func(g.symbol(sym)).SetSourceName(sym.Name())
 	if callee.IsDeclaration() && callee.Type() != nil {
 		g.declare(callee, sym)
 	}
