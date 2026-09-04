@@ -1,5 +1,3 @@
-// Package analyzer performs semantic analysis, symbol resolution,
-// operator precedence folding, and type checking on ASTs.
 package analyzer
 
 import (
@@ -8,7 +6,9 @@ import (
 	"github.com/vertex-language/vsc/token"
 )
 
-// Scope represents a lexical scope holding symbols.
+// Scope is one lexical scope: the names declared directly in it, and
+// the scope that encloses it. Every name in a program is found by
+// walking out from where it was written.
 type Scope struct {
 	parent   *Scope
 	children []*Scope

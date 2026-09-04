@@ -335,12 +335,8 @@ func (p *parser) parseParamList(close token.Kind, defaults bool) []*ast.Param {
 	for !p.at(close) && !p.at(token.EOF) {
 		start := p.i
 		out = append(out, p.parseParam(defaults))
-		if !p.at(token.COMMA) {
+		if !p.more(start) {
 			break
-		}
-		p.next()
-		if p.i == start {
-			p.next()
 		}
 	}
 	return out
@@ -472,12 +468,8 @@ func (p *parser) parseGenericParams() *ast.GenericParams {
 		param.Inherit = p.parseGenericParamInheritance()
 		param.Span = p.span(plo)
 		g.Params = append(g.Params, param)
-		if !p.at(token.COMMA) {
+		if !p.more(start) {
 			break
-		}
-		p.next()
-		if p.i == start {
-			p.next()
 		}
 	}
 	if p.atGt() {
@@ -497,12 +489,8 @@ func (p *parser) parseGenericArgs() *ast.GenericArgs {
 	for !p.atGt() && !p.at(token.EOF) {
 		start := p.i
 		g.Args = append(g.Args, p.parseType())
-		if !p.at(token.COMMA) {
+		if !p.more(start) {
 			break
-		}
-		p.next()
-		if p.i == start {
-			p.next()
 		}
 	}
 	if p.atGt() {

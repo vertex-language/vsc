@@ -8,7 +8,9 @@ import (
 	"github.com/vertex-language/vsc/types"
 )
 
-// Symbol represents a declared language entity (variable, function, type, etc.).
+// Symbol is something a name denotes. Every name a program resolves
+// ends at one of these, and Info.Uses is the map from the one to the
+// other.
 type Symbol interface {
 	Name() string
 	Type() types.Type
@@ -17,7 +19,9 @@ type Symbol interface {
 	String() string
 }
 
-// VarSymbol represents a variable, constant, or parameter.
+// VarSymbol is a variable, a constant, or a parameter. It carries
+// what the checker learns about it as the body is read: whether it
+// has been initialized, and whether it has been consumed.
 type VarSymbol struct {
 	name          string
 	typ           types.Type
@@ -43,7 +47,6 @@ func NewVar(name string, typ types.Type, pos token.Pos, isConst bool, ownership 
 
 func (v *VarSymbol) Name() string                   { return v.name }
 func (v *VarSymbol) Type() types.Type               { return v.typ }
-func (v *VarSymbol) SetType(t types.Type)           { v.typ = t }
 func (v *VarSymbol) Pos() token.Pos                 { return v.pos }
 func (v *VarSymbol) Decl() ast.Decl                 { return v.decl }
 func (v *VarSymbol) SetDecl(d ast.Decl)             { v.decl = d }
@@ -61,7 +64,7 @@ func (v *VarSymbol) String() string {
 	return fmt.Sprintf("%s %s: %s", kind, v.name, v.typ)
 }
 
-// FuncSymbol represents a function, method, or initializer.
+// FuncSymbol is a function or a method.
 type FuncSymbol struct {
 	name string
 	sig  *types.Signature
@@ -79,13 +82,12 @@ func NewFunc(name string, sig *types.Signature, pos token.Pos) *FuncSymbol {
 	return &FuncSymbol{name: name, sig: sig, pos: pos}
 }
 
-func (f *FuncSymbol) Name() string                      { return f.name }
-func (f *FuncSymbol) Type() types.Type                  { return f.sig }
-func (f *FuncSymbol) Signature() *types.Signature       { return f.sig }
-func (f *FuncSymbol) SetSignature(sig *types.Signature) { f.sig = sig }
-func (f *FuncSymbol) Pos() token.Pos                    { return f.pos }
-func (f *FuncSymbol) Decl() ast.Decl                    { return f.decl }
-func (f *FuncSymbol) SetDecl(d ast.Decl)                { f.decl = d }
+func (f *FuncSymbol) Name() string                { return f.name }
+func (f *FuncSymbol) Type() types.Type            { return f.sig }
+func (f *FuncSymbol) Signature() *types.Signature { return f.sig }
+func (f *FuncSymbol) Pos() token.Pos              { return f.pos }
+func (f *FuncSymbol) Decl() ast.Decl              { return f.decl }
+func (f *FuncSymbol) SetDecl(d ast.Decl)          { f.decl = d }
 func (f *FuncSymbol) String() string {
 	return fmt.Sprintf("func %s%s", f.name, f.sig)
 }
@@ -98,7 +100,8 @@ func (f *FuncSymbol) Overloads() []*FuncSymbol {
 // AddOverload records another declaration of the same name.
 func (f *FuncSymbol) AddOverload(g *FuncSymbol) { f.others = append(f.others, g) }
 
-// TypeNameSymbol represents a named type (struct, class, enum, protocol, typealias).
+// TypeNameSymbol is a name that denotes a type. In expression
+// position it is a metatype, which is what makes `S(…)` a call.
 type TypeNameSymbol struct {
 	name string
 	typ  types.Type
@@ -110,17 +113,17 @@ func NewTypeName(name string, typ types.Type, pos token.Pos) *TypeNameSymbol {
 	return &TypeNameSymbol{name: name, typ: typ, pos: pos}
 }
 
-func (t *TypeNameSymbol) Name() string          { return t.name }
-func (t *TypeNameSymbol) Type() types.Type      { return t.typ }
-func (t *TypeNameSymbol) SetType(tp types.Type) { t.typ = tp }
-func (t *TypeNameSymbol) Pos() token.Pos        { return t.pos }
-func (t *TypeNameSymbol) Decl() ast.Decl        { return t.decl }
-func (t *TypeNameSymbol) SetDecl(d ast.Decl)    { t.decl = d }
+func (t *TypeNameSymbol) Name() string       { return t.name }
+func (t *TypeNameSymbol) Type() types.Type   { return t.typ }
+func (t *TypeNameSymbol) Pos() token.Pos     { return t.pos }
+func (t *TypeNameSymbol) Decl() ast.Decl     { return t.decl }
+func (t *TypeNameSymbol) SetDecl(d ast.Decl) { t.decl = d }
 func (t *TypeNameSymbol) String() string {
 	return fmt.Sprintf("type %s = %s", t.name, t.typ)
 }
 
-// EnumCaseSymbol represents a single case of an enumeration.
+// EnumCaseSymbol is one case of an enum, declared in the enum's own
+// scope so that a member of the type finds it unqualified.
 type EnumCaseSymbol struct {
 	name           string
 	enumType       types.Type
@@ -149,20 +152,3 @@ func (ec *EnumCaseSymbol) String() string {
 	}
 	return fmt.Sprintf("case %s", ec.name)
 }
-
-// PackageSymbol represents an imported module or package.
-type PackageSymbol struct {
-	name  string
-	scope *Scope
-}
-
-func NewPackage(name string, scope *Scope) *PackageSymbol {
-	return &PackageSymbol{name: name, scope: scope}
-}
-
-func (p *PackageSymbol) Name() string     { return p.name }
-func (p *PackageSymbol) Type() types.Type { return nil }
-func (p *PackageSymbol) Pos() token.Pos   { return token.NoPos }
-func (p *PackageSymbol) Decl() ast.Decl   { return nil }
-func (p *PackageSymbol) Scope() *Scope    { return p.scope }
-func (p *PackageSymbol) String() string   { return fmt.Sprintf("package %s", p.name) }

@@ -202,12 +202,8 @@ func (p *parser) parseTuplePattern(mode patternMode) ast.Pattern {
 		e.Pat = p.parsePattern(mode)
 		e.Span = p.span(elo)
 		t.Elems = append(t.Elems, e)
-		if !p.at(token.COMMA) {
+		if !p.more(start) {
 			break
-		}
-		p.next()
-		if p.i == start {
-			p.next()
 		}
 	}
 	t.Rparen = p.expect(token.RPAREN)

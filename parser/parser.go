@@ -215,6 +215,24 @@ func (p *parser) wordAt(n int, s string) bool {
 	return t.Kind == token.IDENT && !t.Flags.Has(token.FlagEscaped) && p.text(t) == s
 }
 
+// more advances past the comma between two items of a list and
+// reports whether another item follows.
+//
+// start is where the item just read began. A production that consumed
+// nothing would leave the loop where it was and spin, so one token
+// goes here to guarantee progress — the list is malformed either way,
+// and the parser's job is to keep going.
+func (p *parser) more(start int) bool {
+	if !p.at(token.COMMA) {
+		return false
+	}
+	p.next()
+	if p.i == start {
+		p.next()
+	}
+	return true
+}
+
 // takeWordBeforeType consumes the contextual keyword s when a type
 // follows it, and returns its position. It is what tells the
 // `nonisolated` that qualifies a conformance from a type of that

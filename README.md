@@ -276,8 +276,10 @@ front end is held to, not an approximation of it. Where the published grammar
 and `swiftc` disagree, `swiftc` is right, and the tests say so:
 `parser/oracle_test.go` parses every module interface in every installed SDK
 and compares verdicts with `swiftc` over a corpus of malformed sources, and
-`parser/README.md` catalogues every place the language turned out to be wider
-than the grammar.
+[`parser/README.md`](parser/README.md) catalogues every place the language
+turned out to be wider than the published grammar, and
+[`analyzer/README.md`](analyzer/README.md) says what the checker knows and
+what it deliberately stays quiet about.
 
 What Vertex adds sits on top of that, and every piece of it is optional.
 Package declarations, receivers, opt-in argument labels, `kernel` and `graph`,
@@ -475,16 +477,23 @@ target tables, and carries a module through instruction selection, object
 writing and linking. `cli` is a wrapper over it, and so is any other program
 that wants a Vertex compiler.
 
-| Package | |
-|---|---|
-| [`token/`](token/) | lexical vocabulary, source positions, file model |
-| [`scanner/`](scanner/) | tokenization |
-| [`parser/`](parser/) · [`ast/`](ast/) | tokens to AST; the syntax tree |
-| [`analyzer/`](analyzer/) · [`types/`](types/) | packages, name resolution, constraints, monomorphization, ownership, layout, shapes |
-| [`lower/`](lower/) | typed AST to VIR; ARC insertion; host/device split |
-| [`.`](.) | the phases composed, the target tables, isel, object writing, linking |
-| [`core/`](core/) | the built-in package |
-| [`cli/`](cli/) · [`cmd/vsc/`](cmd/vsc/) | verb dispatch and the executable |
+What is in this repository today is the front end: everything from source
+text to a checked tree. It is held to Swift by two oracles — every module
+interface in every installed SDK must parse, and `swiftc` must agree with it
+about which programs are Swift and which are not. The phases below `lower` are
+described here as the design they are being built to; the table says which of
+them exist.
+
+| Package | | |
+|---|---|---|
+| [`token/`](token/) | lexical vocabulary, source positions, file model | |
+| [`scanner/`](scanner/) | tokenization, literal decoding | |
+| [`parser/`](parser/) · [`ast/`](ast/) | tokens to AST; the syntax tree | |
+| [`analyzer/`](analyzer/) · [`types/`](types/) | name resolution, types, layout, ownership | |
+| `lower/` | typed AST to VIR; ARC insertion; host/device split | planned |
+| `.` | the phases composed, the target tables, isel, object writing, linking | planned |
+| `core/` | the built-in package | planned |
+| `cli/` · `cmd/vsc/` | verb dispatch and the executable | planned |
 
 Everything downstream of `lower` — instruction selection and encoding for
 AMD64, ARM64, and Wasm, the PTX and StableHLO device emitters, and the ELF,

@@ -1,4 +1,24 @@
-// Package types models the semantic type system of the Vertex/Swift language.
+// Package types is the type model: what a program's types are, once
+// the spellings in the source have been resolved.
+//
+// A type here is a value, and two of them are the same type when
+// Identical says so. Nothing in this package reads source, holds a
+// position, or reports a diagnostic — a type has no place in a file,
+// and the same Int is every Int in the program.
+//
+// Three things it follows Swift on, because a Vertex value and a
+// Swift value of the same type are the same bytes and obey the same
+// rules:
+//
+// Layout. Size, stride and alignment are Swift's, extra inhabitants
+// included, which is why `Int?` is nine bytes and `String?` is
+// sixteen. See layout.go.
+//
+// Conformance is nominal. A type conforms to a protocol because it
+// was declared to, never because its members happen to line up.
+//
+// A typealias is not a new type. It is another spelling of the one it
+// names, and Identical looks through it.
 package types
 
 import (
@@ -6,7 +26,9 @@ import (
 	"strings"
 )
 
-// Type represents a semantic type.
+// Type is what a spelling in the source resolved to. Underlying
+// looks through the names: a typealias is another spelling of the
+// type it names, and Underlying is where that ends.
 type Type interface {
 	// Underlying returns the underlying concrete type, stripping any Named wrapper.
 	Underlying() Type
@@ -14,7 +36,10 @@ type Type interface {
 	String() string
 }
 
-// BasicKind represents the category of a primitive type.
+// BasicKind names one of the types the compiler knows without
+// reading a declaration. The untyped kinds at the end are not types a
+// program can write: they are what a literal is before the context
+// around it says which type it takes.
 type BasicKind int
 
 const (
@@ -58,7 +83,9 @@ const (
 	IsNumeric = IsInteger | IsFloat
 )
 
-// Basic represents a built-in primitive type.
+// Basic is one of the builtin types. It has no members here — those
+// live in a library this compiler has no reader for — so a member of
+// one is unknown rather than absent.
 type Basic struct {
 	kind BasicKind
 	info BasicInfo
@@ -71,7 +98,9 @@ func (b *Basic) Name() string     { return b.name }
 func (b *Basic) Underlying() Type { return b }
 func (b *Basic) String() string   { return b.name }
 
-// OwnershipKind represents ownership semantics for parameters and values.
+// OwnershipKind is what a parameter does with the value it is given:
+// borrow it for the call, consume it, or take a reference the callee
+// writes through.
 type OwnershipKind int
 
 const (
@@ -94,7 +123,9 @@ func (o OwnershipKind) String() string {
 	}
 }
 
-// Param represents a parameter in a function signature.
+// Param is one parameter. Label is what a call writes and Name is
+// what the body uses — `func move(to dest: Point)` has both, and a
+// parameter written with one name has them the same.
 type Param struct {
 	Name      string
 	Label     string
@@ -128,7 +159,8 @@ func (p *Param) String() string {
 	return sb.String()
 }
 
-// Signature represents a function or closure type.
+// Signature is a function type: what it takes, what it gives back,
+// and the effects it has.
 //
 // Throwing is two facts, because Swift's is. A function that throws
 // says so, and it may also name what it throws: `throws(E)` is a
@@ -181,7 +213,8 @@ type TupleElement struct {
 	Type Type
 }
 
-// Tuple represents a tuple type.
+// Tuple is a tuple type. Swift has no one-element tuple: `(Int)` is
+// an Int in parentheses, and the parser says so before this.
 type Tuple struct {
 	Elements []*TupleElement
 }
@@ -206,20 +239,23 @@ func (t *Tuple) String() string {
 	return sb.String()
 }
 
-// Field represents a property or member variable in a struct or class.
+// Field is a stored property. IsConst is the `let` of `let x: Int`,
+// which is what makes an assignment to it a mistake.
 type Field struct {
 	Name    string
 	Type    Type
 	IsConst bool
 }
 
-// Method represents a member method declared in a nominal type or protocol requirement.
+// Method is a function declared in a type, or promised by a
+// protocol. Static and instance methods are not yet told apart.
 type Method struct {
 	Name string
 	Sig  *Signature
 }
 
-// Requirement represents a requirement in a protocol (method or property).
+// Requirement is what a protocol promises: a method, with a
+// signature, or a property, with a type.
 type Requirement struct {
 	Name    string
 	Sig     *Signature // non-nil for method requirement
@@ -228,7 +264,10 @@ type Requirement struct {
 	IsConst bool
 }
 
-// Named represents a named nominal type or type alias.
+// Named is a name standing for a type. With an underlying type it is
+// a typealias, which Identical looks through; with none it is a name
+// this compiler could not resolve, and stays opaque rather than
+// pretending to be something.
 type Named struct {
 	Name       string
 	Pkg        string
@@ -248,7 +287,9 @@ func (n *Named) Underlying() Type {
 }
 func (n *Named) String() string { return n.Name }
 
-// Struct represents a nominal value type with inline layout.
+// Struct is a value type: its instances are copied, and its fields
+// are laid out inline. Copyable is false for one declared
+// `~Copyable`.
 type Struct struct {
 	Name         string
 	TypeParams   []*TypeParam
@@ -261,7 +302,9 @@ type Struct struct {
 func (s *Struct) Underlying() Type { return s }
 func (s *Struct) String() string   { return s.Name }
 
-// Class represents a nominal heap-allocated reference type.
+// Class is a reference type: its instances are one object with many
+// references to it. An actor is a Class with IsActor set, because
+// that is what an actor is, plus a rule about who may touch it.
 type Class struct {
 	Name         string
 	TypeParams   []*TypeParam
@@ -275,14 +318,18 @@ type Class struct {
 func (c *Class) Underlying() Type { return c }
 func (c *Class) String() string   { return c.Name }
 
-// EnumCase represents one case in an enum.
+// EnumCase is one case. AssociatedType is what it carries — a single
+// type, or a Tuple where it carries several — and RawValue is the
+// other kind of case, the one numbered or named by its declaration.
 type EnumCase struct {
 	Name           string
 	AssociatedType Type
 	RawValue       string
 }
 
-// Enum represents a sum / algebraic data type.
+// Enum is a type that is one of its cases. RawType is set for one
+// declared with a raw value type, which is the form that has no
+// associated values.
 type Enum struct {
 	Name         string
 	TypeParams   []*TypeParam
@@ -296,7 +343,8 @@ type Enum struct {
 func (e *Enum) Underlying() Type { return e }
 func (e *Enum) String() string   { return e.Name }
 
-// Protocol represents an interface / constraint contract.
+// Protocol is a set of requirements a type may declare it meets.
+// Conformance is nominal: see ConformsTo.
 type Protocol struct {
 	Name         string
 	Inherited    []*Protocol
@@ -306,7 +354,8 @@ type Protocol struct {
 func (p *Protocol) Underlying() Type { return p }
 func (p *Protocol) String() string   { return p.Name }
 
-// Array represents an array type [T].
+// Array is `[T]`. It is the same type as `Array<T>`, which is what
+// the resolver reads both spellings into.
 type Array struct {
 	Elem Type
 }
@@ -314,7 +363,8 @@ type Array struct {
 func (a *Array) Underlying() Type { return a }
 func (a *Array) String() string   { return fmt.Sprintf("[%s]", a.Elem) }
 
-// Dictionary represents a dictionary type [Key: Value].
+// Dictionary is `[Key: Value]`, and `Dictionary<Key, Value>` with
+// it.
 type Dictionary struct {
 	Key   Type
 	Value Type
@@ -323,7 +373,8 @@ type Dictionary struct {
 func (d *Dictionary) Underlying() Type { return d }
 func (d *Dictionary) String() string   { return fmt.Sprintf("[%s: %s]", d.Key, d.Value) }
 
-// Optional represents a nullable value type T?.
+// Optional is `T?`: the wrapped value, or none. What it costs is in
+// layout.go, and it is not always a byte more than T.
 type Optional struct {
 	Wrapped Type
 }
@@ -331,7 +382,9 @@ type Optional struct {
 func (o *Optional) Underlying() Type { return o }
 func (o *Optional) String() string   { return fmt.Sprintf("%s?", o.Wrapped) }
 
-// Metatype represents the metatype of a type (T.Type).
+// Metatype is `T.Type`: the type itself as a value. A type's name in
+// expression position denotes one, which is what makes `Int.self` a
+// value and `Box(v: 3)` a call to an initializer.
 type Metatype struct {
 	Instance Type
 }
@@ -339,7 +392,8 @@ type Metatype struct {
 func (m *Metatype) Underlying() Type { return m }
 func (m *Metatype) String() string   { return fmt.Sprintf("%s.Type", m.Instance) }
 
-// Existential represents an existential container `any P`.
+// Existential is `any P`: a value of some type conforming to the
+// protocols, in a box, with the type erased. An empty one is `Any`.
 type Existential struct {
 	Protocols []*Protocol
 }
@@ -356,7 +410,8 @@ func (e *Existential) String() string {
 	return "any " + strings.Join(names, " & ")
 }
 
-// Opaque represents an opaque return type `some P`.
+// Opaque is `some P`: one type conforming to the constraints, the
+// same one every time, which the caller is not told the name of.
 type Opaque struct {
 	Base        Type
 	Constraints []*Protocol
@@ -374,7 +429,9 @@ func (o *Opaque) String() string {
 	return "some " + strings.Join(names, " & ")
 }
 
-// TypeParam represents a generic type parameter.
+// TypeParam is the `T` of `func f<T>(…)`. Identity is the pointer:
+// two parameters with the same name in different declarations are
+// different types, and Substitute is keyed on that.
 type TypeParam struct {
 	Name        string
 	Constraints []Type
@@ -383,7 +440,9 @@ type TypeParam struct {
 func (tp *TypeParam) Underlying() Type { return tp }
 func (tp *TypeParam) String() string   { return tp.Name }
 
-// GenericInstance represents an instantiated generic type (e.g. Array<Int>, Stack<T>).
+// GenericInstance is a generic type with its arguments given —
+// `Stack<Int>`. A member of one is the member of Base with the
+// parameters substituted.
 type GenericInstance struct {
 	Base Type
 	Args []Type

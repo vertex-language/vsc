@@ -440,192 +440,35 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 	for _, d := range decls {
 		switch d := d.(type) {
 		case *ast.StructDecl:
-			sym := scope.Lookup(d.Name.Text(c.file))
-			if sym == nil {
-				continue
-			}
-			st := sym.Type().(*types.Struct)
-			typeScope := NewScope(scope, d.Pos(), d.End())
-			c.info.Scopes[d] = typeScope
-			st.TypeParams = c.declareGenericParams(d.Generics, typeScope)
-			c.declareNested(d.Body, typeScope)
-
-			if d.Inherit != nil {
-				for _, item := range d.Inherit.Items {
-					inhType := c.resolveType(item.Type, scope)
-					if proto, ok := inhType.(*types.Protocol); ok {
-						st.Conformances = append(st.Conformances, proto)
-					}
-				}
-			}
-
-			if d.Body != nil {
-				for _, mem := range d.Body.Members {
-					switch m := mem.(type) {
-					case *ast.VarDecl:
-						isConst := m.Kind == token.LET
-						for _, b := range m.Bindings {
-							st.Fields = append(st.Fields,
-								c.storedField(b, isConst, typeScope)...)
-						}
-					case *ast.FuncDecl:
-						fName := m.Name.Text(c.file)
-						sig := c.buildFuncSig(m.Sig, typeScope)
-						st.Methods = append(st.Methods, &types.Method{
-							Name: fName,
-							Sig:  sig,
-						})
-						fSym := NewFunc(fName, sig, m.Name.Pos())
-						fSym.SetDecl(m)
-						typeScope.Insert(fSym)
-						c.info.Defs[m.Name] = fSym
-					}
-				}
+			if t, inner, params, ok := c.openType(d, d.Name, d.Generics, d.Body, scope); ok {
+				n := t.(*types.Struct)
+				n.TypeParams = params
+				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil)
 			}
 
 		case *ast.ClassDecl:
-			sym := scope.Lookup(d.Name.Text(c.file))
-			if sym == nil {
-				continue
-			}
-			cl := sym.Type().(*types.Class)
-			typeScope := NewScope(scope, d.Pos(), d.End())
-			c.info.Scopes[d] = typeScope
-			cl.TypeParams = c.declareGenericParams(d.Generics, typeScope)
-			c.declareNested(d.Body, typeScope)
-
-			if d.Inherit != nil {
-				for i, item := range d.Inherit.Items {
-					inhType := c.resolveType(item.Type, scope)
-					if i == 0 {
-						if supClass, ok := inhType.(*types.Class); ok {
-							cl.Superclass = supClass
-							continue
-						}
-					}
-					if proto, ok := inhType.(*types.Protocol); ok {
-						cl.Conformances = append(cl.Conformances, proto)
-					}
-				}
-			}
-
-			if d.Body != nil {
-				for _, mem := range d.Body.Members {
-					switch m := mem.(type) {
-					case *ast.VarDecl:
-						isConst := m.Kind == token.LET
-						for _, b := range m.Bindings {
-							cl.Fields = append(cl.Fields,
-								c.storedField(b, isConst, typeScope)...)
-						}
-					case *ast.FuncDecl:
-						fName := m.Name.Text(c.file)
-						sig := c.buildFuncSig(m.Sig, typeScope)
-						cl.Methods = append(cl.Methods, &types.Method{
-							Name: fName,
-							Sig:  sig,
-						})
-						fSym := NewFunc(fName, sig, m.Name.Pos())
-						fSym.SetDecl(m)
-						typeScope.Insert(fSym)
-						c.info.Defs[m.Name] = fSym
-					}
-				}
+			if t, inner, params, ok := c.openType(d, d.Name, d.Generics, d.Body, scope); ok {
+				n := t.(*types.Class)
+				n.TypeParams = params
+				n.Conformances = c.protocolsOf(d.Inherit, scope, &n.Superclass)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil)
 			}
 
 		case *ast.ActorDecl:
-			sym := scope.Lookup(d.Name.Text(c.file))
-			if sym == nil {
-				continue
-			}
-			cl := sym.Type().(*types.Class)
-			typeScope := NewScope(scope, d.Pos(), d.End())
-			c.info.Scopes[d] = typeScope
-			cl.TypeParams = c.declareGenericParams(d.Generics, typeScope)
-			c.declareNested(d.Body, typeScope)
-
-			if d.Inherit != nil {
-				for _, item := range d.Inherit.Items {
-					inhType := c.resolveType(item.Type, scope)
-					if proto, ok := inhType.(*types.Protocol); ok {
-						cl.Conformances = append(cl.Conformances, proto)
-					}
-				}
-			}
-
-			if d.Body != nil {
-				for _, mem := range d.Body.Members {
-					switch m := mem.(type) {
-					case *ast.VarDecl:
-						isConst := m.Kind == token.LET
-						for _, b := range m.Bindings {
-							cl.Fields = append(cl.Fields,
-								c.storedField(b, isConst, typeScope)...)
-						}
-					case *ast.FuncDecl:
-						fName := m.Name.Text(c.file)
-						sig := c.buildFuncSig(m.Sig, typeScope)
-						cl.Methods = append(cl.Methods, &types.Method{
-							Name: fName,
-							Sig:  sig,
-						})
-						fSym := NewFunc(fName, sig, m.Name.Pos())
-						fSym.SetDecl(m)
-						typeScope.Insert(fSym)
-						c.info.Defs[m.Name] = fSym
-					}
-				}
+			if t, inner, params, ok := c.openType(d, d.Name, d.Generics, d.Body, scope); ok {
+				n := t.(*types.Class)
+				n.TypeParams = params
+				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil)
 			}
 
 		case *ast.EnumDecl:
-			sym := scope.Lookup(d.Name.Text(c.file))
-			if sym == nil {
-				continue
-			}
-			en := sym.Type().(*types.Enum)
-			typeScope := NewScope(scope, d.Pos(), d.End())
-			c.info.Scopes[d] = typeScope
-			en.TypeParams = c.declareGenericParams(d.Generics, typeScope)
-			c.declareNested(d.Body, typeScope)
-
-			if d.Inherit != nil {
-				for _, item := range d.Inherit.Items {
-					inhType := c.resolveType(item.Type, scope)
-					if proto, ok := inhType.(*types.Protocol); ok {
-						en.Conformances = append(en.Conformances, proto)
-					}
-				}
-			}
-
-			if d.Body != nil {
-				for _, mem := range d.Body.Members {
-					switch m := mem.(type) {
-					case *ast.EnumCaseDecl:
-						for _, el := range m.Elements {
-							caseName := el.Name.Text(c.file)
-							assocType := c.associatedType(el.Params, typeScope)
-							enCase := &types.EnumCase{
-								Name:           caseName,
-								AssociatedType: assocType,
-							}
-							en.Cases = append(en.Cases, enCase)
-							caseSym := NewEnumCase(caseName, en, assocType, el.Name.Pos())
-							typeScope.Insert(caseSym)
-							c.info.Defs[el.Name] = caseSym
-						}
-					case *ast.FuncDecl:
-						fName := m.Name.Text(c.file)
-						sig := c.buildFuncSig(m.Sig, typeScope)
-						en.Methods = append(en.Methods, &types.Method{
-							Name: fName,
-							Sig:  sig,
-						})
-						fSym := NewFunc(fName, sig, m.Name.Pos())
-						fSym.SetDecl(m)
-						typeScope.Insert(fSym)
-						c.info.Defs[m.Name] = fSym
-					}
-				}
+			if t, inner, params, ok := c.openType(d, d.Name, d.Generics, d.Body, scope); ok {
+				n := t.(*types.Enum)
+				n.TypeParams = params
+				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
+				c.readMembers(d.Body, inner, nil, &n.Methods, n)
 			}
 
 		case *ast.TypealiasDecl:
@@ -636,6 +479,104 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 					named.SetUnderlying(underlying)
 				}
 			}
+		}
+	}
+}
+
+// openType finds the type a declaration declares and opens the scope
+// its members are written in, with its generic parameters and its
+// nested types already in it. It reports false where the declaration
+// has no symbol, which happens only after an earlier error.
+func (c *checker) openType(d ast.Decl, name *ast.Ident, generics *ast.GenericParams, body *ast.MemberBlock, scope *Scope) (types.Type, *Scope, []*types.TypeParam, bool) {
+	if name == nil {
+		return nil, nil, nil, false
+	}
+	sym := scope.Lookup(name.Text(c.file))
+	if sym == nil {
+		return nil, nil, nil, false
+	}
+	typeScope := NewScope(scope, d.Pos(), d.End())
+	c.info.Scopes[d] = typeScope
+	// Remembered by name, which is how an extension elsewhere in the
+	// program finds the scope its members belong in. Two types of the
+	// same name in different scopes are one entry, which is as much
+	// as an extension can say about which it means today.
+	if c.typeScopes == nil {
+		c.typeScopes = map[string]*Scope{}
+	}
+	c.typeScopes[name.Text(c.file)] = typeScope
+	params := c.declareGenericParams(generics, typeScope)
+	c.declareNested(body, typeScope)
+	return sym.Type(), typeScope, params, true
+}
+
+// protocolsOf reads an inheritance clause: the protocols a type
+// conforms to, and — where super is non-nil, which is to say for a
+// class — the superclass, which Swift writes first in the same list
+// and tells apart by what the name turns out to denote.
+func (c *checker) protocolsOf(inherit *ast.InheritanceClause, scope *Scope, super *types.Type) []*types.Protocol {
+	if inherit == nil {
+		return nil
+	}
+	var out []*types.Protocol
+	for i, item := range inherit.Items {
+		t := c.resolveType(item.Type, scope)
+		if i == 0 && super != nil {
+			if cl, ok := t.(*types.Class); ok {
+				*super = cl
+				continue
+			}
+		}
+		if proto, ok := t.(*types.Protocol); ok {
+			out = append(out, proto)
+		}
+	}
+	return out
+}
+
+// readMembers reads what a type's body declares into the type: its
+// stored properties, its methods, and — for an enum, which is the
+// only kind that has them — its cases. A nil sink is a member kind
+// this type cannot have.
+func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[]*types.Field, methods *[]*types.Method, en *types.Enum) {
+	if body == nil || typeScope == nil {
+		return
+	}
+	for _, mem := range body.Members {
+		switch m := mem.(type) {
+		case *ast.VarDecl:
+			if fields == nil {
+				continue
+			}
+			isConst := m.Kind == token.LET
+			for _, b := range m.Bindings {
+				*fields = append(*fields, c.storedField(b, isConst, typeScope)...)
+			}
+
+		case *ast.EnumCaseDecl:
+			if en == nil {
+				continue
+			}
+			for _, el := range m.Elements {
+				name := el.Name.Text(c.file)
+				assoc := c.associatedType(el.Params, typeScope)
+				en.Cases = append(en.Cases, &types.EnumCase{Name: name, AssociatedType: assoc})
+				sym := NewEnumCase(name, en, assoc, el.Name.Pos())
+				typeScope.Insert(sym)
+				c.info.Defs[el.Name] = sym
+			}
+
+		case *ast.FuncDecl:
+			if methods == nil {
+				continue
+			}
+			name := m.Name.Text(c.file)
+			sig := c.buildFuncSig(m.Sig, typeScope)
+			*methods = append(*methods, &types.Method{Name: name, Sig: sig})
+			sym := NewFunc(name, sig, m.Name.Pos())
+			sym.SetDecl(m)
+			typeScope.Insert(sym)
+			c.info.Defs[m.Name] = sym
 		}
 	}
 }
@@ -805,112 +746,53 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		if !ok {
 			continue
 		}
-
 		extType := c.resolveType(ext.Type, scope)
-		if extType == nil || extType == types.Typ[types.Invalid] {
+		if extType == nil || isInvalid(extType) {
 			continue
 		}
 
-		nominalType := extType.Underlying()
-		typeName := nominalType.String()
-		if named, ok := extType.(*types.Named); ok {
-			typeName = named.Name
-		}
-
-		var typeScope *Scope
-		for node, sc := range c.info.Scopes {
-			switch nd := node.(type) {
-			case *ast.StructDecl:
-				if nd.Name.Text(c.file) == typeName {
-					typeScope = sc
-				}
-			case *ast.ClassDecl:
-				if nd.Name.Text(c.file) == typeName {
-					typeScope = sc
-				}
-			case *ast.ActorDecl:
-				if nd.Name.Text(c.file) == typeName {
-					typeScope = sc
-				}
-			case *ast.EnumDecl:
-				if nd.Name.Text(c.file) == typeName {
-					typeScope = sc
-				}
-			}
-			if typeScope != nil {
-				break
-			}
-		}
+		// An extension's members are written in the extended type's
+		// own scope, so that they see what a member written inside
+		// the declaration would see.
+		typeScope := c.typeScopes[typeNameOf(extType)]
 		if typeScope == nil {
 			typeScope = NewScope(scope, ext.Pos(), ext.End())
 		}
 		c.info.Scopes[ext] = typeScope
 
-		if ext.Inherit != nil {
-			for _, item := range ext.Inherit.Items {
-				protoType := c.resolveType(item.Type, scope)
-				if proto, ok := protoType.(*types.Protocol); ok {
-					switch nt := nominalType.(type) {
-					case *types.Struct:
-						nt.Conformances = append(nt.Conformances, proto)
-					case *types.Class:
-						nt.Conformances = append(nt.Conformances, proto)
-					case *types.Enum:
-						nt.Conformances = append(nt.Conformances, proto)
-					}
-				}
-			}
+		fields, methods, conformances := sinksOf(extType.Underlying())
+		if conformances != nil {
+			*conformances = append(*conformances, c.protocolsOf(ext.Inherit, scope, nil)...)
 		}
-
-		if ext.Body != nil {
-			for _, mem := range ext.Body.Members {
-				switch m := mem.(type) {
-				case *ast.FuncDecl:
-					fName := m.Name.Text(c.file)
-					sig := c.buildFuncSig(m.Sig, typeScope)
-					method := &types.Method{Name: fName, Sig: sig}
-					switch nt := nominalType.(type) {
-					case *types.Struct:
-						nt.Methods = append(nt.Methods, method)
-					case *types.Class:
-						nt.Methods = append(nt.Methods, method)
-					case *types.Enum:
-						nt.Methods = append(nt.Methods, method)
-					}
-					sym := NewFunc(fName, sig, m.Name.Pos())
-					sym.SetDecl(m)
-					typeScope.Insert(sym)
-					c.info.Defs[m.Name] = sym
-
-				case *ast.VarDecl:
-					isConst := m.Kind == token.LET
-					for _, b := range m.Bindings {
-						var propType types.Type
-						if tp, ok := b.Pat.(*ast.TypedPattern); ok {
-							propType = c.resolveType(tp.Type, scope)
-						}
-						c.declarePattern(b.Pat, propType, isConst, typeScope)
-						if idPat, ok := b.Pat.(*ast.IdentPattern); ok {
-							field := &types.Field{
-								Name:    idPat.Name.Text(c.file),
-								Type:    propType,
-								IsConst: isConst,
-							}
-							switch nt := nominalType.(type) {
-							case *types.Struct:
-								nt.Fields = append(nt.Fields, field)
-							case *types.Class:
-								nt.Fields = append(nt.Fields, field)
-							}
-						}
-					}
-				}
-			}
-		}
+		en, _ := extType.Underlying().(*types.Enum)
+		c.readMembers(ext.Body, typeScope, fields, methods, en)
 	}
 }
 
-// checkProtocolConformances validates that all types adopting protocols fulfill their requirements.
+// typeNameOf is the name a type is declared under.
+func typeNameOf(t types.Type) string {
+	if named, ok := t.(*types.Named); ok {
+		return named.Name
+	}
+	return t.Underlying().String()
+}
+
+// sinksOf is where a type's members are recorded. A struct, a class,
+// an enum and an actor keep the same three lists, which is what lets
+// an extension add to any of them without knowing which it has. A nil
+// sink is a member kind the type cannot hold.
+func sinksOf(t types.Type) (fields *[]*types.Field, methods *[]*types.Method, conformances *[]*types.Protocol) {
+	switch n := t.(type) {
+	case *types.Struct:
+		return &n.Fields, &n.Methods, &n.Conformances
+	case *types.Class:
+		return &n.Fields, &n.Methods, &n.Conformances
+	case *types.Enum:
+		return nil, &n.Methods, &n.Conformances
+	}
+	return nil, nil, nil
+}
+
 func (c *checker) checkProtocolConformances(scope *Scope) {
 	for _, sym := range scope.elems {
 		tn, ok := sym.(*TypeNameSymbol)

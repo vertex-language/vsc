@@ -13,7 +13,9 @@ const (
 	AssocRight
 )
 
-// PrecedenceGroup represents a declared or built-in operator precedence group.
+// PrecedenceGroup is what decides how an operator binds. Swift has no
+// fixed table: a program declares its groups and says which is higher
+// than which, and the folding order is read off the graph.
 type PrecedenceGroup struct {
 	Name       string
 	HigherThan []string

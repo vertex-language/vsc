@@ -458,12 +458,8 @@ func (p *parser) parseAvailability() ast.Node {
 		}
 		arg.Span = p.span(alo)
 		c.Args = append(c.Args, arg)
-		if !p.at(token.COMMA) {
+		if !p.more(start) {
 			break
-		}
-		p.next()
-		if p.i == start {
-			p.next()
 		}
 	}
 	c.Rparen = p.expect(token.RPAREN)

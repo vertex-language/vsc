@@ -481,12 +481,8 @@ func (p *parser) parseCallArgList(close token.Kind) []*ast.CallArg {
 		arg.Span = p.span(lo)
 		out = append(out, arg)
 
-		if !p.at(token.COMMA) {
+		if !p.more(start) {
 			break
-		}
-		p.next()
-		if p.i == start {
-			p.next()
 		}
 	}
 	return out

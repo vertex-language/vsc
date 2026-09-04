@@ -92,12 +92,8 @@ func (p *parser) parseParenOrTuple() ast.Expr {
 		e.X = p.parseExpr(0)
 		e.Span = p.span(elo)
 		elems = append(elems, e)
-		if !p.at(token.COMMA) {
+		if !p.more(start) {
 			break
-		}
-		p.next()
-		if p.i == start {
-			p.next()
 		}
 	}
 	rparen := p.expect(token.RPAREN)

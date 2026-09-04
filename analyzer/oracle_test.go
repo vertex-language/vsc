@@ -134,3 +134,29 @@ func TestEveryExpressionIsVisited(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckCorpusDoesNotCrash runs the checker over every file in
+// tests/. Those programs use names this checker cannot resolve yet —
+// the standard library is not modelled — so what is required here is
+// not a clean check but a finished one: a front end that gives up on
+// a construct says so with a diagnostic, never with a panic.
+func TestCheckCorpusDoesNotCrash(t *testing.T) {
+	files, err := filepath.Glob("../tests/*.swift")
+	if err != nil || len(files) == 0 {
+		t.Skip("no corpus")
+	}
+	for _, name := range files {
+		t.Run(filepath.Base(name), func(t *testing.T) {
+			src, err := os.ReadFile(name)
+			if err != nil {
+				t.Skip(err)
+			}
+			f := token.NewFile(name, src)
+			file, diags := parser.ParseFile(f, 0)
+			for _, d := range diags {
+				t.Errorf("parser diag: %s", d.Print(f))
+			}
+			Check([]*ast.File{file})
+		})
+	}
+}
