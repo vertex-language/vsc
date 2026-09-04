@@ -280,6 +280,8 @@ and compares verdicts with `swiftc` over a corpus of malformed sources, and
 turned out to be wider than the published grammar, and
 [`analyzer/README.md`](analyzer/README.md) says what the checker knows and
 what it deliberately stays quiet about.
+[`proposed_layout.md`](proposed_layout.md) and
+[`proposed_vil.md`](proposed_vil.md) are the plan for what comes after them.
 
 What Vertex adds sits on top of that, and every piece of it is optional.
 Package declarations, receivers, opt-in argument labels, `kernel` and `graph`,
@@ -490,7 +492,8 @@ them exist.
 | [`scanner/`](scanner/) | tokenization, literal decoding | |
 | [`parser/`](parser/) · [`ast/`](ast/) | tokens to AST; the syntax tree | |
 | [`analyzer/`](analyzer/) · [`types/`](types/) | name resolution, types, layout, ownership | |
-| `lower/` | typed AST to VIR; ARC insertion; host/device split | planned |
+| [`vil/`](vil/) | the ownership IR: a clone of Swift's SIL | started |
+| `lower/` | canonical VIL to VIR; host/device split | planned |
 | `.` | the phases composed, the target tables, isel, object writing, linking | planned |
 | `core/` | the built-in package | planned |
 | `cli/` · `cmd/vsc/` | verb dispatch and the executable | planned |
