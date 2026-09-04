@@ -261,11 +261,24 @@ func (p *printer) operands(in *vil.Inst) {
 			p.printf(", %s", p.refs(args))
 		}
 
+	// `builtin "sadd_with_overflow_Int64"(%4, %5, %6) : $(Builtin.Int64, Builtin.Int1)`
+	case vil.BuiltinCall:
+		p.printf(" %q(%s)", aux.Name, p.refs(args))
+		if r := in.Result(); r != nil {
+			p.printf(" : %s", r.Type())
+		}
+
+	case vil.CondFail:
+		p.printf(" %s, %q", p.refs(args), aux.Text)
+
 	case vil.WitnessMethod:
 		p.printf(" #%s", aux.Member)
 
 	case vil.Apply, vil.PartialApply:
 		p.printf("%s %s(%s)", attrPrefix(aux.Attrs), p.ref(args[0]), p.refs(args[1:]))
+		if len(args) > 0 && args[0] != nil {
+			p.printf(" : %s", args[0].Type())
+		}
 
 	// `debug_value %0, let, name "b", argno 1` — the binding
 	// qualifier comes before the name and everything else after,

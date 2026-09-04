@@ -251,14 +251,25 @@ func (g *gen) ifStmt(s *ast.IfStmt) {
 	}
 }
 
-// condition lowers an if's condition list. Only a plain boolean
-// expression is lowered so far; a binding condition needs optionals,
-// which need a library.
+// condition lowers an if's condition list to the bit a branch tests.
+//
+// A Bool is a struct around a Builtin.Int1 and cond_br takes the bit,
+// so the condition is reached through exactly as an operand of an
+// operator is.
+//
+// Only a plain boolean expression is lowered so far; a binding
+// condition needs optionals, which need a library.
 func (g *gen) condition(conds []ast.Node) *vil.Value {
 	for _, c := range conds {
-		if e, ok := c.(ast.Expr); ok {
-			return g.expr(e)
+		e, ok := c.(ast.Expr)
+		if !ok {
+			continue
 		}
+		v := g.expr(e)
+		if v == nil {
+			return nil
+		}
+		return g.machine(v, g.info.Types[e])
 	}
 	return nil
 }

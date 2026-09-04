@@ -12,13 +12,13 @@ parameter and a `let` that keeps a reference already lower to what
 `swiftc -emit-silgen` prints for the same source, instruction for
 instruction.
 
-What remains of the sequence at the end is `core/`, `vil/pass` and the
-parser that lets tests be written in `.vil` rather than in Go. `core/`
-is the one that widens everything: a literal in Swift is a call to an
-initializer a library declares, so until it exists `vil/gen` emits the
-form the mandatory passes produce instead — which means a function
-with a literal in it is diffed against `swiftc -emit-sil` rather than
-`-emit-silgen`.
+`core/` exists too, which is what made `1 + 2` a call to a declaration
+rather than a rule in the checker. `fib` — the README's own example —
+now goes from source to verified VIL, arithmetic, comparison, branch
+and recursion, with every builtin named as swiftc names it.
+
+What remains of the sequence at the end is `vil/pass`, `lower/`, and
+the parser that lets tests be written in `.vil` rather than in Go.
 
 ## Why cloning exactly is the point
 

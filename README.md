@@ -495,7 +495,7 @@ them exist.
 | [`vil/`](vil/) | the ownership IR: a clone of Swift's SIL, its text form, its rules, and the lowering into it | started |
 | `lower/` | canonical VIL to VIR; host/device split | planned |
 | `.` | the phases composed, the target tables, isel, object writing, linking | planned |
-| `core/` | the built-in package | planned |
+| [`core/`](core/) | the built-in module: the operators, and what a primitive is made of | started |
 | `cli/` · `cmd/vsc/` | verb dispatch and the executable | planned |
 
 Everything downstream of `lower` — instruction selection and encoding for

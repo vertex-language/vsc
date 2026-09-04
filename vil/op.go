@@ -92,6 +92,11 @@ const (
 	Yield       Op = "yield"
 	Unwind      Op = "unwind"
 
+	// Builtins: the machine instructions an operator's declaration
+	// stands for, and the trap a checked one needs.
+	BuiltinCall Op = "builtin"
+	CondFail    Op = "cond_fail"
+
 	// Debug.
 	DebugValue Op = "debug_value"
 )

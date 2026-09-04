@@ -93,14 +93,24 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 		_ = name
 	}
 
-	// 2. Package Scope
-	pkgScope := NewScope(universeScope, token.NoPos, token.NoPos)
+	// 2. The built-in module, between the universe and the program.
+	//
+	// Its declarations are read the way any file's are, into a scope
+	// of their own: a program sees them, and nothing it declares can
+	// be confused with them. What it says about itself — a
+	// diagnostic in core.swift — is not the caller's business and is
+	// dropped; core has a test of its own for that.
+	coreScope := NewScope(universeScope, token.NoPos, token.NoPos)
+
+	// 3. Package Scope
+	pkgScope := NewScope(coreScope, token.NoPos, token.NoPos)
 
 	c := &checker{
 		pg:      pg,
 		info:    info,
 		negated: make(map[ast.Expr]bool),
 	}
+	c.loadCore(coreScope)
 
 	// Multi-pass analysis over all compilation units:
 

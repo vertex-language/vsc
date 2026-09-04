@@ -229,6 +229,21 @@ func (b *Block) StringLiteral(s string, encoding string) *Value {
 		Object(BuiltinRawPointer)).Result()
 }
 
+// ---- builtins ----
+
+// Builtin calls a machine instruction by name. This is where an
+// operator's declaration stops being a call and becomes an add: core
+// says which instruction a `+` on Int is, and this emits it.
+func (b *Block) Builtin(name string, result Type, args ...*Value) *Value {
+	return b.add(BuiltinCall, Aux{Name: name}, args, result).Result()
+}
+
+// CondFail traps when its operand is true, which is how checked
+// arithmetic reports an overflow.
+func (b *Block) CondFail(cond *Value, message string) *Inst {
+	return b.add(CondFail, Aux{Text: message}, []*Value{cond})
+}
+
 // ---- debug ----
 
 // DebugValue records the source name of a value, which is what a

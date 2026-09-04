@@ -83,6 +83,21 @@ func drops(_ b: Box) -> Int {
 func inner(_ n: Int) -> Int { return n }
 func outer(_ n: Int) -> Int { return inner(n) }
 `},
+		{"arithmetic", `
+func add(_ a: Int, _ b: Int) -> Int { return a + b }
+`},
+		{"comparison", `
+func lt(_ a: Int, _ b: Int) -> Bool { return a < b }
+`},
+		{"floating point", `
+func scale(_ a: Double, _ b: Double) -> Double { return a * b }
+`},
+		{"fib, from the README", `
+func fib(_ n: Int) -> Int {
+    if n <= 1 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+`},
 		{"a function with no result", `
 final class Box { var n: Int = 0 }
 func nothing(_ b: Box) {
@@ -149,6 +164,56 @@ bb0(%0 : @guaranteed $Box):
 } // end sil function 'keeps'
 `
 	if got := funcText(t, m, "keeps"); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestArithmeticIsBuiltins covers what core made possible: an
+// operator resolves to a declaration, and the declaration's body is a
+// machine instruction. Every instruction below is one swiftc emits
+// for the same source, in the same order.
+func TestArithmeticIsBuiltins(t *testing.T) {
+	m := lower(t, `
+func add(_ a: Int, _ b: Int) -> Int { return a + b }
+`)
+	want := `sil hidden [ossa] @add : $@convention(thin) (Int, Int) -> Int {
+bb0(%0 : $Int, %1 : $Int):
+  debug_value %0, let, name "a", argno 1
+  debug_value %1, let, name "b", argno 2
+  %2 = struct_extract %0, #Int._value
+  %3 = struct_extract %1, #Int._value
+  %4 = integer_literal $Builtin.Int1, -1
+  %5 = builtin "sadd_with_overflow_Int64"(%2, %3, %4) : $(Builtin.Int64, Builtin.Int1)
+  %6 = tuple_extract %5, 0
+  %7 = tuple_extract %5, 1
+  cond_fail %7, "arithmetic overflow"
+  %8 = struct $Int (%6)
+  return %8
+} // end sil function 'add'
+`
+	if got := funcText(t, m, "add"); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestComparisonIsABuiltin: no overflow check, and the result is a
+// bit wrapped in a Bool.
+func TestComparisonIsABuiltin(t *testing.T) {
+	m := lower(t, `
+func lt(_ a: Int, _ b: Int) -> Bool { return a < b }
+`)
+	want := `sil hidden [ossa] @lt : $@convention(thin) (Int, Int) -> Bool {
+bb0(%0 : $Int, %1 : $Int):
+  debug_value %0, let, name "a", argno 1
+  debug_value %1, let, name "b", argno 2
+  %2 = struct_extract %0, #Int._value
+  %3 = struct_extract %1, #Int._value
+  %4 = builtin "cmp_slt_Int64"(%2, %3) : $Builtin.Int1
+  %5 = struct $Bool (%4)
+  return %5
+} // end sil function 'lt'
+`
+	if got := funcText(t, m, "lt"); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }

@@ -23,6 +23,12 @@ type Info struct {
 	// Folded maps each flat SequenceExpr to its precedence-folded expression tree.
 	Folded map[*ast.SequenceExpr]ast.Expr
 
+	// Operators maps each operator expression to the declaration it
+	// resolved to. An operator is a function, and this is the same
+	// answer Uses gives for a call — kept apart only because an
+	// operator is not written as a name.
+	Operators map[ast.Expr]Symbol
+
 	// Values maps each literal to the value it denotes: a BasicLit or
 	// a StringLit with nothing to interpolate, and every run of text
 	// inside an interpolated one, so that a consumer reads the pieces
@@ -41,6 +47,7 @@ func NewInfo() *Info {
 		Uses:        make(map[*ast.Ident]Symbol),
 		Scopes:      make(map[ast.Node]*Scope),
 		Folded:      make(map[*ast.SequenceExpr]ast.Expr),
+		Operators:   make(map[ast.Expr]Symbol),
 		Values:      make(map[ast.Node]Value),
 		Diagnostics: nil,
 	}

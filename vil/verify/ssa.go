@@ -26,6 +26,7 @@ func (c *collector) structure(f *vil.Func, d *domTree) {
 		}
 		for i, in := range b.Insts() {
 			c.branchTargets(b, i, in, f)
+			c.condition(b, i, in)
 		}
 	}
 }
@@ -83,6 +84,19 @@ func (c *collector) terminator(b *vil.Block) {
 	}
 	if last := insts[len(insts)-1]; !last.Op().IsTerminator() {
 		c.at(b, len(insts)-1, last.Op(), nil, ErrTerminator, "")
+	}
+}
+
+// condition checks that a branch tests a machine bit. `cond_br` takes
+// a Builtin.Int1, not a Bool: a Bool is a struct around one, and
+// reaching through it is the caller's job.
+func (c *collector) condition(b *vil.Block, i int, in *vil.Inst) {
+	if in.Op() != vil.CondBr || len(in.Args()) == 0 {
+		return
+	}
+	if t := in.Args()[0].Type(); !t.Equal(vil.Object(vil.BuiltinInt1)) {
+		c.at(b, i, in.Op(), in.Args()[0], ErrSignature,
+			"branches on "+t.String()+", which is not $Builtin.Int1")
 	}
 }
 

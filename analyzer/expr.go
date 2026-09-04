@@ -91,6 +91,10 @@ func (c *checker) checkPrefix(e *ast.PrefixExpr, expected types.Type, scope *Sco
 		c.negated[lit] = op == "-"
 	}
 	inner := c.checkExpr(e.X, expected, scope)
+	if sym := c.builtinOperator(scope, op, inner); sym != nil {
+		c.info.Operators[e] = sym
+		return sym.Signature().Results
+	}
 	switch op {
 	case "-", "+":
 		if isInvalid(inner) {
@@ -408,6 +412,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		lhs := c.checkExpr(e.X, nil, scope)
 		rhs := c.checkExpr(e.Y, nil, scope)
 		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs)
+
+		// An operator is a function, and core declares them. Where
+		// one resolves, the call decides the type and the rules
+		// below are not consulted — they are what answers for the
+		// operators core does not declare.
+		if sym := c.builtinOperator(scope, opName, lhs, rhs); sym != nil {
+			c.info.Operators[e] = sym
+			return sym.Signature().Results
+		}
 
 		switch opName {
 		case "==", "!=", "<", "<=", ">", ">=":

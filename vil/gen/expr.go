@@ -3,6 +3,7 @@ package gen
 import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/types"
 	"github.com/vertex-language/vsc/vil"
 )
@@ -232,15 +233,105 @@ func (g *gen) declare(f *vil.Func, sym *analyzer.FuncSymbol) {
 	}
 }
 
-// binary lowers an operator. Every operator in Swift is a function,
-// and the function that implements `+` on Int is declared in a
-// library there is not one of yet — so nothing is lowered here until
-// core/ exists, and the operand values are produced so that their
-// ownership is still right.
+// binary lowers an operator.
+//
+// An operator is a function and the checker resolved it to one, in
+// core. What core declares has no body, because its body is a machine
+// instruction — so the call is not emitted; the instruction is.
+//
+// The shape is Swift's, and it is three steps. Reach through the
+// struct to the machine value; do the arithmetic, which for a checked
+// operator returns the result and an overflow bit; wrap what comes
+// back in the type that holds it.
+//
+//	%4 = struct_extract %0, #Int._value
+//	%5 = struct_extract %1, #Int._value
+//	%6 = integer_literal $Builtin.Int1, -1
+//	%7 = builtin "sadd_with_overflow_Int64"(%4, %5, %6) : $(Builtin.Int64, Builtin.Int1)
+//	%8 = tuple_extract %7, 0
+//	%9 = tuple_extract %7, 1
+//	cond_fail %9, "arithmetic overflow"
+//	%10 = struct $Int (%8)
 func (g *gen) binary(e *ast.BinaryExpr) *vil.Value {
-	g.expr(e.X)
-	g.expr(e.Y)
-	return nil
+	sym, _ := g.info.Operators[e].(*analyzer.FuncSymbol)
+	if sym == nil {
+		g.expr(e.X)
+		g.expr(e.Y)
+		return nil
+	}
+	op := sym.Name()
+
+	// && and || do not evaluate their right operand unless they have
+	// to, which is a branch rather than an instruction. They wait on
+	// the lowering that gives them one.
+	if op == "&&" || op == "||" {
+		g.expr(e.X)
+		g.expr(e.Y)
+		return nil
+	}
+
+	operand := g.info.Types[e.X]
+	bi, ok := core.Lower(op, operand)
+	if !ok {
+		g.expr(e.X)
+		g.expr(e.Y)
+		return nil
+	}
+	lhs, rhs := g.expr(e.X), g.expr(e.Y)
+	if lhs == nil || rhs == nil {
+		return nil
+	}
+
+	a, b := g.machine(lhs, operand), g.machine(rhs, operand)
+	result := lowerType(sym.Signature().Results)
+
+	if !bi.Overflows {
+		raw := g.blk.Builtin(bi.Name, vil.Object(builtinNamed(bi.Result)), a, b)
+		return g.blk.Struct(result, raw)
+	}
+
+	// A checked operator asks for the trap it wants: -1 is all bits
+	// set, which is how Swift says "report the overflow".
+	want := g.blk.IntegerLiteral(vil.Object(vil.BuiltinInt1), -1)
+	pair := vil.Object(&types.Tuple{Elements: []*types.TupleElement{
+		{Type: builtinNamed(bi.Result)},
+		{Type: vil.BuiltinInt1},
+	}})
+	both := g.blk.Builtin(bi.Name, pair, a, b, want)
+	value := g.blk.TupleExtract(both, 0, vil.Object(builtinNamed(bi.Result)))
+	flag := g.blk.TupleExtract(both, 1, vil.Object(vil.BuiltinInt1))
+	g.blk.CondFail(flag, "arithmetic overflow")
+	return g.blk.Struct(result, value)
+}
+
+// machine reaches through a primitive's struct to the word inside it,
+// which is what the builtin operates on.
+func (g *gen) machine(v *vil.Value, t types.Type) *vil.Value {
+	field, name, ok := core.Layout(t)
+	if !ok {
+		return v
+	}
+	return g.blk.StructExtract(v, typeName(t)+"."+field,
+		vil.Object(builtinNamed(name)))
+}
+
+// builtinNamed is the builtin type core named.
+func builtinNamed(name string) types.Type {
+	switch name {
+	case "Int1":
+		return vil.BuiltinInt1
+	case "Int8":
+		return vil.BuiltinInt8
+	case "Int16":
+		return vil.BuiltinInt16
+	case "Int32":
+		return vil.BuiltinInt32
+	case "FPIEEE32":
+		return vil.BuiltinFPIEEE32
+	case "FPIEEE64":
+		return vil.BuiltinFPIEEE64
+	}
+	return vil.BuiltinInt64
 }
 
 // selfValue is the receiver, which is the last parameter of a method.
