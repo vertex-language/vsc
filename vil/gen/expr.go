@@ -45,8 +45,96 @@ func (g *gen) expr(e ast.Expr) *vil.Value {
 
 	case *ast.BinaryExpr:
 		return g.binary(n)
+
+	case *ast.PrefixExpr:
+		return g.prefix(n)
 	}
+	g.unsupported(e)
 	return nil
+}
+
+// prefix lowers a prefix operator. It is not always one instruction:
+// Swift writes negation as a subtraction from zero and bitwise
+// inversion as two of them, and core says which, so that what is
+// emitted here is what `swiftc -emit-sil` emits for the same source.
+func (g *gen) prefix(e *ast.PrefixExpr) *vil.Value {
+	sym, _ := g.info.Operators[e].(*analyzer.FuncSymbol)
+	if sym == nil {
+		g.expr(e.X)
+		g.unsupported(e)
+		return nil
+	}
+	operand := g.info.Types[e.X]
+	steps, ok := core.LowerPrefix(sym.Name(), operand)
+	if !ok {
+		g.expr(e.X)
+		g.unsupported(e)
+		return nil
+	}
+	v := g.expr(e.X)
+	if v == nil {
+		return nil
+	}
+	result := lowerType(sym.Signature().Results)
+	if len(steps) == 0 {
+		// Unary plus is the operand.
+		return v
+	}
+
+	// An expansion of more than one step reuses the literal that says
+	// whether to report, which is what SILGen's own inlining leaves
+	// behind and so what the diff is taken against.
+	flags := make(map[int64]*vil.Value, 1)
+	cur := g.machine(v, operand)
+	for _, st := range steps {
+		cur = g.step(st, cur, flags)
+		if cur == nil {
+			return nil
+		}
+	}
+	return g.blk.Struct(result, cur)
+}
+
+// step emits one builtin of a prefix operator's expansion.
+func (g *gen) step(st core.Step, operand *vil.Value, flags map[int64]*vil.Value) *vil.Value {
+	out := vil.Object(builtinNamed(st.Result))
+	args := []*vil.Value{operand}
+	if st.HasConst {
+		k := g.blk.IntegerLiteral(vil.Object(builtinNamed(st.Result)), st.Const)
+		if st.ConstLeft {
+			args = []*vil.Value{k, operand}
+		} else {
+			args = append(args, k)
+		}
+	}
+	if !st.Overflows {
+		return g.blk.Builtin(st.Name, out, args...)
+	}
+
+	// The last operand of a reporting builtin says whether to report:
+	// all bits set for yes, none for the wrapping arithmetic that `~`
+	// is made of.
+	want := int64(0)
+	if st.Reports {
+		want = -1
+	}
+	flag, ok := flags[want]
+	if !ok {
+		flag = g.blk.IntegerLiteral(vil.Object(vil.BuiltinInt1), want)
+		flags[want] = flag
+	}
+	args = append(args, flag)
+	pair := vil.Object(&types.Tuple{Elements: []*types.TupleElement{
+		{Type: builtinNamed(st.Result)},
+		{Type: vil.BuiltinInt1},
+	}})
+	both := g.blk.Builtin(st.Name, pair, args...)
+	value := g.blk.TupleExtract(both, 0, out)
+	if st.Reports {
+		flag := g.blk.TupleExtract(both, 1, vil.Object(vil.BuiltinInt1))
+		g.blk.CondFail(flag, "arithmetic overflow")
+	}
+	return value
 }
 
 // rvalue is an expression lowered where its ownership is about to be

@@ -493,7 +493,8 @@ them exist.
 | [`parser/`](parser/) · [`ast/`](ast/) | tokens to AST; the syntax tree | |
 | [`analyzer/`](analyzer/) · [`types/`](types/) | name resolution, types, layout, ownership | |
 | [`vil/`](vil/) | the ownership IR: a clone of Swift's SIL, its text form, its rules, and the lowering into it | started |
-| `lower/` | canonical VIL to VIR; host/device split | planned |
+| [`vil/pass/`](vil/pass/) | the passes that must run: verification, and erasing the ownership form | started |
+| [`lower/`](lower/) | lowered VIL to VIR; host/device split | started |
 | `.` | the phases composed, the target tables, isel, object writing, linking | planned |
 | [`core/`](core/) | the built-in module: the operators, and what a primitive is made of | started |
 | `cli/` · `cmd/vsc/` | verb dispatch and the executable | planned |

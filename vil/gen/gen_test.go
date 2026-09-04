@@ -30,7 +30,11 @@ func lower(t *testing.T, src string) *vil.Module {
 	for _, d := range checks {
 		t.Fatalf("check: %s", d.Print(f))
 	}
-	return File("t", file, info)
+	m, gens := File("t", file, info)
+	for _, d := range gens {
+		t.Fatalf("gen: %s", d.Print(f))
+	}
+	return m
 }
 
 // TestLoweredModulesVerify is the contract this package owes the

@@ -106,6 +106,85 @@ func < (lhs: String, rhs: String) -> Bool
 func == (lhs: Character, rhs: Character) -> Bool
 func != (lhs: Character, rhs: Character) -> Bool
 
+// ---- bitwise ----
+
+// Swift declares these once on FixedWidthInteger and lets the
+// generic system find them. There is no generic system reaching this
+// far yet, so they are written out per type, which is the same set of
+// functions said the long way.
+
+func & (lhs: Int, rhs: Int) -> Int
+func | (lhs: Int, rhs: Int) -> Int
+func ^ (lhs: Int, rhs: Int) -> Int
+func << (lhs: Int, rhs: Int) -> Int
+func >> (lhs: Int, rhs: Int) -> Int
+
+func & (lhs: Int8, rhs: Int8) -> Int8
+func | (lhs: Int8, rhs: Int8) -> Int8
+func ^ (lhs: Int8, rhs: Int8) -> Int8
+func << (lhs: Int8, rhs: Int8) -> Int8
+func >> (lhs: Int8, rhs: Int8) -> Int8
+
+func & (lhs: Int16, rhs: Int16) -> Int16
+func | (lhs: Int16, rhs: Int16) -> Int16
+func ^ (lhs: Int16, rhs: Int16) -> Int16
+func << (lhs: Int16, rhs: Int16) -> Int16
+func >> (lhs: Int16, rhs: Int16) -> Int16
+
+func & (lhs: Int32, rhs: Int32) -> Int32
+func | (lhs: Int32, rhs: Int32) -> Int32
+func ^ (lhs: Int32, rhs: Int32) -> Int32
+func << (lhs: Int32, rhs: Int32) -> Int32
+func >> (lhs: Int32, rhs: Int32) -> Int32
+
+func & (lhs: Int64, rhs: Int64) -> Int64
+func | (lhs: Int64, rhs: Int64) -> Int64
+func ^ (lhs: Int64, rhs: Int64) -> Int64
+func << (lhs: Int64, rhs: Int64) -> Int64
+func >> (lhs: Int64, rhs: Int64) -> Int64
+
+func & (lhs: UInt, rhs: UInt) -> UInt
+func | (lhs: UInt, rhs: UInt) -> UInt
+func ^ (lhs: UInt, rhs: UInt) -> UInt
+func << (lhs: UInt, rhs: UInt) -> UInt
+func >> (lhs: UInt, rhs: UInt) -> UInt
+
+func & (lhs: UInt8, rhs: UInt8) -> UInt8
+func | (lhs: UInt8, rhs: UInt8) -> UInt8
+func ^ (lhs: UInt8, rhs: UInt8) -> UInt8
+func << (lhs: UInt8, rhs: UInt8) -> UInt8
+func >> (lhs: UInt8, rhs: UInt8) -> UInt8
+
+func & (lhs: UInt16, rhs: UInt16) -> UInt16
+func | (lhs: UInt16, rhs: UInt16) -> UInt16
+func ^ (lhs: UInt16, rhs: UInt16) -> UInt16
+func << (lhs: UInt16, rhs: UInt16) -> UInt16
+func >> (lhs: UInt16, rhs: UInt16) -> UInt16
+
+func & (lhs: UInt32, rhs: UInt32) -> UInt32
+func | (lhs: UInt32, rhs: UInt32) -> UInt32
+func ^ (lhs: UInt32, rhs: UInt32) -> UInt32
+func << (lhs: UInt32, rhs: UInt32) -> UInt32
+func >> (lhs: UInt32, rhs: UInt32) -> UInt32
+
+func & (lhs: UInt64, rhs: UInt64) -> UInt64
+func | (lhs: UInt64, rhs: UInt64) -> UInt64
+func ^ (lhs: UInt64, rhs: UInt64) -> UInt64
+func << (lhs: UInt64, rhs: UInt64) -> UInt64
+func >> (lhs: UInt64, rhs: UInt64) -> UInt64
+
+// ---- prefix ----
+
+prefix func ~ (operand: Int) -> Int
+prefix func ~ (operand: Int8) -> Int8
+prefix func ~ (operand: Int16) -> Int16
+prefix func ~ (operand: Int32) -> Int32
+prefix func ~ (operand: Int64) -> Int64
+prefix func ~ (operand: UInt) -> UInt
+prefix func ~ (operand: UInt8) -> UInt8
+prefix func ~ (operand: UInt16) -> UInt16
+prefix func ~ (operand: UInt32) -> UInt32
+prefix func ~ (operand: UInt64) -> UInt64
 // ---- logical ----
 
 func && (lhs: Bool, rhs: Bool) -> Bool

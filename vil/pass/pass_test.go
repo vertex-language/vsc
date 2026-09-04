@@ -204,5 +204,9 @@ func lowerFile(t *testing.T, path string) *vil.Module {
 	for _, d := range checks {
 		t.Fatalf("check: %s", d.Print(f))
 	}
-	return gen.File("t", file, info)
+	m, diags := gen.File("t", file, info)
+	for _, d := range diags {
+		t.Fatalf("gen: %s", d.Print(f))
+	}
+	return m
 }

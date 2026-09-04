@@ -274,3 +274,67 @@ func hasSpareValues(t Type) bool {
 		return false
 	}
 }
+
+// Offsetof is where a stored property begins, in bytes from the first
+// one. Fields are laid out in the order they were written, each at the
+// next offset its own alignment admits: nothing is reordered, so a
+// program that cares can see what it declared.
+//
+// For a struct or a tuple that is the offset from the start of the
+// value. A class's stored properties do not start at the start of the
+// object -- an instance begins with whatever the runtime needs to know
+// about it -- so a caller adds the header itself, since how big that
+// is belongs to the runtime rather than to the type.
+//
+// The second result is false when the type has no such field.
+func Offsetof(t Type, field string, target *Target) (int64, bool) {
+	if target == nil {
+		target = DefaultTarget64
+	}
+	if t == nil {
+		return 0, false
+	}
+	var fields []*Field
+	switch tt := t.Underlying().(type) {
+	case *Struct:
+		fields = tt.Fields
+	case *Class:
+		fields = tt.Fields
+	case *Tuple:
+		var offset int64
+		for i, elem := range tt.Elements {
+			offset = alignUp(offset, Alignof(elem.Type, target))
+			if elem.Name == field || itoa(i) == field {
+				return offset, true
+			}
+			offset += Sizeof(elem.Type, target)
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+
+	var offset int64
+	for _, f := range fields {
+		offset = alignUp(offset, Alignof(f.Type, target))
+		if f.Name == field {
+			return offset, true
+		}
+		offset += Sizeof(f.Type, target)
+	}
+	return 0, false
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}

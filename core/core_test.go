@@ -121,3 +121,73 @@ func TestDeclaresTheOperators(t *testing.T) {
 		}
 	}
 }
+
+// TestLowerPrefix holds the prefix operators to what swiftc emits for
+// them. The expansions were read off `swiftc -emit-sil`: negation is a
+// subtraction from zero that reports, inversion is the same
+// subtraction and then one more that does not, and `!` is an exclusive
+// or with the one bit set.
+func TestLowerPrefix(t *testing.T) {
+	steps, ok := LowerPrefix("-", types.Typ[types.Int])
+	if !ok || len(steps) != 1 {
+		t.Fatalf("negation is %d steps (%v)", len(steps), ok)
+	}
+	s := steps[0]
+	if s.Name != "ssub_with_overflow_Int64" || !s.ConstLeft || s.Const != 0 || !s.Reports {
+		t.Errorf("negation is %+v", s)
+	}
+
+	steps, ok = LowerPrefix("~", types.Typ[types.Int])
+	if !ok || len(steps) != 2 {
+		t.Fatalf("inversion is %d steps (%v)", len(steps), ok)
+	}
+	if steps[0].Reports || steps[1].Reports {
+		t.Error("inverting the bits of a value cannot fail, so neither step reports")
+	}
+	if steps[1].Const != 1 || steps[1].ConstLeft {
+		t.Errorf("the second step is %+v, want a subtraction of one", steps[1])
+	}
+
+	steps, ok = LowerPrefix("!", types.Typ[types.Bool])
+	if !ok || len(steps) != 1 || steps[0].Name != "xor_Int1" || steps[0].Const != -1 {
+		t.Errorf("not is %+v (%v)", steps, ok)
+	}
+
+	steps, ok = LowerPrefix("-", types.Typ[types.Double])
+	if !ok || len(steps) != 1 || steps[0].Name != "fneg_FPIEEE64" || steps[0].HasConst {
+		t.Errorf("float negation is %+v (%v), want one operand", steps, ok)
+	}
+
+	// Unary plus is not a failure and not an instruction.
+	if steps, ok := LowerPrefix("+", types.Typ[types.Int]); !ok || len(steps) != 0 {
+		t.Errorf("unary plus is %+v (%v)", steps, ok)
+	}
+}
+
+// TestLowerPrefixUnsigned: the unsigned types use the unsigned
+// subtraction, which is what swiftc emits for them.
+func TestLowerPrefixUnsigned(t *testing.T) {
+	steps, ok := LowerPrefix("~", types.Typ[types.UInt])
+	if !ok || len(steps) != 2 {
+		t.Fatalf("inversion is %d steps (%v)", len(steps), ok)
+	}
+	for i, s := range steps {
+		if s.Name != "usub_with_overflow_Int64" {
+			t.Errorf("step %d is %q", i, s.Name)
+		}
+	}
+}
+
+// TestLowerPrefixRefuses: an operator a type does not have has no
+// expansion, rather than a wrong one.
+func TestLowerPrefixRefuses(t *testing.T) {
+	if _, ok := LowerPrefix("!", types.Typ[types.Int]); ok {
+		t.Error("an Int can be negated logically")
+	}
+	if _, ok := LowerPrefix("~", types.Typ[types.Double]); ok {
+		t.Error("a Double has bits to invert")
+	}
+	if _, ok := LowerPrefix("-", types.Typ[types.String]); ok {
+		t.Error("a String can be negated")
+	}
+}

@@ -238,3 +238,87 @@ func underlyingBasic(t types.Type) (*types.Basic, bool) {
 	b, ok := t.Underlying().(*types.Basic)
 	return b, ok
 }
+
+// A Step is one builtin in the expansion of a prefix operator.
+//
+// A prefix operator is not always one instruction. Swift writes `-x`
+// as a subtraction from zero and `~x` as `(0 - x) - 1`, both of them
+// through the same overflow-reporting builtin that binary subtraction
+// uses -- with the reporting turned off for `~`, since inverting the
+// bits of the smallest value is not an error.
+type Step struct {
+	// Name is the builtin, and Result the machine type it produces.
+	Name, Result string
+	// Overflows says the builtin returns a value and a flag, and
+	// Reports says the flag is checked. A step can overflow without
+	// reporting: that is Swift's wrapping arithmetic.
+	Overflows, Reports bool
+	// HasConst says the expansion supplies a second operand. Without
+	// one the builtin takes the operand alone, which is how negation
+	// of a floating-point value is written.
+	HasConst  bool
+	Const     int64
+	ConstLeft bool
+}
+
+// LowerPrefix gives the builtins a prefix operator expands to, in
+// order, each taking the result of the one before it. An operator
+// that does nothing -- unary plus -- expands to no steps at all,
+// which is not a failure.
+func LowerPrefix(op string, operand types.Type) ([]Step, bool) {
+	b, ok := underlyingBasic(operand)
+	if !ok {
+		return nil, false
+	}
+	_, machine, ok := Layout(operand)
+	if !ok {
+		return nil, false
+	}
+	if op == "+" {
+		return nil, true
+	}
+
+	info := b.Info()
+	switch {
+	case info&types.IsBoolean != 0:
+		if op != "!" {
+			return nil, false
+		}
+		// All bits set, and there is one bit.
+		return []Step{{Name: "xor_Int1", Result: "Int1", HasConst: true, Const: -1}}, true
+
+	case info&types.IsFloat != 0:
+		if op != "-" {
+			return nil, false
+		}
+		return []Step{{Name: "fneg_" + machine, Result: machine}}, true
+
+	case info&types.IsInteger != 0:
+		s := "s"
+		if info&types.IsUnsigned != 0 {
+			s = "u"
+		}
+		sub := s + "sub_with_overflow_" + machine
+		switch op {
+		case "-":
+			return []Step{{
+				Name: sub, Result: machine,
+				Overflows: true, Reports: true,
+				HasConst: true, Const: 0, ConstLeft: true,
+			}}, true
+		case "~":
+			// Two's complement: ~x is -x - 1, and neither half of it
+			// can fail, so neither half reports.
+			return []Step{{
+				Name: sub, Result: machine,
+				Overflows: true,
+				HasConst:  true, Const: 0, ConstLeft: true,
+			}, {
+				Name: sub, Result: machine,
+				Overflows: true,
+				HasConst:  true, Const: 1,
+			}}, true
+		}
+	}
+	return nil, false
+}

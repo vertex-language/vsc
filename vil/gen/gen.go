@@ -44,7 +44,7 @@ import (
 )
 
 // File lowers one checked file into a raw VIL module.
-func File(name string, f *ast.File, info *analyzer.Info) *vil.Module {
+func File(name string, f *ast.File, info *analyzer.Info) (*vil.Module, []token.Diagnostic) {
 	m := vil.NewModule(name, vil.StageRaw)
 	m.Import("Builtin")
 
@@ -58,7 +58,7 @@ func File(name string, f *ast.File, info *analyzer.Info) *vil.Module {
 			g.function(fn)
 		}
 	}
-	return m
+	return m, g.diags
 }
 
 // A gen lowers one file.
@@ -71,6 +71,54 @@ type gen struct {
 	blk    *vil.Block
 	scopes []*scope
 	locals map[analyzer.Symbol]*local
+
+	diags []token.Diagnostic
+}
+
+// unsupported records an expression this package cannot lower.
+//
+// The alternative is what it used to do: return nothing, and let the
+// statement above substitute the empty tuple, so a function declared
+// to return Int returned Void and only the verifier noticed. Silence
+// about what was not lowered is how a compiler emits a program that
+// is not the one it was given.
+func (g *gen) unsupported(e ast.Expr) {
+	name := "an expression"
+	if e != nil {
+		name = exprKind(e)
+	}
+	pos := token.NoPos
+	if e != nil {
+		pos = e.Pos()
+	}
+	g.diags = append(g.diags, token.Diagnostic{
+		Pos:      pos,
+		End:      pos,
+		Severity: token.Error,
+		Message:  "cannot lower " + name + " yet",
+	})
+}
+
+func exprKind(e ast.Expr) string {
+	switch e.(type) {
+	case *ast.PrefixExpr:
+		return "this prefix operator"
+	case *ast.PostfixExpr:
+		return "a postfix operator"
+	case *ast.ClosureExpr:
+		return "a closure"
+	case *ast.SubscriptExpr:
+		return "a subscript"
+	case *ast.TernaryExpr:
+		return "a conditional expression"
+	case *ast.ArrayLit:
+		return "an array literal"
+	case *ast.DictLit:
+		return "a dictionary literal"
+	case *ast.TupleExpr:
+		return "a tuple expression"
+	}
+	return "this expression"
 }
 
 // A local is what a name in scope lowers to: a value, or the address
