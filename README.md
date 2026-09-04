@@ -497,6 +497,7 @@ them exist.
 | [`lower/`](lower/) | lowered VIL to VIR; host/device split | started |
 | `.` | the phases composed, the target tables, isel, object writing, linking | planned |
 | [`core/`](core/) | the built-in module: the operators, and what a primitive is made of | started |
+| [`mangle/`](mangle/) | Swift'''s symbol mangling, cloned | started |
 | `cli/` · `cmd/vsc/` | verb dispatch and the executable | planned |
 
 Everything downstream of `lower` — instruction selection and encoding for
