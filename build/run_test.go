@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	irverify "github.com/vertex-language/ir/verify"
@@ -1015,5 +1016,136 @@ func main() -> Int32 {
 `, "")
 	if got := runExit(t, bin); got != 42 {
 		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
+// TestForInRangeRuns holds the counting loop to what Swift's for-in
+// over a range actually does. Every expected value here was checked by
+// compiling the same program with swiftc and running it.
+//
+// The three that are easy to get wrong: a bound is evaluated once
+// rather than once per iteration, a closed range includes its upper
+// bound, and `continue` in a closed range still has to reach the test
+// that ends the loop.
+func TestForInRangeRuns(t *testing.T) {
+	bin := buildSwift(t, "main", `
+final class Counter {
+    var calls = 0
+    func bound() -> Int { calls = calls + 1; return 4 }
+}
+
+func main() -> Int32 {
+    var t: Int32 = 0
+
+    // The upper bound is evaluated once, not once per iteration.
+    let k = Counter()
+    for _ in 0..<k.bound() { t = t + 1 }
+    if t != 4 { return 91 }
+    if k.calls != 1 { return 92 }
+
+    // An empty half-open range runs zero times.
+    var n: Int32 = 0
+    for _ in 3..<3 { n = n + 1 }
+    if n != 0 { return 93 }
+
+    // A closed range includes its upper bound: 1+2+3 = 6.
+    var s = 0
+    for i in 1...3 { s = s + i }
+    if s != 6 { return 94 }
+
+    // A single-element closed range runs exactly once.
+    var one = 0
+    for _ in 7...7 { one = one + 1 }
+    if one != 1 { return 95 }
+
+    // break leaves at the third value.
+    var b = 0
+    for i in 0..<100 {
+        if i == 3 { break }
+        b = b + 1
+    }
+    if b != 3 { return 96 }
+
+    // continue skips one iteration and no more.
+    var c = 0
+    for i in 0..<5 {
+        if i == 2 { continue }
+        c = c + 1
+    }
+    if c != 4 { return 97 }
+
+    // A continue in a closed range still has to ask whether that was
+    // the last iteration: a loop that skipped the test would spin.
+    var d = 0
+    for i in 1...4 {
+        if i == 4 { continue }
+        d = d + i
+    }
+    if d != 6 { return 98 }
+
+    // The loop variable may carry its type, and a for-in binds a name
+    // of its own rather than writing to one already in scope.
+    let i = 100
+    var e: Int32 = 0
+    for i: Int in 0..<3 { e = e + 1 }
+    if e != 3 { return 99 }
+    if i != 100 { return 100 }
+
+    return 42
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
+// TestForInLabelsRun: a labelled break leaves the outer loop and a
+// labelled continue goes round it, which is the only way to tell the
+// two apart from inside a nested loop. swiftc run on this program
+// gives 6.
+func TestForInLabelsRun(t *testing.T) {
+	bin := buildSwift(t, "main", `
+func main() -> Int32 {
+    var t: Int32 = 0
+    outer: for i in 0..<4 {
+        for j in 0..<4 {
+            if j == 2 { continue outer }
+            if i == 3 { break outer }
+            t = t + 1
+        }
+    }
+    // i = 0, 1, 2 each contribute j = 0 and j = 1; i = 3 leaves at once.
+    return t
+}
+`, "")
+	if got := runExit(t, bin); got != 6 {
+		t.Errorf("exit status = %d, want 6", got)
+	}
+}
+
+// TestReversedRangeTraps: `for i in 5..<3` is a mistake about the
+// program, not an empty loop, and Swift kills the process for it. A
+// naive `i < upper` test would run zero times and say nothing, which
+// is the whole reason the check is emitted before the loop.
+//
+// swiftc's own binary dies on SIGTRAP with the same message.
+func TestReversedRangeTraps(t *testing.T) {
+	bin := buildSwift(t, "main", `
+func main() -> Int32 {
+    var t: Int32 = 0
+    var lo = 5
+    var hi = 3
+    for _ in lo..<hi { t = t + 1 }
+    return t
+}
+`, "")
+	cmd := exec.Command(bin)
+	err := cmd.Run()
+	if err == nil {
+		t.Fatalf("the program exited normally; want a trap")
+	}
+	ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGTRAP {
+		t.Errorf("exited %v, want a SIGTRAP", cmd.ProcessState)
 	}
 }

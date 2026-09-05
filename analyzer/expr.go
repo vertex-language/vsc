@@ -505,9 +505,19 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 			return types.Typ[types.Void]
 
+		// A range is its two bounds, which have to be one type: `0..<n`
+		// is a Range<Int> because n is an Int, and reconcileLiterals
+		// above is what gave the literal that type. Swift requires the
+		// bound to be Comparable and there is no protocol machinery
+		// here, so what is required instead is that the two agree.
 		case "...", "..<":
-			// Range operator
-			return types.NewNamed("Range", "", lhs)
+			if !types.Identical(lhs, rhs) {
+				if !isInvalid(lhs) && !isInvalid(rhs) {
+					c.typeErrorf(e.Op.Pos(), "cannot form a range from '%s' to '%s'", lhs, rhs)
+				}
+				return types.Typ[types.Invalid]
+			}
+			return &types.Range{Element: lhs, Closed: opName == "..."}
 
 		default:
 			// Custom operator: if operands compatible return lhs

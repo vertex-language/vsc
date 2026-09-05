@@ -232,9 +232,9 @@ func main() -> Int32 { return fib(10) }`)
 func TestRefusalsCoverTheirSpan(t *testing.T) {
 	src := `
 func main() -> Int32 {
-    var n: Int32 = 0
-    for x in 0..<3 { n = n + x }
-    return n
+    var n = 0
+    for x in 0..<3 where x > 1 { n = n + x }
+    return Int32(n)
 }`
 	_, diags := generate(t, "main", src)
 	if len(diags) == 0 {

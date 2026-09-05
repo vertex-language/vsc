@@ -74,6 +74,9 @@ func Alignof(t Type, target *Target) int64 {
 		return target.WordSize
 	case *Optional:
 		return Alignof(tt.Wrapped, target)
+	// Two bounds, laid out as a struct of two of them would be.
+	case *Range:
+		return Alignof(tt.Element, target)
 	case *Tuple:
 		var maxAlign int64 = 1
 		for _, elem := range tt.Elements {
@@ -150,6 +153,11 @@ func Sizeof(t Type, target *Target) int64 {
 		return target.WordSize * int64(4+len(tt.Protocols))
 	case *Protocol:
 		return target.WordSize * 5
+
+	// Two bounds. A ClosedRange is the same two: Swift's carries a
+	// finished bit in its *iterator*, not in the range.
+	case *Range:
+		return Strideof(tt.Element, target) + Sizeof(tt.Element, target)
 
 	case *Optional:
 		size := Sizeof(tt.Wrapped, target)

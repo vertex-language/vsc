@@ -120,14 +120,17 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		}
 
 	case *ast.ForInStmt:
-		// The element type comes from the sequence. Only Array is
-		// modelled as one so far; anything else — a range, a
-		// dictionary, a type conforming to Sequence — says nothing
-		// this compiler can read yet.
+		// The element type comes from the sequence. An array's is what
+		// it holds and a range's is its bound; anything else — a
+		// dictionary, a type conforming to Sequence — says nothing this
+		// compiler can read yet.
 		seqType := c.checkExpr(s.Seq, nil, scope)
 		elemType := types.Type(types.Typ[types.Invalid])
-		if arr, ok := seqType.Underlying().(*types.Array); ok {
-			elemType = arr.Elem
+		switch seq := seqType.Underlying().(type) {
+		case *types.Array:
+			elemType = seq.Elem
+		case *types.Range:
+			elemType = seq.Element
 		}
 		loopScope := NewScope(scope, s.Pos(), s.End())
 		c.info.Scopes[s] = loopScope

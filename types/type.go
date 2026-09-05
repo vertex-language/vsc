@@ -429,6 +429,29 @@ type Optional struct {
 func (o *Optional) Underlying() Type { return o }
 func (o *Optional) String() string   { return fmt.Sprintf("%s?", o.Wrapped) }
 
+// Range is `a..<b` or `a...b`: two bounds of the same type, and
+// whether the upper one is included.
+//
+// Swift has two types here, Range and ClosedRange, because they
+// differ in more than a flag — a closed range over the whole of Int
+// has no representable "one past the end" and its iterator has to
+// carry a finished bit. They are one type with a flag here because
+// nothing yet distinguishes them beyond how a for-in counts, and
+// splitting them before there is a second difference would be two
+// names for one idea.
+type Range struct {
+	Element Type
+	Closed  bool
+}
+
+func (r *Range) Underlying() Type { return r }
+func (r *Range) String() string {
+	if r.Closed {
+		return fmt.Sprintf("ClosedRange<%s>", r.Element)
+	}
+	return fmt.Sprintf("Range<%s>", r.Element)
+}
+
 // Metatype is `T.Type`: the type itself as a value. A type's name in
 // expression position denotes one, which is what makes `Int.self` a
 // value and `Box(v: 3)` a call to an initializer.

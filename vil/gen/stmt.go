@@ -69,6 +69,9 @@ func (g *gen) stmtBody(s ast.Stmt) {
 	case *ast.WhileStmt:
 		g.whileStmt(n)
 
+	case *ast.ForInStmt:
+		g.forInStmt(n)
+
 	case *ast.SwitchStmt:
 		g.switchStmt(n)
 
@@ -655,12 +658,46 @@ func (g *gen) switchOnValue(s *ast.SwitchStmt, subject *vil.Value, t types.Type,
 // equals is the bit that says whether two values of the same type are
 // the same one, which is what a case pattern tests.
 func (g *gen) equals(a, b *vil.Value, t types.Type) *vil.Value {
-	bi, ok := core.Lower("==", t)
+	return g.compare("==", a, b, t)
+}
+
+// compare is the bit an ordering or equality test produces: the raw
+// Builtin.Int1 rather than a Bool, because that is what cond_br and
+// cond_fail take and wrapping it in a struct only to take it apart
+// again says nothing.
+func (g *gen) compare(op string, a, b *vil.Value, t types.Type) *vil.Value {
+	bi, ok := core.Lower(op, t)
 	if !ok {
 		return nil
 	}
 	return g.blk.Builtin(bi.Name, vil.Object(builtinNamed(bi.Result)),
 		g.machine(a, t), g.machine(b, t))
+}
+
+// increment is v + 1 at v's own type, as the checked add Swift uses.
+//
+// The trap it carries can never fire where this package emits it: a
+// for-in only increments an index it has just proved is below the
+// upper bound. It is the checked builtin anyway because that is the
+// one `+` on an Int is, and reaching for an unchecked add here would
+// make this the one place in the compiler where Swift's arithmetic
+// means something else.
+func (g *gen) increment(v *vil.Value, t types.Type) *vil.Value {
+	bi, ok := core.Lower("+", t)
+	if !ok || !bi.Overflows {
+		return nil
+	}
+	one := g.blk.IntegerLiteral(vil.Object(builtinFor(t)), 1)
+	want := g.blk.IntegerLiteral(vil.Object(vil.BuiltinInt1), -1)
+	pair := vil.Object(&types.Tuple{Elements: []*types.TupleElement{
+		{Type: builtinNamed(bi.Result)},
+		{Type: vil.BuiltinInt1},
+	}})
+	both := g.blk.Builtin(bi.Name, pair, g.machine(v, t), one, want)
+	sum := g.blk.TupleExtract(both, 0, vil.Object(builtinNamed(bi.Result)))
+	flag := g.blk.TupleExtract(both, 1, vil.Object(vil.BuiltinInt1))
+	g.blk.CondFail(flag, "arithmetic overflow")
+	return g.blk.Struct(lowerType(t), sum)
 }
 
 // caseClauses is the clauses of a switch, in order, skipping anything
@@ -832,4 +869,259 @@ func (g *gen) label(id *ast.Ident) string {
 		return ""
 	}
 	return g.text(id)
+}
+
+// forInStmt lowers `for i in a..<b` and `for i in a...b` as the
+// counting loop they are.
+//
+// SILGen does not do this. It emits the desugaring the language
+// defines — `makeIterator()`, then `next()` in a loop until it returns
+// none — and every piece of that is generic stdlib: Range, Collection,
+// IndexingIterator, Optional. None of it exists here, so lowering the
+// desugaring would mean lowering calls to functions that are declared
+// nowhere.
+//
+// What is emitted instead is what `swiftc -O` produces once it has
+// specialized and inlined all of that away, which is the same program:
+// two bounds evaluated once, an index, and a comparison. The oracle is
+// `swiftc -O -emit-sil`, and three of its facts are load-bearing:
+//
+//   - the bounds are evaluated once, before the loop, not per
+//     iteration;
+//   - a reversed range traps, and says so in those words. It is not an
+//     empty loop, which is what a naive `i < hi` test would silently
+//     make it;
+//   - `a..<b` stops before b and `a...b` includes it.
+//
+// The two spellings need two shapes. A half-open range is tested at
+// the top, because it may run zero times. A closed one cannot — the
+// trap above guarantees a <= b — so it is tested at the bottom, after
+// the body, against the upper bound itself. That is not a style
+// choice: `for i in 0...Int.max` with a top test would have to
+// evaluate i + 1 past the end of the type, and the increment is only
+// safe below because it is reached having just proved i is not yet the
+// upper bound.
+//
+// Anything that is not a range of integers is refused. An array, a
+// dictionary, a type of one's own conforming to Sequence — each needs
+// the iterator protocol this cannot lower, and each says so by name.
+func (g *gen) forInStmt(s *ast.ForInStmt) {
+	switch {
+	case s.Await.IsValid():
+		g.refuse(s, "an async for-in")
+		return
+	case s.Try.IsValid():
+		g.refuse(s, "a throwing for-in")
+		return
+	case s.Case.IsValid():
+		g.refuse(s, "a for-in with a `case` pattern")
+		return
+	case s.Where != nil:
+		g.refuse(s, "a for-in with a `where` clause")
+		return
+	}
+
+	rng, ok := g.info.Types[s.Seq].Underlying().(*types.Range)
+	if !ok {
+		g.refuse(s, "a for-in over "+g.seqKind(s.Seq))
+		return
+	}
+	elem := rng.Element
+	if _, ok := core.Lower("<", elem); !ok {
+		g.refuse(s, "a for-in over a range of "+elem.String())
+		return
+	}
+
+	bin, ok := g.fold(s.Seq).(*ast.BinaryExpr)
+	if !ok {
+		g.refuse(s.Seq, "this range")
+		return
+	}
+
+	// Once, before anything else: a bound that calls a function calls
+	// it one time, however many times the body runs.
+	lo, hi := g.rvalue(bin.X), g.rvalue(bin.Y)
+	if lo == nil || hi == nil {
+		return
+	}
+
+	// `cond_fail (hi < lo)`, in Swift's own words. A range that runs
+	// backwards is a mistake about the program rather than an empty
+	// loop, and this is the only place that can still say so — by the
+	// time the index is being compared, the two are indistinguishable.
+	if bad := g.compare("<", hi, lo, elem); bad != nil {
+		g.blk.CondFail(bad, "Range requires lowerBound <= upperBound")
+	}
+
+	// The index is a box for the same reason a `var` is: it is written
+	// to, and an SSA value is not. Allocating it through the scope
+	// machinery is what gets it released on every way out of the loop,
+	// a `break` and a `return` from inside the body included.
+	vt := lowerType(elem)
+	name := g.patternName(s.Pat)
+	box := g.blk.AllocBox(vt, "$"+name+"$index", "var")
+	borrow := g.blk.BeginBorrow(box, "var_decl")
+	slot := g.blk.ProjectBox(borrow, 0, vt)
+	g.destroyLater(box)
+	g.endBorrowLater(borrow)
+	g.blk.Store(lo, slot, storeQualifier(vt))
+
+	header := g.fn.Block()
+	latch := g.fn.Block()
+	exit := g.fn.Block()
+	label := g.takeLabel()
+
+	g.blk.Br(header)
+
+	// The head of a half-open loop tests before the body; a closed one
+	// falls straight in, having already proved it has an iteration to
+	// run.
+	g.blk = header
+	index := g.blk.Load(slot, loadQualifier(vt))
+	if !rng.Closed {
+		more := g.compare("<", index, hi, elem)
+		if more == nil {
+			g.refuse(s.Seq, "a range of "+elem.String())
+			return
+		}
+		// The body is a block of its own only here. A closed range
+		// runs its body straight out of the header, and allocating a
+		// block it would never branch to would leave an empty one
+		// behind.
+		body := g.fn.Block()
+		g.blk.CondBr(more, body, nil, exit, nil)
+		g.blk = body
+		index = g.blk.Load(slot, loadQualifier(vt))
+	}
+
+	// The loop variable is a fresh `let` each time round, bound to the
+	// index as it stands. That is SILGen's shape too — a move_value
+	// [var_decl] of what next() produced — and it is why writing to
+	// the index inside the body is not a thing the language offers.
+	depth := len(g.scopes)
+	g.push()
+	g.bindLoopVar(s.Pat, index, vt)
+
+	g.loops = append(g.loops, loop{header: latch, exit: exit, depth: depth, label: label})
+	g.block(s.Body)
+	g.loops = g.loops[:len(g.loops)-1]
+	if g.blk != nil && g.blk.Term() == nil {
+		g.pop()
+		g.blk.Br(latch)
+	} else {
+		// The body left by itself and has already unwound.
+		g.scopes = g.scopes[:len(g.scopes)-1]
+	}
+
+	// `continue` lands here, which is why the bottom test lives in
+	// this block rather than at the end of the body: a continue in a
+	// closed-range loop still has to ask whether that was the last
+	// iteration.
+	g.blk = latch
+	at := g.blk.Load(slot, loadQualifier(vt))
+	step := latch
+	if rng.Closed {
+		last := g.compare("==", at, hi, elem)
+		if last == nil {
+			g.refuse(s.Seq, "a range of "+elem.String())
+			return
+		}
+		step = g.fn.Block()
+		g.blk.CondBr(last, exit, nil, step, nil)
+		g.blk = step
+		at = g.blk.Load(slot, loadQualifier(vt))
+	}
+	next := g.increment(at, elem)
+	if next == nil {
+		g.refuse(s.Seq, "a range of "+elem.String())
+		return
+	}
+	g.blk.Store(next, slot, storeQualifier(vt))
+	g.blk.Br(header)
+
+	g.blk = exit
+}
+
+// bindLoopVar binds a for-in's pattern to one iteration's value.
+//
+// A wildcard binds nothing and is not an omission: `for _ in 0..<3`
+// says the count is what matters, and there is no name to give the
+// value to.
+func (g *gen) bindLoopVar(pat ast.Pattern, v *vil.Value, t vil.Type) {
+	name := patternIdent(pat)
+	if name == nil {
+		return
+	}
+	sym := g.info.Defs[name]
+	if sym == nil {
+		return
+	}
+	bound := g.blk.MoveValue(v, "lexical", "var_decl")
+	g.blk.DebugValue(bound, g.text(name), "let")
+	g.destroyLater(bound)
+	g.locals[sym] = &local{value: bound, typ: t}
+}
+
+// patternIdent is the name a pattern binds, or nil for one that binds
+// nothing.
+//
+// Two spellings reach here for the same thing. The parser reads a
+// for-in's pattern in matching mode, where a bare name is a value to
+// compare with rather than a name to bind, so `for i in …` arrives as
+// an expression; `for i: Int in …` arrives wrapped in its annotation.
+// The analyzer declares a symbol for both, so both have to be found.
+func patternIdent(pat ast.Pattern) *ast.Ident {
+	switch p := pat.(type) {
+	case *ast.TypedPattern:
+		return patternIdent(p.Pat)
+	case *ast.ValueBindingPattern:
+		return patternIdent(p.Pat)
+	case *ast.IdentPattern:
+		return p.Name
+	case *ast.ExprPattern:
+		if id, ok := p.X.(*ast.IdentExpr); ok {
+			return id.Name
+		}
+	}
+	return nil
+}
+
+// patternName is what to call the hidden index, so that a reader of
+// the IR can tell which loop it belongs to.
+func (g *gen) patternName(pat ast.Pattern) string {
+	if name := patternIdent(pat); name != nil {
+		return g.text(name)
+	}
+	return "i"
+}
+
+// fold resolves a sequence expression to the tree the analyzer built
+// from it. The parser leaves `a..<b` as a flat sequence of operands
+// and operators; which of them binds tighter is the analyzer's
+// answer, and this is where it is read.
+func (g *gen) fold(e ast.Expr) ast.Expr {
+	if seq, ok := e.(*ast.SequenceExpr); ok {
+		if folded, ok := g.info.Folded[seq]; ok {
+			return folded
+		}
+	}
+	if p, ok := e.(*ast.ParenExpr); ok {
+		return g.fold(p.X)
+	}
+	return e
+}
+
+// seqKind names what a for-in was asked to walk, for the refusal.
+func (g *gen) seqKind(e ast.Expr) string {
+	t := g.info.Types[e]
+	if t == nil {
+		return "this"
+	}
+	switch t.Underlying().(type) {
+	case *types.Array:
+		return "an array"
+	case *types.Dictionary:
+		return "a dictionary"
+	}
+	return "'" + t.String() + "'"
 }

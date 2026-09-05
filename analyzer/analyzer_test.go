@@ -974,3 +974,57 @@ func f(_ n: Int32) {
 		})
 	}
 }
+
+// TestRangesAreTyped: a range is its two bounds, and they have to be
+// one type. The element is what a for-in binds its variable to, which
+// is the only thing that gave the variable a type at all — before
+// this, a range was modelled as a name whose underlying type was its
+// lower bound, so `0..<n` looked like an Int to everything that asked.
+func TestRangesAreTyped(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"the literal takes the other bound's type", `
+func f(_ n: Int32) {
+    for i in 0..<n { _ = i }
+}
+`, ""},
+		{"bounds that disagree", `
+func f(_ a: Int32, _ b: Int) {
+    for i in a..<b { _ = i }
+}
+`, "cannot form a range from 'Int32' to 'Int'"},
+		{"the loop variable is the bound's type, not the sequence's", `
+func f(_ n: Int32) {
+    var t: Int32 = 0
+    for i in 0..<n { t = t + i }
+}
+`, ""},
+		{"and a mismatch against it is still reported", `
+func f(_ n: Int32) {
+    var t: Int = 0
+    for i in 0..<n { t = t + i }
+}
+`, "cannot be applied to operands of type 'Int' and 'Int32'"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := checkSnippet(t, tc.src)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("reported %v, want a clean check", got)
+				}
+				return
+			}
+			for _, m := range got {
+				if strings.Contains(m, tc.want) {
+					return
+				}
+			}
+			t.Errorf("reported %v, want one containing %q", got, tc.want)
+		})
+	}
+}

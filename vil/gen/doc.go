@@ -78,6 +78,17 @@
 // or with the leading dot the context resolves. A case that carries
 // one is refused: the payload's layout is not computed anywhere yet.
 //
+// For-in, over a range of integers and nothing else. This is the one
+// construct that does not follow SILGen: the language defines a for-in
+// as makeIterator() and next() until it returns none, and every piece
+// of that is generic stdlib -- Range, Collection, IndexingIterator,
+// Optional -- so lowering the desugaring would mean calling functions
+// declared nowhere. What is emitted is what `swiftc -O` produces once
+// it has specialized all of it away, which is the same program: two
+// bounds evaluated once, an index, a comparison, and Swift's own trap
+// for a range that runs backwards. A for-in over anything else is
+// refused by name.
+//
 // Two rules of the language are checked here because nothing before
 // this models them: a `break` or `continue` has to be inside a loop
 // it names, and the body of a `guard` may not fall through. Both are
