@@ -227,14 +227,14 @@ func main() -> Int32 { return fib(10) }`)
 }
 
 // TestRefusalsCoverTheirSpan: a caret under the first byte of a
-// twenty-line switch says less than one under the whole of it, and
+// twenty-line statement says less than one under the whole of it, and
 // the node knows its extent.
 func TestRefusalsCoverTheirSpan(t *testing.T) {
 	src := `
-enum E { case a, b }
 func main() -> Int32 {
-    let e = E.a
-    switch e { case .a: return 1; case .b: return 2 }
+    var n: Int32 = 0
+    for x in 0..<3 { n = n + x }
+    return n
 }`
 	_, diags := generate(t, "main", src)
 	if len(diags) == 0 {

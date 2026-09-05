@@ -53,6 +53,12 @@ func (c *fn) inst(in *vil.Inst) error {
 		}
 		return nil
 
+	case vil.Enum:
+		return c.makeEnum(in)
+
+	case vil.SwitchEnum:
+		return c.switchEnum(in)
+
 	case vil.StructElementAddr:
 		return c.structElementAddr(in)
 
@@ -414,6 +420,119 @@ func (c *fn) allocRef(in *vil.Inst) error {
 	}
 	c.def(res, got.Value(0))
 	return nil
+}
+
+// makeEnum builds one case of an enum, which for a payload-free enum is
+// its tag: the case's position among the ones the type declares.
+//
+// The position rather than a name, because that is what survives to a
+// machine — and the same number switchEnum branches on, which is why
+// both read it from the type rather than counting separately.
+func (c *fn) makeEnum(in *vil.Inst) error {
+	res := in.Result()
+	if res == nil {
+		return nil
+	}
+	if len(in.Args()) != 0 {
+		return c.fail(ErrUnsupported, in.Op(), "an enum case that carries a value")
+	}
+	tag, ok := enumTag(res.Type(), in.Aux().Member)
+	if !ok {
+		return c.fail(ErrUnsupported, in.Op(), "no case "+in.Aux().Member+" in "+res.Type().String())
+	}
+	r, ok := machine(res.Type())
+	if !ok {
+		return c.fail(ErrType, in.Op(), res.Type().String())
+	}
+	switch r.reg {
+	case ir.TypeI32:
+		c.def(res, c.b.I32.Const(tag))
+	case ir.TypeI64:
+		c.def(res, c.b.I64.Const(tag))
+	default:
+		return c.fail(ErrType, in.Op(), r.reg.String())
+	}
+	return nil
+}
+
+// switchEnum branches on the tag.
+//
+// A jump table rather than a chain of comparisons: the tags of an enum
+// are 0, 1, 2 … by construction, which is the one shape a table is
+// always right for. The default edge takes the cases the switch did not
+// name, and there is always one — vil/gen adds it where the source
+// named every case, because a table has to say where an unnamed
+// selector goes even when the type says there are none.
+func (c *fn) switchEnum(in *vil.Inst) error {
+	sel, err := c.operand(in, in.Args()[0])
+	if err != nil {
+		return err
+	}
+	tag, ok := sel.(ir.I32)
+	if !ok {
+		return c.fail(ErrType, in.Op(), "the tag is not an i32")
+	}
+
+	e, ok := enumOf(in.Args()[0].Type())
+	if !ok {
+		return c.fail(ErrUnsupported, in.Op(), in.Args()[0].Type().String())
+	}
+
+	// One target per case, in tag order, so that the table is indexed
+	// by the tag itself.
+	targets := make([]ir.BlockTarget, len(e.Cases))
+	var dflt *ir.Block
+	for _, k := range in.Aux().Cases {
+		dest, ok := c.blocks[k.Dest]
+		if !ok {
+			return c.fail(ErrUnsupported, in.Op(), "no such block")
+		}
+		if k.Member == "" {
+			dflt = dest
+			continue
+		}
+		i, ok := enumTag(in.Args()[0].Type(), k.Member)
+		if !ok || int(i) >= len(targets) {
+			return c.fail(ErrUnsupported, in.Op(), "no case "+k.Member)
+		}
+		targets[i] = dest.To()
+	}
+	if dflt == nil {
+		return c.fail(ErrUnsupported, in.Op(), "a switch with no default edge")
+	}
+	// A case the switch did not name goes where anything unnamed goes.
+	for i := range targets {
+		if targets[i].Block() == nil {
+			targets[i] = dflt.To()
+		}
+	}
+	c.b.BrTable(tag, targets, dflt.To())
+	return nil
+}
+
+// enumOf is the enum a type is.
+func enumOf(t vil.Type) (*types.Enum, bool) {
+	if !t.IsValid() || t.IsAddress() || t.Formal() == nil {
+		return nil, false
+	}
+	e, ok := t.Formal().Underlying().(*types.Enum)
+	return e, ok
+}
+
+// enumTag is a case's position among the ones its type declares, which
+// is the value the case is represented by.
+func enumTag(t vil.Type, member string) (int64, bool) {
+	e, ok := enumOf(t)
+	if !ok {
+		return 0, false
+	}
+	name := memberName(member)
+	for i, c := range e.Cases {
+		if c != nil && c.Name == name {
+			return int64(i), true
+		}
+	}
+	return 0, false
 }
 
 // structElementAddr is a stored property inside a struct's own

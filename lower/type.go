@@ -44,6 +44,31 @@ func machineOf(t types.Type) (repr, bool) {
 	case *types.Class:
 		// A class value is the reference, never the object.
 		return repr{reg: ir.TypePtr}, true
+	case *types.Enum:
+		// An enum with no associated values is its tag and nothing
+		// else, so it is an integer of whatever width the tag needs.
+		// One with a payload is the payload beside the tag, which is a
+		// layout this package does not compute yet.
+		for _, c := range t.Cases {
+			if c != nil && c.AssociatedType != nil {
+				return repr{}, false
+			}
+		}
+		if len(t.Cases) <= 1 {
+			// One case carries no information: there is nothing to
+			// tell apart and nothing to store.
+			return repr{reg: ir.TypeI32, width: 8}, true
+		}
+		size := types.Sizeof(t, types.DefaultTarget64)
+		switch {
+		case size <= 1:
+			return repr{reg: ir.TypeI32, width: 8}, true
+		case size <= 2:
+			return repr{reg: ir.TypeI32, width: 16}, true
+		case size <= 4:
+			return repr{reg: ir.TypeI32}, true
+		}
+		return repr{reg: ir.TypeI64}, true
 	case *types.Struct:
 		// A struct of one field is that field. It is the same rule
 		// the instructions follow — `struct` and `struct_extract`

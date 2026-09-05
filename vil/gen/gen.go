@@ -416,6 +416,25 @@ type loop struct {
 	exit   *vil.Block // break: the statement after the loop
 	depth  int
 	label  string // "" unless the loop was written with one
+
+	// lazyExit stands in for exit where the block after the statement
+	// may turn out never to be reached — a switch whose every case
+	// returns has nothing after it, and a block nothing branches to is
+	// one the verifier rejects. Calling it is what makes the block, so
+	// it is called only by something that is about to branch there.
+	lazyExit func() *vil.Block
+}
+
+// exitBlock is where a break inside this statement goes, making the
+// block if it does not exist yet.
+func (l loop) exitBlock() *vil.Block {
+	if l.exit != nil {
+		return l.exit
+	}
+	if l.lazyExit != nil {
+		return l.lazyExit()
+	}
+	return nil
 }
 
 // enclosing is the loop a break or a continue names: the innermost
@@ -528,9 +547,20 @@ func (g *gen) function(d *ast.FuncDecl, recv types.Type) {
 	}
 	// A body that falls off the end returns nothing, which only a
 	// void function may do — and the checker already said so.
+	//
+	// A function with a result can still end up here with nowhere to
+	// fall from: `switch` leaves a continuation block behind, and when
+	// every case returns, nothing branches to it. Swift ends such a
+	// block with `unreachable`, and so does this — inventing a value
+	// to return would be a value the program could not have computed,
+	// and returning void would be the wrong type.
 	if g.blk != nil && g.blk.Term() == nil {
 		g.unwind()
-		g.blk.Return(g.result())
+		if !g.entry && sig.Results != nil && !isVoid(sig.Results) {
+			g.blk.Unreachable()
+		} else {
+			g.blk.Return(g.result())
+		}
 	}
 	g.fn = nil
 	g.entry = false

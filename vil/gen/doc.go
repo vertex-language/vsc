@@ -55,6 +55,29 @@
 // same reason the member is, because reading the struct out into a
 // value first would write into the copy.
 //
+// Switch, in the two shapes SILGen has and picked between the same
+// way. A subject that is an enum branches on its tag with
+// switch_enum; anything else is a chain of comparisons, each case
+// tested in turn and a failed test falling into the next, which is
+// what Swift's pattern match over Equatable is rather than a jump
+// table. A case body does not fall into the next one — Swift breaks
+// implicitly at its end — and `break` inside a switch leaves the
+// switch where `continue` leaves the enclosing loop, which is the one
+// place the two keywords name different statements.
+//
+// The block after a switch is made only when something branches to
+// it. Where every case returns there is nothing after the statement,
+// and a block with no predecessors is one the verifier rejects.
+// Swift reaches the same place differently: SILGen gives a function
+// one epilog block that every return branches to with its value, so
+// the continuation always has a predecessor. This returns from each
+// case directly, which is simpler and needs the block to be
+// conditional instead.
+//
+// An enum case with no associated value, written out as `Color.red`
+// or with the leading dot the context resolves. A case that carries
+// one is refused: the payload's layout is not computed anywhere yet.
+//
 // Two rules of the language are checked here because nothing before
 // this models them: a `break` or `continue` has to be inside a loop
 // it names, and the body of a `guard` may not fall through. Both are

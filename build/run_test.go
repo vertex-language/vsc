@@ -860,3 +860,160 @@ func buildSwift(t *testing.T, module, swift, mainC string) string {
 	}
 	return filepath.Join(dir, module)
 }
+
+// TestSwitchOnEnumRuns: an enum with no associated values is its tag,
+// and a switch over one is a jump table indexed by it. Every case is
+// taken here, including the last, because a table that is one short is
+// a table that runs off its end.
+func TestSwitchOnEnumRuns(t *testing.T) {
+	bin := buildSwift(t, "main", `
+enum Color { case red, green, blue }
+
+func code(_ c: Color) -> Int32 {
+    switch c {
+    case .red: return 1
+    case .green: return 10
+    case .blue: return 100
+    }
+}
+
+func main() -> Int32 {
+    // 1 + 10 + 100, then the same three again through a variable, so
+    // that the tag is read out of storage as well as made on the spot.
+    var total: Int32 = code(.red) + code(.green) + code(.blue)
+    let c = Color.green
+    total = total + code(c)
+    return total - 79
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
+// TestSwitchOnValueRuns: a subject that is not an enum is a chain of
+// comparisons rather than a table — Swift's `~=` — so what is checked
+// is that a later case is reached only when every earlier one failed,
+// and that the default catches what none of them matched.
+func TestSwitchOnValueRuns(t *testing.T) {
+	bin := buildSwift(t, "main", `
+func classify(_ n: Int32) -> Int32 {
+    switch n {
+    case 0: return 3
+    case 1: return 5
+    case 2: return 7
+    default: return 11
+    }
+}
+
+func main() -> Int32 {
+    // 3 + 5 + 7 + 11 + 11: the two out-of-range subjects both fall to
+    // the default rather than to the nearest case.
+    return classify(0) + classify(1) + classify(2) + classify(3) + classify(-1)
+}
+`, "")
+	if got := runExit(t, bin); got != 37 {
+		t.Errorf("exit status = %d, want 37", got)
+	}
+}
+
+// TestSwitchFallsOutToWhatFollows: a case body does not fall into the
+// next one and does not end the function either — it goes to whatever
+// comes after the switch. `break` goes to the same place, and both
+// have to leave the continuation reachable.
+func TestSwitchFallsOutToWhatFollows(t *testing.T) {
+	bin := buildSwift(t, "main", `
+enum Step { case one, two, three }
+
+func main() -> Int32 {
+    var n: Int32 = 0
+    let s = Step.two
+    switch s {
+    case .one:
+        n = 1
+    case .two:
+        n = 20
+        break
+    case .three:
+        n = 300
+    }
+    // Reached from the case body, which is the point: had .two fallen
+    // into .three this would be 300, and had it returned, 20.
+    return n + 22
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
+// TestSwitchInsideLoop: `break` inside a switch leaves the switch and
+// `continue` leaves the iteration, which is the one place the two
+// keywords mean different statements. The loop is a while rather than
+// a for-in because for-in does not lower yet.
+func TestSwitchInsideLoop(t *testing.T) {
+	bin := buildSwift(t, "main", `
+func main() -> Int32 {
+    var i: Int32 = 0
+    var total: Int32 = 0
+    while i < 6 {
+        i = i + 1
+        switch i {
+        case 3:
+            // Leaves the switch, not the loop: the add below still runs.
+            break
+        case 5:
+            // Leaves the iteration: the add below is skipped.
+            continue
+        default:
+            total = total + 100
+        }
+        total = total + i
+    }
+    // default runs for 1, 2, 4 and 6 -> 400, and the trailing add for
+    // every iteration but the fifth -> 1+2+3+4+6 = 16.
+    return total - 374
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
+// TestEnumInStorageRuns: an enum with no associated values is one byte
+// of tag, so it has to survive being stored — in a struct field, in a
+// variable written to more than once — and come back as the same case.
+// It also exercises the leading dot, which names a case of whatever
+// type the context wants.
+func TestEnumInStorageRuns(t *testing.T) {
+	bin := buildSwift(t, "main", `
+enum Suit { case clubs, diamonds, hearts, spades }
+
+struct Card {
+    var suit: Suit
+    var rank: Int32
+}
+
+func points(_ c: Card) -> Int32 {
+    switch c.suit {
+    case .clubs: return c.rank
+    case .diamonds: return c.rank * 2
+    default: return c.rank * 10
+    }
+}
+
+func main() -> Int32 {
+    var s = Suit.clubs
+    var total: Int32 = points(Card(suit: s, rank: 1))
+    s = .diamonds
+    total = total + points(Card(suit: s, rank: 3))
+    // .spades takes the default, so the last term is 30 rather than 3.
+    s = .spades
+    total = total + points(Card(suit: s, rank: 3))
+    return total + 5
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}

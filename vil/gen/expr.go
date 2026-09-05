@@ -29,6 +29,20 @@ func (g *gen) expr(e ast.Expr) *vil.Value {
 	case *ast.MemberExpr:
 		return g.member(n)
 
+	// `.red` where a Color is wanted. The checker resolved the base
+	// and recorded the case under the name, so there is nothing left
+	// to look up: it lowers exactly as `Color.red` does.
+	case *ast.ImplicitMemberExpr:
+		if n.Name == nil {
+			return nil
+		}
+		ec, ok := g.info.Uses[n.Name].(*analyzer.EnumCaseSymbol)
+		if !ok {
+			g.refuse(n, "this implicit member")
+			return nil
+		}
+		return g.enumCase(n, ec)
+
 	case *ast.CallExpr:
 		return g.call(n)
 
@@ -323,8 +337,16 @@ func (g *gen) borrow(v *vil.Value) *vil.Value {
 // member lowers a property read: borrow the base, take the address of
 // the field, read it under an access, and close both.
 func (g *gen) member(e *ast.MemberExpr) *vil.Value {
+	if e.Name == nil {
+		return nil
+	}
+	// `E.b` names a case rather than reading a property: the base is a
+	// type, which has no value to read out of.
+	if ec, ok := g.info.Uses[e.Name].(*analyzer.EnumCaseSymbol); ok {
+		return g.enumCase(e, ec)
+	}
 	base := g.expr(e.X)
-	if base == nil || e.Name == nil {
+	if base == nil {
 		return nil
 	}
 	t := lowerType(g.info.Types[e])
@@ -580,6 +602,25 @@ func (g *gen) bindingName(p ast.Pattern) string {
 		return g.text(id.Name)
 	}
 	return ""
+}
+
+// enumCase builds one case of an enum, which SILGen writes as
+//
+//	%1 = enum $E, #E.b!enumelt
+//
+// A case that carries associated values is refused: the payload has to
+// be put in, and where it goes is a layout this compiler does not
+// compute yet.
+func (g *gen) enumCase(e ast.Expr, ec *analyzer.EnumCaseSymbol) *vil.Value {
+	if ec.AssociatedType() != nil {
+		g.refuse(e, "an enum case that carries a value")
+		return nil
+	}
+	t := g.info.Types[e]
+	if t == nil {
+		t = ec.Type()
+	}
+	return g.blk.Enum(lowerType(t), memberName(ec.Type(), ec.Name()), nil)
 }
 
 // method lowers a call through a dot.

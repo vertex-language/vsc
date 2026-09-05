@@ -3,7 +3,9 @@ package gen
 import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/token"
+	"github.com/vertex-language/vsc/types"
 	"github.com/vertex-language/vsc/vil"
 )
 
@@ -66,6 +68,9 @@ func (g *gen) stmtBody(s ast.Stmt) {
 
 	case *ast.WhileStmt:
 		g.whileStmt(n)
+
+	case *ast.SwitchStmt:
+		g.switchStmt(n)
 
 	case *ast.RepeatWhileStmt:
 		g.repeatStmt(n)
@@ -466,6 +471,219 @@ func (g *gen) whileStmt(s *ast.WhileStmt) {
 	g.blk = exit
 }
 
+// switchStmt lowers a switch.
+//
+// Two shapes, and SILGen picks between them the same way. A subject that
+// is an enum branches on the tag:
+//
+//	switch_enum %e, case #E.a: bb1, case #E.b: bb2, default: bb3
+//
+// Anything else is a chain: each pattern is compared with the subject
+// and a failed test falls into the next one, which is what Swift's
+// pattern match on a literal is — `~=` over Equatable, and not a jump
+// table.
+//
+//	%c = <subject == first>   cond_br %c, body1, test2
+//	test2: …
+//
+// A case body does not fall into the next: Swift breaks implicitly at
+// the end of one, so a body that runs off its end goes to the
+// continuation. `break` inside a switch goes there too, and `continue`
+// past it to the enclosing loop — which is why the entry pushed here
+// keeps whatever header was already on the stack.
+func (g *gen) switchStmt(s *ast.SwitchStmt) {
+	subject := g.rvalue(s.Subject)
+	if subject == nil {
+		return
+	}
+	clauses := caseClauses(s)
+	if len(clauses) == 0 {
+		return
+	}
+
+	// The continuation is made on demand rather than up front: where
+	// every case returns, nothing branches past the switch, and a
+	// block with no predecessors is not a well formed one. Everything
+	// that would branch there goes through cont(), so the block exists
+	// exactly when something reaches it.
+	var contBlk *vil.Block
+	cont := func() *vil.Block {
+		if contBlk == nil {
+			contBlk = g.fn.Block()
+		}
+		return contBlk
+	}
+
+	bodies := make([]*vil.Block, len(clauses))
+	for i := range clauses {
+		bodies[i] = g.fn.Block()
+	}
+
+	subjectType := g.info.Types[s.Subject]
+	if _, isEnum := underlyingEnum(subjectType); isEnum {
+		if !g.switchOnEnum(s, subject, subjectType, clauses, bodies, cont) {
+			return
+		}
+	} else if !g.switchOnValue(s, subject, subjectType, clauses, bodies, cont) {
+		return
+	}
+
+	// The bodies, each ending at the continuation unless it left by
+	// itself.
+	header := (*vil.Block)(nil)
+	if l, ok := g.enclosing(""); ok {
+		header = l.header
+	}
+	for i, cs := range clauses {
+		g.blk = bodies[i]
+		g.loops = append(g.loops, loop{header: header, lazyExit: cont, depth: len(g.scopes)})
+		for _, st := range cs.Stmts {
+			g.stmt(st)
+			if g.blk == nil || g.blk.Term() != nil {
+				break
+			}
+		}
+		g.loops = g.loops[:len(g.loops)-1]
+		if g.blk != nil && g.blk.Term() == nil {
+			g.blk.Br(cont())
+		}
+	}
+	// Nil rather than an empty block when nothing reached the end:
+	// what follows the switch is unreachable, and the callers already
+	// read a nil block as saying so.
+	g.blk = contBlk
+}
+
+// switchOnEnum emits the branch for an enum subject, and reports
+// whether it could.
+func (g *gen) switchOnEnum(s *ast.SwitchStmt, subject *vil.Value, t types.Type,
+	clauses []*ast.CaseClause, bodies []*vil.Block, cont func() *vil.Block) bool {
+
+	var cases []vil.Case
+	seenDefault := false
+	for i, cs := range clauses {
+		if cs.Kind == token.DEFAULT {
+			cases = append(cases, vil.Case{Dest: bodies[i]})
+			seenDefault = true
+			continue
+		}
+		for _, item := range cs.Items {
+			if item.Where != nil {
+				g.refuse(s, "a switch with a `where` clause")
+				return false
+			}
+			pat, ok := item.Pat.(*ast.EnumCasePattern)
+			if !ok || pat.Name == nil {
+				g.refuse(item.Pat, "this pattern in a switch over an enum")
+				return false
+			}
+			if pat.Args != nil {
+				g.refuse(item.Pat, "a pattern that binds an enum case's value")
+				return false
+			}
+			cases = append(cases, vil.Case{
+				Member: memberName(t, g.text(pat.Name)),
+				Dest:   bodies[i],
+			})
+		}
+	}
+	// The checker holds a switch over an enum to covering every case,
+	// so a missing default means every case is named. Sending the
+	// unnamed remainder to the continuation rather than leaving the
+	// branch short is what keeps the block well formed either way.
+	if !seenDefault {
+		cases = append(cases, vil.Case{Dest: cont()})
+	}
+	g.blk.SwitchEnum(subject, cases...)
+	return true
+}
+
+// switchOnValue emits the comparison chain for a subject that is not an
+// enum, and reports whether it could.
+func (g *gen) switchOnValue(s *ast.SwitchStmt, subject *vil.Value, t types.Type,
+	clauses []*ast.CaseClause, bodies []*vil.Block, cont func() *vil.Block) bool {
+
+	// The default is where a subject that matched nothing goes, and the
+	// continuation is that when there is none.
+	fallback := (*vil.Block)(nil)
+	for i, cs := range clauses {
+		if cs.Kind == token.DEFAULT {
+			fallback = bodies[i]
+		}
+	}
+	if fallback == nil {
+		fallback = cont()
+	}
+
+	for i, cs := range clauses {
+		if cs.Kind == token.DEFAULT {
+			continue
+		}
+		for _, item := range cs.Items {
+			if item.Where != nil {
+				g.refuse(s, "a switch with a `where` clause")
+				return false
+			}
+			pat, ok := item.Pat.(*ast.ExprPattern)
+			if !ok {
+				g.refuse(item.Pat, "this pattern in a switch")
+				return false
+			}
+			n := len(g.diags)
+			want := g.rvalue(pat.X)
+			if want == nil {
+				// Whatever stopped it said so, unless nothing did.
+				if len(g.diags) == n {
+					g.refuse(item.Pat, "this pattern in a switch")
+				}
+				return false
+			}
+			eq := g.equals(subject, want, t)
+			if eq == nil {
+				g.refuse(item.Pat, "a switch over "+t.String())
+				return false
+			}
+			next := g.fn.Block()
+			g.blk.CondBr(eq, bodies[i], nil, next, nil)
+			g.blk = next
+		}
+	}
+	g.blk.Br(fallback)
+	return true
+}
+
+// equals is the bit that says whether two values of the same type are
+// the same one, which is what a case pattern tests.
+func (g *gen) equals(a, b *vil.Value, t types.Type) *vil.Value {
+	bi, ok := core.Lower("==", t)
+	if !ok {
+		return nil
+	}
+	return g.blk.Builtin(bi.Name, vil.Object(builtinNamed(bi.Result)),
+		g.machine(a, t), g.machine(b, t))
+}
+
+// caseClauses is the clauses of a switch, in order, skipping anything
+// that is not one — a conditional case is an #if the parser kept.
+func caseClauses(s *ast.SwitchStmt) []*ast.CaseClause {
+	out := make([]*ast.CaseClause, 0, len(s.Cases))
+	for _, c := range s.Cases {
+		if cs, ok := c.(*ast.CaseClause); ok {
+			out = append(out, cs)
+		}
+	}
+	return out
+}
+
+// underlyingEnum is the enum a type is, if it is one.
+func underlyingEnum(t types.Type) (*types.Enum, bool) {
+	if t == nil {
+		return nil, false
+	}
+	e, ok := t.Underlying().(*types.Enum)
+	return e, ok
+}
+
 // repeatStmt lowers `repeat { … } while cond`, whose difference from
 // a while loop is which end the test is at:
 //
@@ -577,7 +795,7 @@ func (g *gen) takeLabel() string {
 // and the extra one is an artifact of how SILGen emits cleanups
 // rather than something the program says.
 func (g *gen) breakStmt(s *ast.BreakStmt) {
-	g.leave(s, "break", g.label(s.Label), func(l loop) *vil.Block { return l.exit })
+	g.leave(s, "break", g.label(s.Label), func(l loop) *vil.Block { return l.exitBlock() })
 }
 
 // continueStmt goes back to the header, where the condition is tested

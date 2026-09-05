@@ -91,6 +91,26 @@
 // is itself a wide struct, are refused for the same reason: both need
 // the memory layout that going by address would also need.
 //
+// # An enum, and the branch on one
+//
+// An enum with no associated values is its tag and nothing else, so
+// it lowers to an integer as wide as the tag needs — one byte up to
+// 256 cases, which is what types.Sizeof says and what Swift lays out.
+// A case is the constant of its position among the ones the type
+// declares, and switch_enum is a jump table indexed by that position:
+// the tags are 0, 1, 2 … by construction, which is the one shape a
+// table is always right for.
+//
+// The table is dense whether or not the switch names every case. A
+// case the switch left out goes where anything unnamed goes, which is
+// the default edge — vil/gen supplies one even where the source named
+// every case, because a table has to say where an out-of-range
+// selector lands and a machine has no notion of the type saying there
+// are none.
+//
+// An enum with a payload is refused, here and in gen both: its layout
+// is the payload beside the tag, and nothing computes that yet.
+//
 // # Where a frame slot goes
 //
 // VIR admits a frame allocation in the entry block and nowhere else,
