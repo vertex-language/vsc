@@ -598,13 +598,15 @@ func (c *checker) declareFunctions(decls []ast.Decl, scope *Scope) {
 			sym := NewFunc(name, sig, f.Name.Pos())
 			sym.SetDecl(f)
 			sym.SetAccess(c.accessOf(f.Mods))
-			// Two functions may share a name as long as they do not
-			// share a signature. Only the second of an identical pair
-			// is a redeclaration.
+			// Two functions may share a base name as long as their
+			// full names differ -- the labels are part of it, so
+			// `label(a:)` and `label(b:)` are two declarations even
+			// though they are one type. Only the second of a pair
+			// that agrees on both is a redeclaration.
 			if old := scope.Insert(sym); old != nil {
 				prev, ok := old.(*FuncSymbol)
 				switch {
-				case !ok || types.Identical(prev.Signature(), sig):
+				case !ok || types.SameDecl(prev.Signature(), sig):
 					c.errorf(f.Name.Pos(), "invalid redeclaration of '%s'", name)
 				default:
 					prev.AddOverload(sym)

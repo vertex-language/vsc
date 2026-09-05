@@ -162,6 +162,13 @@ type Signature struct {
 }
 
 func (s *Signature) Underlying() Type { return s }
+
+// String is the type, which is not the declaration: a parameter's
+// label and its name belong to the latter, and printing them made
+// `func triple(_ n: Int32) -> Int32` read as having a type that no
+// annotation could be written to match. swiftc prints
+// `(Int32) -> Int32` for it. Ownership and variadicity stay, being
+// part of what the type says about a call.
 func (s *Signature) String() string {
 	var sb strings.Builder
 	sb.WriteString("(")
@@ -169,7 +176,16 @@ func (s *Signature) String() string {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString(p.String())
+		if p.Ownership != DefaultOwnership {
+			sb.WriteString(p.Ownership.String())
+			sb.WriteString(" ")
+		}
+		if p.Type != nil {
+			sb.WriteString(p.Type.String())
+		}
+		if p.Variadic {
+			sb.WriteString("...")
+		}
 	}
 	sb.WriteString(")")
 	if s.Async {

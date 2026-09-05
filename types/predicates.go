@@ -1,6 +1,33 @@
 package types
 
 // Identical reports whether x and y are identical types.
+// SameDecl reports whether two function signatures belong to the same
+// declaration, which is a different question from whether they are the
+// same type.
+//
+// Swift's full name for a function is its base name and its argument
+// labels together, so `label(a:)` and `label(b:)` are two declarations
+// and may both exist. Their *types* are identical -- SE-0111 took
+// labels out of the type system -- which is why Identical says yes to
+// the same pair and why the two questions cannot share an answer:
+// asking Identical about a redeclaration rejected every overload that
+// differed only in its labels, and asking SameDecl about an assignment
+// would reject every declared function used as a value.
+func SameDecl(x, y *Signature) bool {
+	if !Identical(x, y) {
+		return false
+	}
+	if x == nil || y == nil {
+		return x == y
+	}
+	for i, p := range x.Params {
+		if p.Label != y.Params[i].Label {
+			return false
+		}
+	}
+	return true
+}
+
 func Identical(x, y Type) bool {
 	if x == y {
 		return true
@@ -89,9 +116,16 @@ func Identical(x, y Type) bool {
 			if !Identical(xt.Results, yt.Results) {
 				return false
 			}
+			// An argument label is part of a declaration's name and
+			// not of its type: SE-0111 took labels out of the type
+			// system, so `func triple(_ n: Int32) -> Int32` has type
+			// `(Int32) -> Int32` and is assignable to a variable of
+			// it. swiftc accepts both spellings against the same
+			// annotation, and comparing labels here rejected every
+			// declared function used as a value.
 			for i, p := range xt.Params {
 				yp := yt.Params[i]
-				if p.Label != yp.Label || p.Ownership != yp.Ownership || p.Variadic != yp.Variadic || !Identical(p.Type, yp.Type) {
+				if p.Ownership != yp.Ownership || p.Variadic != yp.Variadic || !Identical(p.Type, yp.Type) {
 					return false
 				}
 			}

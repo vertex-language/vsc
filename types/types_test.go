@@ -79,7 +79,11 @@ func TestCompositeTypes(t *testing.T) {
 		Async:   true,
 		Throws:  true,
 	}
-	expectedSig := "(borrowing a x: Int, _ y: String...) async throws -> Bool"
+	// The labels and the names are not printed, because they are not
+	// part of the type: swiftc prints exactly
+	// `(borrowing Int, String) async throws -> Bool` for the same
+	// declaration. Ownership and variadicity are part of it and stay.
+	expectedSig := "(borrowing Int, String...) async throws -> Bool"
 	if sig.String() != expectedSig {
 		t.Errorf("expected %q, got %q", expectedSig, sig.String())
 	}

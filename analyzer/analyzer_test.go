@@ -1028,3 +1028,67 @@ func f(_ n: Int32) {
 		})
 	}
 }
+
+// TestArgumentLabelsAreNotPartOfTheType: SE-0111 took argument labels
+// out of Swift's type system, so a declared function is assignable to
+// a variable of its type however its parameters were labelled. They
+// are still part of the declaration's full name, which is what lets
+// two functions differ in labels alone -- two questions that cannot
+// share an answer, and did.
+//
+// Both verdicts are swiftc's, run on the same source.
+func TestArgumentLabelsAreNotPartOfTheType(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"a labelled function is a value of its unlabelled type", `
+func triple(_ n: Int32) -> Int32 { return n * 3 }
+func named(x: Int32) -> Int32 { return x }
+func f() {
+    let a: (Int32) -> Int32 = triple
+    let b: (Int32) -> Int32 = named
+    _ = a
+    _ = b
+}
+`, ""},
+		{"two declarations may differ in labels alone", `
+func label(a: Int) -> Int { return a }
+func label(b: Int) -> Int { return b }
+func f() {
+    _ = label(a: 1)
+    _ = label(b: 2)
+}
+`, ""},
+		{"and the same full name twice is still a redeclaration", `
+func label(a: Int) -> Int { return a }
+func label(a: Int) -> Int { return a }
+`, "invalid redeclaration of 'label'"},
+		{"a function of the wrong type is still rejected", `
+func triple(_ n: Int32) -> Int32 { return n * 3 }
+func f() {
+    let a: (Int) -> Int = triple
+    _ = a
+}
+`, "cannot convert"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := checkSnippet(t, tc.src)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("reported %v, want a clean check", got)
+				}
+				return
+			}
+			for _, m := range got {
+				if strings.Contains(m, tc.want) {
+					return
+				}
+			}
+			t.Errorf("reported %v, want one containing %q", got, tc.want)
+		})
+	}
+}
