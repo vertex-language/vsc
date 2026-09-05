@@ -1222,3 +1222,46 @@ func main() -> Int32 {
 		t.Errorf("exit status = %d, want 42", got)
 	}
 }
+
+// TestOverrideIsNotSilentlyIgnored: a method call on a class that
+// takes part in inheritance either reaches the right body or is
+// refused. What it must not do is what it did -- bind the
+// superclass's body statically, return the wrong number, and say
+// nothing.
+//
+// swiftc on this program gives 5: 2 from the override through a
+// base-typed local, 2 through a base-typed parameter, and 1 from the
+// base itself. A diagnostic passes, because a refusal is honest; a
+// clean compile that answers anything but 5 does not.
+func TestOverrideIsNotSilentlyIgnored(t *testing.T) {
+	if runtime.GOARCH != "arm64" || runtime.GOOS != "darwin" {
+		t.Skip("not on Apple Silicon; skipping the link-and-run check")
+	}
+	target, ok := build.Host()
+	if !ok {
+		t.Skip("no backend for this machine")
+	}
+	const src = `
+class A { func get() -> Int32 { return 1 } }
+class B: A { override func get() -> Int32 { return 2 } }
+
+func ask(_ a: A) -> Int32 { return a.get() }
+
+func main() -> Int32 {
+    let b: A = B()
+    return b.get() + ask(B()) + ask(A())
+}
+`
+	// The target matters: without one, lowering runs on defaults that
+	// do not describe this machine and reports something unrelated,
+	// which would let this test pass by mistaking that for the
+	// refusal.
+	_, diags := vsc.Compile([]vsc.Source{{Name: "main.swift", Text: []byte(src)}},
+		vsc.Options{Module: "main", Target: target})
+	if len(diags) > 0 {
+		return // refused, and said so
+	}
+	if got := runExit(t, buildSwift(t, "main", src, "")); got != 5 {
+		t.Errorf("exit status = %d, want 5: the override was ignored", got)
+	}
+}

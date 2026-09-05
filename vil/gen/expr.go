@@ -700,9 +700,21 @@ func (g *gen) enumCase(e ast.Expr, ec *analyzer.EnumCaseSymbol) *vil.Value {
 // method finds it in, and reversing it would pass the first argument as
 // the receiver.
 //
-// Static dispatch only. A `final` class's method is a function_ref like
-// a struct's; one that may be overridden is a class_method through the
-// object's table, and neither the table nor inheritance is modelled yet.
+// Static dispatch only, and refused where that is not enough.
+//
+// A method on a class that neither has a superclass nor is one has a
+// single implementation, so a function_ref names the only thing there
+// is to name. Where inheritance is involved, which body runs is a fact
+// about the object and the answer is a class_method through its table;
+// there is no table yet, so such a call is refused.
+//
+// This comment used to say inheritance was not modelled, and treated
+// static dispatch as safe on that ground. The checker learned
+// inheritance -- it resolves a method through the superclass chain and
+// converts a subclass to its base -- and this did not notice, so a
+// call through a base-typed reference ran the base's body and returned
+// the wrong number with nothing said. An assumption about another
+// package is only as good as the day it was written down.
 func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *vil.Value {
 	ref := g.info.Methods[mem]
 	if ref == nil || ref.Method == nil || ref.Method.Sig == nil {
@@ -724,6 +736,15 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *vil.Value {
 
 // methodCall emits the call itself, over a receiver the caller supplies.
 func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func() *vil.Value) *vil.Value {
+	// Which body a method call reaches is a fact about the object
+	// when the class takes part in inheritance, and there is no table
+	// to ask. Binding it here anyway is what this used to do, and it
+	// did not fail: it called the superclass's body and returned the
+	// wrong number, with nothing said.
+	if cl, ok := receiverClass(ref.Recv); ok && g.poly[cl] {
+		g.refuse(e, "a method call on '"+cl.Name+"', which takes part in inheritance")
+		return nil
+	}
 	callee := g.m.Func(g.methodSymbol(ref)).SetSourceName(ref.Method.Name)
 	if callee.IsDeclaration() && callee.Type() != nil {
 		g.declareMethod(callee, ref)
@@ -752,6 +773,16 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 	v := g.blk.Apply(fnRef, result, args...)
 	g.destroyLater(v)
 	return v
+}
+
+// receiverClass is the class a method was found in, if it was found in
+// one. A struct or an enum has no inheritance and no question to ask.
+func receiverClass(t types.Type) (*types.Class, bool) {
+	if t == nil {
+		return nil, false
+	}
+	cl, ok := t.Underlying().(*types.Class)
+	return cl, ok
 }
 
 // implicitMethod is the receiver's method a bare name refers to, for a

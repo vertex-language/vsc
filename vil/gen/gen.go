@@ -23,9 +23,14 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 	m := vil.NewModule(name, vil.StageRaw)
 	m.Import("Builtin")
 
+	// Which classes take part in inheritance has to be known before
+	// any body is lowered: a call in the first file may be on a class
+	// the last file subclasses.
+	poly := polymorphic(files, info)
+
 	var diags []token.Diagnostic
 	for _, f := range files {
-		g := &gen{m: m, info: info, file: f.Unit, module: name}
+		g := &gen{m: m, info: info, file: f.Unit, module: name, poly: poly}
 		for _, stmt := range f.Stmts {
 			decl, ok := stmt.(*ast.DeclStmt)
 			if !ok {
@@ -47,6 +52,55 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 		diags = append(diags, g.diags...)
 	}
 	return m, diags
+}
+
+// polymorphic is the set of classes a method call on which cannot be
+// bound statically: the ones with a superclass, and the ones that are
+// somebody's superclass.
+//
+// A class in neither group has exactly one implementation of each of
+// its methods and always will, so naming it directly is not an
+// optimization but the only thing there is to name. For the rest,
+// which body runs is a fact about the object rather than about the
+// expression, and answering it here would answer it wrong -- see
+// methodCall.
+func polymorphic(files []*ast.File, info *analyzer.Info) map[*types.Class]bool {
+	out := map[*types.Class]bool{}
+	var mark func(t types.Type)
+	mark = func(t types.Type) {
+		if t == nil {
+			return
+		}
+		if cl, ok := t.Underlying().(*types.Class); ok {
+			out[cl] = true
+		}
+	}
+	for _, f := range files {
+		for _, stmt := range f.Stmts {
+			decl, ok := stmt.(*ast.DeclStmt)
+			if !ok {
+				continue
+			}
+			cd, ok := decl.D.(*ast.ClassDecl)
+			if !ok || cd.Name == nil {
+				continue
+			}
+			sym, _ := info.Defs[cd.Name].(*analyzer.TypeNameSymbol)
+			if sym == nil {
+				continue
+			}
+			cl, ok := sym.Type().Underlying().(*types.Class)
+			if !ok || cl.Superclass == nil {
+				continue
+			}
+			// The subclass, because a call on it may reach a body
+			// declared below it; and the superclass, because a call
+			// on it may reach one declared above.
+			mark(cl)
+			mark(cl.Superclass)
+		}
+	}
+	return out
 }
 
 // members lowers the methods a type declares.
@@ -163,6 +217,9 @@ type gen struct {
 	// closures counts the closure bodies lowered so far, so that each
 	// gets a name of its own.
 	closures int
+
+	// poly is the classes whose methods cannot be bound statically.
+	poly map[*types.Class]bool
 
 	diags []token.Diagnostic
 }
