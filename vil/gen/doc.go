@@ -89,6 +89,16 @@
 // for a range that runs backwards. A for-in over anything else is
 // refused by name.
 //
+// Closures that capture nothing, and a declared function used as a
+// value. A closure body is a function of its own -- SILGen emits one
+// as `sil private` and refers to it -- so that is what this emits,
+// and the expression becomes a function_ref given the shape of a
+// function value. A closure that captures is refused by name: the
+// captures would be trailing parameters bound by partial_apply, and
+// what that needs beyond a bigger case here is a heap context, a
+// reference count on it, and a forwarder for the arity it does not
+// match. See closure.go.
+//
 // Two rules of the language are checked here because nothing before
 // this models them: a `break` or `continue` has to be inside a loop
 // it names, and the body of a `guard` may not fall through. Both are

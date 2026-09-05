@@ -160,6 +160,10 @@ type gen struct {
 	// stored properties.
 	recv types.Type
 
+	// closures counts the closure bodies lowered so far, so that each
+	// gets a name of its own.
+	closures int
+
 	diags []token.Diagnostic
 }
 
@@ -287,8 +291,15 @@ func (g *gen) exprKind(e ast.Expr) string {
 		return "a tuple expression"
 	case *ast.CallExpr:
 		if id, ok := n.Fun.(*ast.IdentExpr); ok && id.Name != nil {
+			// A name that is neither a function nor a value of
+			// function type is a type, and calling one makes an
+			// instance. Saying which reads very differently to
+			// whoever wrote the call, so the two are told apart
+			// rather than both called "this call".
 			if _, isFunc := g.info.Uses[id.Name].(*analyzer.FuncSymbol); !isFunc {
-				return "a constructor call"
+				if _, callable := g.info.Types[id].Underlying().(*types.Signature); !callable {
+					return "a constructor call"
+				}
 			}
 		}
 		return "this call"

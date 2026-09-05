@@ -43,6 +43,9 @@ func (g *gen) expr(e ast.Expr) *vil.Value {
 		}
 		return g.enumCase(n, ec)
 
+	case *ast.ClosureExpr:
+		return g.closure(n)
+
 	case *ast.CallExpr:
 		return g.call(n)
 
@@ -250,6 +253,13 @@ func (g *gen) ident(e *ast.IdentExpr) *vil.Value {
 	}
 	l := g.locals[sym]
 	if l == nil {
+		// A function's own name, used as a value rather than called.
+		// It is the same pair a closure produces — the declaration
+		// referenced, then given the shape of a function value — and
+		// it is why `apply(triple, 5)` needs nothing of its own.
+		if fs, ok := sym.(*analyzer.FuncSymbol); ok {
+			return g.funcValue(fs)
+		}
 		// Not a local. Inside a method a bare name may be a stored
 		// property, which the analyzer resolved to the symbol the type's
 		// own scope holds — so it is reached through the receiver, and
@@ -392,6 +402,17 @@ func (g *gen) call(e *ast.CallExpr) *vil.Value {
 	if tn, ok := g.info.Uses[id.Name].(*analyzer.TypeNameSymbol); ok {
 		return g.construct(e, tn)
 	}
+	// A name bound to a value of function type is called through the
+	// value rather than by name: `f(x)` where f is a closure is an
+	// apply of what f holds, and there is no symbol to reference.
+	if sym := g.info.Uses[id.Name]; sym != nil {
+		if _, isFunc := g.info.Types[id].Underlying().(*types.Signature); isFunc {
+			if _, isLocal := g.locals[sym]; isLocal {
+				return g.applyValue(e, id)
+			}
+		}
+	}
+
 	sym, _ := g.info.Uses[id.Name].(*analyzer.FuncSymbol)
 	if sym == nil {
 		g.unsupported(e)
@@ -413,6 +434,47 @@ func (g *gen) call(e *ast.CallExpr) *vil.Value {
 	}
 	result := lowerType(sym.Signature().Results)
 	v := g.blk.Apply(ref, result, args...)
+	g.destroyLater(v)
+	return v
+}
+
+// funcValue is a declared function used as a value.
+func (g *gen) funcValue(sym *analyzer.FuncSymbol) *vil.Value {
+	callee := g.m.Func(g.symbol(sym)).SetSourceName(sym.Name())
+	if callee.IsDeclaration() && callee.Type() != nil {
+		g.declare(callee, sym)
+	}
+	ref := g.blk.FunctionRef(callee)
+	return g.blk.ThinToThickFunction(ref, lowerType(sym.Signature()))
+}
+
+// applyValue calls a function held in a variable rather than named by
+// a declaration — a closure, or a function passed as an argument.
+//
+// The callee is an operand like any other, which is the whole
+// difference from a call by name: there is no function_ref, and what
+// is applied is whatever the value holds.
+func (g *gen) applyValue(e *ast.CallExpr, id *ast.IdentExpr) *vil.Value {
+	sig, _ := g.info.Types[id].Underlying().(*types.Signature)
+	if sig == nil {
+		g.unsupported(e)
+		return nil
+	}
+	callee := g.expr(id)
+	if callee == nil {
+		return nil
+	}
+	var args []*vil.Value
+	if e.Args != nil {
+		for _, a := range e.Args.Args {
+			v := g.rvalue(a.X)
+			if v == nil {
+				return nil
+			}
+			args = append(args, v)
+		}
+	}
+	v := g.blk.Apply(callee, lowerType(sig.Results), args...)
 	g.destroyLater(v)
 	return v
 }

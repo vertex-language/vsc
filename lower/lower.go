@@ -1,7 +1,11 @@
 package lower
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/vertex-language/ir"
+	"github.com/vertex-language/vsc/types"
 	"github.com/vertex-language/vsc/vil"
 )
 
@@ -61,6 +65,10 @@ type lowerer struct {
 	prefix string
 	callee map[string]ir.Callee
 	defs   map[string]*ir.Func
+
+	// funcTypes are the VIR typedefs indirect calls name, one per
+	// distinct Swift function type.
+	funcTypes map[string]*ir.Type
 
 	// The runtime's three, declared the first time something needs
 	// one. What they do is runtime/'s business — it builds them as a
@@ -214,4 +222,90 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// funcTypeOf is the VIR func typedef for a Swift function type, made
+// once per distinct type and reused.
+//
+// The name is the type's own spelling with what VIR's identifiers do
+// not admit taken out. It has to be a name because a callind names a
+// typedef rather than carrying a signature inline; it has to be one
+// name per signature because two typedefs with the same shape are two
+// types.
+func (l *lowerer) funcTypeOf(sig *types.Signature) (*ir.Type, error) {
+	name := funcTypeName(sig)
+	if t, ok := l.funcTypes[name]; ok {
+		return t, nil
+	}
+	s := ir.NewSig()
+	for _, p := range sig.Params {
+		if n, ok := directWords(vil.Object(p.Type)); ok {
+			for i := 0; i < n; i++ {
+				s.Param(ir.TypeI64)
+			}
+			continue
+		}
+		r, ok := machineOf(p.Type)
+		if !ok {
+			return nil, fmt.Errorf("no register for %s", p.Type)
+		}
+		s.Param(r.reg)
+	}
+	if sig.Results != nil && !isVoidType(sig.Results) {
+		if n, ok := directWords(vil.Object(sig.Results)); ok {
+			for i := 0; i < n; i++ {
+				s.Ret(ir.TypeI64)
+			}
+		} else {
+			r, ok := machineOf(sig.Results)
+			if !ok {
+				return nil, fmt.Errorf("no register for %s", sig.Results)
+			}
+			s.Ret(r.reg)
+		}
+	}
+	t := l.out.FuncType(name, s)
+	if l.funcTypes == nil {
+		l.funcTypes = map[string]*ir.Type{}
+	}
+	l.funcTypes[name] = t
+	return t, nil
+}
+
+// funcTypeName is a VIR identifier standing for a Swift function type.
+func funcTypeName(sig *types.Signature) string {
+	var b strings.Builder
+	b.WriteString("fn")
+	for _, p := range sig.Params {
+		b.WriteByte('_')
+		b.WriteString(identSafe(p.Type.String()))
+	}
+	b.WriteString("__")
+	if sig.Results != nil && !isVoidType(sig.Results) {
+		b.WriteString(identSafe(sig.Results.String()))
+	} else {
+		b.WriteString("void")
+	}
+	return b.String()
+}
+
+// identSafe is a type's spelling with everything VIR's identifiers do
+// not admit replaced, so that two different types cannot collide.
+func identSafe(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('.')
+		}
+	}
+	return b.String()
+}
+
+// isVoidType is the empty result, which VIR spells by having none.
+func isVoidType(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && (b.Kind() == types.Void)
 }

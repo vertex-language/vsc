@@ -74,6 +74,13 @@ func trivial(t types.Type) bool {
 		return n.name != "NativeObject"
 	case *types.Metatype:
 		return true
+	// A function value owns its context, and while a closure that
+	// captures is refused there is no context to own: what a signature
+	// holds is a code address. lower relies on this from the other
+	// side, representing one in a single register, and both change
+	// together the day partial_apply is emitted.
+	case *types.Signature:
+		return true
 	case *types.Struct:
 		for _, f := range n.Fields {
 			if !trivial(f.Type) {

@@ -1149,3 +1149,76 @@ func main() -> Int32 {
 		t.Errorf("exited %v, want a SIGTRAP", cmd.ProcessState)
 	}
 }
+
+// TestClosuresRun exercises every closure shape that lowers: written
+// inline, bound to a local and called through it, spelled with
+// shorthand argument names, and a declared function used as a value.
+// swiftc run on this same program gives 42.
+func TestClosuresRun(t *testing.T) {
+	bin := buildSwift(t, "main", `
+func apply(_ f: (Int32) -> Int32, _ x: Int32) -> Int32 { return f(x) }
+func combine(_ f: (Int32) -> Int32, _ g: (Int32) -> Int32, _ x: Int32) -> Int32 {
+    return f(g(x))
+}
+
+func triple(_ n: Int32) -> Int32 { return n * 3 }
+
+func main() -> Int32 {
+    // A closure called directly through the local that holds it.
+    let inc: (Int32) -> Int32 = { n in n + 1 }
+    if inc(4) != 5 { return 91 }
+
+    // Two closures in one function, so the naming has to tell them apart.
+    let dbl: (Int32) -> Int32 = { n in n * 2 }
+    if combine(inc, dbl, 10) != 21 { return 92 }
+
+    // More than one statement, and an explicit return.
+    let clamp: (Int32) -> Int32 = { n in
+        if n > 10 { return 10 }
+        return n
+    }
+    if clamp(50) != 10 { return 93 }
+    if clamp(3) != 3 { return 94 }
+
+    // Written where it is passed.
+    if apply({ n in n - 1 }, 8) != 7 { return 95 }
+
+    // A declared function is a value of function type: the same pair
+    // of instructions a closure produces, with no body to emit.
+    let t: (Int32) -> Int32 = triple
+    if t(5) != 15 { return 96 }
+    if apply(triple, 5) != 15 { return 97 }
+
+    // $0, where the parameters are not written.
+    let sq: (Int32) -> Int32 = { $0 * $0 }
+    if sq(6) != 36 { return 98 }
+
+    return 42
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
+// TestFunctionValuesAreCalledIndirectly: a closure reaches its body
+// through the value that holds it, not through its name -- which is
+// the whole point of one. Passing two different closures to the same
+// parameter has to call two different bodies, and a lowering that
+// resolved the callee statically would call one of them twice.
+func TestFunctionValuesAreCalledIndirectly(t *testing.T) {
+	bin := buildSwift(t, "main", `
+func twice(_ f: (Int32) -> Int32, _ x: Int32) -> Int32 { return f(f(x)) }
+
+func main() -> Int32 {
+    let add3: (Int32) -> Int32 = { n in n + 3 }
+    let mul3: (Int32) -> Int32 = { n in n * 3 }
+    // 1+3+3 = 7, and 2*3*3 = 18, so the two parameters cannot be the
+    // same body: 7 + 18 + 17.
+    return twice(add3, 1) + twice(mul3, 2) + 17
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}

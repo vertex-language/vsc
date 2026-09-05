@@ -53,6 +53,13 @@ func (c *fn) inst(in *vil.Inst) error {
 		}
 		return nil
 
+	// A thin function given the shape of a thick one. With no context
+	// to add, the value is the code address it already was -- see
+	// machineOf's case for a signature, which is the other half of
+	// this decision.
+	case vil.ThinToThickFunction:
+		return c.thinToThick(in)
+
 	case vil.Enum:
 		return c.makeEnum(in)
 
@@ -790,9 +797,22 @@ func (c *fn) refCount(in *vil.Inst, slot *ir.Callee, name string) error {
 }
 
 func (c *fn) apply(in *vil.Inst) error {
-	callee, ok := c.refs[in.Args()[0]]
-	if !ok {
-		return c.fail(ErrUnsupported, in.Op(), "an indirect call")
+	callee, direct := c.refs[in.Args()[0]]
+	var through ir.Ptr
+	if !direct {
+		// A call through a value: a closure, or a function passed in.
+		// The pointer is an operand like any other and the signature
+		// comes from the value's own type, which is what keeps an
+		// indirect call well typed.
+		v, err := c.operand(in, in.Args()[0])
+		if err != nil {
+			return err
+		}
+		p, ok := v.(ir.Ptr)
+		if !ok {
+			return c.fail(ErrType, in.Op(), "the callee is not a pointer")
+		}
+		through = p
 	}
 	args := make([]ir.Value, 0, len(in.Args())-1)
 	for _, a := range in.Args()[1:] {
@@ -811,7 +831,16 @@ func (c *fn) apply(in *vil.Inst) error {
 		}
 		args = append(args, got)
 	}
-	res := c.b.Call(callee, args...)
+	var res ir.Results
+	if direct {
+		res = c.b.Call(callee, args...)
+	} else {
+		ft, err := c.calleeType(in, in.Args()[0])
+		if err != nil {
+			return err
+		}
+		res = c.b.CallInd(through, ft, args...)
+	}
 
 	r := in.Result()
 	if r == nil || empty(r.Type()) || res.Len() == 0 {
@@ -886,4 +915,51 @@ func (c *fn) ret(in *vil.Inst) error {
 		return nil
 	}
 	return c.fail(ErrUnsupported, in.Op(), "a result held in memory")
+}
+
+// thinToThick turns a named function into a value.
+//
+// Until the conversion, a function_ref is a symbol rather than a
+// register: a direct call names it and needs no address. This is where
+// something other than a call asks, and the answer is the address --
+// one register, because gen refuses a closure that captures and the
+// context word Swift's thick function carries would always be null.
+// machineOf's case for a signature is the other half of that, and both
+// change together when partial_apply arrives.
+func (c *fn) thinToThick(in *vil.Inst) error {
+	res := in.Result()
+	if res == nil {
+		return nil
+	}
+	callee, ok := c.refs[in.Args()[0]]
+	if !ok {
+		// A thick function made from something that was already a
+		// value: a reabstraction, which needs the context this does
+		// not have.
+		return c.fail(ErrUnsupported, in.Op(), "a function value that is not a reference to a declaration")
+	}
+	c.def(res, c.b.Ptr.GetAddr(callee))
+	return nil
+}
+
+// calleeType is the VIR func typedef an indirect call names.
+//
+// A callind carries its signature rather than reading it off the
+// callee, because there is no callee to read it off -- so the type of
+// the value being called is what says how to call it, and this is
+// where a Swift function type becomes one.
+func (c *fn) calleeType(in *vil.Inst, v *vil.Value) (*ir.Type, error) {
+	t := v.Type()
+	if !t.IsValid() || t.IsAddress() || t.Formal() == nil {
+		return nil, c.fail(ErrType, in.Op(), "the callee has no function type")
+	}
+	sig, ok := t.Formal().Underlying().(*types.Signature)
+	if !ok {
+		return nil, c.fail(ErrType, in.Op(), "the callee is not a function")
+	}
+	ft, err := c.l.funcTypeOf(sig)
+	if err != nil {
+		return nil, c.fail(ErrType, in.Op(), err.Error())
+	}
+	return ft, nil
 }

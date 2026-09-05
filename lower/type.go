@@ -41,6 +41,14 @@ func machineOf(t types.Type) (repr, bool) {
 		return basicRepr(t.Kind())
 	case *types.Named:
 		return machineOf(t.Underlying())
+	// A function value. Swift's is two words -- the code address and
+	// the context a closure captured -- and this is one, because gen
+	// refuses a closure that captures and a context that can only ever
+	// be null is not information. The second word arrives with
+	// partial_apply, and vil.trivial says the same thing from the
+	// other side.
+	case *types.Signature:
+		return repr{reg: ir.TypePtr}, true
 	case *types.Class:
 		// A class value is the reference, never the object.
 		return repr{reg: ir.TypePtr}, true

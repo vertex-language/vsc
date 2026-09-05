@@ -204,6 +204,14 @@ func (b *Block) Apply(callee *Value, result Type, args ...*Value) *Value {
 	return b.add(Apply, Aux{}, append([]*Value{callee}, args...), result).Result()
 }
 
+// ThinToThickFunction gives a function with no context the shape of one
+// that has a context. A closure that captures nothing is a top-level
+// function and a value of function type is thick, so the two have to
+// meet somewhere, and this is where SILGen puts it.
+func (b *Block) ThinToThickFunction(fn *Value, t Type) *Value {
+	return b.add(ThinToThickFunction, Aux{Type: t}, []*Value{fn}, t).Result()
+}
+
 // PartialApply binds some arguments and produces a thick function —
 // which is what a closure is.
 func (b *Block) PartialApply(callee *Value, t Type, args ...*Value) *Value {

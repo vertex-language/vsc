@@ -91,6 +91,21 @@
 // is itself a wide struct, are refused for the same reason: both need
 // the memory layout that going by address would also need.
 //
+// # A function value
+//
+// One pointer, where Swift's is two. A thick function there is a code
+// address and the heap context a closure captured; gen refuses a
+// closure that captures, so the context is provably null, and a word
+// that can only ever be zero is not information. thin_to_thick_function
+// is therefore the address of the function it names and nothing else,
+// and vil.trivial answers true for a signature for the same reason --
+// there is no context to retain or release. Both change together when
+// partial_apply arrives.
+//
+// A call through such a value is a callind, which names a func typedef
+// rather than reading a signature off a callee it does not have. The
+// typedefs are made here, one per distinct Swift function type.
+//
 // # An enum, and the branch on one
 //
 // An enum with no associated values is its tag and nothing else, so
