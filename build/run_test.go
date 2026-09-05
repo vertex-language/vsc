@@ -1323,3 +1323,64 @@ func main() -> Int32 {
 		t.Errorf("exit status = %d, want 42", got)
 	}
 }
+
+// TestEvaluationOrder: Swift evaluates a method call's receiver before
+// its arguments, and everything left to right.
+//
+// The receiver goes last in the argument list, because that is where
+// the method convention puts self -- and gen was evaluating it last as
+// well, which is a different claim. `r.recv(1).take(r.step(2))` ran
+// step before recv and gave 21 where swiftc gave 12, with nothing
+// said. SILGen shows the order plainly: it applies recv, then step,
+// then take.
+//
+// Each Rec records the order its methods ran in as decimal digits, so
+// the expected value is the sequence read left to right. swiftc on
+// this program gives 42.
+func TestEvaluationOrder(t *testing.T) {
+	bin := buildSwift(t, "main", `
+final class Rec {
+    var seq: Int32 = 0
+    func recv(_ tag: Int32) -> Rec { seq = seq * 10 + tag; return self }
+    func step(_ tag: Int32) -> Int32 { seq = seq * 10 + tag; return 0 }
+    func two(_ a: Int32, _ b: Int32) -> Int32 { return 0 }
+    func read() -> Int32 { return seq }
+}
+
+func free2(_ a: Int32, _ b: Int32) -> Int32 { return 0 }
+
+func main() -> Int32 {
+    // The receiver, then the arguments left to right.
+    let r = Rec()
+    r.recv(1).two(r.step(2), r.step(3))
+    if r.read() != 123 { return 91 }
+
+    // A free function's arguments, left to right.
+    let s = Rec()
+    free2(s.step(1), s.step(2))
+    if s.read() != 12 { return 92 }
+
+    // Both operands of a binary operator, left to right.
+    let t = Rec()
+    let sum = t.step(1) + t.step(2)
+    if sum != 0 { return 93 }
+    if t.read() != 12 { return 94 }
+
+    // A chain: each receiver before the next call's arguments.
+    let u = Rec()
+    u.recv(1).recv(2).two(u.step(3), u.step(4))
+    if u.read() != 1234 { return 95 }
+
+    // A closure's argument, before the call.
+    let v = Rec()
+    let f: (Int32) -> Int32 = { n in n }
+    if f(v.step(7)) != 0 { return 96 }
+    if v.read() != 7 { return 97 }
+
+    return 42
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}

@@ -751,20 +751,8 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 	}
 	fnRef := g.blk.FunctionRef(callee)
 
-	// The arguments the program wrote, then the receiver.
-	var args []*vil.Value
-	if e.Args != nil {
-		for _, a := range e.Args.Args {
-			v := g.rvalue(a.X)
-			if v == nil {
-				return nil
-			}
-			args = append(args, v)
-		}
-	}
-	self := receiver()
-	if self == nil {
-		g.unsupported(e)
+	self, args, ok := g.methodArgs(e, receiver)
+	if !ok {
 		return nil
 	}
 	args = append(args, self)
@@ -785,19 +773,8 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 func (g *gen) dynamicCall(e *ast.CallExpr, ref *analyzer.MethodRef, cl *types.Class,
 	receiver func() *vil.Value) *vil.Value {
 
-	var args []*vil.Value
-	if e.Args != nil {
-		for _, a := range e.Args.Args {
-			v := g.rvalue(a.X)
-			if v == nil {
-				return nil
-			}
-			args = append(args, v)
-		}
-	}
-	self := receiver()
-	if self == nil {
-		g.unsupported(e)
+	self, args, ok := g.methodArgs(e, receiver)
+	if !ok {
 		return nil
 	}
 
@@ -810,6 +787,36 @@ func (g *gen) dynamicCall(e *ast.CallExpr, ref *analyzer.MethodRef, cl *types.Cl
 	v := g.blk.Apply(method, result, args...)
 	g.destroyLater(v)
 	return v
+}
+
+// methodArgs evaluates a method call's operands in the order the
+// language says, and returns them in the order the convention wants.
+//
+// Those are two different orders and conflating them was a bug. Swift
+// evaluates the receiver expression first and then the arguments left
+// to right, which SILGen shows plainly: for `r.recv(1).take(r.step(2))`
+// it applies recv, then step, then take. The receiver goes *last* in
+// the argument list, because that is where the method convention puts
+// self -- but going last is about where the value is passed, not about
+// when it is computed. Evaluating it last as well made the program
+// print 21 where swiftc printed 12.
+func (g *gen) methodArgs(e *ast.CallExpr, receiver func() *vil.Value) (*vil.Value, []*vil.Value, bool) {
+	self := receiver()
+	if self == nil {
+		g.unsupported(e)
+		return nil, nil, false
+	}
+	var args []*vil.Value
+	if e.Args != nil {
+		for _, a := range e.Args.Args {
+			v := g.rvalue(a.X)
+			if v == nil {
+				return nil, nil, false
+			}
+			args = append(args, v)
+		}
+	}
+	return self, args, true
 }
 
 // methodType is the function type a class_method yields: the method's
