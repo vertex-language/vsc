@@ -79,6 +79,10 @@ func (g *gen) expr(e ast.Expr) *vil.Value {
 // inversion as two of them, and core says which, so that what is
 // emitted here is what `swiftc -emit-sil` emits for the same source.
 func (g *gen) prefix(e *ast.PrefixExpr) *vil.Value {
+	// A signed literal is a constant, not a negation to perform.
+	if v := g.constant(e); v != nil {
+		return v
+	}
 	sym, _ := g.info.Operators[e].(*analyzer.FuncSymbol)
 	if sym == nil {
 		g.expr(e.X)
@@ -196,6 +200,18 @@ func (g *gen) rvalue(e ast.Expr) *vil.Value {
 // points: a function with a literal in it is compared against
 // `swiftc -emit-sil`, and one without against `-emit-silgen`.
 func (g *gen) literal(e *ast.BasicLit) *vil.Value {
+	return g.constant(e)
+}
+
+// constant emits whatever constant the checker folded onto an
+// expression, or nothing where it folded none.
+//
+// Two spellings reach it: a literal, and a literal with a sign in
+// front. The second is one constant and not an operator applied to
+// another -- `-128` as an Int8 is representable where 128 is not --
+// which is why the checker records the signed value on the expression
+// and this reads it there.
+func (g *gen) constant(e ast.Expr) *vil.Value {
 	v, ok := g.info.Values[e]
 	if !ok {
 		return nil
@@ -504,6 +520,12 @@ func (g *gen) applyValue(e *ast.CallExpr, id *ast.IdentExpr) *vil.Value {
 // neither exists yet.
 func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *vil.Value {
 	t := g.info.Types[e]
+	// `Int32(n)` names a type and is a conversion rather than a
+	// construction: there is nothing to lay out, only a width to
+	// change and a range to check. See convert.go.
+	if v, isConversion := g.convert(e, t); isConversion {
+		return v
+	}
 	st, ok := t.Underlying().(*types.Struct)
 	if !ok {
 		if cl, isClass := t.Underlying().(*types.Class); isClass {

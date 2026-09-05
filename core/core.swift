@@ -16,6 +16,10 @@
 
 // ---- arithmetic ----
 
+// Int is written first in every group on purpose: an untyped
+// literal is assignable to all of them, and overload resolution
+// takes the first candidate that fits, so `1 + 2` is an Int.
+
 func + (lhs: Int, rhs: Int) -> Int
 func - (lhs: Int, rhs: Int) -> Int
 func * (lhs: Int, rhs: Int) -> Int
@@ -26,26 +30,55 @@ func + (lhs: Int8, rhs: Int8) -> Int8
 func - (lhs: Int8, rhs: Int8) -> Int8
 func * (lhs: Int8, rhs: Int8) -> Int8
 func / (lhs: Int8, rhs: Int8) -> Int8
+func % (lhs: Int8, rhs: Int8) -> Int8
 
 func + (lhs: Int16, rhs: Int16) -> Int16
 func - (lhs: Int16, rhs: Int16) -> Int16
 func * (lhs: Int16, rhs: Int16) -> Int16
 func / (lhs: Int16, rhs: Int16) -> Int16
+func % (lhs: Int16, rhs: Int16) -> Int16
 
 func + (lhs: Int32, rhs: Int32) -> Int32
 func - (lhs: Int32, rhs: Int32) -> Int32
 func * (lhs: Int32, rhs: Int32) -> Int32
 func / (lhs: Int32, rhs: Int32) -> Int32
+func % (lhs: Int32, rhs: Int32) -> Int32
 
 func + (lhs: Int64, rhs: Int64) -> Int64
 func - (lhs: Int64, rhs: Int64) -> Int64
 func * (lhs: Int64, rhs: Int64) -> Int64
 func / (lhs: Int64, rhs: Int64) -> Int64
+func % (lhs: Int64, rhs: Int64) -> Int64
 
 func + (lhs: UInt, rhs: UInt) -> UInt
 func - (lhs: UInt, rhs: UInt) -> UInt
 func * (lhs: UInt, rhs: UInt) -> UInt
 func / (lhs: UInt, rhs: UInt) -> UInt
+func % (lhs: UInt, rhs: UInt) -> UInt
+
+func + (lhs: UInt8, rhs: UInt8) -> UInt8
+func - (lhs: UInt8, rhs: UInt8) -> UInt8
+func * (lhs: UInt8, rhs: UInt8) -> UInt8
+func / (lhs: UInt8, rhs: UInt8) -> UInt8
+func % (lhs: UInt8, rhs: UInt8) -> UInt8
+
+func + (lhs: UInt16, rhs: UInt16) -> UInt16
+func - (lhs: UInt16, rhs: UInt16) -> UInt16
+func * (lhs: UInt16, rhs: UInt16) -> UInt16
+func / (lhs: UInt16, rhs: UInt16) -> UInt16
+func % (lhs: UInt16, rhs: UInt16) -> UInt16
+
+func + (lhs: UInt32, rhs: UInt32) -> UInt32
+func - (lhs: UInt32, rhs: UInt32) -> UInt32
+func * (lhs: UInt32, rhs: UInt32) -> UInt32
+func / (lhs: UInt32, rhs: UInt32) -> UInt32
+func % (lhs: UInt32, rhs: UInt32) -> UInt32
+
+func + (lhs: UInt64, rhs: UInt64) -> UInt64
+func - (lhs: UInt64, rhs: UInt64) -> UInt64
+func * (lhs: UInt64, rhs: UInt64) -> UInt64
+func / (lhs: UInt64, rhs: UInt64) -> UInt64
+func % (lhs: UInt64, rhs: UInt64) -> UInt64
 
 func + (lhs: Float, rhs: Float) -> Float
 func - (lhs: Float, rhs: Float) -> Float
@@ -62,12 +95,32 @@ func + (lhs: String, rhs: String) -> String
 
 // ---- comparison ----
 
+// Every ordering on every primitive, rather than the handful that
+// happened to be needed. An operator missing here is not a
+// diagnostic about the program -- it reads as `cannot lower this
+// expression`, which is the compiler's own gap wearing the
+// language's clothes.
+
 func == (lhs: Int, rhs: Int) -> Bool
 func != (lhs: Int, rhs: Int) -> Bool
 func < (lhs: Int, rhs: Int) -> Bool
 func <= (lhs: Int, rhs: Int) -> Bool
 func > (lhs: Int, rhs: Int) -> Bool
 func >= (lhs: Int, rhs: Int) -> Bool
+
+func == (lhs: Int8, rhs: Int8) -> Bool
+func != (lhs: Int8, rhs: Int8) -> Bool
+func < (lhs: Int8, rhs: Int8) -> Bool
+func <= (lhs: Int8, rhs: Int8) -> Bool
+func > (lhs: Int8, rhs: Int8) -> Bool
+func >= (lhs: Int8, rhs: Int8) -> Bool
+
+func == (lhs: Int16, rhs: Int16) -> Bool
+func != (lhs: Int16, rhs: Int16) -> Bool
+func < (lhs: Int16, rhs: Int16) -> Bool
+func <= (lhs: Int16, rhs: Int16) -> Bool
+func > (lhs: Int16, rhs: Int16) -> Bool
+func >= (lhs: Int16, rhs: Int16) -> Bool
 
 func == (lhs: Int32, rhs: Int32) -> Bool
 func != (lhs: Int32, rhs: Int32) -> Bool
@@ -84,7 +137,46 @@ func > (lhs: Int64, rhs: Int64) -> Bool
 func >= (lhs: Int64, rhs: Int64) -> Bool
 
 func == (lhs: UInt, rhs: UInt) -> Bool
+func != (lhs: UInt, rhs: UInt) -> Bool
 func < (lhs: UInt, rhs: UInt) -> Bool
+func <= (lhs: UInt, rhs: UInt) -> Bool
+func > (lhs: UInt, rhs: UInt) -> Bool
+func >= (lhs: UInt, rhs: UInt) -> Bool
+
+func == (lhs: UInt8, rhs: UInt8) -> Bool
+func != (lhs: UInt8, rhs: UInt8) -> Bool
+func < (lhs: UInt8, rhs: UInt8) -> Bool
+func <= (lhs: UInt8, rhs: UInt8) -> Bool
+func > (lhs: UInt8, rhs: UInt8) -> Bool
+func >= (lhs: UInt8, rhs: UInt8) -> Bool
+
+func == (lhs: UInt16, rhs: UInt16) -> Bool
+func != (lhs: UInt16, rhs: UInt16) -> Bool
+func < (lhs: UInt16, rhs: UInt16) -> Bool
+func <= (lhs: UInt16, rhs: UInt16) -> Bool
+func > (lhs: UInt16, rhs: UInt16) -> Bool
+func >= (lhs: UInt16, rhs: UInt16) -> Bool
+
+func == (lhs: UInt32, rhs: UInt32) -> Bool
+func != (lhs: UInt32, rhs: UInt32) -> Bool
+func < (lhs: UInt32, rhs: UInt32) -> Bool
+func <= (lhs: UInt32, rhs: UInt32) -> Bool
+func > (lhs: UInt32, rhs: UInt32) -> Bool
+func >= (lhs: UInt32, rhs: UInt32) -> Bool
+
+func == (lhs: UInt64, rhs: UInt64) -> Bool
+func != (lhs: UInt64, rhs: UInt64) -> Bool
+func < (lhs: UInt64, rhs: UInt64) -> Bool
+func <= (lhs: UInt64, rhs: UInt64) -> Bool
+func > (lhs: UInt64, rhs: UInt64) -> Bool
+func >= (lhs: UInt64, rhs: UInt64) -> Bool
+
+func == (lhs: Float, rhs: Float) -> Bool
+func != (lhs: Float, rhs: Float) -> Bool
+func < (lhs: Float, rhs: Float) -> Bool
+func <= (lhs: Float, rhs: Float) -> Bool
+func > (lhs: Float, rhs: Float) -> Bool
+func >= (lhs: Float, rhs: Float) -> Bool
 
 func == (lhs: Double, rhs: Double) -> Bool
 func != (lhs: Double, rhs: Double) -> Bool
@@ -92,9 +184,6 @@ func < (lhs: Double, rhs: Double) -> Bool
 func <= (lhs: Double, rhs: Double) -> Bool
 func > (lhs: Double, rhs: Double) -> Bool
 func >= (lhs: Double, rhs: Double) -> Bool
-
-func == (lhs: Float, rhs: Float) -> Bool
-func < (lhs: Float, rhs: Float) -> Bool
 
 func == (lhs: Bool, rhs: Bool) -> Bool
 func != (lhs: Bool, rhs: Bool) -> Bool
@@ -105,7 +194,6 @@ func < (lhs: String, rhs: String) -> Bool
 
 func == (lhs: Character, rhs: Character) -> Bool
 func != (lhs: Character, rhs: Character) -> Bool
-
 // ---- bitwise ----
 
 // Swift declares these once on FixedWidthInteger and lets the

@@ -16,6 +16,12 @@ import (
 // the overflow should be reported. VIR splits the arithmetic from the
 // test, so both are emitted and the caller's tuple_extract picks one.
 func (c *fn) builtin(name string, args []ir.Value) ([]ir.Value, error) {
+	// A conversion names two types rather than one -- the source in
+	// the verb and the destination after it -- so it cannot be read
+	// by the "verb plus width" split below.
+	if out, ok, err := c.convertBuiltin(name, args); ok {
+		return out, err
+	}
 	verb, width, ok := splitBuiltin(name)
 	if !ok {
 		return nil, c.fail(ErrBuiltin, "builtin", name)
@@ -72,4 +78,74 @@ func (c *fn) boolBuiltin(name, verb string, args []ir.Value) ([]ir.Value, error)
 		return []ir.Value{ns.Xor(a, b)}, nil
 	}
 	return nil, c.fail(ErrBuiltin, "builtin", name)
+}
+
+// convertBuiltin translates a width conversion, and reports whether
+// the name was one.
+//
+// Three verbs, and which one gen chose already answers the signedness
+// question: sext for a signed source, zext for an unsigned one, trunc
+// for a narrowing. What is left here is the register class, and VIR
+// has only two integer classes -- i32 and i64. Int8 and Int16 are not
+// register types; a value of one lives in an i32 already extended to
+// its own signedness, which is why a conversion between any two of
+// Int8, Int16 and Int32 moves no bits at all.
+//
+// It moves no bits safely because gen has already emitted the range
+// check: by the time the value reaches here it fits the destination,
+// so the register holds what the destination wants.
+func (c *fn) convertBuiltin(name string, args []ir.Value) ([]ir.Value, bool, error) {
+	verb, src, dst, ok := splitConvert(name)
+	if !ok {
+		return nil, false, nil
+	}
+	if len(args) != 1 {
+		return nil, true, c.fail(ErrBuiltin, "builtin", name+": a conversion takes one operand")
+	}
+	from, fok := builtinRepr(src)
+	to, tok := builtinRepr(dst)
+	if !fok || !tok {
+		return nil, true, c.fail(ErrBuiltin, "builtin", name)
+	}
+
+	switch {
+	case from.reg == to.reg:
+		// Same register class: Int8, Int16 and Int32 share one, and
+		// the value already fits.
+		return []ir.Value{args[0]}, true, nil
+
+	case from.reg == ir.TypeI64 && to.reg == ir.TypeI32:
+		a, ok := args[0].(ir.I64)
+		if !ok {
+			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an i64")
+		}
+		return []ir.Value{c.b.I32.WrapI64(a)}, true, nil
+
+	case from.reg == ir.TypeI32 && to.reg == ir.TypeI64:
+		a, ok := args[0].(ir.I32)
+		if !ok {
+			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an i32")
+		}
+		if verb == "zextOrBitCast" {
+			return []ir.Value{c.b.I64.ZExtI32(a)}, true, nil
+		}
+		return []ir.Value{c.b.I64.SExtI32(a)}, true, nil
+	}
+	return nil, true, c.fail(ErrBuiltin, "builtin", name)
+}
+
+// splitConvert reads a conversion's verb and its two types.
+func splitConvert(name string) (verb, src, dst string, ok bool) {
+	for _, v := range [...]string{"truncOrBitCast_", "sextOrBitCast_", "zextOrBitCast_"} {
+		if !strings.HasPrefix(name, v) {
+			continue
+		}
+		rest := name[len(v):]
+		i := strings.LastIndexByte(rest, '_')
+		if i < 0 {
+			return "", "", "", false
+		}
+		return strings.TrimSuffix(v, "_"), rest[:i], rest[i+1:], true
+	}
+	return "", "", "", false
 }

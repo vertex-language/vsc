@@ -50,8 +50,16 @@ func (c *checker) reconcileLiterals(x ast.Expr, lhs types.Type, y ast.Expr, rhs 
 // with, and records that reading. It reports whether the literal took
 // the type.
 func (c *checker) adopt(e ast.Expr, want types.Type) (types.Type, bool) {
-	lit, ok := e.(*ast.BasicLit)
-	if !ok || want == nil {
+	if want == nil {
+		return nil, false
+	}
+	// `-5` is a negative literal rather than a negation applied to
+	// one -- checkPrefix reads the sign and the magnitude together --
+	// so it is as adoptable as `5` is. Looking only at a bare literal
+	// made `someInt32 != -5` an error against a type no annotation
+	// could fix, where swiftc takes it.
+	lit, ok := literalUnder(e)
+	if !ok {
 		return nil, false
 	}
 	var untyped types.Type
@@ -70,8 +78,24 @@ func (c *checker) adopt(e ast.Expr, want types.Type) (types.Type, bool) {
 	if !ok || b.Info()&types.IsNumeric == 0 || !types.AssignableTo(untyped, want) {
 		return nil, false
 	}
+	// Both nodes: the expression, because that is what the operator
+	// around it reads, and the literal, because that is what carries
+	// the value down to lowering.
 	c.info.Types[e] = want
+	c.info.Types[lit] = want
 	return want, true
+}
+
+// literalUnder is the numeric literal an expression is, through a
+// leading sign.
+func literalUnder(e ast.Expr) (*ast.BasicLit, bool) {
+	if p, ok := e.(*ast.PrefixExpr); ok && p.Op != nil {
+		if inner, ok := p.X.(*ast.BasicLit); ok {
+			e = inner
+		}
+	}
+	lit, ok := e.(*ast.BasicLit)
+	return lit, ok
 }
 
 // checkPrefix reads a PrefixExpression. Swift declares `-`, `+` and
@@ -86,11 +110,18 @@ func (c *checker) checkPrefix(e *ast.PrefixExpr, expected types.Type, scope *Sco
 	}
 	// `-1` is a negative literal, not a negation applied to one: the
 	// magnitude and the sign are read together, so that the bound
-	// checked against Int is the one Swift checks.
-	if lit, ok := e.X.(*ast.BasicLit); ok && lit.Kind == token.INT_LIT && (op == "-" || op == "+") {
+	// checked against Int is the one Swift checks. `-128` as an Int8
+	// is the case that shows it -- 128 does not fit and -128 does.
+	if lit, ok := e.X.(*ast.BasicLit); ok && (op == "-" || op == "+") {
 		c.negated[lit] = op == "-"
 	}
 	inner := c.checkExpr(e.X, expected, scope)
+	// The signed value belongs to the expression, so that whatever
+	// reads a constant finds one here rather than an operator applied
+	// to a magnitude. This used to be recorded in c.negated and never
+	// read again, which left `-128` as a negation of 128 all the way
+	// down to lowering, where it was refused.
+	c.foldSign(e, op)
 	if sym := c.builtinOperator(scope, op, inner); sym != nil {
 		c.info.Operators[e] = sym
 		return sym.Signature().Results
@@ -864,5 +895,33 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 
 	default:
 		return types.Typ[types.Invalid]
+	}
+}
+
+// foldSign records a signed literal's value on the expression that
+// spells it.
+//
+// The magnitude is held as a uint64 and the negation is done in that
+// width on purpose: Int.min's magnitude is 2^63, which has no positive
+// int64 to negate, and two's complement gives the right bits for it
+// and for everything smaller by the same arithmetic.
+func (c *checker) foldSign(e *ast.PrefixExpr, op string) {
+	lit, ok := e.X.(*ast.BasicLit)
+	if !ok || (op != "-" && op != "+") {
+		return
+	}
+	v, ok := c.info.Values[lit]
+	if !ok || !v.IsValid() {
+		return
+	}
+	if op == "+" {
+		c.info.Values[e] = v
+		return
+	}
+	switch v.Kind {
+	case IntValue:
+		c.info.Values[e] = Value{Kind: IntValue, Int: ^v.Int + 1}
+	case FloatValue:
+		c.info.Values[e] = Value{Kind: FloatValue, Float: -v.Float}
 	}
 }

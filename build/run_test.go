@@ -1384,3 +1384,134 @@ func main() -> Int32 {
 		t.Errorf("exit status = %d, want 42", got)
 	}
 }
+
+// TestNumericConversionsRun: `Int32(n)` is a call to an initializer
+// the standard library declares, and there is no standard library
+// here. What swiftc -O leaves once it has inlined that initializer is
+// what gen emits directly, which is the same decision literal() and
+// construct() already take.
+//
+// The cases that matter are the ones about range rather than about
+// width: a widening conversion emits no check, a narrowing one checks
+// both ends, and signedness decides which end can fail. swiftc gives
+// 42 on this program.
+func TestNumericConversionsRun(t *testing.T) {
+	bin := buildSwift(t, "main", `
+func main() -> Int32 {
+    // Widening: no check can fail.
+    let a: Int32 = 40
+    if Int(a) != 40 { return 91 }
+
+    // Narrowing, in range.
+    let big = 1000
+    if Int32(big) != 1000 { return 92 }
+
+    // Signed to unsigned, in range.
+    let pos = 7
+    if UInt32(pos) != 7 { return 93 }
+
+    // Int8, Int16 and Int32 share a register, so a conversion among
+    // them moves no bits -- but it still checks.
+    let m: Int32 = 100
+    if Int8(m) != 100 { return 94 }
+    if Int16(m) != 100 { return 95 }
+    if Int32(Int8(m)) != 100 { return 96 }
+
+    // Negative through a signed narrowing.
+    let neg = -5
+    if Int32(neg) != -5 { return 97 }
+    if Int8(Int32(neg)) != -5 { return 98 }
+
+    // An unsigned source widens by zero-extension, not sign-extension:
+    // this value has its top bit set.
+    let u: UInt32 = 4000000000
+    if UInt(u) != 4000000000 { return 99 }
+
+    return 42
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
+// TestConversionOutOfRangeTraps: `Int32(someInt)` is not C's cast. A
+// value the destination cannot represent kills the process, and the
+// message says which end it fell off. swiftc's own binaries die on
+// SIGTRAP with the same two messages.
+func TestConversionOutOfRangeTraps(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"above the maximum", `
+func main() -> Int32 {
+    var big = 5000000000
+    return Int32(big)
+}
+`},
+		{"negative into an unsigned type", `
+func main() -> Int32 {
+    var neg = -5
+    let u = UInt32(neg)
+    return Int32(u)
+}
+`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(buildSwift(t, "main", tc.src, ""))
+			if err := cmd.Run(); err == nil {
+				t.Fatal("the program exited normally; want a trap")
+			}
+			ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+			if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGTRAP {
+				t.Errorf("exited %v, want a SIGTRAP", cmd.ProcessState)
+			}
+		})
+	}
+}
+
+// TestIntegerWidthsRun: the prelude declares the operators, and it
+// used to declare them uuevenly -- arithmetic on Int8 and Int16 but no
+// comparisons, UInt with only == and <, and no UInt8, UInt16, UInt32
+// or UInt64 at all. A missing operator does not read as a fact about
+// the program: it reads as "cannot lower this expression", which is
+// the compiler's own gap wearing the language's clothes.
+//
+// Also here: Int.min written out, which is a signed literal rather
+// than a negation of a magnitude that has no positive form.
+func TestIntegerWidthsRun(t *testing.T) {
+	bin := buildSwift(t, "main", `
+func main() -> Int32 {
+    let a: Int8 = -128
+    let b: Int8 = 127
+    if !(a < b) { return 91 }
+    if a >= b { return 92 }
+
+    let c: Int16 = -32768
+    if !(c < 0) { return 93 }
+
+    let d: UInt8 = 255
+    if !(d > 0) { return 94 }
+    if d != 255 { return 95 }
+
+    let e: UInt32 = 4000000000
+    if !(e > 1) { return 96 }
+
+    let f: UInt64 = 18446744073709551615
+    if !(f > 0) { return 97 }
+
+    let g: Int = -9223372036854775808
+    if g >= 0 { return 98 }
+
+    if Int32(a) != -128 { return 99 }
+    if Int(d) != 255 { return 100 }
+
+    return 42
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}

@@ -106,6 +106,12 @@
 // and the invariant that makes them work is that every table down a
 // chain repeats its base's rows in its base's order.
 //
+// Numeric conversions. `Int32(n)` names a type and is a conversion
+// rather than a construction: a range check and a change of width,
+// which is what swiftc -O leaves once it has inlined the initializer
+// the standard library declares. A value the destination cannot
+// represent traps, in Swift's own words. See convert.go.
+//
 // Two rules of the language are checked here because nothing before
 // this models them: a `break` or `continue` has to be inside a loop
 // it names, and the body of a `guard` may not fall through. Both are
