@@ -57,6 +57,9 @@ func (c *fn) inst(in *vil.Inst) error {
 	// to add, the value is the code address it already was -- see
 	// machineOf's case for a signature, which is the other half of
 	// this decision.
+	case vil.ClassMethod:
+		return c.classMethod(in)
+
 	case vil.ThinToThickFunction:
 		return c.thinToThick(in)
 
@@ -425,8 +428,73 @@ func (c *fn) allocRef(in *vil.Inst) error {
 	if got.Len() == 0 {
 		return c.fail(ErrIR, in.Op(), "the allocator returned nothing")
 	}
-	c.def(res, got.Value(0))
+	obj, ok := got.Value(0).(ir.Ptr)
+	if !ok {
+		return c.fail(ErrType, in.Op(), "the allocator did not return a pointer")
+	}
+
+	// The metadata word, which the runtime allocated and zeroed and
+	// this fills in: the address of the class's dispatch table. It is
+	// what a class_method loads, and it is why the answer depends on
+	// what was allocated rather than on what the expression said.
+	if cl, ok := f.Underlying().(*types.Class); ok {
+		if g, ok := c.l.vtable[cl.Name]; ok {
+			c.b.Ptr.Store(c.b.Ptr.GetAddr(g), obj)
+		}
+	}
+	c.def(res, obj)
 	return nil
+}
+
+// classMethod reads an implementation out of the receiver's table.
+//
+// Two loads: the table from the object's metadata word, then the row.
+// The row's index comes from the static class -- the one the call was
+// written against -- and is right for the dynamic class because every
+// table down a chain repeats its base's rows in its base's order.
+func (c *fn) classMethod(in *vil.Inst) error {
+	res := in.Result()
+	if res == nil {
+		return nil
+	}
+	recv, err := c.operand(in, in.Args()[0])
+	if err != nil {
+		return err
+	}
+	obj, ok := recv.(ir.Ptr)
+	if !ok {
+		return c.fail(ErrType, in.Op(), "the receiver is not a reference")
+	}
+	cl, ok := classOf(in.Args()[0].Type())
+	if !ok {
+		return c.fail(ErrUnsupported, in.Op(), "a method on something that is not a class")
+	}
+	rows, ok := c.l.slots[cl.Name]
+	if !ok {
+		return c.fail(ErrUnsupported, in.Op(), cl.Name+" has no dispatch table")
+	}
+	i := -1
+	for n, m := range rows {
+		if m == in.Aux().Member {
+			i = n
+			break
+		}
+	}
+	if i < 0 {
+		return c.fail(ErrUnsupported, in.Op(), "no slot "+in.Aux().Member+" in "+cl.Name+"'s table")
+	}
+	table := c.b.Ptr.Load(obj)
+	c.def(res, c.b.Ptr.Load(c.fieldAddr(table, int64(i)*8)))
+	return nil
+}
+
+// classOf is the class a value's type is.
+func classOf(t vil.Type) (*types.Class, bool) {
+	if !t.IsValid() || t.Formal() == nil {
+		return nil, false
+	}
+	cl, ok := t.Formal().Underlying().(*types.Class)
+	return cl, ok
 }
 
 // makeEnum builds one case of an enum, which for a payload-free enum is
@@ -953,13 +1021,23 @@ func (c *fn) calleeType(in *vil.Inst, v *vil.Value) (*ir.Type, error) {
 	if !t.IsValid() || t.IsAddress() || t.Formal() == nil {
 		return nil, c.fail(ErrType, in.Op(), "the callee has no function type")
 	}
-	sig, ok := t.Formal().Underlying().(*types.Signature)
-	if !ok {
-		return nil, c.fail(ErrType, in.Op(), "the callee is not a function")
+	switch f := t.Formal().Underlying().(type) {
+	case *types.Signature:
+		// A closure or a function value: a Swift function type.
+		ft, err := c.l.funcTypeOf(f)
+		if err != nil {
+			return nil, c.fail(ErrType, in.Op(), err.Error())
+		}
+		return ft, nil
+	case *vil.FuncType:
+		// A method loaded out of a dispatch table, which already
+		// carries the lowered shape -- the receiver among the
+		// parameters, in the place the convention puts it.
+		ft, err := c.l.lowerFuncType(f)
+		if err != nil {
+			return nil, c.fail(ErrType, in.Op(), err.Error())
+		}
+		return ft, nil
 	}
-	ft, err := c.l.funcTypeOf(sig)
-	if err != nil {
-		return nil, c.fail(ErrType, in.Op(), err.Error())
-	}
-	return ft, nil
+	return nil, c.fail(ErrType, in.Op(), "the callee is not a function")
 }

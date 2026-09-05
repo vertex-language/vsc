@@ -2,6 +2,7 @@ package lower
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/vertex-language/ir"
@@ -45,6 +46,9 @@ func Module(m *vil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 			return nil, err
 		}
 	}
+	if err := l.vtables(m); err != nil {
+		return nil, err
+	}
 	for _, f := range m.Funcs() {
 		if f.IsDeclaration() {
 			continue
@@ -65,6 +69,13 @@ type lowerer struct {
 	prefix string
 	callee map[string]ir.Callee
 	defs   map[string]*ir.Func
+
+	// vtable is a class's dispatch table, and slots is the order of
+	// its rows: a class_method knows the member it wants and the
+	// static class it is calling on, and the index comes from
+	// scanning that class's rows for it.
+	vtable map[string]*ir.Global
+	slots  map[string][]string
 
 	// funcTypes are the VIR typedefs indirect calls name, one per
 	// distinct Swift function type.
@@ -289,23 +300,104 @@ func funcTypeName(sig *types.Signature) string {
 	return b.String()
 }
 
-// identSafe is a type's spelling with everything VIR's identifiers do
-// not admit replaced, so that two different types cannot collide.
+// identSafe turns a type's spelling into something VIR will take as an
+// identifier: letters, digits and underscore, never starting with a
+// digit.
+//
+// A hash of the original goes on the end because the substitution is
+// not injective -- `(Int, Int)` and `[Int: Int]` flatten to the same
+// letters -- and two distinct signatures sharing one typedef would be
+// two different calls agreeing to disagree about their arguments.
 func identSafe(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			b.WriteRune(r)
 		default:
-			b.WriteByte('.')
+			b.WriteByte('_')
 		}
 	}
-	return b.String()
+	// FNV-1a, for a short distinct tail.
+	var h uint64 = 14695981039346656037
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211
+	}
+	return b.String() + "_" + strconv.FormatUint(h, 16)
 }
 
 // isVoidType is the empty result, which VIR spells by having none.
 func isVoidType(t types.Type) bool {
 	b, ok := t.Underlying().(*types.Basic)
 	return ok && (b.Kind() == types.Void)
+}
+
+// vtables lays each class's dispatch table down as a read-only global
+// of function pointers.
+//
+// One pointer per row, in the order gen wrote them, which is the order
+// the chain declares them: an inherited slot keeps the index it had in
+// the superclass, so a call that loaded a table it has never seen
+// still indexes it correctly. That invariant is the whole of dynamic
+// dispatch and it is gen that establishes it -- see vil/gen/vtable.go.
+//
+// Read-only because a table is written once, by the linker, out of
+// relocations to the functions it names.
+func (l *lowerer) vtables(m *vil.Module) error {
+	tables := m.VTables()
+	if len(tables) == 0 {
+		return nil
+	}
+	l.vtable = make(map[string]*ir.Global, len(tables))
+	l.slots = make(map[string][]string, len(tables))
+	for _, t := range tables {
+		if len(t.Entries) == 0 {
+			// A class with no methods has nothing to dispatch, and an
+			// empty array is not a type VIR admits.
+			continue
+		}
+		rows := make([]ir.Init, 0, len(t.Entries))
+		members := make([]string, 0, len(t.Entries))
+		for _, e := range t.Entries {
+			impl, ok := l.callee[l.sym(e.Impl)]
+			if !ok {
+				f, ok := l.defs[e.Impl]
+				if !ok {
+					return &Error{Err: ErrUnsupported, Func: t.Class,
+						What: "no function named " + e.Impl + " for slot " + e.Member}
+				}
+				impl = f
+			}
+			rows = append(rows, ir.RelocInit(impl))
+			members = append(members, e.Member)
+		}
+		g := l.out.Global(l.sym(vtableSymbol(t.Class)), ir.RO,
+			ir.Array(uint64(len(rows)), ir.StorePtr.FType())).Init(ir.List(rows...))
+		l.vtable[t.Class] = g
+		l.slots[t.Class] = members
+	}
+	return nil
+}
+
+// vtableSymbol is the object-file name of a class's table.
+func vtableSymbol(class string) string { return "$sv" + class }
+
+// lowerFuncType is the VIR typedef for an already-lowered VIL function
+// type, which is what a class_method yields.
+func (l *lowerer) lowerFuncType(t *vil.FuncType) (*ir.Type, error) {
+	name := "fnv_" + identSafe(t.String())
+	if got, ok := l.funcTypes[name]; ok {
+		return got, nil
+	}
+	sig, err := l.signature(name, t)
+	if err != nil {
+		return nil, err
+	}
+	ft := l.out.FuncType(name, sig)
+	if l.funcTypes == nil {
+		l.funcTypes = map[string]*ir.Type{}
+	}
+	l.funcTypes[name] = ft
+	return ft, nil
 }

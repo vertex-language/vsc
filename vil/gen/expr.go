@@ -700,15 +700,15 @@ func (g *gen) enumCase(e ast.Expr, ec *analyzer.EnumCaseSymbol) *vil.Value {
 // method finds it in, and reversing it would pass the first argument as
 // the receiver.
 //
-// Static dispatch only, and refused where that is not enough.
+// Static where that is the only answer, dynamic where it is not.
 //
 // A method on a class that neither has a superclass nor is one has a
 // single implementation, so a function_ref names the only thing there
 // is to name. Where inheritance is involved, which body runs is a fact
-// about the object and the answer is a class_method through its table;
-// there is no table yet, so such a call is refused.
+// about the object, and the call goes through the table the instance
+// carries -- see dynamicCall and vil/gen/vtable.go.
 //
-// This comment used to say inheritance was not modelled, and treated
+// This comment once said inheritance was not modelled, and treated
 // static dispatch as safe on that ground. The checker learned
 // inheritance -- it resolves a method through the superclass chain and
 // converts a subclass to its base -- and this did not notice, so a
@@ -736,14 +736,14 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *vil.Value {
 
 // methodCall emits the call itself, over a receiver the caller supplies.
 func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func() *vil.Value) *vil.Value {
-	// Which body a method call reaches is a fact about the object
-	// when the class takes part in inheritance, and there is no table
-	// to ask. Binding it here anyway is what this used to do, and it
-	// did not fail: it called the superclass's body and returned the
-	// wrong number, with nothing said.
+	// Which body a method call reaches is a fact about the object when
+	// the class takes part in inheritance, so it is asked of the
+	// object: class_method reads the slot out of the table the
+	// instance carries. A function_ref here would name the static
+	// type's body, which is what this used to do -- it called the
+	// superclass's and returned the wrong number, with nothing said.
 	if cl, ok := receiverClass(ref.Recv); ok && g.poly[cl] {
-		g.refuse(e, "a method call on '"+cl.Name+"', which takes part in inheritance")
-		return nil
+		return g.dynamicCall(e, ref, cl, receiver)
 	}
 	callee := g.m.Func(g.methodSymbol(ref)).SetSourceName(ref.Method.Name)
 	if callee.IsDeclaration() && callee.Type() != nil {
@@ -773,6 +773,80 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 	v := g.blk.Apply(fnRef, result, args...)
 	g.destroyLater(v)
 	return v
+}
+
+// dynamicCall dispatches through the receiver's table.
+//
+// The slot is named for the class that introduced the method rather
+// than the one the lookup found it in: an override does not get a slot
+// of its own, it replaces the one the base declared, and B's table
+// says #A.get. A call site that named #B.get would be asking for a row
+// that is not there.
+func (g *gen) dynamicCall(e *ast.CallExpr, ref *analyzer.MethodRef, cl *types.Class,
+	receiver func() *vil.Value) *vil.Value {
+
+	var args []*vil.Value
+	if e.Args != nil {
+		for _, a := range e.Args.Args {
+			v := g.rvalue(a.X)
+			if v == nil {
+				return nil
+			}
+			args = append(args, v)
+		}
+	}
+	self := receiver()
+	if self == nil {
+		g.unsupported(e)
+		return nil
+	}
+
+	intro := introducer(cl, ref.Method)
+	member := intro.Name + "." + ref.Method.Name
+	method := g.blk.ClassMethod(self, member, methodType(ref, intro))
+
+	args = append(args, self)
+	result := lowerType(ref.Method.Sig.Results)
+	v := g.blk.Apply(method, result, args...)
+	g.destroyLater(v)
+	return v
+}
+
+// methodType is the function type a class_method yields: the method's
+// own, with the receiver last and the introducing class as its type,
+// because that is the signature every implementation of the slot has
+// to have.
+func methodType(ref *analyzer.MethodRef, intro *types.Class) vil.Type {
+	sig := ref.Method.Sig
+	ft := &vil.FuncType{Convention: vil.Method}
+	for _, p := range sig.Params {
+		t := lowerType(p.Type)
+		ft.Params = append(ft.Params, vil.Param{Type: t, Convention: paramConvention(p, t)})
+	}
+	self := lowerType(intro)
+	ft.Params = append(ft.Params, vil.Param{Type: self, Convention: selfConvention(self)})
+	if sig.Results != nil && !isVoid(sig.Results) {
+		t := lowerType(sig.Results)
+		ft.Results = append(ft.Results, vil.Result{Type: t, Convention: resultConvention(t)})
+	}
+	return vil.Object(ft)
+}
+
+// introducer is the base-most class declaring this method, which is
+// the class the slot is named for.
+func introducer(cl *types.Class, m *types.Method) *types.Class {
+	if m == nil || m.Sig == nil {
+		return cl
+	}
+	key := m.Name + m.Sig.String()
+	for _, c := range classChain(cl) {
+		for _, own := range c.Methods {
+			if own != nil && own.Sig != nil && own.Name+own.Sig.String() == key {
+				return c
+			}
+		}
+	}
+	return cl
 }
 
 // receiverClass is the class a method was found in, if it was found in

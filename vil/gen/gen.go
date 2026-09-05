@@ -51,6 +51,14 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 		}
 		diags = append(diags, g.diags...)
 	}
+
+	// The tables last, once every method has a symbol to point at.
+	tg := &gen{m: m, info: info, module: name, poly: poly}
+	if len(files) > 0 {
+		tg.file = files[0].Unit
+	}
+	tg.vtables(files)
+	diags = append(diags, tg.diags...)
 	return m, diags
 }
 

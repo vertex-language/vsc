@@ -99,6 +99,13 @@
 // reference count on it, and a forwarder for the arity it does not
 // match. See closure.go.
 //
+// Classes with inheritance, dispatched through a table. A method call
+// is a class_method when the receiver's class has a superclass or is
+// one, and a function_ref otherwise -- a class in neither group has a
+// single implementation and always will. The tables are in vtable.go,
+// and the invariant that makes them work is that every table down a
+// chain repeats its base's rows in its base's order.
+//
 // Two rules of the language are checked here because nothing before
 // this models them: a `break` or `continue` has to be inside a loop
 // it names, and the body of a `guard` may not fall through. Both are

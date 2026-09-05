@@ -106,6 +106,17 @@
 // rather than reading a signature off a callee it does not have. The
 // typedefs are made here, one per distinct Swift function type.
 //
+// # A class's dispatch table
+//
+// One read-only global per class, holding a function pointer per row
+// in the order gen wrote them. alloc_ref stamps its address into the
+// instance's metadata word -- the first of the two the runtime
+// reserves, which it allocated and zeroed for exactly this -- and a
+// class_method loads it back and indexes it. The row's index comes
+// from the static class, and is right for the dynamic one because
+// every table down a chain repeats its base's rows in its base's
+// order.
+//
 // # An enum, and the branch on one
 //
 // An enum with no associated values is its tag and nothing else, so

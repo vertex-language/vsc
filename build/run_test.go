@@ -1265,3 +1265,61 @@ func main() -> Int32 {
 		t.Errorf("exit status = %d, want 5: the override was ignored", got)
 	}
 }
+
+// TestDynamicDispatchRuns holds dispatch to what the object is rather
+// than to what the expression said.
+//
+// Three levels, because two do not distinguish the interesting cases:
+// legs is overridden at the middle level and inherited by the bottom
+// one, so Penguin's slot has to find Bird's body and not Animal's;
+// noise is overridden at the bottom only; fly is introduced by the
+// middle class and overridden below it, so it occupies a slot the base
+// has never heard of. swiftc run on this program gives 42.
+func TestDynamicDispatchRuns(t *testing.T) {
+	bin := buildSwift(t, "main", `
+class Animal {
+    func legs() -> Int32 { return 4 }
+    func noise() -> Int32 { return 1 }
+}
+class Bird: Animal {
+    override func legs() -> Int32 { return 2 }
+    func fly() -> Int32 { return 100 }
+}
+class Penguin: Bird {
+    override func noise() -> Int32 { return 3 }
+    override func fly() -> Int32 { return 0 }
+}
+
+func legsOf(_ a: Animal) -> Int32 { return a.legs() }
+func noiseOf(_ a: Animal) -> Int32 { return a.noise() }
+func flightOf(_ b: Bird) -> Int32 { return b.fly() }
+
+func main() -> Int32 {
+    // An override reached through the base's static type.
+    if legsOf(Animal()) != 4 { return 91 }
+    if legsOf(Bird()) != 2 { return 92 }
+    // Inherited two levels down: Penguin does not override legs, so
+    // Bird's body must be found and not Animal's.
+    if legsOf(Penguin()) != 2 { return 93 }
+
+    // A slot overridden at the bottom level only.
+    if noiseOf(Animal()) != 1 { return 94 }
+    if noiseOf(Bird()) != 1 { return 95 }
+    if noiseOf(Penguin()) != 3 { return 96 }
+
+    // A slot the middle class introduced, overridden below it.
+    if flightOf(Bird()) != 100 { return 97 }
+    if flightOf(Penguin()) != 0 { return 98 }
+
+    // Through a local typed as the base.
+    let p: Animal = Penguin()
+    if p.legs() != 2 { return 99 }
+    if p.noise() != 3 { return 100 }
+
+    return 42
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
