@@ -31,13 +31,49 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 			if !ok {
 				continue
 			}
-			if fn, ok := decl.D.(*ast.FuncDecl); ok {
-				g.function(fn)
+			switch d := decl.D.(type) {
+			case *ast.FuncDecl:
+				g.function(d, nil)
+			case *ast.StructDecl:
+				g.members(d.Name, d.Body)
+			case *ast.ClassDecl:
+				g.members(d.Name, d.Body)
+			case *ast.ActorDecl:
+				g.members(d.Name, d.Body)
+			case *ast.EnumDecl:
+				g.members(d.Name, d.Body)
 			}
 		}
 		diags = append(diags, g.diags...)
 	}
 	return m, diags
+}
+
+// members lowers the methods a type declares.
+//
+// A method is a function with the receiver as its last parameter, which
+// is what the method convention says and what selfValue reads. Nothing
+// else about it is special: the body is lowered by the same walk, and a
+// name in it that turns out to be a stored property is reached through
+// the receiver rather than through a local.
+func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
+	if name == nil || body == nil {
+		return
+	}
+	sym, _ := g.info.Uses[name].(*analyzer.TypeNameSymbol)
+	if sym == nil {
+		if def, ok := g.info.Defs[name].(*analyzer.TypeNameSymbol); ok {
+			sym = def
+		}
+	}
+	if sym == nil {
+		return
+	}
+	for _, mem := range body.Members {
+		if fn, ok := mem.(*ast.FuncDecl); ok {
+			g.function(fn, sym.Type())
+		}
+	}
 }
 
 // symbol is the name a function is given in the module, which is the
@@ -118,6 +154,11 @@ type gen struct {
 	// label the next one will answer to.
 	loops   []loop
 	pending string
+
+	// recv is the type whose method is being lowered, or nil in a free
+	// function. A name that is not a local is looked for among its
+	// stored properties.
+	recv types.Type
 
 	diags []token.Diagnostic
 }
@@ -403,12 +444,15 @@ func (g *gen) emitCleanups(s *scope) {
 }
 
 // function lowers one declaration.
-func (g *gen) function(d *ast.FuncDecl) {
+// recv is the type the function is a method of, or nil for a free
+// function.
+func (g *gen) function(d *ast.FuncDecl, recv types.Type) {
 	sym, _ := g.info.Defs[d.Name].(*analyzer.FuncSymbol)
 	if sym == nil {
 		return
 	}
 	sig := sym.Signature()
+	g.recv = recv
 
 	// The entry point is named, called and returned from differently
 	// from every other function, and a main this compiler cannot use
@@ -419,6 +463,14 @@ func (g *gen) function(d *ast.FuncDecl) {
 		return
 	}
 
+	name := g.symbol(sym)
+	if recv != nil {
+		name = g.methodSymbol(&analyzer.MethodRef{
+			Recv:   recv,
+			Method: &types.Method{Name: sym.Name(), Sig: sig},
+		})
+	}
+
 	linkage := linkageOf(sym.Access())
 	if g.entry {
 		// A program's entry point leaves its object file whatever the
@@ -426,7 +478,7 @@ func (g *gen) function(d *ast.FuncDecl) {
 		// is the linker rather than another module.
 		linkage = vil.Public
 	}
-	f := g.m.Func(g.symbol(sym)).SetSourceName(sym.Name()).
+	f := g.m.Func(name).SetSourceName(sym.Name()).
 		SetLinkage(linkage).SetAttr("ossa")
 	g.fn = f
 	g.locals = map[analyzer.Symbol]*local{}
@@ -454,6 +506,16 @@ func (g *gen) function(d *ast.FuncDecl) {
 		// promises and why it needs no cleanup here.
 		g.destroyLater(v)
 	}
+	if recv != nil {
+		// Self last, which is the method convention's shape and what
+		// selfValue reads. A struct receiver is a value; a class
+		// receiver is a reference the caller keeps alive across the
+		// call, which is @guaranteed.
+		t := lowerType(recv)
+		f.Param(t, selfConvention(t))
+		f.Type().Convention = vil.Method
+	}
+
 	switch {
 	case g.entry:
 		entrySignature(f)
@@ -472,6 +534,7 @@ func (g *gen) function(d *ast.FuncDecl) {
 	}
 	g.fn = nil
 	g.entry = false
+	g.recv = nil
 }
 
 // void is the empty tuple every function without a result returns.

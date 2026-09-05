@@ -33,6 +33,13 @@
 // SSA value is usable only where it dominates its readers. Calls to
 // functions the checker resolved.
 //
+// Methods, on a struct or on a final class: an ordinary function with
+// the receiver as its last parameter, called through a function_ref.
+// Static dispatch only — a method that may be overridden goes through
+// the object's table, and neither the table nor inheritance is
+// modelled. A bare name in a method body that is a stored property or
+// another method of the same type is self's.
+//
 // Making an instance. A struct with no initializer of its own is
 // made by the memberwise one, whose body is a `struct` instruction
 // over its arguments; a class with none is made by the one it gets

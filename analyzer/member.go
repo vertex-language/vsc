@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"github.com/vertex-language/vsc/ast"
 	"strconv"
 
 	"github.com/vertex-language/vsc/types"
@@ -21,6 +22,58 @@ import (
 // this compiler builds for `E` in expression position is E's
 // metatype. Static and instance members are not yet told apart, which
 // is an over-acceptance this will lose when they are.
+// lookupMemberFor is lookupMember, recording into Info which method a
+// member expression named.
+//
+// The recording is here rather than at the call site because this is
+// where the walk ends: a method may be found on a superclass or through
+// a generic instance's base, and only the step that found it knows which
+// type that was.
+func (c *checker) lookupMemberFor(e *ast.MemberExpr, t types.Type, name string) types.Type {
+	got := c.lookupMember(t, name)
+	if e != nil {
+		if recv, m := c.findMethod(t, name); m != nil {
+			c.info.Methods[e] = &MethodRef{Recv: recv, Method: m}
+		}
+	}
+	return got
+}
+
+// findMethod is the method a name refers to and the nominal type that
+// declares it, seeing through a generic instance and up a superclass
+// chain the way lookupMember does.
+func (c *checker) findMethod(t types.Type, name string) (types.Type, *types.Method) {
+	if t == nil {
+		return nil, nil
+	}
+	if meta, ok := t.(*types.Metatype); ok {
+		t = meta.Instance
+	}
+	if inst, ok := t.(*types.GenericInstance); ok {
+		return c.findMethod(inst.Base, name)
+	}
+	var methods []*types.Method
+	switch b := t.Underlying().(type) {
+	case *types.Struct:
+		methods = b.Methods
+	case *types.Class:
+		methods = b.Methods
+	case *types.Enum:
+		methods = b.Methods
+	default:
+		return nil, nil
+	}
+	for _, m := range methods {
+		if m.Name == name {
+			return t, m
+		}
+	}
+	if b, ok := t.Underlying().(*types.Class); ok && b.Superclass != nil {
+		return c.findMethod(b.Superclass, name)
+	}
+	return nil, nil
+}
+
 func (c *checker) lookupMember(t types.Type, name string) types.Type {
 	if t == nil {
 		return nil

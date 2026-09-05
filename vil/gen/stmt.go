@@ -127,13 +127,20 @@ func (g *gen) exprStmt(e ast.Expr) {
 // rather than `store`: whether the destination already held something
 // is what definite initialization decides, and it has not run yet.
 func (g *gen) assign(e *ast.BinaryExpr) {
+	// Counted so that a destination which already said why it could not
+	// be written to is not told off a second time in more general
+	// terms. Two diagnostics for one mistake sends the reader looking
+	// for two.
+	said := len(g.diags)
 	addr := g.lvalue(e.X)
 	if addr == nil {
 		// An assignment whose destination could not be lowered is an
 		// assignment that does not happen, in a program that compiles
 		// and runs. Whatever it was meant to change keeps its old
 		// value and the answer is quietly wrong.
-		g.refuse(e.X, "an assignment to "+g.exprKind(e.X))
+		if len(g.diags) == said {
+			g.refuse(e.X, "an assignment to "+g.exprKind(e.X))
+		}
 		return
 	}
 	v := g.rvalue(e.Y)
@@ -158,6 +165,10 @@ func (g *gen) lvalue(e ast.Expr) *vil.Value {
 				return l.addr
 			}
 		}
+		// Inside a method a bare name may be a stored property, and
+		// writing to it writes through the receiver: `n = …` there is
+		// `self.n = …`.
+		return g.implicitSelfAddr(n)
 
 	case *ast.MemberExpr:
 		if n.Name == nil {
@@ -188,6 +199,37 @@ func (g *gen) lvalue(e ast.Expr) *vil.Value {
 		return g.blk.StructElementAddr(addr, name, t)
 	}
 	return nil
+}
+
+// implicitSelfAddr is where a stored property of the receiver lives, for
+// a name in a method body being written to.
+//
+// A class's property is inside the object the reference names, so its
+// address is arithmetic on the receiver. A struct's is inside the
+// receiver's own storage — and a struct receiver arrives by value, so
+// there is nothing to write into that the caller would see. Swift says
+// the same by requiring `mutating` on such a method and giving it an
+// inout self; neither is modelled, so this refuses rather than writing
+// to a copy.
+func (g *gen) implicitSelfAddr(e *ast.IdentExpr) *vil.Value {
+	if g.recv == nil || e.Name == nil {
+		return nil
+	}
+	name := g.text(e.Name)
+	field, ok := storedField(g.recv, name)
+	if !ok {
+		return nil
+	}
+	self := g.selfValue()
+	if self == nil {
+		return nil
+	}
+	if !isClass(g.recv) {
+		g.errorAt(e, "cannot assign to '"+name+"': the receiver is a value, and a "+
+			"method that changes one has to be declared 'mutating'")
+		return nil
+	}
+	return g.blk.RefElementAddr(self, memberName(g.recv, name), lowerType(field.Type))
 }
 
 // text is a node's spelling.

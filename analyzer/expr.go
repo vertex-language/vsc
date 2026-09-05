@@ -580,7 +580,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 		}
 
-		if t := c.lookupMember(baseType, memberName); t != nil {
+		if t := c.lookupMemberFor(e, baseType, memberName); t != nil {
 			return t
 		}
 		// A type declared in this compilation has a member list, so a

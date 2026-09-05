@@ -35,8 +35,29 @@ type Info struct {
 	// of `"a\(b)c"` in order.
 	Values map[ast.Node]Value
 
+	// Methods maps each member expression that named a method to the
+	// method and the type that declares it.
+	//
+	// The type is half the answer, not decoration: a method's symbol is
+	// mangled inside the nominal it belongs to, so a consumer that knew
+	// only the signature could not name the thing it wants to call.
+	// Uses cannot carry it — that maps a name to a symbol, and a method
+	// lives in its type's scope rather than in the one the call was
+	// written in.
+	Methods map[*ast.MemberExpr]*MethodRef
+
 	// Diagnostics holds all warnings and errors produced during analysis.
 	Diagnostics []token.Diagnostic
+}
+
+// A MethodRef is a method and the nominal type it was found in.
+//
+// Recv is where the lookup ended rather than where it started: a method
+// inherited from a superclass belongs to the superclass, and that is the
+// type its symbol names.
+type MethodRef struct {
+	Recv   types.Type
+	Method *types.Method
 }
 
 // NewInfo allocates an empty Info container.
@@ -49,6 +70,7 @@ func NewInfo() *Info {
 		Folded:      make(map[*ast.SequenceExpr]ast.Expr),
 		Operators:   make(map[ast.Expr]Symbol),
 		Values:      make(map[ast.Node]Value),
+		Methods:     make(map[*ast.MemberExpr]*MethodRef),
 		Diagnostics: nil,
 	}
 }

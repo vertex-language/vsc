@@ -726,6 +726,41 @@ func main() -> Int32 {
 	}
 }
 
+// TestMethodsRun: a struct's and a class's, end to end.
+//
+// The receiver travels as the last argument, so a convention that put it
+// anywhere else would pass an argument as self and self as an argument.
+// The numbers are chosen so that either mistake changes the answer.
+func TestMethodsRun(t *testing.T) {
+	bin := buildSwift(t, "main", `
+struct Rect {
+    var w: Int32
+    var h: Int32
+    func area() -> Int32 { return w * h }
+    func scaled(_ k: Int32) -> Int32 { return area() * k }
+}
+
+final class Counter {
+    var n: Int32 = 0
+    func bump(_ by: Int32) -> Int32 { n = n + by; return n }
+}
+
+func main() -> Int32 {
+    let r = Rect(w: 3, h: 4)
+    // scaled calls area through the implicit receiver: 12 * 2.
+    if r.scaled(2) != 24 { return 1 }
+
+    let c = Counter()
+    if c.bump(20) != 20 { return 2 }
+    // The class keeps what the first call wrote: 20 + 10.
+    return r.area() + c.bump(10)
+}
+`, "")
+	if got := runExit(t, bin); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
 // runExit runs a program and returns its exit status, failing only if
 // it did not run at all.
 func runExit(t *testing.T, bin string) int {

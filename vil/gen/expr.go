@@ -4,6 +4,7 @@ import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/core"
+	"github.com/vertex-language/vsc/mangle"
 	"github.com/vertex-language/vsc/types"
 	"github.com/vertex-language/vsc/vil"
 )
@@ -235,6 +236,14 @@ func (g *gen) ident(e *ast.IdentExpr) *vil.Value {
 	}
 	l := g.locals[sym]
 	if l == nil {
+		// Not a local. Inside a method a bare name may be a stored
+		// property, which the analyzer resolved to the symbol the type's
+		// own scope holds — so it is reached through the receiver, and
+		// `x` in a method body means `self.x`.
+		if v, ok := g.implicitSelf(e, sym); ok {
+			return v
+		}
+		g.unsupported(e)
 		return nil
 	}
 	if l.addr != nil {
@@ -247,6 +256,60 @@ func (g *gen) ident(e *ast.IdentExpr) *vil.Value {
 		return g.borrow(l.value)
 	}
 	return l.value
+}
+
+// implicitSelf reads a stored property of the receiver, for a name in a
+// method body that named one.
+//
+// The property is found by name among the receiver's own, which is what
+// the analyzer resolved against: it put the type's stored properties in
+// the scope the method body was checked in, so a name that reached here
+// and is one of them is that one.
+func (g *gen) implicitSelf(e *ast.IdentExpr, sym analyzer.Symbol) (*vil.Value, bool) {
+	if g.recv == nil || e.Name == nil {
+		return nil, false
+	}
+	name := g.text(e.Name)
+	field, ok := storedField(g.recv, name)
+	if !ok {
+		return nil, false
+	}
+	self := g.selfValue()
+	if self == nil {
+		return nil, false
+	}
+	t := lowerType(field.Type)
+	member := memberName(g.recv, name)
+	if isClass(g.recv) {
+		addr := g.blk.RefElementAddr(self, member, t)
+		access := g.blk.BeginAccess(addr, "read", "dynamic")
+		v := g.blk.Load(access, loadQualifier(t))
+		g.blk.EndAccess(access)
+		return v, true
+	}
+	return g.blk.StructExtract(self, member, t), true
+}
+
+// storedField is the property of a type with this name.
+func storedField(t types.Type, name string) (*types.Field, bool) {
+	if t == nil {
+		return nil, false
+	}
+	var fields []*types.Field
+	switch b := t.Underlying().(type) {
+	case *types.Struct:
+		fields = b.Fields
+	case *types.Class:
+		fields = b.Fields
+	default:
+		return nil, false
+	}
+	for _, f := range fields {
+		if f != nil && f.Name == name {
+			return f, true
+		}
+	}
+	return nil, false
 }
 
 // borrow opens a borrow that the enclosing scope closes, which is how
@@ -286,10 +349,21 @@ func (g *gen) call(e *ast.CallExpr) *vil.Value {
 	// statement around it drops, the return that wanted the value
 	// falls back on whatever a return with no value produces, and a
 	// program that should not have compiled runs and is wrong.
+	// A call through a dot is a method call, and the receiver is what
+	// tells it apart from a call to a free function.
+	if mem, ok := e.Fun.(*ast.MemberExpr); ok {
+		return g.method(e, mem)
+	}
 	id, ok := e.Fun.(*ast.IdentExpr)
 	if !ok || id.Name == nil {
 		g.unsupported(e)
 		return nil
+	}
+	// Inside a method, a bare call may name one of the receiver's own
+	// methods: `doubled()` there means `self.doubled()`, and its symbol
+	// is mangled inside the type rather than beside it.
+	if ref, ok := g.implicitMethod(id); ok {
+		return g.methodCall(e, ref, func() *vil.Value { return g.selfValue() })
 	}
 	// A type's name in expression position is a constructor call:
 	// `P(x: 1)` names a type rather than a function.
@@ -506,6 +580,175 @@ func (g *gen) bindingName(p ast.Pattern) string {
 		return g.text(id.Name)
 	}
 	return ""
+}
+
+// method lowers a call through a dot.
+//
+// It is an ordinary call with the receiver passed as an argument, which
+// is what `swiftc -emit-sil` shows for both a struct's method and a
+// final class's:
+//
+//	sil @P.add : $@convention(method) (Int, Int, P) -> Int
+//	%6 = function_ref @P.add
+//	%7 = apply %6(%3, %5, %0)
+//
+// Self goes last. That is the method convention's shape and not an
+// arbitrary choice: it is what puts the receiver in the register a
+// method finds it in, and reversing it would pass the first argument as
+// the receiver.
+//
+// Static dispatch only. A `final` class's method is a function_ref like
+// a struct's; one that may be overridden is a class_method through the
+// object's table, and neither the table nor inheritance is modelled yet.
+func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *vil.Value {
+	ref := g.info.Methods[mem]
+	if ref == nil || ref.Method == nil || ref.Method.Sig == nil {
+		g.unsupported(e)
+		return nil
+	}
+	if g.info.Types[mem.X] == nil {
+		g.unsupported(e)
+		return nil
+	}
+	return g.methodCall(e, ref, func() *vil.Value {
+		// The receiver is borrowed rather than copied: self is
+		// @guaranteed, which says the caller keeps it alive across the
+		// call and the callee does not consume it. rvalue would hand
+		// over a copy nothing afterwards destroys.
+		return g.expr(mem.X)
+	})
+}
+
+// methodCall emits the call itself, over a receiver the caller supplies.
+func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func() *vil.Value) *vil.Value {
+	callee := g.m.Func(g.methodSymbol(ref)).SetSourceName(ref.Method.Name)
+	if callee.IsDeclaration() && callee.Type() != nil {
+		g.declareMethod(callee, ref)
+	}
+	fnRef := g.blk.FunctionRef(callee)
+
+	// The arguments the program wrote, then the receiver.
+	var args []*vil.Value
+	if e.Args != nil {
+		for _, a := range e.Args.Args {
+			v := g.rvalue(a.X)
+			if v == nil {
+				return nil
+			}
+			args = append(args, v)
+		}
+	}
+	self := receiver()
+	if self == nil {
+		g.unsupported(e)
+		return nil
+	}
+	args = append(args, self)
+
+	result := lowerType(ref.Method.Sig.Results)
+	v := g.blk.Apply(fnRef, result, args...)
+	g.destroyLater(v)
+	return v
+}
+
+// implicitMethod is the receiver's method a bare name refers to, for a
+// call written inside one of its own methods.
+func (g *gen) implicitMethod(id *ast.IdentExpr) (*analyzer.MethodRef, bool) {
+	if g.recv == nil || id.Name == nil {
+		return nil, false
+	}
+	name := g.text(id.Name)
+	var methods []*types.Method
+	switch b := g.recv.Underlying().(type) {
+	case *types.Struct:
+		methods = b.Methods
+	case *types.Class:
+		methods = b.Methods
+	case *types.Enum:
+		methods = b.Methods
+	default:
+		return nil, false
+	}
+	for _, m := range methods {
+		if m != nil && m.Name == name {
+			return &analyzer.MethodRef{Recv: g.recv, Method: m}, true
+		}
+	}
+	return nil, false
+}
+
+// methodSymbol is the name a method is given: the mangling of a
+// declaration nested inside the type that declares it.
+//
+// The type is what makes it a method's symbol rather than a free
+// function's, which is why mangle.Decl carries a context at all. Two
+// types may each declare `doubled`, and they are two symbols.
+func (g *gen) methodSymbol(ref *analyzer.MethodRef) string {
+	d := mangle.Decl{
+		Module:    g.module,
+		Name:      ref.Method.Name,
+		Signature: ref.Method.Sig,
+	}
+	if nom, ok := nominalOf(ref.Recv); ok {
+		d.Context = []mangle.Nominal{nom}
+	}
+	name, err := mangle.Function(d)
+	if err != nil {
+		g.errorAt(nil, "cannot name '"+ref.Method.Name+"': "+err.Error())
+		return ref.Method.Name
+	}
+	return name
+}
+
+// nominalOf is the mangler's name for a type: what it is called and
+// which of the three kinds it is.
+func nominalOf(t types.Type) (mangle.Nominal, bool) {
+	if t == nil {
+		return mangle.Nominal{}, false
+	}
+	name := typeName(t)
+	if name == "" {
+		return mangle.Nominal{}, false
+	}
+	switch t.Underlying().(type) {
+	case *types.Struct:
+		return mangle.Nominal{Name: name, Kind: mangle.Struct}, true
+	case *types.Class:
+		return mangle.Nominal{Name: name, Kind: mangle.Class}, true
+	case *types.Enum:
+		return mangle.Nominal{Name: name, Kind: mangle.Enum}, true
+	}
+	return mangle.Nominal{}, false
+}
+
+// declareMethod gives a method's callee its lowered type: the
+// parameters the program wrote, then the receiver.
+func (g *gen) declareMethod(f *vil.Func, ref *analyzer.MethodRef) {
+	sig := ref.Method.Sig
+	for _, p := range sig.Params {
+		t := lowerType(p.Type)
+		f.Type().Params = append(f.Type().Params,
+			vil.Param{Type: t, Convention: paramConvention(p, t)})
+	}
+	self := lowerType(ref.Recv)
+	f.Type().Params = append(f.Type().Params,
+		vil.Param{Type: self, Convention: selfConvention(self)})
+	f.Type().Convention = vil.Method
+	if sig.Results != nil && !isVoid(sig.Results) {
+		t := lowerType(sig.Results)
+		f.SetResult(t, resultConvention(t))
+	}
+}
+
+// selfConvention is how a receiver crosses the call. A struct is a value
+// and owns nothing the caller has to keep alive; a class is a reference
+// the caller holds for the duration, which is @guaranteed and is what
+// SILGen writes.
+func selfConvention(t vil.Type) vil.ParamConvention {
+	if t.Trivial() {
+		return vil.ParamUnowned
+	}
+	return vil.ParamGuaranteed
 }
 
 // declare gives a callee its lowered type, so that a call to a
