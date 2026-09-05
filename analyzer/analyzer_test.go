@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vertex-language/vsc/ast"
@@ -854,5 +855,122 @@ func TestCheckOneErrorPerMistake(t *testing.T) {
 	msgs = checkSnippet(t, "let y = someUndefined + 1\n")
 	if len(msgs) != 1 || msgs[0] != "cannot find 'someUndefined' in scope" {
 		t.Errorf("expected one 'cannot find' error, got %v", msgs)
+	}
+}
+
+// TestAssignmentSuppliesItsContext: the destination of an assignment
+// is the context its source is read in, which is the only thing that
+// gives an untyped literal or a leading-dot member a type at all.
+//
+// Every verdict below is swiftc's, run on the same source.
+func TestAssignmentSuppliesItsContext(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string // the message expected, or "" for a clean check
+	}{
+		{"a literal takes the destination's width", `
+func f() {
+    var n: Int32 = 0
+    n = 1
+}
+`, ""},
+		{"and through a compound assignment", `
+func f() {
+    var n: Int32 = 0
+    n += 1
+}
+`, ""},
+		{"a leading dot names a case of the destination", `
+enum Color { case red, green }
+func f() {
+    var c = Color.red
+    c = .green
+}
+`, ""},
+		{"a case the type does not have is still reported", `
+enum Color { case red, green }
+func f() {
+    var c = Color.red
+    c = .blue
+}
+`, "type 'Color' has no member 'blue'"},
+		{"a leading dot with no context to resolve against", `
+func f() {
+    let x = .red
+    _ = x
+}
+`, "reference to member 'red' cannot be resolved without a contextual type"},
+		{"the destination's type is still enforced", `
+func f() {
+    var n: Int32 = 0
+    n = "x"
+}
+`, "cannot assign value of type 'String' to type 'Int32'"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := checkSnippet(t, tc.src)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("reported %v, want a clean check", got)
+				}
+				return
+			}
+			for _, m := range got {
+				if strings.Contains(m, tc.want) {
+					return
+				}
+			}
+			t.Errorf("reported %v, want one containing %q", got, tc.want)
+		})
+	}
+}
+
+// TestSwitchPatternsAreChecked: `case 0:` is a value compared with the
+// subject, so it is checked against the subject's type. Before it was,
+// the pattern had no recorded type at all and the whole switch was
+// dropped on the floor by the code generator.
+func TestSwitchPatternsAreChecked(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"a literal pattern matching its subject", `
+func f(_ n: Int32) {
+    switch n {
+    case 0: break
+    default: break
+    }
+}
+`, ""},
+		{"a pattern of the wrong type", `
+func f(_ n: Int32) {
+    switch n {
+    case "x": break
+    default: break
+    }
+}
+`, "cannot match values of type 'Int32'"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := checkSnippet(t, tc.src)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("reported %v, want a clean check", got)
+				}
+				return
+			}
+			for _, m := range got {
+				if strings.Contains(m, tc.want) {
+					return
+				}
+			}
+			t.Errorf("reported %v, want one containing %q", got, tc.want)
+		})
 	}
 }

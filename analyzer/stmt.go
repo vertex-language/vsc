@@ -190,6 +190,23 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 	switch p := pat.(type) {
 	case *ast.ValueBindingPattern:
 		c.declarePattern(p.Pat, subjectType, p.Kind == token.LET, scope)
+
+	// `case 0:` is a value to compare the subject with, so it is
+	// checked against the subject's type -- which is both what gives
+	// `0` a type at all and what makes `case "x":` over an Int the
+	// error it is. Swift spells the comparison `~=`; what this checks
+	// is its two operands agreeing, since the only overload here is
+	// the one over Equatable.
+	case *ast.ExprPattern:
+		if p.X == nil {
+			return
+		}
+		t := c.checkExpr(p.X, subjectType, scope)
+		if subjectType != nil && t != nil &&
+			!types.Identical(t, subjectType) &&
+			!isInvalid(t) && !isInvalid(subjectType) {
+			c.typeErrorf(p.X.Pos(), "expression pattern of type '%s' cannot match values of type '%s'", t, subjectType)
+		}
 	// `case .circle(let r)` binds r to the case's associated value,
 	// not to the enum: what is matched and what is bound are
 	// different types, and only the case says which.

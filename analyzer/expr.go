@@ -353,7 +353,13 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	case *ast.BinaryExpr:
 		opName := string(c.file.Slice(e.Op.Lo, e.Op.Hi))
 		if opName == "=" {
-			rhs := c.checkExpr(e.Y, nil, scope)
+			// The destination is read first, so that its type is the
+			// context the source is checked in. That is what makes
+			// `n = 1` an Int32 one when n is an Int32, and `s = .red`
+			// name a case of whatever s is — neither expression has a
+			// type of its own to fall back on, and a checker that
+			// looked at the source first would have nothing to give
+			// them.
 			var lhs types.Type
 			if id, ok := e.X.(*ast.IdentExpr); ok {
 				name := id.Name.Text(c.file)
@@ -403,6 +409,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				lhs = c.checkExpr(e.X, nil, scope)
 			}
 
+			rhs := c.checkExpr(e.Y, lhs, scope)
+			if t, ok := c.adopt(e.Y, lhs); ok {
+				rhs = t
+			}
 			if !types.AssignableTo(rhs, lhs) {
 				c.typeErrorf(e.Op.Pos(), "cannot assign value of type '%s' to type '%s'", rhs, lhs)
 			}
@@ -486,6 +496,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					}
 				}
 			}
+			// As for `=` above: `n += 1` gives 1 whatever n is.
+			if t, ok := c.adopt(e.Y, lhs); ok {
+				rhs = t
+			}
 			if !types.AssignableTo(rhs, lhs) {
 				c.typeErrorf(e.Op.Pos(), "cannot assign value of type '%s' to type '%s'", rhs, lhs)
 			}
@@ -567,6 +581,33 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 		c.typeErrorf(e.Pos(), "cannot call value of non-function type '%s'", calleeType)
 		return types.Typ[types.Invalid]
+
+	// `.red` where a Color is wanted. There is no base to check: the
+	// context supplies it, which is the whole of what makes the syntax
+	// shorter than `Color.red`. Swift resolves any static member this
+	// way; only an enum case is resolved here, because an enum case is
+	// the only static member this checker has.
+	case *ast.ImplicitMemberExpr:
+		if e.Name == nil {
+			return types.Typ[types.Invalid]
+		}
+		if expected == nil {
+			c.typeErrorf(e.Dot, "reference to member '%s' cannot be resolved without a contextual type", e.Name.Text(c.file))
+			return types.Typ[types.Invalid]
+		}
+		name := e.Name.Text(c.file)
+		sym := c.enumCaseSymbol(expected, name)
+		if sym == nil {
+			if !isInvalid(expected) {
+				c.typeErrorf(e.Name.Pos(), "type '%s' has no member '%s'", expected, name)
+			}
+			return types.Typ[types.Invalid]
+		}
+		// Recorded under the name, which is where gen reads it: an
+		// implicit member and a written-out one name the same case and
+		// lower the same way.
+		c.info.Uses[e.Name] = sym
+		return expected
 
 	case *ast.MemberExpr:
 		baseType := c.checkExpr(e.X, nil, scope)

@@ -31,12 +31,42 @@ import (
 // type that was.
 func (c *checker) lookupMemberFor(e *ast.MemberExpr, t types.Type, name string) types.Type {
 	got := c.lookupMember(t, name)
-	if e != nil {
+	if e != nil && e.Name != nil {
 		if recv, m := c.findMethod(t, name); m != nil {
 			c.info.Methods[e] = &MethodRef{Recv: recv, Method: m}
 		}
+		// `E.b` names a case, and a consumer has to know which one.
+		// The symbol is the enum's own scope's, put there when its
+		// cases were read, so this records the use rather than making
+		// a second symbol for the same case.
+		if sym := c.enumCaseSymbol(t, name); sym != nil {
+			c.info.Uses[e.Name] = sym
+		}
 	}
 	return got
+}
+
+// enumCaseSymbol is the case of an enum a name refers to, or nil where
+// the type is not an enum or has no such case.
+func (c *checker) enumCaseSymbol(t types.Type, name string) *EnumCaseSymbol {
+	if t == nil {
+		return nil
+	}
+	if meta, ok := t.(*types.Metatype); ok {
+		t = meta.Instance
+	}
+	if inst, ok := t.(*types.GenericInstance); ok {
+		t = inst.Base
+	}
+	if _, ok := t.Underlying().(*types.Enum); !ok {
+		return nil
+	}
+	scope := c.typeScopes[typeNameOf(t)]
+	if scope == nil {
+		return nil
+	}
+	sym, _ := scope.Lookup(name).(*EnumCaseSymbol)
+	return sym
 }
 
 // findMethod is the method a name refers to and the nominal type that
