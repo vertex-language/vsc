@@ -217,12 +217,29 @@ func (p *parser) parseForIn() ast.Stmt {
 	p.next()
 
 	s := &ast.ForInStmt{For: kw}
+	// `for try await x in xs`, in that order: the effects belong to
+	// the iteration rather than to the sequence expression, which is
+	// why they are written here and not beside it.
+	if p.at(token.TRY) {
+		s.Try = p.pos()
+		p.next()
+	}
 	s.Await = p.takeWord("await")
 	if p.at(token.CASE) {
 		s.Case = p.pos()
 		p.next()
 	}
-	s.Pat = p.parsePattern(patternMatching)
+	// `for i in xs` binds i; only `for case .some(x) in xs` matches
+	// against something. Reading the plain form as a matching pattern
+	// made a bare name an expression to compare with rather than a
+	// name to declare, and left `for i: Int in xs` unparseable — a
+	// type annotation belongs to a name being bound, and in a matching
+	// pattern the colon is a case label's terminator instead.
+	mode := patternBinding
+	if s.Case.IsValid() {
+		mode = patternMatching
+	}
+	s.Pat = p.parsePattern(mode)
 	s.In = p.expect(token.IN)
 	s.Seq = p.parseExpr(exprBasic)
 	s.Where = p.parseWhereClause()

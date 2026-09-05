@@ -42,11 +42,12 @@ type CodeBlock struct {
 	Rbrace token.Pos
 }
 
-// ForInStmt is for [await] [case] Pattern in Expression [WhereClause]
-// CodeBlock.
+// ForInStmt is for [try] [await] [case] Pattern in Expression
+// [WhereClause] CodeBlock.
 type ForInStmt struct {
 	Span
 	For   token.Pos
+	Try   token.Pos // NoPos unless a throwing sequence
 	Await token.Pos // NoPos unless an async sequence
 	Case  token.Pos // NoPos unless the pattern is a matching one
 	Pat   Pattern
