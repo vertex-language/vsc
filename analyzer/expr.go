@@ -526,28 +526,44 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 
 		calleeType := c.checkExpr(e.Fun, nil, scope)
+		var args []*ast.CallArg
+		if e.Args != nil {
+			args = e.Args.Args
+		}
 		if sig, ok := calleeType.Underlying().(*types.Signature); ok {
-			var args []*ast.CallArg
-			if e.Args != nil {
-				args = e.Args.Args
-			}
 			if chosen := c.resolveOverload(e.Fun, args, scope); chosen != nil {
 				sig = chosen
 			}
 			return c.checkCallArguments(e, sig, args, scope).Results
 		}
-		// An initializer call. Initializers are not modelled yet, so
-		// the arguments are not checked against one — but where the
-		// type is generic they are what says which type is being
-		// made, and that much can be read off the stored properties.
+		// An initializer call.
+		//
+		// A struct that declares no initializer of its own gets the
+		// memberwise one, and that is a real signature the arguments
+		// can be checked against: one parameter per stored property,
+		// in declaration order, labelled with the property's name. A
+		// type that declares its own initializers is not checked
+		// here — which of them was meant is overload resolution, and
+		// what an initializer body promises is not modelled.
 		if meta, ok := calleeType.(*types.Metatype); ok {
-			return c.inferInstance(meta.Instance, e, scope)
-		}
-		// Whatever is being called, the arguments are expressions.
-		if e.Args != nil {
-			for _, arg := range e.Args.Args {
+			inst := c.inferInstance(meta.Instance, e, scope)
+			if st, ok := inst.Underlying().(*types.Struct); ok {
+				if sig := st.Memberwise(); sig != nil {
+					c.checkCallArguments(e, sig, args, scope)
+					return inst
+				}
+			}
+			// Not checked against anything, but the arguments are
+			// still expressions and still have to be looked at: a
+			// mistake inside one is a mistake wherever it appears.
+			for _, arg := range args {
 				c.checkExpr(arg.X, nil, scope)
 			}
+			return inst
+		}
+		// Whatever is being called, the arguments are expressions.
+		for _, arg := range args {
+			c.checkExpr(arg.X, nil, scope)
 		}
 		c.typeErrorf(e.Pos(), "cannot call value of non-function type '%s'", calleeType)
 		return types.Typ[types.Invalid]

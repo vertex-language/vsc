@@ -64,8 +64,41 @@ func (g *gen) stmtBody(s ast.Stmt) {
 	case *ast.IfStmt:
 		g.ifStmt(n)
 
+	case *ast.WhileStmt:
+		g.whileStmt(n)
+
+	case *ast.RepeatWhileStmt:
+		g.repeatStmt(n)
+
+	case *ast.GuardStmt:
+		g.guardStmt(n)
+
+	case *ast.LabeledStmt:
+		g.labeled(n)
+
+	case *ast.BreakStmt:
+		g.breakStmt(n)
+
+	case *ast.ContinueStmt:
+		g.continueStmt(n)
+
 	case *ast.CodeBlock:
 		g.block(n)
+
+	case *ast.EmptyStmt:
+		// A bare `;`. Nothing to lower, and nothing wrong with it.
+
+	case *ast.BadStmt:
+		// The parser already reported why. Compile stops before this
+		// package on a parse error, so reaching here means a caller
+		// drove the generator directly; either way, saying it again
+		// helps nobody.
+
+	default:
+		// Everything this package does not lower yet, said out loud.
+		// A statement that falls through here silently is a statement
+		// that does not happen, in a program that compiles.
+		g.unsupportedStmt(s)
 	}
 }
 
@@ -96,6 +129,11 @@ func (g *gen) exprStmt(e ast.Expr) {
 func (g *gen) assign(e *ast.BinaryExpr) {
 	addr := g.lvalue(e.X)
 	if addr == nil {
+		// An assignment whose destination could not be lowered is an
+		// assignment that does not happen, in a program that compiles
+		// and runs. Whatever it was meant to change keeps its old
+		// value and the answer is quietly wrong.
+		g.refuse(e.X, "an assignment to "+g.exprKind(e.X))
 		return
 	}
 	v := g.rvalue(e.Y)
@@ -122,15 +160,32 @@ func (g *gen) lvalue(e ast.Expr) *vil.Value {
 		}
 
 	case *ast.MemberExpr:
-		base := g.expr(n.X)
-		if base == nil || n.Name == nil {
+		if n.Name == nil {
 			return nil
 		}
 		t := lowerType(g.info.Types[n])
 		name := memberName(g.info.Types[n.X], n.Name.Text(g.file))
+
+		// A class's property is inside the object the reference
+		// points at, so the base is a value and the field is
+		// arithmetic on it.
 		if isClass(g.info.Types[n.X]) {
+			base := g.expr(n.X)
+			if base == nil {
+				return nil
+			}
 			return g.blk.RefElementAddr(base, name, t)
 		}
+
+		// A struct's property is inside the struct's own storage, so
+		// the base has to be an address as well — `p.y = …` writes
+		// into where p lives, and reading p out into a value first
+		// would write into the copy.
+		addr := g.lvalue(n.X)
+		if addr == nil {
+			return nil
+		}
+		return g.blk.StructElementAddr(addr, name, t)
 	}
 	return nil
 }
@@ -213,13 +268,25 @@ func storeQualifier(t vil.Type) string {
 // inside a scope must be produced before the scope is torn down, and
 // must not be destroyed by it.
 func (g *gen) ret(s *ast.ReturnStmt) {
-	var v *vil.Value
-	if s.X != nil {
-		v = g.rvalue(s.X)
+	if s.X == nil {
+		// `return` with nothing to return: the empty tuple, or the
+		// exit status in the entry point, which says zero.
+		g.unwind()
+		g.blk.Return(g.result())
+		return
 	}
+	v := g.rvalue(s.X)
 	g.unwind()
 	if v == nil {
-		v = g.void()
+		// The expression was there and could not be lowered, and
+		// whatever refused it has already said so. What must not
+		// happen is returning something else in its place: the
+		// substitute type-checks, the module verifies, and the
+		// program runs and gives the wrong answer. `unreachable`
+		// terminates the block without inventing a value, and the
+		// diagnostic already stopped the compilation.
+		g.blk.Unreachable()
+		return
 	}
 	g.blk.Return(v)
 }
@@ -277,7 +344,13 @@ func (g *gen) condition(conds []ast.Node) *vil.Value {
 	for _, c := range conds {
 		e, ok := c.(ast.Expr)
 		if !ok {
-			continue
+			// A binding condition, an availability check, a `case`
+			// pattern. Each is a condition this package does not
+			// lower, and each has to say so: a condition that
+			// silently produced nothing took its whole statement with
+			// it, body and all.
+			g.refuse(c, conditionKind(c))
+			return nil
 		}
 		v := g.expr(e)
 		if v == nil {
@@ -285,5 +358,218 @@ func (g *gen) condition(conds []ast.Node) *vil.Value {
 		}
 		return g.machine(v, g.info.Types[e])
 	}
+	g.refuse(nil, "an empty condition")
 	return nil
+}
+
+// conditionKind names a condition the way a person would say it.
+func conditionKind(c ast.Node) string {
+	switch c.(type) {
+	case *ast.OptionalBinding:
+		return "a binding condition"
+	case *ast.AvailabilityCond:
+		return "an availability condition"
+	case *ast.CaseCond:
+		return "a case condition"
+	}
+	return "this condition"
+}
+
+// whileStmt lowers a while loop to the three blocks SILGen gives it:
+// a header that tests, a body that branches back to it, and the block
+// after.
+//
+//	bb0: ... br header
+//	header: <condition> cond_br %c, body, exit
+//	body: ... br header
+//	exit: ...
+//
+// The condition is emitted into the header rather than before it,
+// because it is tested once per iteration and not once.
+//
+// A borrow opened by the condition would want ending on each pass
+// through the header, and this does not arrange that — the formal
+// scope around the statement closes after the loop, which is the
+// wrong place. It is not reachable yet: the only conditions that
+// lower are comparisons of trivial types, which own nothing and leave
+// nothing to close. A condition that owns something needs the scope
+// handling before it needs anything else here.
+func (g *gen) whileStmt(s *ast.WhileStmt) {
+	header := g.fn.Block()
+	body := g.fn.Block()
+	exit := g.fn.Block()
+
+	label := g.takeLabel()
+
+	g.blk.Br(header)
+
+	g.blk = header
+	cond := g.condition(s.Conds)
+	if cond == nil {
+		// Reported. The block is left open and the compilation stops
+		// on the diagnostic; inventing a branch here would only
+		// decide which way an untestable condition went.
+		return
+	}
+	g.blk.CondBr(cond, body, nil, exit, nil)
+
+	g.blk = body
+	g.loops = append(g.loops, loop{header: header, exit: exit, depth: len(g.scopes), label: label})
+	g.block(s.Body)
+	g.loops = g.loops[:len(g.loops)-1]
+	if g.blk != nil && g.blk.Term() == nil {
+		g.blk.Br(header)
+	}
+
+	g.blk = exit
+}
+
+// repeatStmt lowers `repeat { … } while cond`, whose difference from
+// a while loop is which end the test is at:
+//
+//	  br body
+//	body: … br cond
+//	cond: <condition> cond_br %c, body, exit
+//	exit:
+//
+// The body runs before anything is tested, which is the whole point
+// of the form. `continue` goes to the condition rather than to the
+// body — the iteration is over, and what remains is deciding whether
+// there is another — and SILGen agrees: its continue branches to the
+// block holding the test.
+func (g *gen) repeatStmt(s *ast.RepeatWhileStmt) {
+	label := g.takeLabel()
+
+	body := g.fn.Block()
+	test := g.fn.Block()
+	exit := g.fn.Block()
+
+	g.blk.Br(body)
+
+	g.blk = body
+	g.loops = append(g.loops, loop{header: test, exit: exit, depth: len(g.scopes), label: label})
+	g.block(s.Body)
+	g.loops = g.loops[:len(g.loops)-1]
+	if g.blk != nil && g.blk.Term() == nil {
+		g.blk.Br(test)
+	}
+
+	g.blk = test
+	cond := g.expr(s.Cond)
+	if cond == nil {
+		return
+	}
+	g.blk.CondBr(g.machine(cond, g.info.Types[s.Cond]), body, nil, exit, nil)
+
+	g.blk = exit
+}
+
+// guardStmt lowers `guard cond else { … }`: an if whose arms are the
+// other way round, and whose else may not fall through.
+//
+//	cond_br %c, cont, else
+//	else: … (returns, breaks, continues, or throws)
+//	cont: …
+//
+// The rule about falling through is the language's, and it is checked
+// here because nothing before this models it. It is what makes a
+// guard worth writing: everything after one may assume the condition
+// held, and that assumption is only sound because the else cannot
+// reach it.
+func (g *gen) guardStmt(s *ast.GuardStmt) {
+	cond := g.condition(s.Conds)
+	if cond == nil {
+		return
+	}
+	elseBlk := g.fn.Block()
+	cont := g.fn.Block()
+	g.blk.CondBr(cond, cont, nil, elseBlk, nil)
+
+	g.blk = elseBlk
+	g.block(s.Body)
+	if g.blk != nil && g.blk.Term() == nil {
+		g.errorAt(s, "the body of a 'guard' must not fall through: "+
+			"it has to return, break, continue, or throw")
+		// Terminated so the block is well formed for whatever reads
+		// the module next. The diagnostic has already stopped the
+		// compilation, and branching to cont would be asserting the
+		// very thing that is wrong.
+		g.blk.Unreachable()
+	}
+
+	g.blk = cont
+}
+
+// labeled lowers `name: while …`, which is the only thing a label is
+// for here: break and continue naming which loop they mean.
+//
+// The label is held rather than emitted. Nothing in VIL carries it —
+// SIL has no labels either, because by the time there are basic
+// blocks a label is just which block a branch goes to.
+func (g *gen) labeled(s *ast.LabeledStmt) {
+	if s.Label == nil {
+		g.stmtBody(s.Stmt)
+		return
+	}
+	saved := g.pending
+	g.pending = g.text(s.Label)
+	g.stmtBody(s.Stmt)
+	g.pending = saved
+}
+
+// takeLabel is the label the loop being lowered was written with, and
+// clears it so that a loop nested inside it does not inherit one.
+func (g *gen) takeLabel() string {
+	label := g.pending
+	g.pending = ""
+	return label
+}
+
+// breakStmt leaves the loop: its scopes are unwound and control goes
+// to the block after it.
+//
+// SILGen writes one more block than this does. Its loop exit branches
+// to a continuation, and a break branches to the same continuation,
+// so there are two blocks where this has one. The graph is the same
+// either way — an empty block whose only instruction is a branch —
+// and the extra one is an artifact of how SILGen emits cleanups
+// rather than something the program says.
+func (g *gen) breakStmt(s *ast.BreakStmt) {
+	g.leave(s, "break", g.label(s.Label), func(l loop) *vil.Block { return l.exit })
+}
+
+// continueStmt goes back to the header, where the condition is tested
+// again.
+func (g *gen) continueStmt(s *ast.ContinueStmt) {
+	g.leave(s, "continue", g.label(s.Label), func(l loop) *vil.Block { return l.header })
+}
+
+// leave is the half break and continue share: find the loop, run the
+// cleanups of everything inside it, and branch.
+func (g *gen) leave(s ast.Stmt, keyword, label string, target func(loop) *vil.Block) {
+	l, ok := g.enclosing(label)
+	if !ok {
+		// The checker does not model loop nesting, so this is where a
+		// break outside a loop, or one naming a label no enclosing
+		// loop has, is caught. Saying which is worth the two cases: a
+		// misspelled label and a misplaced break read very
+		// differently to whoever wrote one.
+		msg := "'" + keyword + "' is not inside a loop"
+		if label != "" {
+			msg = "no enclosing loop is labelled '" + label + "'"
+		}
+		g.errorAt(s, msg)
+		return
+	}
+	g.unwindTo(l.depth)
+	g.blk.Br(target(l))
+}
+
+// label is the name a break or a continue wrote, or "" for the
+// innermost loop.
+func (g *gen) label(id *ast.Ident) string {
+	if id == nil {
+		return ""
+	}
+	return g.text(id)
 }

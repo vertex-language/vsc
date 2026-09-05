@@ -132,52 +132,55 @@ func TestBitwise(t *testing.T) {
 // would drop them.
 func TestRefusesTheOwnershipForm(t *testing.T) {
 	m := vil.NewModule("t", vil.StageRaw)
-	if _, err := Module(m, target); !errors.Is(err, ErrStage) {
+	if _, err := Module(m, target, Options{}); !errors.Is(err, ErrStage) {
 		t.Errorf("a raw module was accepted: %v", err)
 	}
 	m = vil.NewModule("t", vil.StageCanonical)
-	if _, err := Module(m, target); !errors.Is(err, ErrStage) {
+	if _, err := Module(m, target, Options{}); !errors.Is(err, ErrStage) {
 		t.Errorf("a canonical module was accepted: %v", err)
 	}
 }
 
-// TestRefusalsNameWhatTheyRefuse. This package cannot yet lower a
-// struct of more than one field, and what matters about that is that
-// it says so: an unlowerable program must not become a lowered one
-// that is wrong.
+// TestRefusalsNameWhatTheyRefuse. What this package cannot lower it
+// has to say so about: an unlowerable program must not become a
+// lowered one that is wrong, and the refusal has to name a function
+// and a reason or it is no use to whoever reads it.
+//
+// The example is a struct too wide to pass in registers. Swift sends
+// one of those by address and this package does not lay a struct out
+// in memory yet, so it is the boundary the ABI stops at.
 func TestRefusalsNameWhatTheyRefuse(t *testing.T) {
-	for _, path := range []string{
-		"../vil/gen/testdata/07-struct-member.swift",
-		"../vil/gen/testdata/14-struct-field.swift",
-	} {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			m := lowered(t, path)
-			out, err := Module(m, target)
-			if err == nil {
-				t.Fatalf("lowered a program it cannot lower:\n%s", dump(t, out))
-			}
-			var e *Error
-			if !errors.As(err, &e) {
-				t.Fatalf("the refusal is not an *Error: %v", err)
-			}
-			if e.Func == "" {
-				t.Errorf("the refusal does not say where: %v", err)
-			}
-			if !errors.Is(err, ErrType) && !errors.Is(err, ErrUnsupported) {
-				t.Errorf("the refusal has no reason: %v", err)
-			}
-		})
+	_, err := lowerSrc(t, `
+struct TooWide {
+    var a: Int; var b: Int; var c: Int; var d: Int; var e: Int
+}
+func first(_ w: TooWide) -> Int { return w.a }
+`)
+	if err == nil {
+		t.Fatal("lowered a program it cannot lower")
+	}
+	var e *Error
+	if !errors.As(err, &e) {
+		t.Fatalf("the refusal is not an *Error: %v", err)
+	}
+	if e.Func == "" {
+		t.Errorf("the refusal does not say where: %v", err)
+	}
+	if !errors.Is(err, ErrType) && !errors.Is(err, ErrUnsupported) {
+		t.Errorf("the refusal has no reason: %v", err)
 	}
 }
 
 // TestCorpusLowers takes the programs vil/gen is held to and requires
 // that what this package produces from them is a module ir/verify
-// accepts. Two of them it refuses instead, which the test above covers.
+// accepts.
 func TestCorpusLowers(t *testing.T) {
-	refused := map[string]bool{
-		"07-struct-member.swift": true,
-		"14-struct-field.swift":  true,
-	}
+	// Nothing in the corpus is refused any more: the two struct
+	// programs that were are the ones the ABI now covers. The map
+	// stays because the next construct to arrive will need it, and an
+	// empty one says the corpus lowers whole rather than that nobody
+	// checked.
+	refused := map[string]bool{}
 	files, err := filepath.Glob("../vil/gen/testdata/*.swift")
 	if err != nil || len(files) == 0 {
 		t.Skip("no corpus")
@@ -185,7 +188,7 @@ func TestCorpusLowers(t *testing.T) {
 	for _, path := range files {
 		name := filepath.Base(path)
 		t.Run(name, func(t *testing.T) {
-			out, err := Module(lowered(t, path), target)
+			out, err := Module(lowered(t, path), target, Options{})
 			if refused[name] {
 				if err == nil {
 					t.Error("lowered a program listed as refused")
@@ -208,7 +211,7 @@ func TestOwnLoweredCorpusVerifies(t *testing.T) {
 	files, _ := filepath.Glob("testdata/*.swift")
 	for _, path := range files {
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			out, err := Module(lowered(t, path), target)
+			out, err := Module(lowered(t, path), target, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -253,7 +256,7 @@ func lowered(t *testing.T, path string) *vil.Module {
 
 func vir(t *testing.T, path string) *ir.Module {
 	t.Helper()
-	out, err := Module(lowered(t, path), target)
+	out, err := Module(lowered(t, path), target, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

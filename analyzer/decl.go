@@ -116,11 +116,12 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			}
 			ownership := c.ownershipOf(p.Mods)
 			params[i] = &types.Param{
-				Name:      name,
-				Label:     label,
-				Type:      c.resolveType(p.Type, scope),
-				Ownership: ownership,
-				Variadic:  p.Ellipsis != token.NoPos,
+				Name:       name,
+				Label:      label,
+				Type:       c.resolveType(p.Type, scope),
+				Ownership:  ownership,
+				Variadic:   p.Ellipsis != token.NoPos,
+				HasDefault: p.Default != nil,
 			}
 		}
 		throws, thrown := c.throwsOf(t.Throws, scope)
@@ -410,9 +411,10 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 		return nil
 	}
 	return []*types.Field{{
-		Name:    idPat.Name.Text(c.file),
-		Type:    fieldType,
-		IsConst: isConst,
+		Name:       idPat.Name.Text(c.file),
+		Type:       fieldType,
+		IsConst:    isConst,
+		HasDefault: b.Value != nil,
 	}}
 }
 
@@ -439,7 +441,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Struct)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
-				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits)
 			}
 
 		case *ast.ClassDecl:
@@ -447,7 +449,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Class)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, &n.Superclass)
-				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits)
 			}
 
 		case *ast.ActorDecl:
@@ -455,7 +457,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Class)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
-				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits)
 			}
 
 		case *ast.EnumDecl:
@@ -463,7 +465,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Enum)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
-				c.readMembers(d.Body, inner, nil, &n.Methods, n)
+				c.readMembers(d.Body, inner, nil, &n.Methods, n, nil)
 			}
 
 		case *ast.TypealiasDecl:
@@ -533,7 +535,7 @@ func (c *checker) protocolsOf(inherit *ast.InheritanceClause, scope *Scope, supe
 // stored properties, its methods, and — for an enum, which is the
 // only kind that has them — its cases. A nil sink is a member kind
 // this type cannot have.
-func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[]*types.Field, methods *[]*types.Method, en *types.Enum) {
+func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[]*types.Field, methods *[]*types.Method, en *types.Enum, inits *[]*types.Signature) {
 	if body == nil || typeScope == nil {
 		return
 	}
@@ -560,6 +562,16 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 				typeScope.Insert(sym)
 				c.info.Defs[el.Name] = sym
 			}
+
+		case *ast.InitDecl:
+			// Recorded because its presence is what decides whether
+			// the type gets a memberwise initializer: a type that
+			// says how it is made does not also get the free answer.
+			if inits == nil {
+				continue
+			}
+			sig := c.buildFuncSig(m.Sig, typeScope)
+			*inits = append(*inits, sig)
 
 		case *ast.FuncDecl:
 			if methods == nil {
@@ -684,11 +696,12 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 			}
 			ownership := c.ownershipOf(p.Mods)
 			params[i] = &types.Param{
-				Name:      name,
-				Label:     label,
-				Type:      c.resolveType(p.Type, scope),
-				Ownership: ownership,
-				Variadic:  p.Ellipsis != token.NoPos,
+				Name:       name,
+				Label:      label,
+				Type:       c.resolveType(p.Type, scope),
+				Ownership:  ownership,
+				Variadic:   p.Ellipsis != token.NoPos,
+				HasDefault: p.Default != nil,
 			}
 		}
 	}
@@ -776,12 +789,12 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		}
 		c.info.Scopes[ext] = typeScope
 
-		fields, methods, conformances := sinksOf(extType.Underlying())
+		fields, methods, conformances, inits := sinksOf(extType.Underlying())
 		if conformances != nil {
 			*conformances = append(*conformances, c.protocolsOf(ext.Inherit, scope, nil)...)
 		}
 		en, _ := extType.Underlying().(*types.Enum)
-		c.readMembers(ext.Body, typeScope, fields, methods, en)
+		c.readMembers(ext.Body, typeScope, fields, methods, en, inits)
 	}
 }
 
@@ -797,16 +810,16 @@ func typeNameOf(t types.Type) string {
 // an enum and an actor keep the same three lists, which is what lets
 // an extension add to any of them without knowing which it has. A nil
 // sink is a member kind the type cannot hold.
-func sinksOf(t types.Type) (fields *[]*types.Field, methods *[]*types.Method, conformances *[]*types.Protocol) {
+func sinksOf(t types.Type) (fields *[]*types.Field, methods *[]*types.Method, conformances *[]*types.Protocol, inits *[]*types.Signature) {
 	switch n := t.(type) {
 	case *types.Struct:
-		return &n.Fields, &n.Methods, &n.Conformances
+		return &n.Fields, &n.Methods, &n.Conformances, &n.Inits
 	case *types.Class:
-		return &n.Fields, &n.Methods, &n.Conformances
+		return &n.Fields, &n.Methods, &n.Conformances, &n.Inits
 	case *types.Enum:
-		return nil, &n.Methods, &n.Conformances
+		return nil, &n.Methods, &n.Conformances, nil
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
 func (c *checker) checkProtocolConformances(scope *Scope) {

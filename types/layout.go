@@ -325,6 +325,52 @@ func Offsetof(t Type, field string, target *Target) (int64, bool) {
 	return 0, false
 }
 
+// InstanceSizeof is how much storage a class instance's stored
+// properties need, laid out the way Offsetof walks them.
+//
+// It is not Sizeof, and the difference is the whole reason it exists.
+// Sizeof of a class is one word, because a class *value* is a
+// reference — which is the right answer for a register, a parameter
+// and a field, and a catastrophic one for an allocation. A class with
+// four Int properties would be given eight bytes and write thirty-two
+// into them.
+//
+// The header is not included: what precedes the first property is the
+// runtime's business and the runtime adds it.
+//
+// It reports false for a type that is not a class, and for one whose
+// properties have no layout.
+func InstanceSizeof(t Type, target *Target) (int64, bool) {
+	if target == nil {
+		target = DefaultTarget64
+	}
+	if t == nil {
+		return 0, false
+	}
+	cl, ok := t.Underlying().(*Class)
+	if !ok {
+		return 0, false
+	}
+	var size, maxAlign int64 = 0, 1
+	for _, f := range cl.Fields {
+		if f == nil || f.Type == nil {
+			return 0, false
+		}
+		fs := Sizeof(f.Type, target)
+		fa := Alignof(f.Type, target)
+		if fs < 0 || fa <= 0 {
+			return 0, false
+		}
+		if fa > maxAlign {
+			maxAlign = fa
+		}
+		size = alignUp(size, fa) + fs
+	}
+	// Rounded up, so that an array of them would be aligned and so
+	// that two instances allocated back to back cannot overlap.
+	return alignUp(size, maxAlign), true
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

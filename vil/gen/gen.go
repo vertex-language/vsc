@@ -1,38 +1,3 @@
-// Package gen lowers a checked tree into raw VIL.
-//
-// SILGen's job, and SILGen's name for it. The analyzer decided what
-// the program means; this decides what it does — which accessor a
-// property reference calls, where a temporary lives, when a value is
-// copied and where its lifetime ends. It rejects nothing: a program
-// that reaches here was already found legal, and what this produces
-// is raw VIL for vil/pass to check and vil/lower to translate.
-//
-// # Ownership is emitted, not inferred
-//
-// Every copy and every destroy is written down here. A `let` that
-// binds a class reference copies it and destroys it where its scope
-// ends; a member read borrows the base for exactly as long as the
-// read takes. That is what makes the output verifiable the moment it
-// exists: vil/verify checks the two rules against what this emitted,
-// rather than against what a later pass hopes to work out.
-//
-// The mechanism is a stack of scopes. Entering one pushes; leaving
-// one emits the cleanups it collected, in reverse; a return unwinds
-// every scope on the way out. It is SILGen's cleanup stack, smaller.
-//
-// # What is lowered
-//
-// Functions, their parameters and results. Local `let` and `var`
-// bindings. Member reads and writes on structs and classes.
-// Assignment. `if`, `else`, and `return`. Calls to functions the
-// checker resolved.
-//
-// What is not, and why: anything that needs a standard library. An
-// integer literal in Swift is a call to `Int.init(_builtinIntegerLiteral:)`,
-// and until core/ declares that, this emits the builtin literal
-// directly and the output is one apply short of what swiftc prints.
-// Closures, enums with payloads, existentials, generics and throwing
-// wait on the same thing.
 package gen
 
 import (
@@ -83,6 +48,11 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 // saying so is better than inventing one -- a symbol that is merely
 // plausible links, and links to the wrong thing.
 func (g *gen) symbol(sym *analyzer.FuncSymbol) string {
+	// The entry point is the one symbol a linker looks for by name,
+	// so it is the one function that is not mangled. See entry.go.
+	if g.isEntry(sym) {
+		return EntryName
+	}
 	d := mangle.Decl{
 		Module:    g.module,
 		Name:      sym.Name(),
@@ -139,9 +109,15 @@ type gen struct {
 	module string
 
 	fn     *vil.Func
+	entry  bool // fn is the program's entry point
 	blk    *vil.Block
 	scopes []*scope
 	locals map[analyzer.Symbol]*local
+
+	// The loops break and continue can leave, innermost last, and the
+	// label the next one will answer to.
+	loops   []loop
+	pending string
 
 	diags []token.Diagnostic
 }
@@ -156,22 +132,102 @@ type gen struct {
 func (g *gen) unsupported(e ast.Expr) {
 	name := "an expression"
 	if e != nil {
-		name = exprKind(e)
+		name = g.exprKind(e)
 	}
-	pos := token.NoPos
-	if e != nil {
-		pos = e.Pos()
+	g.refuse(e, name)
+}
+
+// unsupportedStmt records a statement this package cannot lower.
+//
+// A statement is the more dangerous of the two to drop, because
+// nothing downstream can notice. An expression that produced no value
+// leaves a hole something asks about; a `while` that was never
+// lowered leaves a program that verifies, links, runs, and does not
+// loop.
+func (g *gen) unsupportedStmt(s ast.Stmt) {
+	name := "a statement"
+	if s != nil {
+		name = stmtKind(s)
+	}
+	g.refuse(s, name)
+}
+
+// errorAt reports something wrong with the program, sited on the node
+// that is wrong.
+//
+// It is separate from refuse because the two say different things. A
+// refusal is about this compiler — the construct is fine and is not
+// lowered yet — and reads with a "yet" in it. This is about the
+// program, and no amount of finishing the compiler will make it
+// compile.
+func (g *gen) errorAt(n ast.Node, msg string) {
+	pos, end := token.NoPos, token.NoPos
+	if n != nil {
+		pos, end = n.Pos(), n.End()
 	}
 	g.diags = append(g.diags, token.Diagnostic{
 		Pos:      pos,
-		End:      pos,
+		End:      end,
+		Severity: token.Error,
+		Message:  msg,
+	})
+}
+
+// refuse reports that a node was not lowered, sited on the whole of
+// it — the span rather than its first byte, so the caret covers what
+// was refused.
+func (g *gen) refuse(n ast.Node, name string) {
+	pos, end := token.NoPos, token.NoPos
+	if n != nil {
+		pos, end = n.Pos(), n.End()
+	}
+	g.diags = append(g.diags, token.Diagnostic{
+		Pos:      pos,
+		End:      end,
 		Severity: token.Error,
 		Message:  "cannot lower " + name + " yet",
 	})
 }
 
-func exprKind(e ast.Expr) string {
-	switch e.(type) {
+// stmtKind names a statement the way a person would say it.
+func stmtKind(s ast.Stmt) string {
+	switch s.(type) {
+	case *ast.ForInStmt:
+		return "a for-in loop"
+	case *ast.WhileStmt:
+		return "a while loop"
+	case *ast.RepeatWhileStmt:
+		return "a repeat-while loop"
+	case *ast.SwitchStmt:
+		return "a switch"
+	case *ast.GuardStmt:
+		return "a guard"
+	case *ast.DeferStmt:
+		return "a defer"
+	case *ast.DoStmt:
+		return "a do block"
+	case *ast.ThrowStmt:
+		return "a throw"
+	case *ast.BreakStmt:
+		return "a break"
+	case *ast.ContinueStmt:
+		return "a continue"
+	case *ast.FallthroughStmt:
+		return "a fallthrough"
+	case *ast.LabeledStmt:
+		return "a labelled statement"
+	case *ast.YieldStmt:
+		return "a yield"
+	case *ast.DiscardStmt:
+		return "a discard"
+	case *ast.IfConfigStmt:
+		return "a compiler directive"
+	}
+	return "this statement"
+}
+
+func (g *gen) exprKind(e ast.Expr) string {
+	switch n := e.(type) {
 	case *ast.PrefixExpr:
 		return "this prefix operator"
 	case *ast.PostfixExpr:
@@ -180,7 +236,7 @@ func exprKind(e ast.Expr) string {
 		return "a closure"
 	case *ast.SubscriptExpr:
 		return "a subscript"
-	case *ast.TernaryExpr:
+	case *ast.TernaryExpr, *ast.ConditionalExpr:
 		return "a conditional expression"
 	case *ast.ArrayLit:
 		return "an array literal"
@@ -188,6 +244,13 @@ func exprKind(e ast.Expr) string {
 		return "a dictionary literal"
 	case *ast.TupleExpr:
 		return "a tuple expression"
+	case *ast.CallExpr:
+		if id, ok := n.Fun.(*ast.IdentExpr); ok && id.Name != nil {
+			if _, isFunc := g.info.Uses[id.Name].(*analyzer.FuncSymbol); !isFunc {
+				return "a constructor call"
+			}
+		}
+		return "this call"
 	}
 	return "this expression"
 }
@@ -287,10 +350,42 @@ func (g *gen) pop() {
 // unwind emits every open scope's cleanups without leaving them,
 // which is what a return does: the scopes are still there for the
 // code after the branch that did not return.
-func (g *gen) unwind() {
-	for i := len(g.scopes) - 1; i >= 0; i-- {
+func (g *gen) unwind() { g.unwindTo(0) }
+
+// unwindTo is unwind as far as a depth and no further, which is what
+// a break and a continue do: they leave the scopes inside the loop
+// and not the ones the loop is inside.
+//
+// Like unwind, it emits rather than pops. The scopes are still open
+// for whatever follows the branch, because a break is one path out of
+// a block and not the end of it.
+func (g *gen) unwindTo(depth int) {
+	for i := len(g.scopes) - 1; i >= depth; i-- {
 		g.emitCleanups(g.scopes[i])
 	}
+}
+
+// A loop is somewhere break and continue can go.
+//
+// depth is how deep the scope stack was when the loop was entered, so
+// that leaving it runs the cleanups of the scopes inside it and none
+// of the ones outside.
+type loop struct {
+	header *vil.Block // continue: test the condition again
+	exit   *vil.Block // break: the statement after the loop
+	depth  int
+	label  string // "" unless the loop was written with one
+}
+
+// enclosing is the loop a break or a continue names: the innermost
+// one, or the one with that label.
+func (g *gen) enclosing(label string) (loop, bool) {
+	for i := len(g.loops) - 1; i >= 0; i-- {
+		if label == "" || g.loops[i].label == label {
+			return g.loops[i], true
+		}
+	}
+	return loop{}, false
 }
 
 // emitCleanups writes one scope's undoing, in reverse order of
@@ -315,11 +410,28 @@ func (g *gen) function(d *ast.FuncDecl) {
 	}
 	sig := sym.Signature()
 
+	// The entry point is named, called and returned from differently
+	// from every other function, and a main this compiler cannot use
+	// as one is refused here rather than left to the linker.
+	g.entry = g.isEntry(sym)
+	if g.entry && !g.checkEntry(sym, sig) {
+		g.entry = false
+		return
+	}
+
+	linkage := linkageOf(sym.Access())
+	if g.entry {
+		// A program's entry point leaves its object file whatever the
+		// source said about who may call it, because what resolves it
+		// is the linker rather than another module.
+		linkage = vil.Public
+	}
 	f := g.m.Func(g.symbol(sym)).SetSourceName(sym.Name()).
-		SetLinkage(linkageOf(sym.Access())).SetAttr("ossa")
+		SetLinkage(linkage).SetAttr("ossa")
 	g.fn = f
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes = nil
+	g.loops, g.pending = nil, ""
 	g.push()
 	g.blk = f.Entry()
 
@@ -342,7 +454,10 @@ func (g *gen) function(d *ast.FuncDecl) {
 		// promises and why it needs no cleanup here.
 		g.destroyLater(v)
 	}
-	if sig.Results != nil && !isVoid(sig.Results) {
+	switch {
+	case g.entry:
+		entrySignature(f)
+	case sig.Results != nil && !isVoid(sig.Results):
 		f.SetResult(lowerType(sig.Results), resultConvention(lowerType(sig.Results)))
 	}
 
@@ -353,9 +468,10 @@ func (g *gen) function(d *ast.FuncDecl) {
 	// void function may do — and the checker already said so.
 	if g.blk != nil && g.blk.Term() == nil {
 		g.unwind()
-		g.blk.Return(g.void())
+		g.blk.Return(g.result())
 	}
 	g.fn = nil
+	g.entry = false
 }
 
 // void is the empty tuple every function without a result returns.

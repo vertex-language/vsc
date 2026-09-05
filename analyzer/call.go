@@ -1,6 +1,9 @@
 package analyzer
 
 import (
+	"fmt"
+	"strconv"
+
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
@@ -181,24 +184,36 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 	if sig.Params == nil {
 		return sig
 	}
-	// Check argument count (if not variadic)
-	minParams := len(sig.Params)
-	isVariadic := false
-	if minParams > 0 && sig.Params[minParams-1].Variadic {
-		minParams--
-		isVariadic = true
+	isVariadic := len(sig.Params) > 0 && sig.Params[len(sig.Params)-1].Variadic
+	least := sig.Minimum()
+	if isVariadic && least > 0 {
+		least--
 	}
 
-	if (!isVariadic && len(args) != len(sig.Params)) || (isVariadic && len(args) < minParams) {
-		c.errorf(call.Pos(), "incorrect argument count: expected %d, got %d", len(sig.Params), len(args))
+	if len(args) < least || (!isVariadic && len(args) > len(sig.Params)) {
+		c.errorf(call.Pos(), "incorrect argument count: expected %s, got %d",
+			arity(least, len(sig.Params), isVariadic), len(args))
 		return sig
+	}
+
+	// Which parameter each argument is for.
+	//
+	// As many arguments as parameters is the ordinary case and they
+	// pair up in order. Fewer means a parameter with a default was
+	// left out, and then the labels are what says which — a caller
+	// may skip any defaulted parameter, not only the last, so
+	// position alone cannot answer it.
+	params := sig.Params
+	if len(args) != len(params) && !isVariadic {
+		params = c.matchByLabel(call, sig.Params, args)
 	}
 
 	for i, arg := range args {
 		var param *types.Param
-		if i < len(sig.Params) {
-			param = sig.Params[i]
-		} else if isVariadic {
+		switch {
+		case i < len(params):
+			param = params[i]
+		case isVariadic:
 			param = sig.Params[len(sig.Params)-1]
 		}
 		if param == nil {
@@ -222,6 +237,84 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 		}
 	}
 	return sig
+}
+
+// matchByLabel pairs a short argument list with the parameters it
+// named, skipping the ones that were left out.
+//
+// A parameter may be skipped only where it has a default; one without
+// is a missing argument, and saying which is missing is the whole
+// value of matching rather than counting. The result is one parameter
+// per argument, in the arguments' order, so the caller's loop is
+// unchanged.
+func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args []*ast.CallArg) []*types.Param {
+	out := make([]*types.Param, 0, len(args))
+	pi := 0
+	for _, arg := range args {
+		label := ""
+		if arg.Label != nil {
+			label = arg.Label.Text(c.file)
+		}
+		// Walk past the parameters this argument is not for. Each one
+		// skipped has to be able to supply itself.
+		for pi < len(params) && !labels(params[pi], label) && params[pi].HasDefault {
+			pi++
+		}
+		if pi >= len(params) {
+			break
+		}
+		if !labels(params[pi], label) {
+			// The argument is not for this parameter, and this
+			// parameter has no default to fall back on — so it was
+			// left out. Naming it is the useful half of the message,
+			// and reporting the label mismatch as well would be two
+			// complaints about one mistake.
+			c.errorf(call.Pos(), "missing argument for parameter '%s'", paramName(params[pi]))
+			return out
+		}
+		out = append(out, params[pi])
+		pi++
+	}
+	// Anything left unmatched has to have a default of its own.
+	for ; pi < len(params); pi++ {
+		if !params[pi].HasDefault {
+			c.errorf(call.Pos(), "missing argument for parameter '%s'", paramName(params[pi]))
+		}
+	}
+	return out
+}
+
+// labels reports whether a parameter answers to this argument label.
+func labels(p *types.Param, label string) bool {
+	if p.Label == "" || p.Label == "_" {
+		return label == ""
+	}
+	return p.Label == label
+}
+
+// paramName is what to call a parameter in a message: its label where
+// it has one, since that is what the caller would have written.
+func paramName(p *types.Param) string {
+	if p.Label != "" && p.Label != "_" {
+		return p.Label
+	}
+	if p.Name != "" {
+		return p.Name
+	}
+	return "_"
+}
+
+// arity is how many arguments a signature takes, said the way the
+// signature admits: a number, a range, or a floor.
+func arity(least, most int, variadic bool) string {
+	switch {
+	case variadic:
+		return fmt.Sprintf("at least %d", least)
+	case least == most:
+		return strconv.Itoa(most)
+	default:
+		return fmt.Sprintf("%d to %d", least, most)
+	}
 }
 
 // inferGenericCall binds a generic signature's type parameters to the

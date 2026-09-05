@@ -36,10 +36,13 @@ func Object(m *ir.Module, opts Options) ([]byte, error) {
 }
 
 func aarch64MachO(m *ir.Module, opts Options) ([]byte, error) {
-	// Mach-O prefixes a C symbol with an underscore, and the library
+	// Mach-O prefixes a symbol with an underscore, and the library
 	// calls the backend invents -- a soft-float helper, a memcpy --
-	// are C. Swift's own symbols carry no prefix and are unaffected.
-	// Apple's variadic convention is the one this platform uses.
+	// need it as much as anything else does. The module's own symbols
+	// arrive with it already applied: the prefix belongs to the
+	// language rather than to the IR, so lower puts it on and nothing
+	// below here renames anything. Apple's variadic convention is the
+	// one this platform uses.
 	o, err := arm64lower.Lower(m, arm64lower.Options{
 		LibcallPrefix: "_",
 		Variadic:      arm64lower.VariadicDarwin,
@@ -51,7 +54,7 @@ func aarch64MachO(m *ir.Module, opts Options) ([]byte, error) {
 		opts.Platform = machocore.PlatformMacOS
 	}
 	if opts.MinOS == "" {
-		opts.MinOS = "11.0"
+		opts.MinOS = defaultMinOS
 	}
 	var buf bytes.Buffer
 	if err := arm64macho.Write(&buf, o, arm64macho.Options{

@@ -44,6 +44,26 @@ func machineOf(t types.Type) (repr, bool) {
 	case *types.Class:
 		// A class value is the reference, never the object.
 		return repr{reg: ir.TypePtr}, true
+	case *types.Struct:
+		// A struct of one field is that field. It is the same rule
+		// the instructions follow — `struct` and `struct_extract`
+		// both forward a single-field aggregate rather than build or
+		// take apart anything — and it has to hold here too, or a
+		// value that lowers inside a function has no type to be
+		// passed to another one by.
+		//
+		// Int and Bool are this: a struct around one builtin. So is
+		// every wrapper a program declares for the same reason, and
+		// they lower alike because after the names are gone they are
+		// alike.
+		//
+		// More than one field is memory, and this package does not
+		// lay a struct out yet — so it says so rather than picking a
+		// register and losing the rest.
+		if len(t.Fields) == 1 && t.Fields[0] != nil {
+			return machineOf(t.Fields[0].Type)
+		}
+		return repr{}, false
 	case *vil.FuncType:
 		// A thin function is its entry point. A thick one is a pair
 		// and does not fit in a register.
@@ -110,6 +130,35 @@ func builtinRepr(name string) (repr, bool) {
 // empty reports whether a type holds nothing: Void, the empty tuple,
 // and Never, which holds nothing because control never arrives. A
 // value of one of these becomes no register at all.
+// whyNoRegister says what a type is, and where the answer is known,
+// why it does not fit in a register.
+//
+// A signature is where the reason matters most: a struct is usable
+// inside a function long before it can cross a call boundary, and
+// "no machine type" would leave the reader thinking the type is
+// unknown rather than that its ABI is undecided.
+func whyNoRegister(t vil.Type) string {
+	if st, ok := structOf(t); ok && len(st.Fields) > 1 {
+		return t.String() + ": a struct wider than " + itoa(maxDirectWords*8) +
+			" bytes, which Swift passes by address and this package does not lay out yet"
+	}
+	return t.String()
+}
+
+// structOf is the struct a type is, seeing through the name it was
+// declared under.
+func structOf(t vil.Type) (*types.Struct, bool) {
+	if !t.IsValid() || t.IsAddress() {
+		return nil, false
+	}
+	f := t.Formal()
+	if f == nil {
+		return nil, false
+	}
+	st, ok := f.Underlying().(*types.Struct)
+	return st, ok
+}
+
 func empty(t vil.Type) bool {
 	if !t.IsValid() || t.IsAddress() {
 		return false

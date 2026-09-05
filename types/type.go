@@ -1,24 +1,3 @@
-// Package types is the type model: what a program's types are, once
-// the spellings in the source have been resolved.
-//
-// A type here is a value, and two of them are the same type when
-// Identical says so. Nothing in this package reads source, holds a
-// position, or reports a diagnostic — a type has no place in a file,
-// and the same Int is every Int in the program.
-//
-// Three things it follows Swift on, because a Vertex value and a
-// Swift value of the same type are the same bytes and obey the same
-// rules:
-//
-// Layout. Size, stride and alignment are Swift's, extra inhabitants
-// included, which is why `Int?` is nine bytes and `String?` is
-// sixteen. See layout.go.
-//
-// Conformance is nominal. A type conforms to a protocol because it
-// was declared to, never because its members happen to line up.
-//
-// A typealias is not a new type. It is another spelling of the one it
-// names, and Identical looks through it.
 package types
 
 import (
@@ -132,6 +111,11 @@ type Param struct {
 	Type      Type
 	Ownership OwnershipKind
 	Variadic  bool
+	// HasDefault says the declaration gave this parameter a value, so
+	// a call may leave it out. What the value is stays in the syntax:
+	// nothing in this package holds an expression, and the default is
+	// one.
+	HasDefault bool
 }
 
 func (p *Param) String() string {
@@ -245,6 +229,10 @@ type Field struct {
 	Name    string
 	Type    Type
 	IsConst bool
+	// HasDefault says the property was declared with an initial
+	// value, which is what lets the memberwise initializer leave its
+	// parameter out.
+	HasDefault bool
 }
 
 // Method is a function declared in a type, or promised by a
@@ -295,8 +283,61 @@ type Struct struct {
 	TypeParams   []*TypeParam
 	Fields       []*Field
 	Methods      []*Method
+	Inits        []*Signature
 	Conformances []*Protocol
 	Copyable     bool
+}
+
+// Memberwise is the initializer a struct gets for free: one parameter
+// per stored property, in declaration order, labelled with the
+// property's name.
+//
+// Swift synthesizes it only where the type declares no initializer of
+// its own, which is the rule this follows — a struct with an `init`
+// has said what making one means, and the free one would be a second
+// answer to the same question. It is nil for such a struct, and for
+// one whose fields did not resolve.
+//
+// A `let` property with an initial value is still a parameter here,
+// which is Swift's rule and not an oversight: the memberwise
+// initializer takes every stored property, and it is the *default*
+// that a property with a value gets, not its exclusion.
+func (s *Struct) Memberwise() *Signature {
+	if len(s.Inits) > 0 {
+		return nil
+	}
+	// The struct's type parameters are the initializer's, so that
+	// `Wrapper(value: 3)` infers T from the argument the way any
+	// other generic call does.
+	sig := &Signature{TypeParams: s.TypeParams}
+	for _, f := range s.Fields {
+		if f == nil || f.Type == nil {
+			return nil
+		}
+		sig.Params = append(sig.Params, &Param{
+			Name:  f.Name,
+			Label: f.Name,
+			Type:  f.Type,
+			// A property with an initial value gives its parameter
+			// one, which is what makes `Inner()` legal for a struct
+			// whose properties all have defaults.
+			HasDefault: f.HasDefault,
+		})
+	}
+	sig.Results = s
+	return sig
+}
+
+// Minimum is how many arguments a call must supply: the parameters
+// without a default. A call may give more, up to all of them.
+func (s *Signature) Minimum() int {
+	n := 0
+	for _, p := range s.Params {
+		if p != nil && !p.HasDefault {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *Struct) Underlying() Type { return s }
@@ -306,6 +347,12 @@ func (s *Struct) String() string   { return s.Name }
 // references to it. An actor is a Class with IsActor set, because
 // that is what an actor is, plus a rule about who may touch it.
 type Class struct {
+	// Inits are the initializers the class declares. A class gets no
+	// memberwise initializer — Swift gives that to structs alone,
+	// because a class has inheritance and initialization has to
+	// account for a superclass.
+	Inits []*Signature
+
 	Name         string
 	TypeParams   []*TypeParam
 	Superclass   Type

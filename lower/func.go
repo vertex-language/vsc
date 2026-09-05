@@ -54,6 +54,9 @@ func (l *lowerer) define(f *vil.Func) error {
 	if needsTrap(f) {
 		c.trapBlock()
 	}
+	if err := c.allocSlots(); err != nil {
+		return err
+	}
 	for _, b := range f.Blocks() {
 		c.b = c.blocks[b]
 		for _, in := range b.Insts() {
@@ -62,25 +65,151 @@ func (l *lowerer) define(f *vil.Func) error {
 			}
 		}
 	}
+	// The IR builder is sticky: the first failure inside it is
+	// recorded and every call after it is a no-op. Asking here is what
+	// keeps that failure attached to the function that caused it —
+	// without it the next function's first instruction is the one that
+	// appears to be wrong, which is a long way from the truth and a
+	// long way from the line to fix.
+	if err := c.l.out.Err(); err != nil {
+		return &Error{Err: ErrIR, Func: f.SourceName(), What: err.Error()}
+	}
 	return nil
+}
+
+// allocSlots reserves the frame storage for every alloc_stack in the
+// function, in the entry block, before any of them is reached.
+//
+// VIR admits a frame allocation in the entry block only — §19.6, and
+// ir's builder refuses one anywhere else — while SIL writes
+// alloc_stack wherever the variable was declared, which for a `var`
+// inside a loop is a block that runs many times. The two are not in
+// conflict: a slot is frame storage, the frame lasts the call, and a
+// scalar local declared in a loop is one slot written afresh on each
+// pass rather than a new slot each time. VIL already stores the
+// initializer where the declaration was, so reusing the slot is what
+// the program says.
+//
+// What this does not do is make the slot's lifetime shorter than the
+// call. dealloc_stack becomes nothing, and two variables in disjoint
+// scopes get two slots where one would have done. That is a frame
+// larger than it needs to be and never a wrong program, and shrinking
+// it is a job for a pass that knows the live ranges.
+func (c *fn) allocSlots() error {
+	entry := c.out.Entry()
+	saved := c.b
+	c.b = entry
+	defer func() { c.b = saved }()
+
+	for _, b := range c.src.Blocks() {
+		for _, in := range b.Insts() {
+			if in.Op() != vil.AllocStack {
+				continue
+			}
+			if err := c.allocStack(in); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// spreadInto records a struct that arrived in words as the fields the
+// body will read.
+func (c *fn) spreadInto(v *vil.Value, regs []ir.Value) error {
+	st, ok := structOf(v.Type())
+	if !ok {
+		return c.fail(ErrType, vil.Op(""), v.Type().String())
+	}
+	ls, ok := structLeaves(st)
+	if !ok {
+		return c.fail(ErrUnsupported, vil.Op(""), whyNoRegister(v.Type()))
+	}
+	words, ok := structWords(st)
+	if !ok {
+		return c.fail(ErrUnsupported, vil.Op(""), whyNoRegister(v.Type()))
+	}
+	fields, ok := c.unpackStruct(regs, words, ls)
+	if !ok {
+		return c.fail(ErrUnsupported, vil.Op(""), whyNoRegister(v.Type()))
+	}
+	if len(fields) == 1 {
+		c.def(v, fields[0])
+		return nil
+	}
+	c.multi[v] = fields
+	return nil
+}
+
+// gather is the other direction: the words a struct is passed in,
+// built from the registers its fields are held in.
+func (c *fn) gather(in *vil.Inst, v *vil.Value) ([]ir.Value, bool, error) {
+	ls, ok := leavesOf(v.Type())
+	if !ok || len(ls) < 2 {
+		return nil, false, nil
+	}
+	st, _ := structOf(v.Type())
+	words, ok := structWords(st)
+	if !ok {
+		return nil, false, c.fail(ErrUnsupported, in.Op(), whyNoRegister(v.Type()))
+	}
+	fields, ok := c.multi[v]
+	if !ok {
+		// One register standing for the whole struct, which happens
+		// where every field but one holds nothing.
+		got, err := c.operand(in, v)
+		if err != nil {
+			return nil, false, err
+		}
+		fields = []ir.Value{got}
+	}
+	regs, ok := c.packStruct(fields, words)
+	if !ok {
+		return nil, false, c.fail(ErrUnsupported, in.Op(), whyNoRegister(v.Type()))
+	}
+	return regs, true, nil
 }
 
 func (c *fn) openBlock(b *vil.Block) error {
 	if b.IsEntry() {
 		out := c.out.Entry()
 		c.blocks[b] = out
-		// The entry block's parameters are the function's.
+		// Taking a struct apart emits instructions, and they belong
+		// at the top of the entry block — before anything reads a
+		// field, which is everything. The builder has no block until
+		// it is given one, and define() gives it each block in turn
+		// later; this is the one place that has to say so early.
+		c.b = out
+		// The entry block's parameters are the function's. A struct
+		// arrived as several of them and has to be taken apart before
+		// anything reads a field: what the body knows about is the
+		// fields, and what the caller sent is the words.
 		params := c.out.Params()
 		i := 0
 		for _, a := range b.Args() {
 			if empty(a.Type()) {
 				continue
 			}
-			if i >= len(params) {
+			n, wide := directWords(a.Type())
+			if !wide {
+				if i >= len(params) {
+					return c.fail(ErrUnsupported, vil.Op(""), "more entry arguments than parameters")
+				}
+				c.values[a] = ir.Wrap(params[i])
+				i++
+				continue
+			}
+			if i+n > len(params) {
 				return c.fail(ErrUnsupported, vil.Op(""), "more entry arguments than parameters")
 			}
-			c.values[a] = ir.Wrap(params[i])
-			i++
+			regs := make([]ir.Value, 0, n)
+			for _, p := range params[i : i+n] {
+				regs = append(regs, ir.Wrap(p))
+			}
+			i += n
+			if err := c.spreadInto(a, regs); err != nil {
+				return err
+			}
 		}
 		return nil
 	}

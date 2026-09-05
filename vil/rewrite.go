@@ -62,6 +62,31 @@ func (in *Inst) Rewrite(op Op, aux Aux, args ...*Value) {
 	}
 }
 
+// Reshape changes what an instruction is while keeping the values it
+// already produced.
+//
+// Rewrite is the other half of the pair, and the difference is who
+// the result belongs to. Rewrite replaces an instruction whose
+// results have already been pointed somewhere else, and drops them.
+// This is for the pass that turns one allocation into another, where
+// every reader is reading the same thing before and after — the
+// address of a variable — and what changed is only where the storage
+// came from. Repointing those uses and then handing them back would
+// be the same edit done twice.
+//
+// Neither op may take operands the other does not: the args are left
+// exactly as they were.
+func (in *Inst) Reshape(op Op, aux Aux) {
+	in.op, in.aux = op, aux
+}
+
+// SetType changes what a value is.
+//
+// It goes with Reshape, for the same pass and the same reason: a box
+// that became a stack slot holds an address where it held a box, and
+// the value every reader already has is the one that has to say so.
+func (v *Value) SetType(t Type) { v.typ = t }
+
 // Erase removes an instruction from its block. Its operands forget
 // it; its results, if it had any, must already have been replaced.
 func (b *Block) Erase(in *Inst) {

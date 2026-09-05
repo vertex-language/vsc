@@ -5,17 +5,34 @@ import (
 	"github.com/vertex-language/vsc/vil"
 )
 
+// Options are what the caller decides about the translation.
+type Options struct {
+	// SymbolPrefix is what a name becomes in an object file: "_" on
+	// Mach-O, empty on ELF and COFF.
+	//
+	// It is stated rather than read off the target, for the reason
+	// vcc's lowering gives: the mapping belongs to the language and
+	// not to the IR, nothing below this package renames a symbol, and
+	// a platform that wants the underscore wants it on every symbol
+	// the module defines or names. `swiftc -c` on Darwin writes
+	// `_$s2m21fyS2iF` and `_main`, and a module built without the
+	// prefix compiles and then fails to link, naming what it could
+	// not find.
+	SymbolPrefix string
+}
+
 // Module translates a lowered VIL module into a VIR module for the
 // given target.
 //
 // The module must be in vil.StageLowered: this package translates the
 // machine form of the program, and the ownership form is not it.
-func Module(m *vil.Module, target ir.Target) (*ir.Module, error) {
+func Module(m *vil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 	if m.Stage() != vil.StageLowered {
 		return nil, &Error{Err: ErrStage, What: string(m.Stage())}
 	}
 	l := &lowerer{
 		out:    ir.NewModule(m.Name(), target),
+		prefix: opts.SymbolPrefix,
 		callee: make(map[string]ir.Callee),
 		defs:   make(map[string]*ir.Func),
 	}
@@ -41,15 +58,27 @@ func Module(m *vil.Module, target ir.Target) (*ir.Module, error) {
 // A lowerer holds what is shared across the whole module.
 type lowerer struct {
 	out    *ir.Module
+	prefix string
 	callee map[string]ir.Callee
 	defs   map[string]*ir.Func
 
-	// The retain and release the runtime provides, declared the first
-	// time a retain or a release needs them. What they do is vcc's
-	// business; that they exist is ours.
+	// The runtime's three, declared the first time something needs
+	// one. What they do is runtime/'s business — it builds them as a
+	// VIR module of its own — and that they exist is ours.
 	retain  ir.Callee
 	release ir.Callee
+	alloc   ir.Callee
 }
+
+// sym is the object-file name of a VIL name.
+//
+// Every symbol goes through here — the module's own functions, the
+// externals it calls, and the runtime's retain and release — because
+// the prefix is the platform's and the platform does not care which
+// of them it is looking at. The map from VIL name to VIR symbol is
+// this function and nothing else, so a caller that wants to find a
+// definition by its VIL name looks it up before this is applied.
+func (l *lowerer) sym(name string) string { return l.prefix + name }
 
 // declare gives every VIL function a VIR symbol before any body is
 // filled, so a call to a function defined later has something to name.
@@ -59,10 +88,10 @@ func (l *lowerer) declare(f *vil.Func) error {
 		return err
 	}
 	if f.IsDeclaration() {
-		l.callee[f.Name()] = l.out.ImportFunc(f.Name(), sig)
+		l.callee[f.Name()] = l.out.ImportFunc(l.sym(f.Name()), sig)
 		return nil
 	}
-	out := l.out.Func(f.Name())
+	out := l.out.Func(l.sym(f.Name()))
 	l.defs[f.Name()] = out
 	if err := l.applySig(f, out, sig); err != nil {
 		return err
@@ -88,9 +117,17 @@ func (l *lowerer) declare(f *vil.Func) error {
 func (l *lowerer) signature(name string, t *vil.FuncType) (*ir.Sig, error) {
 	sig := ir.NewSig()
 	for _, p := range t.Params {
+		// A struct of more than one field is more than one register:
+		// its memory image cut into words, which is what Swift passes.
+		if n, ok := directWords(p.Type); ok {
+			for i := 0; i < n; i++ {
+				sig.Param(ir.TypeI64)
+			}
+			continue
+		}
 		r, ok := machine(p.Type)
 		if !ok {
-			return nil, &Error{Err: ErrType, Func: name, What: p.Type.String()}
+			return nil, &Error{Err: ErrType, Func: name, What: whyNoRegister(p.Type)}
 		}
 		sig.Param(r.reg)
 	}
@@ -98,9 +135,15 @@ func (l *lowerer) signature(name string, t *vil.FuncType) (*ir.Sig, error) {
 		if empty(res.Type) {
 			continue
 		}
+		if n, ok := directWords(res.Type); ok {
+			for i := 0; i < n; i++ {
+				sig.Ret(ir.TypeI64)
+			}
+			continue
+		}
 		r, ok := machine(res.Type)
 		if !ok {
-			return nil, &Error{Err: ErrType, Func: name, What: res.Type.String()}
+			return nil, &Error{Err: ErrType, Func: name, What: whyNoRegister(res.Type)}
 		}
 		sig.Ret(r.reg)
 	}

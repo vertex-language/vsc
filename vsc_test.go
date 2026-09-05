@@ -44,7 +44,7 @@ func TestCompile(t *testing.T) {
 	if got := u.VIL.Stage(); got != vil.StageLowered {
 		t.Errorf("the ownership IR is %s, want lowered", got)
 	}
-	if u.VIR.Lookup("$s1t3fibyS2iF") == nil {
+	if u.VIR.Lookup("_$s1t3fibyS2iF") == nil {
 		t.Errorf("no symbol for fib; the module has %d functions", len(u.VIR.Funcs()))
 	}
 }
@@ -122,7 +122,7 @@ func TestModuleNamesTheSymbols(t *testing.T) {
 	if a.VIR == nil || b.VIR == nil {
 		t.Fatal("did not compile")
 	}
-	if a.VIR.Lookup("$s3one3fibyS2iF") == nil || b.VIR.Lookup("$s3two3fibyS2iF") == nil {
+	if a.VIR.Lookup("_$s3one3fibyS2iF") == nil || b.VIR.Lookup("_$s3two3fibyS2iF") == nil {
 		t.Error("the module name is not in the symbols")
 	}
 }

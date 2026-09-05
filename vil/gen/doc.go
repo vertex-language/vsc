@@ -1,0 +1,71 @@
+// Package gen lowers a checked tree into raw VIL.
+//
+// SILGen's job, and SILGen's name for it. The analyzer decided what
+// the program means; this decides what it does — which accessor a
+// property reference calls, where a temporary lives, when a value is
+// copied and where its lifetime ends. It rejects nothing: a program
+// that reaches here was already found legal, and what this produces
+// is raw VIL for vil/pass to check and vil/lower to translate.
+//
+// # Ownership is emitted, not inferred
+//
+// Every copy and every destroy is written down here. A `let` that
+// binds a class reference copies it and destroys it where its scope
+// ends; a member read borrows the base for exactly as long as the
+// read takes. That is what makes the output verifiable the moment it
+// exists: vil/verify checks the two rules against what this emitted,
+// rather than against what a later pass hopes to work out.
+//
+// The mechanism is a stack of scopes. Entering one pushes; leaving
+// one emits the cleanups it collected, in reverse; a return unwinds
+// every scope on the way out. It is SILGen's cleanup stack, smaller.
+//
+// # What is lowered
+//
+// Functions, their parameters and results. Local `let` and `var`
+// bindings. Member reads and writes on structs and classes.
+// Assignment. The control flow that is branches and blocks: `if`,
+// `else`, `guard`, `while`, `repeat`-`while`, `break` and `continue`
+// — labelled or not — and `return`. The three forms that produce a
+// value on two paths and join them, which are `&&`, `||` and the
+// conditional operator: each evaluates only the arm it needs, and
+// each hands the answer to the join as a block argument, because an
+// SSA value is usable only where it dominates its readers. Calls to
+// functions the checker resolved.
+//
+// Making an instance. A struct with no initializer of its own is
+// made by the memberwise one, whose body is a `struct` instruction
+// over its arguments; a class with none is made by the one it gets
+// for free, which allocates and stores each property's initial
+// value. Both are emitted inlined rather than as a call, because the
+// initializer is declared nowhere and a call to a function that does
+// not exist is worse than the body of the one that would have run.
+// An initializer a type declares itself is refused.
+//
+// Writing through a name: a `var`, a class's property through the
+// reference it is inside, and a struct's property through the address
+// of the struct — the base of a struct member is an address for the
+// same reason the member is, because reading the struct out into a
+// value first would write into the copy.
+//
+// Two rules of the language are checked here because nothing before
+// this models them: a `break` or `continue` has to be inside a loop
+// it names, and the body of a `guard` may not fall through. Both are
+// errors about the program rather than refusals about the compiler,
+// and they read that way.
+//
+// Everything else is refused by name and said out loud, which is a
+// rule rather than a courtesy. An expression that produced no value
+// and no diagnostic used to take its statement with it, and a
+// statement kind with no case here used to vanish entirely — a
+// `while` that never ran, in a program that compiled, linked and
+// gave an answer. Both are why every path out of this package that
+// lowers nothing reports it.
+//
+// What is not, and why: anything that needs a standard library. An
+// integer literal in Swift is a call to `Int.init(_builtinIntegerLiteral:)`,
+// and until core/ declares that, this emits the builtin literal
+// directly and the output is one apply short of what swiftc prints.
+// Closures, enums with payloads, existentials, generics and throwing
+// wait on the same thing.
+package gen
