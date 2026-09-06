@@ -539,7 +539,19 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 	}
 	for i, cs := range clauses {
 		g.blk = bodies[i]
-		g.loops = append(g.loops, loop{header: header, lazyExit: cont, depth: len(g.scopes)})
+		// A case body is a list of statements rather than a code
+		// block, so nothing else pushes a scope for it -- and
+		// anything it allocates would then be cleaned up by the scope
+		// around the whole switch, at the continuation, which no case
+		// body dominates. A `for` in a case is the shape that shows
+		// it: its index is a box, and the box was destroyed where the
+		// cases had already met.
+		//
+		// The depth is taken before the push, so that a `break` out
+		// of the case unwinds this scope on its way.
+		depth := len(g.scopes)
+		g.push()
+		g.loops = append(g.loops, loop{header: header, lazyExit: cont, depth: depth})
 		for _, st := range cs.Stmts {
 			g.stmt(st)
 			if g.blk == nil || g.blk.Term() != nil {
@@ -548,7 +560,11 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 		}
 		g.loops = g.loops[:len(g.loops)-1]
 		if g.blk != nil && g.blk.Term() == nil {
+			g.pop()
 			g.blk.Br(cont())
+		} else {
+			// The body left by itself and has already unwound.
+			g.scopes = g.scopes[:len(g.scopes)-1]
 		}
 	}
 	// Nil rather than an empty block when nothing reached the end:

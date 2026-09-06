@@ -33,7 +33,7 @@ func (c *checker) checkExpr(expr ast.Expr, expected types.Type, scope *Scope) ty
 // Swift: `celsius * 9` is Double arithmetic and `9 * celsius` is the
 // same arithmetic written the other way round, because in both the
 // literal is what gives way.
-func (c *checker) reconcileLiterals(x ast.Expr, lhs types.Type, y ast.Expr, rhs types.Type) (types.Type, types.Type) {
+func (c *checker) reconcileLiterals(x ast.Expr, lhs types.Type, y ast.Expr, rhs types.Type, scope *Scope) (types.Type, types.Type) {
 	if types.Identical(lhs, rhs) {
 		return lhs, rhs
 	}
@@ -43,7 +43,57 @@ func (c *checker) reconcileLiterals(x ast.Expr, lhs types.Type, y ast.Expr, rhs 
 	if t, ok := c.adopt(y, lhs); ok {
 		return lhs, t
 	}
+	// `n != 1 + 2` is the same question as `n != 3`, and was not
+	// getting the same answer: a single literal took its type from the
+	// other side and a sum of two did not, so the comparison became
+	// Int32 against Int. A tree made only of literals and the
+	// operators that keep their operands' type is one literal as far
+	// as this is concerned.
+	if t, ok := c.adoptTree(x, rhs, scope); ok {
+		return t, rhs
+	}
+	if t, ok := c.adoptTree(y, lhs, scope); ok {
+		return lhs, t
+	}
 	return lhs, rhs
+}
+
+// adoptTree re-reads an expression made only of literals as the type
+// it is being combined with.
+//
+// Re-checking rather than rewriting: the expression's parts each need
+// the new type recorded against them, its operators need resolving
+// against the new type, and checkExpr is what does both.
+func (c *checker) adoptTree(e ast.Expr, want types.Type, scope *Scope) (types.Type, bool) {
+	if want == nil || !c.isLiteralTree(e) {
+		return nil, false
+	}
+	b, ok := want.Underlying().(*types.Basic)
+	if !ok || b.Info()&types.IsNumeric == 0 {
+		return nil, false
+	}
+	return c.checkExpr(e, want, scope), true
+}
+
+// isLiteralTree reports whether an expression is made of numeric
+// literals and nothing else -- so that it has no type of its own to
+// insist on, and takes whatever the context has.
+func (c *checker) isLiteralTree(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.BasicLit:
+		return n.Kind == token.INT_LIT || n.Kind == token.FLOAT_LIT
+	case *ast.ParenExpr:
+		return c.isLiteralTree(n.X)
+	case *ast.PrefixExpr:
+		return c.isLiteralTree(n.X)
+	case *ast.BinaryExpr:
+		if n.Op == nil {
+			return false
+		}
+		op := string(c.file.Slice(n.Op.Lo, n.Op.Hi))
+		return sharesOperandType(op) && c.isLiteralTree(n.X) && c.isLiteralTree(n.Y)
+	}
+	return false
 }
 
 // adopt re-reads a numeric literal as the type it is being combined
@@ -465,7 +515,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 		lhs := c.checkExpr(e.X, operandCtx, scope)
 		rhs := c.checkExpr(e.Y, operandCtx, scope)
-		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs)
+		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs, scope)
 
 		// An operator is a function, and core declares them. Where
 		// one resolves, the call decides the type and the rules

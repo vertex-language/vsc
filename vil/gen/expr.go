@@ -1131,6 +1131,30 @@ func joinOwnership(t vil.Type) vil.Ownership {
 	return vil.Owned
 }
 
+// branchArm evaluates an expression that runs only on one path, and
+// closes whatever it opened before that path rejoins the others.
+//
+// A borrow taken while computing it -- reading a class out of a `let`
+// takes one -- would otherwise be ended by the enclosing scope, in a
+// block the borrow does not dominate: the value is defined on one arm
+// and the cleanup runs where the arms have already met. The verifier
+// catches it ("end_borrow: use is not dominated by its definition"),
+// which is how `r.no() && r.yes()` was found to be unbuildable.
+//
+// The value itself outlives the scope, and may: the arms of a `&&`
+// and of a ternary produce what the join takes, and the join owns it
+// from there.
+func (g *gen) branchArm(eval func() *vil.Value) *vil.Value {
+	g.push()
+	v := eval()
+	if v == nil {
+		g.scopes = g.scopes[:len(g.scopes)-1]
+		return nil
+	}
+	g.pop()
+	return v
+}
+
 // shortCircuit lowers && and ||, which are branches rather than
 // instructions: the right operand is evaluated only when the left one
 // did not already decide the answer.
@@ -1183,7 +1207,7 @@ func (g *gen) shortCircuit(e *ast.BinaryExpr, isAnd bool) *vil.Value {
 	}
 
 	g.blk = rhsBlk
-	rhs := g.expr(e.Y)
+	rhs := g.branchArm(func() *vil.Value { return g.expr(e.Y) })
 	if rhs == nil {
 		return nil
 	}
