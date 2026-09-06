@@ -52,7 +52,7 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 	}
 	c.info.Diagnostics = c.info.Diagnostics[:quiet]
 
-	var fits []*types.Signature
+	var fits []*FuncSymbol
 	for _, cand := range candidates {
 		sig := cand.Signature()
 		if sig == nil || len(sig.Params) != len(argTypes) {
@@ -60,19 +60,43 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 		}
 		ok := true
 		for i, t := range argTypes {
-			if !c.labelFits(args[i], sig.Params[i]) || !types.AssignableTo(t, sig.Params[i].Type) {
+			if !c.labelFits(args[i], sig.Params[i]) {
 				ok = false
 				break
 			}
+			if types.AssignableTo(t, sig.Params[i].Type) {
+				continue
+			}
+			// A literal argument was checked with no context, so it
+			// came out as the default -- an Int -- and is not
+			// assignable to an Int32 parameter it would have fitted
+			// perfectly well. It has no type of its own to insist on,
+			// so it fits any numeric parameter, and checkCallArguments
+			// re-reads it as that parameter's type once a candidate is
+			// chosen. Without this, `f(2, 3)` never reached the
+			// two-parameter f and was reported against the
+			// one-parameter one as the wrong argument count.
+			if c.isLiteralTree(args[i].X) && isNumericType(sig.Params[i].Type) {
+				continue
+			}
+			ok = false
+			break
 		}
 		if ok {
-			fits = append(fits, sig)
+			fits = append(fits, cand)
 		}
 	}
-	if len(fits) == 1 {
-		return fits[0]
+	if len(fits) != 1 {
+		return nil
 	}
-	return nil
+	// The winner, not just its signature. Everything downstream reads
+	// the name's meaning out of Uses -- lowering mangles a call from
+	// the symbol it finds there -- and leaving the first declaration
+	// in place meant every call to an overloaded name reached the
+	// first one, whichever the arguments actually chose. It compiled
+	// and it ran and it called the wrong function.
+	c.info.Uses[id.Name] = fits[0]
+	return fits[0].Signature()
 }
 
 // labelFits reports whether an argument's label is the one a
@@ -350,4 +374,13 @@ func (c *checker) inferGenericCall(sig *types.Signature, args []*ast.CallArg, sc
 		return out
 	}
 	return sig
+}
+
+// isNumericType reports whether a literal could take this type.
+func isNumericType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsNumeric != 0
 }

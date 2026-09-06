@@ -307,7 +307,7 @@ func Offsetof(t Type, field string, target *Target) (int64, bool) {
 	case *Struct:
 		fields = tt.Fields
 	case *Class:
-		fields = tt.Fields
+		fields = ClassFields(tt)
 	case *Tuple:
 		var offset int64
 		for i, elem := range tt.Elements {
@@ -360,7 +360,7 @@ func InstanceSizeof(t Type, target *Target) (int64, bool) {
 		return 0, false
 	}
 	var size, maxAlign int64 = 0, 1
-	for _, f := range cl.Fields {
+	for _, f := range ClassFields(cl) {
 		if f == nil || f.Type == nil {
 			return 0, false
 		}
@@ -391,4 +391,36 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// ClassFields is every stored property an instance of cl has, the
+// superclass's first.
+//
+// A class declares its own properties and inherits the rest, and the
+// inherited ones come first because a subclass has to be usable
+// wherever its base is: the base's fields must sit at the offsets the
+// base's own code reads them at. Class.Fields holds what the
+// declaration wrote and nothing else, so a subclass laid out from it
+// alone had no room for what it inherited -- every field started at
+// zero and a write to one clobbered another.
+func ClassFields(cl *Class) []*Field {
+	if cl == nil {
+		return nil
+	}
+	var chain []*Class
+	seen := map[*Class]bool{}
+	for c := cl; c != nil && !seen[c]; {
+		seen[c] = true
+		chain = append([]*Class{c}, chain...)
+		next, _ := c.Superclass.(*Class)
+		if next == nil && c.Superclass != nil {
+			next, _ = c.Superclass.Underlying().(*Class)
+		}
+		c = next
+	}
+	var out []*Field
+	for _, c := range chain {
+		out = append(out, c.Fields...)
+	}
+	return out
 }

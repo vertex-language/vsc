@@ -247,7 +247,7 @@ func (g *gen) closureSymbol() string {
 // `self` counts, and is asked separately: inside a method a bare name
 // may be one of the receiver's properties, and reading it captures the
 // receiver just as writing `self` does.
-func (g *gen) captured(e *ast.ClosureExpr) (string, bool) {
+func (g *gen) captured(e ast.Node) (string, bool) {
 	var name string
 	var found bool
 	ast.Inspect(e, func(n ast.Node) bool {
@@ -285,4 +285,91 @@ func (g *gen) captured(e *ast.ClosureExpr) (string, bool) {
 		return true
 	})
 	return name, found
+}
+
+// nestedFunc lowers a function declared inside another one.
+//
+// Swift's nested function is a closure with a name: it may capture,
+// and one that does needs everything partial_apply needs. One that
+// does not is an ordinary function that happens to have been written
+// somewhere private, and is emitted as one -- under the same symbol
+// the call site mangles, which is why nothing at the call has to know
+// where the declaration was.
+//
+// It used to be dropped. The checker resolved the name, gen emitted a
+// function_ref to a symbol it never defined, and the program called
+// into an empty declaration: `func outer() { func inner(n) { n * 2 };
+// return inner(21) }` returned 2 where swiftc returns 42.
+func (g *gen) nestedFunc(d *ast.FuncDecl) {
+	if name, ok := g.captured(d); ok {
+		g.refuse(d, "a nested function that captures '"+name+"'")
+		return
+	}
+
+	outer := struct {
+		fn      *vil.Func
+		entry   bool
+		blk     *vil.Block
+		scopes  []*scope
+		locals  map[analyzer.Symbol]*local
+		loops   []loop
+		pending string
+		recv    types.Type
+	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv}
+	defer func() {
+		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
+		g.scopes, g.locals = outer.scopes, outer.locals
+		g.loops, g.pending, g.recv = outer.loops, outer.pending, outer.recv
+	}()
+
+	g.function(d, nil)
+}
+
+// declKind names a declaration for a refusal.
+func declKind(d ast.Decl) string {
+	switch d.(type) {
+	case *ast.StructDecl:
+		return "a struct declared inside a function"
+	case *ast.ClassDecl:
+		return "a class declared inside a function"
+	case *ast.EnumDecl:
+		return "an enum declared inside a function"
+	case *ast.ProtocolDecl:
+		return "a protocol declared inside a function"
+	case *ast.TypealiasDecl:
+		return "a typealias declared inside a function"
+	case *ast.ExtensionDecl:
+		return "an extension declared inside a function"
+	}
+	return "this declaration inside a function"
+}
+
+// registerNested records every function declared directly in a body
+// as belonging to the function named by enclosing.
+//
+// Directly, not at any depth: a function nested two deep is
+// registered when its own enclosing function is lowered, against that
+// one's symbol, which is what keeps the chain distinct.
+func (g *gen) registerNested(body *ast.CodeBlock, enclosing string) {
+	if body == nil {
+		return
+	}
+	for _, st := range body.Stmts {
+		decl, ok := st.(*ast.DeclStmt)
+		if !ok {
+			continue
+		}
+		fd, ok := decl.D.(*ast.FuncDecl)
+		if !ok || fd.Name == nil {
+			continue
+		}
+		sym, ok := g.info.Defs[fd.Name].(*analyzer.FuncSymbol)
+		if !ok {
+			continue
+		}
+		if g.nested == nil {
+			g.nested = map[analyzer.Symbol]string{}
+		}
+		g.nested[sym] = enclosing
+	}
 }

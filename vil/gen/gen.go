@@ -151,6 +151,21 @@ func (g *gen) symbol(sym *analyzer.FuncSymbol) string {
 	if g.isEntry(sym) {
 		return EntryName
 	}
+	// A function declared inside another is local to it, so two of
+	// them with the same name in different enclosing functions are
+	// two functions. Mangling only the name gave them one symbol, and
+	// the second definition was appended to the first.
+	if enc, ok := g.nested[sym]; ok {
+		d := mangle.Decl{
+			Module:        g.module,
+			Name:          sym.Name(),
+			Signature:     sym.Signature(),
+			Discriminator: mangle.Discriminator(g.file.Name() + "\x00" + enc),
+		}
+		if name, err := mangle.Function(d); err == nil {
+			return name
+		}
+	}
 	d := mangle.Decl{
 		Module:    g.module,
 		Name:      sym.Name(),
@@ -228,6 +243,11 @@ type gen struct {
 
 	// poly is the classes whose methods cannot be bound statically.
 	poly map[*types.Class]bool
+
+	// nested maps a function declared inside another to the symbol of
+	// the one it was declared in, which is what tells two local
+	// functions of the same name apart.
+	nested map[analyzer.Symbol]string
 
 	diags []token.Diagnostic
 }
@@ -576,6 +596,12 @@ func (g *gen) function(d *ast.FuncDecl, recv types.Type) {
 	f := g.m.Func(name).SetSourceName(sym.Name()).
 		SetLinkage(linkage).SetAttr("ossa")
 	g.fn = f
+	// Every function declared inside this one is registered before any
+	// of the body is lowered, so that a call finds the same symbol
+	// wherever in the body it appears -- including from a sibling
+	// nested function, where the enclosing function is no longer the
+	// one being lowered.
+	g.registerNested(d.Body, name)
 	// The definition states the type; a forward declaration only
 	// guessed at it. A call written above the declaration it names
 	// creates the function and fills its parameter list in, and

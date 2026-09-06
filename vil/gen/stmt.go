@@ -53,8 +53,18 @@ func (g *gen) stmt(s ast.Stmt) {
 func (g *gen) stmtBody(s ast.Stmt) {
 	switch n := s.(type) {
 	case *ast.DeclStmt:
-		if d, ok := n.D.(*ast.VarDecl); ok {
+		switch d := n.D.(type) {
+		case *ast.VarDecl:
 			g.varDecl(d)
+		case *ast.FuncDecl:
+			g.nestedFunc(d)
+		default:
+			// Anything else declared inside a body -- a type, an
+			// extension -- is refused rather than skipped. Skipping
+			// it is what this used to do for every declaration that
+			// was not a var, which is how a nested function came to
+			// be declared, called, and never emitted.
+			g.refuse(n, declKind(n.D))
 		}
 
 	case *ast.ExprStmt:
