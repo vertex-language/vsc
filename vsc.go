@@ -1,6 +1,7 @@
 package vsc
 
 import (
+	"errors"
 	"github.com/vertex-language/ir"
 
 	"github.com/vertex-language/vsc/analyzer"
@@ -158,6 +159,13 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 		return u, diags
 	}
 
+	// Lowering needs a machine, and the zero Target is not one: it
+	// describes nothing, and lowering against it produces diagnostics
+	// about the program that are really diagnostics about the caller.
+	// Saying so is worth more than the phase it saves.
+	if !opts.Target.Valid() {
+		return u, append(diags, phaseError(errNoTarget))
+	}
 	out, err := lower.Module(m, opts.Target, lower.Options{
 		SymbolPrefix: SymbolPrefix(opts.Target),
 	})
@@ -197,3 +205,8 @@ func phaseError(err error) Diagnostic {
 		Message:  err.Error(),
 	}}
 }
+
+// errNoTarget is what Compile reports when it is asked to lower for
+// no machine. Stopping at Canonical or earlier needs no target and
+// does not reach this.
+var errNoTarget = errors.New("no target: lowering needs a machine to lower for")

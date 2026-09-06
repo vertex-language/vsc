@@ -101,3 +101,25 @@ func (s *Scope) LookupParent(name string) (*Scope, Symbol) {
 	}
 	return nil, nil
 }
+
+// Symbols is everything declared directly in this scope, including
+// the overloads a name carries.
+//
+// The order is not the declaration order -- a scope is a map -- so a
+// caller that needs one sorts. What this is for is asking about every
+// symbol in a scope at once, which is how a module's exports are
+// marked as belonging to it.
+func (s *Scope) Symbols() []Symbol {
+	out := make([]Symbol, 0, len(s.elems))
+	for _, sym := range s.elems {
+		out = append(out, sym)
+		if fn, ok := sym.(*FuncSymbol); ok {
+			for _, over := range fn.Overloads() {
+				if over != sym {
+					out = append(out, over)
+				}
+			}
+		}
+	}
+	return out
+}

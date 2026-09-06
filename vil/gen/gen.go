@@ -178,7 +178,7 @@ func (g *gen) symbol(sym *analyzer.FuncSymbol) string {
 	// the second definition was appended to the first.
 	if enc, ok := g.nested[sym]; ok {
 		d := mangle.Decl{
-			Module:        g.module,
+			Module:        g.moduleOf(sym),
 			Name:          sym.Name(),
 			Signature:     sym.Signature(),
 			Discriminator: mangle.Discriminator(g.file.Name() + "\x00" + enc),
@@ -188,7 +188,7 @@ func (g *gen) symbol(sym *analyzer.FuncSymbol) string {
 		}
 	}
 	d := mangle.Decl{
-		Module:    g.module,
+		Module:    g.moduleOf(sym),
 		Name:      sym.Name(),
 		Signature: sym.Signature(),
 	}
@@ -411,6 +411,39 @@ func (g *gen) exprKind(e ast.Expr) string {
 		return "this call"
 	}
 	return "this expression"
+}
+
+// moduleOf is the module a symbol belongs to, which is the one being
+// compiled unless the symbol came from an interface.
+//
+// A symbol's mangled name carries its module, and that is what makes
+// two modules' symbols distinct -- so a call to an imported function
+// has to mangle with the module that will define it rather than with
+// the one making the call. Getting this wrong does not fail at
+// compile time: it fails at link time, on a symbol nobody defined,
+// with the caller's module name in it.
+func (g *gen) moduleOf(sym analyzer.Symbol) string {
+	if g.info != nil {
+		if m, ok := g.info.Imported[sym]; ok && m != "" {
+			return m
+		}
+	}
+	return g.module
+}
+
+// moduleOfType is the module a nominal type was declared in, which is
+// what a method of it is mangled with.
+func (g *gen) moduleOfType(t types.Type) string {
+	if g.info == nil || t == nil {
+		return g.module
+	}
+	if m, ok := g.info.ImportedTypes[t]; ok && m != "" {
+		return m
+	}
+	if m, ok := g.info.ImportedTypes[t.Underlying()]; ok && m != "" {
+		return m
+	}
+	return g.module
 }
 
 // A local is what a name in scope lowers to: a value, or the address

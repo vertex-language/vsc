@@ -53,6 +53,18 @@ type Info struct {
 	// the type rather than pointing at it.
 	Extensions map[*ast.ExtensionDecl]types.Type
 
+	// Imported is the module a symbol was declared in, for symbols
+	// that came from another module's interface. A symbol's mangled
+	// name carries the module it belongs to, and for these that is
+	// not the module being compiled.
+	Imported map[Symbol]string
+
+	// ImportedTypes is the module a nominal type was declared in, for
+	// the same reason: a method's symbol is mangled inside its type,
+	// so which module a method belongs to is a question about the
+	// type rather than about the method.
+	ImportedTypes map[types.Type]string
+
 	// Diagnostics holds all warnings and errors produced during analysis.
 	Diagnostics []token.Diagnostic
 }
@@ -70,16 +82,18 @@ type MethodRef struct {
 // NewInfo allocates an empty Info container.
 func NewInfo() *Info {
 	return &Info{
-		Types:       make(map[ast.Expr]types.Type),
-		Defs:        make(map[*ast.Ident]Symbol),
-		Uses:        make(map[*ast.Ident]Symbol),
-		Scopes:      make(map[ast.Node]*Scope),
-		Folded:      make(map[*ast.SequenceExpr]ast.Expr),
-		Operators:   make(map[ast.Expr]Symbol),
-		Values:      make(map[ast.Node]Value),
-		Methods:     make(map[*ast.MemberExpr]*MethodRef),
-		Extensions:  make(map[*ast.ExtensionDecl]types.Type),
-		Diagnostics: nil,
+		Types:         make(map[ast.Expr]types.Type),
+		Defs:          make(map[*ast.Ident]Symbol),
+		Uses:          make(map[*ast.Ident]Symbol),
+		Scopes:        make(map[ast.Node]*Scope),
+		Folded:        make(map[*ast.SequenceExpr]ast.Expr),
+		Operators:     make(map[ast.Expr]Symbol),
+		Values:        make(map[ast.Node]Value),
+		Methods:       make(map[*ast.MemberExpr]*MethodRef),
+		Extensions:    make(map[*ast.ExtensionDecl]types.Type),
+		Imported:      make(map[Symbol]string),
+		ImportedTypes: make(map[types.Type]string),
+		Diagnostics:   nil,
 	}
 }
 

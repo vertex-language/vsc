@@ -939,7 +939,7 @@ func (g *gen) implicitMethod(id *ast.IdentExpr) (*analyzer.MethodRef, bool) {
 // types may each declare `doubled`, and they are two symbols.
 func (g *gen) methodSymbol(ref *analyzer.MethodRef) string {
 	d := mangle.Decl{
-		Module:    g.module,
+		Module:    g.moduleOfType(ref.Recv),
 		Name:      ref.Method.Name,
 		Signature: ref.Method.Sig,
 	}
