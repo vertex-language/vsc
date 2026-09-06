@@ -47,6 +47,15 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 				g.members(d.Name, d.Body)
 			case *ast.EnumDecl:
 				g.members(d.Name, d.Body)
+			case *ast.ExtensionDecl:
+				// An extension's methods belong to the type it
+				// extends, and are emitted exactly as methods written
+				// inside the declaration would be. Not handling this
+				// case meant they were never emitted at all: the
+				// checker attached them to the type, a call resolved
+				// and mangled, and the link failed on a symbol
+				// nothing had defined.
+				g.extension(d)
 			}
 		}
 		diags = append(diags, g.diags...)
@@ -118,6 +127,18 @@ func polymorphic(files []*ast.File, info *analyzer.Info) map[*types.Class]bool {
 // else about it is special: the body is lowered by the same walk, and a
 // name in it that turns out to be a stored property is reached through
 // the receiver rather than through a local.
+func (g *gen) extension(d *ast.ExtensionDecl) {
+	recv := g.info.Extensions[d]
+	if recv == nil || d.Body == nil {
+		return
+	}
+	for _, mem := range d.Body.Members {
+		if fn, ok := mem.(*ast.FuncDecl); ok {
+			g.function(fn, recv)
+		}
+	}
+}
+
 func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
 	if name == nil || body == nil {
 		return

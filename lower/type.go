@@ -96,6 +96,9 @@ func machineOf(t types.Type) (repr, bool) {
 		if len(t.Fields) == 1 && t.Fields[0] != nil {
 			return machineOf(t.Fields[0].Type)
 		}
+		// A struct with no fields is not "no register yet"; it is no
+		// register, the way Void is. empty() is what says so, and
+		// every caller that asks this question asks that one first.
 		return repr{}, false
 	case *vil.FuncType:
 		// A thin function is its entry point. A thick one is a pair
@@ -201,6 +204,14 @@ func empty(t vil.Type) bool {
 		return f.Kind() == types.Void || f.Kind() == types.Never
 	case *types.Tuple:
 		return len(f.Elements) == 0
+	// A struct with no stored properties holds nothing, so there is
+	// nothing to pass, return or keep in a register. Swift's `struct
+	// S {}` is a real type with methods and a size of zero, and this
+	// used to have no machine type for it at all -- which refused a
+	// struct that conformed to a protocol and declared no storage,
+	// among others.
+	case *types.Struct:
+		return len(f.Fields) == 0
 	}
 	return false
 }

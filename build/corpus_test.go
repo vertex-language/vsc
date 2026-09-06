@@ -49,7 +49,7 @@ type outcome struct {
 
 func (o outcome) String() string {
 	if o.signaled {
-		return "killed by " + o.signal.String()
+		return "killed by " + o.signal.String() + " (signal " + itoa(int(o.signal)) + ")"
 	}
 	return "exit " + itoa(o.status)
 }

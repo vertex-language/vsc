@@ -884,6 +884,11 @@ func (c *fn) apply(in *vil.Inst) error {
 	}
 	args := make([]ir.Value, 0, len(in.Args())-1)
 	for _, a := range in.Args()[1:] {
+		// An argument of empty type is not passed, matching the
+		// signature that does not declare a register for it.
+		if empty(a.Type()) {
+			continue
+		}
 		// A struct goes as the words it is passed in.
 		regs, wide, err := c.gather(in, a)
 		if err != nil {

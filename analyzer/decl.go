@@ -781,6 +781,7 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		if extType == nil || isInvalid(extType) {
 			continue
 		}
+		c.info.Extensions[ext] = extType
 
 		// An extension's members are written in the extended type's
 		// own scope, so that they see what a member written inside

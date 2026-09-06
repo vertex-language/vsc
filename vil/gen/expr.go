@@ -290,7 +290,7 @@ func (g *gen) ident(e *ast.IdentExpr) *vil.Value {
 		access := g.blk.BeginAccess(l.addr, "read", "unknown")
 		v := g.blk.Load(access, loadQualifier(l.typ))
 		g.blk.EndAccess(access)
-		return v
+		return g.loaded(v, l.typ)
 	}
 	if l.value.Ownership() == vil.Owned {
 		return g.borrow(l.value)
@@ -325,7 +325,7 @@ func (g *gen) implicitSelf(e *ast.IdentExpr, sym analyzer.Symbol) (*vil.Value, b
 		access := g.blk.BeginAccess(addr, "read", "dynamic")
 		v := g.blk.Load(access, loadQualifier(t))
 		g.blk.EndAccess(access)
-		return v, true
+		return g.loaded(v, t), true
 	}
 	return g.blk.StructExtract(self, member, t), true
 }
@@ -387,6 +387,23 @@ func (g *gen) member(e *ast.MemberExpr) *vil.Value {
 	access := g.blk.BeginAccess(addr, "read", "dynamic")
 	v := g.blk.Load(access, loadQualifier(t))
 	g.blk.EndAccess(access)
+	return g.loaded(v, t)
+}
+
+// loaded registers the cleanup a copying load owes.
+//
+// `load [copy]` retains what it read: the value in memory stays where
+// it is and the caller gets a reference of its own, which the caller
+// has to release. A trivial type owns nothing and its load copies
+// nothing, so it owes nothing.
+//
+// Nothing did this, so reading a class out of a stored property or
+// out of a `var` leaked it -- and the verifier said so, which is why
+// `final class B { var a = A() }` could not be built at all.
+func (g *gen) loaded(v *vil.Value, t vil.Type) *vil.Value {
+	if v != nil && !t.Trivial() {
+		g.destroyLater(v)
+	}
 	return v
 }
 

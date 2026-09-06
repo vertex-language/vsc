@@ -46,10 +46,29 @@ func resolveAssigns(f *vil.Func) {
 			if len(args) != 2 || args[0] == nil {
 				continue
 			}
-			if !args[0].Type().Trivial() {
+			if args[0].Type().Trivial() {
+				in.Reshape(vil.Store, vil.Aux{Attrs: []string{"trivial"}})
 				continue
 			}
-			in.Reshape(vil.Store, vil.Aux{Attrs: []string{"trivial"}})
+			// The slot owns what it holds, so the old value has to go
+			// somewhere. swiftc's own lowering of this is three
+			// instructions and the order of the last two is the whole
+			// point:
+			//
+			//	%old = load %addr
+			//	store %new to %addr
+			//	strong_release %old
+			//
+			// Releasing before storing would free the object first,
+			// and `x = x` would then store a dangling reference.
+			// Taking the old value rather than copying it is what
+			// makes the release balance: the slot is about to be
+			// overwritten, so nothing is left behind to own it.
+			addr := args[1]
+			old := b.InsertBefore(in, vil.Load, vil.Aux{Attrs: []string{"take"}},
+				[]*vil.Value{addr}, args[0].Type())
+			in.Reshape(vil.Store, vil.Aux{Attrs: []string{"init"}})
+			b.InsertAfter(in, vil.DestroyValue, vil.Aux{}, []*vil.Value{old.Result()})
 		}
 	}
 }

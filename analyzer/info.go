@@ -46,6 +46,13 @@ type Info struct {
 	// written in.
 	Methods map[*ast.MemberExpr]*MethodRef
 
+	// Extensions is the type each extension extends. The resolution
+	// happens in the checker and is cached privately there, but
+	// lowering needs it too: an extension's methods are emitted with
+	// the extended type as their receiver, and the syntax only names
+	// the type rather than pointing at it.
+	Extensions map[*ast.ExtensionDecl]types.Type
+
 	// Diagnostics holds all warnings and errors produced during analysis.
 	Diagnostics []token.Diagnostic
 }
@@ -71,6 +78,7 @@ func NewInfo() *Info {
 		Operators:   make(map[ast.Expr]Symbol),
 		Values:      make(map[ast.Node]Value),
 		Methods:     make(map[*ast.MemberExpr]*MethodRef),
+		Extensions:  make(map[*ast.ExtensionDecl]types.Type),
 		Diagnostics: nil,
 	}
 }

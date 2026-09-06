@@ -78,6 +78,22 @@ func lowerBlock(b *vil.Block) {
 				in.Rewrite(vil.StrongRelease, vil.Aux{}, args[0])
 			}
 
+		// A copying load is a load and a retain. The value stays in
+		// memory and the reader gets a reference of its own, which is
+		// the same bargain copy_value makes -- and it was not being
+		// kept: this pass knew copy_value and not `load [copy]`, so
+		// the retain was simply never emitted. Anything that then
+		// released what it had read released a reference nobody had
+		// taken, and the object died while a live name still pointed
+		// at it. The symptom moved with the linker, which is what a
+		// use-after-free looks like from a distance.
+		case vil.Load:
+			if in.Result() != nil && hasAttr(in, "copy") {
+				in.Reshape(vil.Load, vil.Aux{})
+				b.InsertAfter(in, vil.StrongRetain, vil.Aux{},
+					[]*vil.Value{in.Result()})
+			}
+
 		// A borrow was a promise about lifetimes, and the promise has
 		// been checked. Nothing is left to emit.
 		case vil.BeginBorrow, vil.MoveValue, vil.MarkUninitialized:
@@ -90,4 +106,14 @@ func lowerBlock(b *vil.Block) {
 			b.Erase(in)
 		}
 	}
+}
+
+// hasAttr reports whether an instruction carries an attribute.
+func hasAttr(in *vil.Inst, name string) bool {
+	for _, a := range in.Aux().Attrs {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }

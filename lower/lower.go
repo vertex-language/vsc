@@ -136,6 +136,13 @@ func (l *lowerer) declare(f *vil.Func) error {
 func (l *lowerer) signature(name string, t *vil.FuncType) (*ir.Sig, error) {
 	sig := ir.NewSig()
 	for _, p := range t.Params {
+		// Nothing to pass. A parameter of empty type -- Void, the
+		// empty tuple, a struct with no stored properties -- takes no
+		// register, which is what the entry block already assumes
+		// when it skips such an argument.
+		if empty(p.Type) {
+			continue
+		}
 		// A struct of more than one field is more than one register:
 		// its memory image cut into words, which is what Swift passes.
 		if n, ok := directWords(p.Type); ok {
@@ -250,6 +257,9 @@ func (l *lowerer) funcTypeOf(sig *types.Signature) (*ir.Type, error) {
 	}
 	s := ir.NewSig()
 	for _, p := range sig.Params {
+		if empty(vil.Object(p.Type)) {
+			continue
+		}
 		if n, ok := directWords(vil.Object(p.Type)); ok {
 			for i := 0; i < n; i++ {
 				s.Param(ir.TypeI64)

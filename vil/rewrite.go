@@ -127,3 +127,45 @@ func (v *Value) dropUse(in *Inst) {
 		}
 	}
 }
+
+// InsertBefore builds an instruction and puts it immediately before
+// at, in the same block.
+//
+// The mutation API had no way to turn one instruction into several,
+// only into a different one -- which is enough for a pass that
+// substitutes and not enough for one that expands. Definite
+// initialization is the second kind: an `assign` to a slot that owns
+// what it holds becomes a load, a store and a release.
+//
+// The instruction is built the way the builder builds one, so its
+// results carry the ownership the op gives them; what differs is
+// only where it lands.
+func (b *Block) InsertBefore(at *Inst, op Op, aux Aux, args []*Value, results ...Type) *Inst {
+	in := b.add(op, aux, args, results...)
+	// add appended it; move it to just before at.
+	b.insts = b.insts[:len(b.insts)-1]
+	for i, other := range b.insts {
+		if other == at {
+			b.insts = append(b.insts[:i], append([]*Inst{in}, b.insts[i:]...)...)
+			return in
+		}
+	}
+	// at is not in this block, so the instruction stays at the end
+	// rather than vanishing.
+	b.insts = append(b.insts, in)
+	return in
+}
+
+// InsertAfter is InsertBefore's other half.
+func (b *Block) InsertAfter(at *Inst, op Op, aux Aux, args []*Value, results ...Type) *Inst {
+	in := b.add(op, aux, args, results...)
+	b.insts = b.insts[:len(b.insts)-1]
+	for i, other := range b.insts {
+		if other == at {
+			b.insts = append(b.insts[:i+1], append([]*Inst{in}, b.insts[i+1:]...)...)
+			return in
+		}
+	}
+	b.insts = append(b.insts, in)
+	return in
+}
