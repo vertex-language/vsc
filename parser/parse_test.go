@@ -16,11 +16,11 @@ func TestFiles(t *testing.T) {
 		files = strings.Split(env, ",")
 	} else {
 		var err error
-		files, err = filepath.Glob("../tests/*.swift")
+		files, err = filepath.Glob("../tests/syntax/*.swift")
 		if err != nil || len(files) == 0 {
-			files, err = filepath.Glob("tests/*.swift")
+			files, err = filepath.Glob("tests/syntax/*.swift")
 			if err != nil || len(files) == 0 {
-				t.Fatal("no test files found in tests/*.swift or ../tests/*.swift")
+				t.Fatal("no test files found in tests/syntax/*.swift or ../tests/syntax/*.swift")
 			}
 		}
 	}

@@ -576,6 +576,14 @@ func (g *gen) function(d *ast.FuncDecl, recv types.Type) {
 	f := g.m.Func(name).SetSourceName(sym.Name()).
 		SetLinkage(linkage).SetAttr("ossa")
 	g.fn = f
+	// The definition states the type; a forward declaration only
+	// guessed at it. A call written above the declaration it names
+	// creates the function and fills its parameter list in, and
+	// appending to that list here gave the function twice as many
+	// parameters as its entry block had arguments -- which the
+	// verifier caught, and which made calling a function declared
+	// further down the file impossible.
+	f.Type().Params = nil
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes = nil
 	g.loops, g.pending = nil, ""

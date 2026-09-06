@@ -450,8 +450,21 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			return types.Typ[types.Void]
 		}
 
-		lhs := c.checkExpr(e.X, nil, scope)
-		rhs := c.checkExpr(e.Y, nil, scope)
+		// An annotation reaches through an arithmetic operator to its
+		// operands. `let a: Int32 = 2 + 3 * 4` is an Int32 sum of
+		// Int32 literals, because the result of `+` and its operands
+		// are one type -- so the context the whole expression is in is
+		// the context each part of it is in. A comparison's result
+		// says nothing about what it compared, and a logical
+		// operator's operands are Bools whatever the result is used
+		// for, so for those the context stops here and the operands
+		// fall back on their own defaults.
+		var operandCtx types.Type
+		if expected != nil && sharesOperandType(opName) {
+			operandCtx = expected
+		}
+		lhs := c.checkExpr(e.X, operandCtx, scope)
+		rhs := c.checkExpr(e.Y, operandCtx, scope)
 		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs)
 
 		// An operator is a function, and core declares them. Where
@@ -924,4 +937,15 @@ func (c *checker) foldSign(e *ast.PrefixExpr, op string) {
 	case FloatValue:
 		c.info.Values[e] = Value{Kind: FloatValue, Float: -v.Float}
 	}
+}
+
+// sharesOperandType reports whether an operator's result is the same
+// type as the values it was applied to, which is what makes it
+// transparent to an annotation.
+func sharesOperandType(op string) bool {
+	switch op {
+	case "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>":
+		return true
+	}
+	return false
 }

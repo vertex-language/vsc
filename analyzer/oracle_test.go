@@ -141,7 +141,7 @@ func TestEveryExpressionIsVisited(t *testing.T) {
 // not a clean check but a finished one: a front end that gives up on
 // a construct says so with a diagnostic, never with a panic.
 func TestCheckCorpusDoesNotCrash(t *testing.T) {
-	files, err := filepath.Glob("../tests/*.swift")
+	files, err := filepath.Glob("../tests/syntax/*.swift")
 	if err != nil || len(files) == 0 {
 		t.Skip("no corpus")
 	}

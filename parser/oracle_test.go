@@ -164,7 +164,7 @@ func TestSwiftcAgreement(t *testing.T) {
 	}
 	for _, src := range rejected {
 		if swiftcAccepts(t, swiftc, src) {
-			t.Errorf("swiftc accepts %q: the case belongs in tests/, not here", src)
+			t.Errorf("swiftc accepts %q: the case belongs in tests/syntax, not here", src)
 			continue
 		}
 		if accepts(src) {
@@ -174,7 +174,7 @@ func TestSwiftcAgreement(t *testing.T) {
 
 	// The corpus, the other way round: everything in tests/ is Swift,
 	// and this is what keeps it honest as it grows.
-	files, _ := filepath.Glob("../tests/*.swift")
+	files, _ := filepath.Glob("../tests/syntax/*.swift")
 	for _, name := range files {
 		src, err := os.ReadFile(name)
 		if err != nil {
