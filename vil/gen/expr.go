@@ -1042,6 +1042,12 @@ func (g *gen) declare(f *vil.Func, sym *analyzer.FuncSymbol) {
 func (g *gen) binary(e *ast.BinaryExpr) *vil.Value {
 	sym, _ := g.info.Operators[e].(*analyzer.FuncSymbol)
 	if sym == nil {
+		// `==` on an enum has no declaration to resolve to: the
+		// standard library synthesizes it, and there is no standard
+		// library here. See enumeq.go.
+		if v, handled := g.enumEquality(e, g.text(e.Op)); handled {
+			return v
+		}
 		g.expr(e.X)
 		g.expr(e.Y)
 		g.unsupported(e)
