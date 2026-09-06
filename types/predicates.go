@@ -257,7 +257,12 @@ func AssignableTo(from, to Type) bool {
 
 	// Untyped literals
 	if bFrom, ok := from.(*Basic); ok && bFrom.info&IsUntyped != 0 {
-		if bTo, ok := to.(*Basic); ok {
+		// Through the name, not at it: a typealias is another
+		// spelling of the type it names, so a literal fits `Num`
+		// exactly when it fits the Int32 that Num is. Asserting on
+		// the type as written meant a parameter declared with an
+		// alias took no literal at all.
+		if bTo, ok := to.Underlying().(*Basic); ok {
 			switch bFrom.kind {
 			case UntypedInt:
 				return bTo.info&IsNumeric != 0
