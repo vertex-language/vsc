@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vertex-language/ir"
@@ -146,4 +147,122 @@ func main() -> Int32 {
 	if got := cmd.ProcessState.ExitCode(); got != 42 {
 		t.Errorf("exit status = %d, want 42", got)
 	}
+}
+
+// TestImportFromSearchPath is the same thing a build does: the
+// library's interface is a file, `import` names the module, and the
+// search path is where it is looked for.
+//
+// The failure modes are half the point. A module that is not there is
+// an error against the line that imported it -- nothing used to be,
+// so `import Anything` was accepted and the program failed later on
+// every name it expected to find. And a name the library did not
+// export is not in scope, which is the message swiftc gives for the
+// same two modules.
+func TestImportFromSearchPath(t *testing.T) {
+	target, ok := build.Host()
+	if !ok {
+		t.Skip("no backend")
+	}
+	const libSrc = `
+public struct Point {
+    public var x: Int32
+    public var y: Int32
+    public func sum() -> Int32 { return x + y }
+}
+
+public func origin() -> Point { return Point(x: 3, y: 4) }
+public func scale(_ p: Point, by k: Int32) -> Point {
+    return Point(x: p.x * k, y: p.y * k)
+}
+
+func internalHelper() -> Int32 { return 99 }
+`
+	dir := t.TempDir()
+	lib, diags := vsc.Compile([]vsc.Source{{Name: "lib.swift", Text: []byte(libSrc)}},
+		vsc.Options{Module: "Geometry", Target: target})
+	for _, d := range diags {
+		t.Fatalf("lib: %v", d)
+	}
+	var ifb bytes.Buffer
+	if err := iface.Print(&ifb, iface.Module{
+		Name: "Geometry", Files: lib.Files, Units: lib.Positions, Info: lib.Info,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ifPath := filepath.Join(dir, "Geometry"+iface.Extension)
+	if err := os.WriteFile(ifPath, ifb.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("a program that imports it", func(t *testing.T) {
+		app, diags := vsc.Compile([]vsc.Source{{Name: "app.swift", Text: []byte(`
+import Geometry
+
+func main() -> Int32 {
+    let p = origin()
+    return scale(p, by: 3).sum() + 21
+}
+`)}}, vsc.Options{Module: "main", Target: target, ImportPaths: []string{dir}})
+		for _, d := range diags {
+			t.Fatalf("app: %v", d)
+		}
+
+		objDir := t.TempDir()
+		write := func(name string, mod *ir.Module) string {
+			obj, err := build.Object(mod, build.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(objDir, name)
+			if err := os.WriteFile(p, obj, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}
+		rt, err := build.Runtime(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rtPath := filepath.Join(objDir, "rt.o")
+		if err := os.WriteFile(rtPath, rt.Data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		bin := filepath.Join(objDir, "prog")
+		if out, err := exec.Command("clang", "-o", bin,
+			write("app.o", app.VIR), write("lib.o", lib.VIR), rtPath).CombinedOutput(); err != nil {
+			t.Fatalf("link: %v\n%s", err, out)
+		}
+		cmd := exec.Command(bin)
+		_ = cmd.Run()
+		if got := cmd.ProcessState.ExitCode(); got != 42 {
+			t.Errorf("exit status = %d, want 42", got)
+		}
+	})
+
+	t.Run("a module that is not there", func(t *testing.T) {
+		_, diags := vsc.Compile([]vsc.Source{{Name: "app.swift", Text: []byte(`
+import Nowhere
+func main() -> Int32 { return 0 }
+`)}}, vsc.Options{Module: "main", Target: target, ImportPaths: []string{dir}})
+		if len(diags) == 0 {
+			t.Fatal("importing a module that does not exist was accepted")
+		}
+		if !strings.Contains(diags[0].Message, "no such module 'Nowhere'") {
+			t.Errorf("reported %q, want it to name the module", diags[0].Message)
+		}
+	})
+
+	t.Run("a name the library did not export", func(t *testing.T) {
+		_, diags := vsc.Compile([]vsc.Source{{Name: "app.swift", Text: []byte(`
+import Geometry
+func main() -> Int32 { return internalHelper() }
+`)}}, vsc.Options{Module: "main", Target: target, ImportPaths: []string{dir}})
+		if len(diags) == 0 {
+			t.Fatal("an internal name was visible across the module boundary")
+		}
+		if !strings.Contains(diags[0].Message, "cannot find 'internalHelper' in scope") {
+			t.Errorf("reported %q, want swiftc's message", diags[0].Message)
+		}
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/vertex-language/vsc/iface"
 	"io"
 
 	"github.com/vertex-language/ir"
@@ -30,6 +31,10 @@ var emits = []emitMode{
 	{"obj", vsc.All, ".o"},
 	{"vir", vsc.All, ".vir"},
 	{"vil", vsc.Lowered, ".sil"},
+	// The module's public face, which is what another module is
+	// compiled against. It needs no machine, so it stops at the
+	// checker.
+	{"interface", vsc.Checked, iface.Extension},
 }
 
 func lookupEmit(name string) (emitMode, bool) {
@@ -112,6 +117,19 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 	}
 
 	switch mode.name {
+	case "interface":
+		var buf bytes.Buffer
+		if err := iface.Print(&buf, iface.Module{
+			Name:  bf.module,
+			Files: u.Files,
+			Units: u.Positions,
+			Info:  u.Info,
+		}); err != nil {
+			fmt.Fprintln(stderr, "vsc:", err)
+			return "", exitUsage
+		}
+		return out, write(out, stdout, stderr, buf.Bytes(), false)
+
 	case "vil":
 		var buf bytes.Buffer
 		if err := text.Print(&buf, u.VIL); err != nil {

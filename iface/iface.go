@@ -27,6 +27,16 @@
 // with -enable-library-evolution and @frozen turns back off per type.
 // It is not implemented here. What is implemented is the default, and
 // the limitation it carries is the one Swift's default carries.
+//
+// # Where this is still more permissive than Swift
+//
+// A public struct's memberwise initializer is internal in Swift: a
+// client of the module cannot call Point(x:y:) unless the type
+// declares a public init of its own. This compiler lets it, because
+// an initializer a type declares itself is not lowered yet -- so
+// enforcing the rule today would leave a public struct with no way to
+// be made at all. The rule goes in when `public init` does, and until
+// then a program that builds here may not build under swiftc.
 package iface
 
 import (

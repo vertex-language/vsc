@@ -21,13 +21,26 @@ import (
 
 // common is the flag set every verb shares.
 type common struct {
-	target string
-	module string
+	target  string
+	module  string
+	include includePath
+}
+
+// includePath collects -I, which may be given more than once. The
+// order is the search order, so the flag package's default of
+// replacing the value would silently keep only the last one.
+type includePath []string
+
+func (p *includePath) String() string { return strings.Join(*p, ", ") }
+func (p *includePath) Set(v string) error {
+	*p = append(*p, v)
+	return nil
 }
 
 func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.target, "target", vsc.HostName(), "target to build for")
 	fs.StringVar(&c.module, "module", vsc.EntryModule, "the module being compiled")
+	fs.Var(&c.include, "I", "a directory to look for imported modules in (repeatable)")
 }
 
 // resolve turns the target flag into a target.
@@ -51,7 +64,12 @@ func (c *common) resolve() (ir.Target, error) {
 // options is what the library is asked for, stopping where the verb
 // wants it stopped.
 func (c *common) options(t ir.Target, stop vsc.Phase) vsc.Options {
-	return vsc.Options{Module: c.module, Target: t, Stop: stop}
+	return vsc.Options{
+		Module:      c.module,
+		Target:      t,
+		Stop:        stop,
+		ImportPaths: c.include,
+	}
 }
 
 // source reads one input. "" and "-" mean standard input, which the

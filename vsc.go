@@ -3,6 +3,9 @@ package vsc
 import (
 	"errors"
 	"github.com/vertex-language/ir"
+	"github.com/vertex-language/vsc/iface"
+	"os"
+	"path/filepath"
 
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
@@ -63,6 +66,14 @@ type Options struct {
 	// Stop says which phase to stop after. The zero value runs them
 	// all.
 	Stop Phase
+	// ImportPaths are the directories an `import` is looked for in.
+	//
+	// A module is found by name: `import Lib` looks for
+	// Lib.vertexinterface in each, in order, and takes the first. The
+	// interface is source, so what is found is parsed and checked the
+	// way the program is -- see the iface package for why it is
+	// source and not a binary format.
+	ImportPaths []string
 }
 
 // A Phase is one step of the compiler, in the order they run.
@@ -131,7 +142,12 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	// file. Where there is one file there is no ambiguity; where there
 	// are several, the message is still right and the line is not, so
 	// it is left unattributed rather than attributed wrongly.
-	info, checks := analyzer.Check(u.Files)
+	imports, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths)
+	diags = append(diags, importDiags...)
+	if Errors(diags) {
+		return u, diags
+	}
+	info, checks := analyzer.CheckImporting(u.Files, imports)
 	u.Info = info
 	diags = append(diags, attribute(checks, u.only())...)
 	if opts.Stop == Checked || Errors(diags) {
@@ -210,3 +226,91 @@ func phaseError(err error) Diagnostic {
 // no machine. Stopping at Canonical or earlier needs no target and
 // does not reach this.
 var errNoTarget = errors.New("no target: lowering needs a machine to lower for")
+
+// loadImports finds and reads what the files import.
+//
+// A module is found by name in the search path, and its interface is
+// parsed with the ordinary parser because an interface is ordinary
+// source. A module named twice is read once: two files importing the
+// same library is the common case, not a mistake.
+//
+// An import that cannot be found is an error against the line that
+// wrote it. Nothing used to be: `import Anything` was accepted and
+// ignored, so a program that imported a module that was not there
+// failed later, on every name it expected to find in it.
+func loadImports(files []*ast.File, units []*token.File, paths []string) ([]analyzer.Import, []Diagnostic) {
+	var out []analyzer.Import
+	var diags []Diagnostic
+	seen := map[string]bool{}
+
+	for i, f := range files {
+		unit := f.Unit
+		if i < len(units) && units[i] != nil {
+			unit = units[i]
+		}
+		for _, stmt := range f.Stmts {
+			decl, ok := stmt.(*ast.DeclStmt)
+			if !ok {
+				continue
+			}
+			imp, ok := decl.D.(*ast.ImportDecl)
+			if !ok || len(imp.Path) == 0 || unit == nil {
+				continue
+			}
+			// The first component names the module; a dotted path
+			// beyond it names something inside one, which this does
+			// not narrow to yet.
+			name := imp.Path[0].Text(unit)
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+
+			path, found := findInterface(name, paths)
+			if !found {
+				diags = append(diags, Diagnostic{File: unit, Diagnostic: token.Diagnostic{
+					Pos:      imp.Pos(),
+					Severity: token.Error,
+					Message:  "no such module '" + name + "': looked for " + name + iface.Extension,
+				}})
+				continue
+			}
+			text, err := os.ReadFile(path)
+			if err != nil {
+				diags = append(diags, Diagnostic{File: unit, Diagnostic: token.Diagnostic{
+					Pos:      imp.Pos(),
+					Severity: token.Error,
+					Message:  "cannot read '" + name + "': " + err.Error(),
+				}})
+				continue
+			}
+			tf := token.NewFile(path, text)
+			parsed, ds := parser.ParseFile(tf, 0)
+			if len(ds) > 0 {
+				diags = append(diags, Diagnostic{File: unit, Diagnostic: token.Diagnostic{
+					Pos:      imp.Pos(),
+					Severity: token.Error,
+					Message:  "'" + name + "' has an interface this compiler cannot read: " + path,
+				}})
+				continue
+			}
+			out = append(out, analyzer.Import{
+				Name:  name,
+				Files: []*ast.File{parsed},
+				Units: []*token.File{tf},
+			})
+		}
+	}
+	return out, diags
+}
+
+// findInterface looks for a module's interface in the search path.
+func findInterface(name string, paths []string) (string, bool) {
+	for _, dir := range paths {
+		candidate := filepath.Join(dir, name+iface.Extension)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, true
+		}
+	}
+	return "", false
+}

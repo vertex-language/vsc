@@ -53,6 +53,9 @@ Flags for build and run:
     --emit obj      compile to an object file
     --emit vir      stop after lowering and print the machine IR
     --emit vil      stop after the ownership passes and print the IR, as SIL
+    --emit interface  write the module's public face, for another module
+                      to be compiled against
+    -I dir          look for imported modules here (repeatable)
     -o file         write output here ("-" is standard output, for vir and vil)
     -entry sym      the program's entry symbol (default: the platform's)
     -freestanding   link no platform libraries
@@ -66,7 +69,12 @@ program's, and every other module's main is an ordinary function.
 That is why -module defaults to main and why building a library means
 saying so.
 
-Not yet: --emit asm, --emit device, -I, -L, -l, -static, cross-target
+A module is imported by name: "import Geometry" looks for
+Geometry.vertexinterface in each -I directory, in order. An interface
+is source -- valid Vertex with the bodies taken out -- which is why
+compiling against one needs no separate module format.
+
+Not yet: --emit asm, --emit device, -L, -l, -static, cross-target
 builds. The target table has one row.
 
 Exit codes: 0 no errors, 1 diagnostics with errors, 2 usage or I/O.
