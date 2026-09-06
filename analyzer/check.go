@@ -16,9 +16,13 @@ type checker struct {
 	currFuncRet types.Type
 	currType    types.Type // the type whose members are being checked
 	negated     map[ast.Expr]bool
-	typeScopes  map[string]*Scope // a declared type's scope, by name
-	currActor   *types.Class
-	inAwait     bool
+
+	// declSites is where each top-level declaration was written and
+	// how far it can be seen from. See access.go.
+	declSites  map[Symbol]declSite
+	typeScopes map[string]*Scope // a declared type's scope, by name
+	currActor  *types.Class
+	inAwait    bool
 }
 
 // typeErrorf reports a diagnostic about types, unless one of them
@@ -79,9 +83,10 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 	pkgScope := NewScope(coreScope, token.NoPos, token.NoPos)
 
 	c := &checker{
-		pg:      pg,
-		info:    info,
-		negated: make(map[ast.Expr]bool),
+		pg:        pg,
+		info:      info,
+		negated:   make(map[ast.Expr]bool),
+		declSites: make(map[Symbol]declSite),
 	}
 	c.loadCore(coreScope)
 

@@ -1,6 +1,9 @@
 package analyzer
 
-import "github.com/vertex-language/vsc/ast"
+import (
+	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/token"
+)
 
 // An Access is how far a declaration can be seen.
 //
@@ -70,4 +73,55 @@ func (c *checker) accessOf(mods []*ast.Modifier) Access {
 		}
 	}
 	return Internal
+}
+
+// Where a declaration was written, and how far it can be seen from.
+//
+// Kept beside the symbols rather than on them because only a function
+// carries an access level today, and because Access's zero value is
+// Private -- a field added to a symbol type would make every symbol
+// nobody remembered to stamp invisible outside its own file. A map
+// says nothing about the symbols that are not in it, which is the
+// right default for a partial answer.
+type declSite struct {
+	file   *token.File
+	access Access
+}
+
+// declaredHere records a top-level declaration's file and access.
+func (c *checker) declaredHere(sym Symbol, access Access) {
+	if sym == nil || c.file == nil {
+		return
+	}
+	if c.declSites == nil {
+		c.declSites = make(map[Symbol]declSite)
+	}
+	c.declSites[sym] = declSite{file: c.file, access: access}
+}
+
+// checkAccess reports a use of a name the file it is written in
+// cannot see.
+//
+// Only the file-scoped levels are enforceable inside one module:
+// internal is the module and every file here is in it, and public is
+// wider still. `private` at file scope means the same as
+// `fileprivate` -- Swift scopes it to the enclosing declaration, and
+// for a top-level declaration that is the file.
+//
+// A symbol with no recorded site is not restricted. That is what
+// makes this safe to add a declaration at a time rather than all at
+// once: what is not stamped is not checked, instead of being
+// invisible.
+func (c *checker) checkAccess(pos token.Pos, name string, sym Symbol) {
+	site, ok := c.declSites[sym]
+	if !ok || c.file == nil || site.file == nil {
+		return
+	}
+	if site.access != Private && site.access != FilePrivate {
+		return
+	}
+	if site.file == c.file {
+		return
+	}
+	c.errorf(pos, "'%s' is inaccessible due to '%s' protection level", name, site.access)
 }

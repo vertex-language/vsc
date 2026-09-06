@@ -404,6 +404,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 		}
 		c.info.Uses[e.Name] = sym
+		c.checkAccess(e.Name.Pos(), e.Name.Text(c.file), sym)
 		// A type's name in expression position denotes the type, not
 		// a value of it: `Int` is `Int.Type`, which is what makes
 		// `Int.self` a metatype and `Box(v: 3)` an initializer call.
@@ -711,6 +712,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// implicit member and a written-out one name the same case and
 		// lower the same way.
 		c.info.Uses[e.Name] = sym
+		c.checkAccess(e.Name.Pos(), e.Name.Text(c.file), sym)
 		return expected
 
 	case *ast.MemberExpr:

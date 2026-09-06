@@ -243,6 +243,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 				c.errorf(d.Name.Pos(), "invalid redeclaration of '%s'", name)
 			}
 			c.info.Defs[d.Name] = sym
+			c.declaredHere(sym, c.accessOf(d.Mods))
 
 		case *ast.ClassDecl:
 			name := d.Name.Text(c.file)
@@ -253,6 +254,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 				c.errorf(d.Name.Pos(), "invalid redeclaration of '%s'", name)
 			}
 			c.info.Defs[d.Name] = sym
+			c.declaredHere(sym, c.accessOf(d.Mods))
 
 		case *ast.ActorDecl:
 			name := d.Name.Text(c.file)
@@ -263,6 +265,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 				c.errorf(d.Name.Pos(), "invalid redeclaration of '%s'", name)
 			}
 			c.info.Defs[d.Name] = sym
+			c.declaredHere(sym, c.accessOf(d.Mods))
 
 		case *ast.EnumDecl:
 			name := d.Name.Text(c.file)
@@ -273,6 +276,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 				c.errorf(d.Name.Pos(), "invalid redeclaration of '%s'", name)
 			}
 			c.info.Defs[d.Name] = sym
+			c.declaredHere(sym, c.accessOf(d.Mods))
 
 		case *ast.ProtocolDecl:
 			name := d.Name.Text(c.file)
@@ -283,6 +287,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 				c.errorf(d.Name.Pos(), "invalid redeclaration of '%s'", name)
 			}
 			c.info.Defs[d.Name] = sym
+			c.declaredHere(sym, c.accessOf(d.Mods))
 
 			if d.Inherit != nil {
 				for _, item := range d.Inherit.Items {
@@ -331,6 +336,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 				c.errorf(d.Name.Pos(), "invalid redeclaration of '%s'", name)
 			}
 			c.info.Defs[d.Name] = sym
+			c.declaredHere(sym, c.accessOf(d.Mods))
 		}
 	}
 }
@@ -598,6 +604,7 @@ func (c *checker) declareFunctions(decls []ast.Decl, scope *Scope) {
 			sym := NewFunc(name, sig, f.Name.Pos())
 			sym.SetDecl(f)
 			sym.SetAccess(c.accessOf(f.Mods))
+			c.declaredHere(sym, sym.Access())
 			// Two functions may share a base name as long as their
 			// full names differ -- the labels are part of it, so
 			// `label(a:)` and `label(b:)` are two declarations even

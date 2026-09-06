@@ -1092,3 +1092,109 @@ func f() {
 		})
 	}
 }
+
+// checkFiles checks several files as one module, the way a build of
+// more than one source does.
+func checkFiles(t *testing.T, srcs ...string) []string {
+	t.Helper()
+	files := make([]*ast.File, len(srcs))
+	for i, src := range srcs {
+		f := token.NewFile("file"+itoaTest(i)+".swift", []byte(src))
+		file, diags := parser.ParseFile(f, 0)
+		if len(diags) != 0 {
+			for _, d := range diags {
+				t.Errorf("parser diag: %s", d.Print(f))
+			}
+			t.Fatalf("parse failed: %s", src)
+		}
+		files[i] = file
+	}
+	_, diags := Check(files)
+	msgs := make([]string, len(diags))
+	for i, d := range diags {
+		msgs[i] = d.Message
+	}
+	return msgs
+}
+
+func itoaTest(n int) string { return string(rune('0' + n)) }
+
+// TestAccessControlAcrossFiles: a declaration's access level says
+// which files may name it, and nothing was checking.
+//
+// This is the rule imports are built on. If `private` is not enforced
+// between two files of one module, `public` will not be enforced
+// between two modules -- the module interface would be describing a
+// boundary that nothing holds anyone to.
+//
+// Every verdict below is swiftc's, run on the same two files.
+func TestAccessControlAcrossFiles(t *testing.T) {
+	const lib = `
+private func priv() -> Int32 { return 1 }
+fileprivate func fpriv() -> Int32 { return 2 }
+internal func intern() -> Int32 { return 4 }
+public func pub() -> Int32 { return 8 }
+func implicit() -> Int32 { return 16 }
+
+private struct PrivType { var n: Int32 }
+public struct PubType { var n: Int32 }
+`
+	cases := []struct {
+		name string
+		use  string
+		want string
+	}{
+		{"private is not visible in another file",
+			"func f() -> Int32 { return priv() }",
+			"'priv' is inaccessible due to 'private' protection level"},
+		{"nor is fileprivate",
+			"func f() -> Int32 { return fpriv() }",
+			"'fpriv' is inaccessible due to 'fileprivate' protection level"},
+		{"internal is the module, and one file is in it",
+			"func f() -> Int32 { return intern() }", ""},
+		{"public certainly is",
+			"func f() -> Int32 { return pub() }", ""},
+		{"and a declaration that says nothing is internal",
+			"func f() -> Int32 { return implicit() }", ""},
+		{"a private type is no more visible than a private function",
+			"func f() -> Int32 { return PrivType(n: 1).n }",
+			"'PrivType' is inaccessible due to 'private' protection level"},
+		{"a public one is",
+			"func f() -> Int32 { return PubType(n: 1).n }", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := checkFiles(t, lib, tc.use)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("reported %v, want a clean check", got)
+				}
+				return
+			}
+			for _, m := range got {
+				if strings.Contains(m, tc.want) {
+					return
+				}
+			}
+			t.Errorf("reported %v, want one containing %q", got, tc.want)
+		})
+	}
+}
+
+// TestAccessControlWithinAFile: the same declarations are visible to
+// the file that wrote them, which is the half that must not break.
+func TestAccessControlWithinAFile(t *testing.T) {
+	got := checkSnippet(t, `
+private func priv() -> Int32 { return 1 }
+fileprivate func fpriv() -> Int32 { return 2 }
+private struct PrivType { var n: Int32 }
+
+func useThem() -> Int32 {
+    return priv() + fpriv() + PrivType(n: 3).n
+}
+`)
+	if len(got) != 0 {
+		t.Errorf("reported %v, want a clean check", got)
+	}
+}
