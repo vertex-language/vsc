@@ -18,8 +18,9 @@ func classType(name string) types.Type {
 }
 
 var (
-	boxT = vil.Object(classType("Box"))
-	intT = vil.Object(types.Typ[types.Int])
+	boxT    = vil.Object(classType("Box"))
+	intT    = vil.Object(types.Typ[types.Int])
+	optIntT = vil.Object(&types.Optional{Wrapped: types.Typ[types.Int]})
 )
 
 // fn starts a function in ownership form.
@@ -314,6 +315,33 @@ func TestGuaranteedIsNotConsumed(t *testing.T) {
 	f.SetResult(boxT, vil.ResultOwned)
 	f.Entry().Return(b) // returns what it does not own
 	wants(t, f, ErrConsumedGuaranteed)
+}
+
+// TestStoreType: what a store writes has to be what the address
+// holds. A narrower value leaves the rest of the slot as it was --
+// four bytes over an `Int32?` leave the tag byte saying nil -- and
+// the program runs and answers wrongly with nothing said anywhere.
+func TestStoreType(t *testing.T) {
+	f := fn("storeswrong")
+	f.SetResult(intT, vil.ResultUnowned)
+	bb := f.Entry()
+	addr := bb.AllocStack(optIntT)
+	bb.Store(bb.IntegerLiteral(intT, 1), addr, "init")
+	bb.DeallocStack(addr)
+	bb.Return(bb.IntegerLiteral(intT, 0))
+	wants(t, f, ErrStoreType)
+}
+
+// TestStoreIntoNonAddress: a store's destination is an address, and
+// an object in its place is the same fault said earlier.
+func TestStoreIntoNonAddress(t *testing.T) {
+	f := fn("storesintoavalue")
+	f.SetResult(intT, vil.ResultUnowned)
+	bb := f.Entry()
+	one := bb.IntegerLiteral(intT, 1)
+	bb.Store(one, one, "init")
+	bb.Return(bb.IntegerLiteral(intT, 0))
+	wants(t, f, ErrStoreType)
 }
 
 // TestStage: mark_uninitialized exists to be removed, and a canonical

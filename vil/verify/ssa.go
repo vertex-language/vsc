@@ -27,6 +27,7 @@ func (c *collector) structure(f *vil.Func, d *domTree) {
 		for i, in := range b.Insts() {
 			c.branchTargets(b, i, in, f)
 			c.condition(b, i, in)
+			c.stored(b, i, in)
 		}
 	}
 }
@@ -97,6 +98,35 @@ func (c *collector) condition(b *vil.Block, i int, in *vil.Inst) {
 	if t := in.Args()[0].Type(); !t.Equal(vil.Object(vil.BuiltinInt1)) {
 		c.at(b, i, in.Op(), in.Args()[0], ErrSignature,
 			"branches on "+t.String()+", which is not $Builtin.Int1")
+	}
+}
+
+// stored checks that what a store or an assign writes is what the
+// address holds.
+//
+// The rule reads as bookkeeping and is not: a store of the wrong type
+// is the shape a wrong answer takes when nothing above it noticed.
+// `d = 6 / 2` into an `Int32?` wrote four bytes over five and left
+// the tag byte saying nil, so the assignment ran, the program
+// compiled and linked, and d was still nothing -- which is what this
+// catches now, at the instruction rather than at the answer.
+func (c *collector) stored(b *vil.Block, i int, in *vil.Inst) {
+	if in.Op() != vil.Store && in.Op() != vil.Assign {
+		return
+	}
+	args := in.Args()
+	if len(args) != 2 || args[0] == nil || args[1] == nil {
+		return
+	}
+	value, addr := args[0].Type(), args[1].Type()
+	if !addr.IsAddress() {
+		c.at(b, i, in.Op(), args[1], ErrStoreType,
+			"the destination is "+addr.String()+", which is not an address")
+		return
+	}
+	if !value.Equal(addr.Object()) {
+		c.at(b, i, in.Op(), args[0], ErrStoreType,
+			"stores "+value.String()+" into an address of "+addr.Object().String())
 	}
 }
 

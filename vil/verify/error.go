@@ -78,6 +78,13 @@ var (
 	// or a destroy of something that owns nothing.
 	ErrOwnership = errors.New("ownership is wrong for the value")
 
+	// ErrStoreType is a store or an assign whose value is not what
+	// the address holds. Four bytes written over a five-byte slot
+	// leave the fifth as it was, and the program runs and answers
+	// wrongly -- `d = 6 / 2` into an `Int32?` stored the three and
+	// left the tag byte saying nil.
+	ErrStoreType = errors.New("stored value is not what the address holds")
+
 	// ErrStage is a rule the module's stage requires and it does not
 	// hold: raw-only instructions in a canonical module, or a
 	// canonical module whose functions still carry mark_uninitialized.
