@@ -226,10 +226,11 @@ Vertex looks to support as much of Swift's grammar as it can, for
 interop-related tasks of Swift's ecosystem, when possible.
 
 **Swift is the base.** Every Vertex addition is specified in
-[docs/vertex_spec.md](docs/vertex_spec.md). Anything else differing
-from Swift is a bug, not a design decision — a program Swift accepts
-and this rejects, one Swift rejects and this accepts, or one the two
-read differently. `TODO.md` holds the known ones.
+[docs/vertex_spec.md](docs/vertex_spec.md), and the two together are
+the source of truth: what either accepts is valid, what neither
+accepts is not. Anything else is a bug rather than a design decision —
+a program that should build and does not, one that should not and
+does, or one the two read differently. `TODO.md` holds the known ones.
 
 ### Grammar
 
