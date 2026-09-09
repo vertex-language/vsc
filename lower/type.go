@@ -90,12 +90,25 @@ func machineOf(t types.Type) (repr, bool) {
 	case *types.Enum:
 		// An enum with no associated values is its tag and nothing
 		// else, so it is an integer of whatever width the tag needs.
-		// One with a payload is the payload beside the tag, which is a
-		// layout this package does not compute yet.
-		for _, c := range t.Cases {
-			if c != nil && c.AssociatedType != nil {
+		//
+		// One with a payload is the payload beside the tag, and its
+		// memory image is words -- see enumImage. A multi-word one
+		// crosses a call as those words, which directWords arranges
+		// out of its leaves. A one-word one has a single leaf, so
+		// directWords does not apply to it, and without a register
+		// here it could not cross a call at all: it was usable inside
+		// a function and had no machine type at a boundary.
+		//
+		// The word is what it already is. makePayloadEnum builds the
+		// image and defines the result as the single value when there
+		// is one, so saying i64 here says what the value has been all
+		// along.
+		if hasPayload(t) {
+			image, ok := enumImage(t)
+			if !ok || len(image.Fields) != 1 {
 				return repr{}, false
 			}
+			return repr{reg: ir.TypeI64}, true
 		}
 		if len(t.Cases) <= 1 {
 			// One case carries no information: there is nothing to

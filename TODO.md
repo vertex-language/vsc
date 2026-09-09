@@ -38,16 +38,7 @@ already correct; only the feature is missing.
 | --- | --- |
 | `throw`, `do`/`catch` | `cannot lower a throw yet`, `cannot lower a do block yet` |
 | a global `let` or `var` | `cannot lower this expression yet`, where it is read |
-| a payload enum crossing a call | `an enum whose cases carry values … cannot cross a call` |
 | top-level code | `top-level code is not supported` |
-
-**A payload enum cannot be a parameter or a result.** One is usable
-inside a function — built, switched over, its payload bound — and has
-no machine type at a call boundary, because the payload beside the tag
-is a layout the backend does not compute yet. `tests/compiler/152`
-passes because it keeps them local. The refusal now says which of the
-two it is rather than naming the type and stopping.
-
 
 **Top-level code is refused, not run.** Swift runs statements at file
 scope; here they are reported rather than discarded, which is the
@@ -91,6 +82,15 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A payload enum could not cross a call**, if it fitted in one
+  word. Its memory image is words, and a multi-word one is passed as
+  those words — which the ABI arranges out of its leaves. A one-word
+  one has a single leaf, so that path did not apply, and `machineOf`
+  refused every payload enum outright, so it had no register either:
+  usable inside a function, and no machine type at a boundary. The
+  word is what the value already was — `makePayloadEnum` defines the
+  result as a single i64 when there is one — so saying so was the
+  whole fix.
 - **A float-to-integer conversion was refused**, because the bound
   Swift traps on was never computed. It is computed against the
   source's own type now — a signed destination of n bits holds

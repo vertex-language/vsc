@@ -273,3 +273,42 @@ func toInt8(_ d: double) -> int8 { return int8(d) }
 		}
 	}
 }
+
+// TestPayloadEnumAcrossCalls: a payload enum that fits in one word
+// had no register. Its image is words, and a multi-word one is passed
+// as those words -- but one word is one leaf, so that path did not
+// apply and machineOf refused every payload enum outright. It was
+// usable inside a function and had no machine type at a boundary.
+func TestPayloadEnumAcrossCalls(t *testing.T) {
+	const src = `
+enum Op { case add(int32), scale(int32), neg }
+enum Wide { case box(int32, int32), empty }
+
+func make(_ k: int32) -> Op { return Op.add(k) }
+func roundTrip(_ o: Op) -> Op { return o }
+
+func apply(_ o: Op, _ n: int32) -> int32 {
+    switch o {
+    case .add(let k): return n + k
+    case .scale(let k): return n * k
+    case .neg: return -n
+    }
+}
+
+func area(_ w: Wide) -> int32 {
+    switch w {
+    case .box(let a, let b): return a * b
+    case .empty: return 0
+    }
+}
+
+func use() -> int32 {
+    return apply(make(5), 10) + apply(roundTrip(Op.neg), 3) + area(Wide.box(2, 5))
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
