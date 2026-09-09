@@ -977,3 +977,26 @@ func use() -> string { return Name.a.rawValue }
 		t.Error("a string rawValue was lowered")
 	}
 }
+
+// TestForceUnwrapAndNilComparison: `o!` had no case in lowering at
+// all, and `o == nil` none either -- nil is not a value of a type
+// core declares an operator over, so both are questions about which
+// case the optional holds.
+func TestForceUnwrapAndNilComparison(t *testing.T) {
+	const src = `
+func force(_ o: int32?) -> int32 { return o! }
+func chained(_ o: int32?) -> int32 { return o! * 2 + o! }
+
+func present(_ o: int32?) -> int32 {
+    let a: int32 = o == nil ? 1 : 0
+    let b: int32 = o != nil ? 10 : 0
+    let c: int32 = nil == o ? 100 : 0
+    return a + b + c
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

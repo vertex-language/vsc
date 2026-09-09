@@ -570,6 +570,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 
 		switch opName {
 		case "==", "!=", "<", "<=", ">", ">=":
+			// `nil == o` is `o == nil` written the other way round.
+			// Only the second was accepted: nil is not comparable to
+			// anything on its own, and asking that of the left
+			// operand rejected the order Swift takes.
+			if (opName == "==" || opName == "!=") &&
+				(isUntypedNil(lhs) && isOptionalType(rhs) ||
+					isUntypedNil(rhs) && isOptionalType(lhs)) {
+				return types.Typ[types.Bool]
+			}
 			if !types.Comparable(lhs) {
 				c.typeErrorf(e.Op.Pos(), "type '%s' is not comparable", lhs)
 			}
@@ -1302,4 +1311,20 @@ func (c *checker) moduleMemberValue(e *ast.MemberExpr, scope *Scope) (types.Type
 		return &types.Metatype{Instance: sym.Type()}, true
 	}
 	return sym.Type(), true
+}
+
+// isUntypedNil reports whether a type is the literal nil's, which has
+// no type of its own until something gives it one.
+func isUntypedNil(t types.Type) bool {
+	b, ok := t.(*types.Basic)
+	return ok && b.Kind() == types.UntypedNil
+}
+
+// isOptionalType reports whether a type is an optional.
+func isOptionalType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Optional)
+	return ok
 }

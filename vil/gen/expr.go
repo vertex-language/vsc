@@ -33,6 +33,9 @@ func (g *gen) expr(e ast.Expr) *vil.Value {
 	case *ast.IdentExpr:
 		return g.ident(n)
 
+	case *ast.ForceExpr:
+		return g.forceUnwrap(n)
+
 	case *ast.MemberExpr:
 		return g.member(n)
 
@@ -1482,6 +1485,12 @@ func (g *gen) binary(e *ast.BinaryExpr) *vil.Value {
 		// lowered here. See optional.go.
 		if g.text(e.Op) == "??" {
 			return g.nilCoalescing(e)
+		}
+		// And `o == nil` has none: nil is not a value of a type core
+		// declares an operator over, so the comparison is a question
+		// about which case the optional holds.
+		if v, isNilTest := g.nilComparison(e, g.text(e.Op)); isNilTest {
+			return v
 		}
 		g.expr(e.X)
 		g.expr(e.Y)

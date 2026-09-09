@@ -2,6 +2,7 @@ package gen
 
 import (
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 	"github.com/vertex-language/vsc/vil"
 )
@@ -280,4 +281,118 @@ func (g *gen) nilCoalescing(e *ast.BinaryExpr) *vil.Value {
 	// once, where the scope holding it ends.
 	g.destroyLater(answer)
 	return answer
+}
+
+// forceUnwrap lowers `o!`: what the optional holds, or a trap where
+// it holds nothing.
+//
+// switch_enum says which case it is. The some arm carries the payload
+// as its block argument and is where everything after the `!`
+// continues; the none arm traps, which is what Swift does and what
+// makes `!` the assertion it is rather than a conversion.
+//
+// There is no join: the none arm does not come back, so the value is
+// the some arm's argument and the block after it is the some arm.
+func (g *gen) forceUnwrap(e *ast.ForceExpr) *vil.Value {
+	o, isOptional := optionalOf(g.typeOf(e.X))
+	if !isOptional {
+		g.refuse(e, "'!' on something that is not an optional")
+		return nil
+	}
+	// The same two limits a binding condition has, for the same
+	// reasons: the payload arrives as one block argument, and one
+	// that owns what it holds needs a lifetime this does not arrange.
+	wrapped := lowerType(o.Wrapped)
+	if !wrapped.Trivial() {
+		g.refuse(e, "'!' on an optional of "+o.Wrapped.String()+
+			", which owns what it holds")
+		return nil
+	}
+	if !oneRegister(o.Wrapped) {
+		g.refuse(e, "'!' on an optional of "+o.Wrapped.String()+
+			", whose payload is more than one register")
+		return nil
+	}
+
+	v := g.rvalue(e.X)
+	if v == nil {
+		return nil
+	}
+	some := g.fn.Block()
+	none := g.fn.Block()
+	payload := some.Arg(wrapped, vil.Unowned)
+	g.blk.SwitchEnum(v,
+		vil.Case{Member: optionalSome, Dest: some},
+		vil.Case{Member: optionalNone, Dest: none})
+
+	// Nothing to test: arriving here is the failure. cond_fail takes
+	// a condition all the same, so it is given one that holds.
+	g.blk = none
+	always := g.blk.IntegerLiteral(vil.Object(vil.BuiltinInt1), -1)
+	g.blk.CondFail(always, "Unexpectedly found nil while unwrapping an Optional value")
+	g.blk.Unreachable()
+
+	g.blk = some
+	return payload
+}
+
+// nilComparison lowers `o == nil` and `o != nil`, and reports whether
+// the expression was one.
+//
+// switch_enum over the case, each arm handing the join the answer for
+// that case: `== nil` is true where it holds nothing, and `!= nil` is
+// the other way round. Which is the same shape as `??` and `!`, and
+// for the same reason -- what an optional is, is which case it holds.
+func (g *gen) nilComparison(e *ast.BinaryExpr, op string) (*vil.Value, bool) {
+	if op != "==" && op != "!=" {
+		return nil, false
+	}
+	subject, ok := e.X, false
+	if isNilLiteral(g.fold(e.Y)) {
+		subject, ok = e.X, true
+	} else if isNilLiteral(g.fold(e.X)) {
+		subject, ok = e.Y, true
+	}
+	if !ok {
+		return nil, false
+	}
+	if _, isOptional := optionalOf(g.typeOf(subject)); !isOptional {
+		return nil, false
+	}
+	v := g.rvalue(subject)
+	if v == nil {
+		return nil, true
+	}
+
+	o, _ := optionalOf(g.typeOf(subject))
+	bit := vil.Object(vil.BuiltinInt1)
+	some := g.fn.Block()
+	none := g.fn.Block()
+	join := g.fn.Block()
+	answer := join.Arg(bit, vil.None)
+	// The some arm declares the payload even though the answer does
+	// not read it: the case's edge hands it over, and an arm that
+	// takes nothing is an arity the branch does not match.
+	some.Arg(lowerType(o.Wrapped), vil.Unowned)
+	g.blk.SwitchEnum(v,
+		vil.Case{Member: optionalSome, Dest: some},
+		vil.Case{Member: optionalNone, Dest: none})
+
+	yes, no := int64(-1), int64(0)
+	if op == "!=" {
+		yes, no = 0, -1
+	}
+	g.blk = some
+	g.blk.Br(join, g.blk.IntegerLiteral(bit, no))
+	g.blk = none
+	g.blk.Br(join, g.blk.IntegerLiteral(bit, yes))
+
+	g.blk = join
+	return answer, true
+}
+
+// isNilLiteral reports whether an expression is the literal nil.
+func isNilLiteral(e ast.Expr) bool {
+	lit, ok := e.(*ast.BasicLit)
+	return ok && lit.Kind == token.NIL
 }

@@ -57,7 +57,6 @@ already correct; only the feature is missing.
 | a failable initializer | `cannot lower a failable initializer` |
 | a user-declared operator | `cannot lower this expression yet` |
 | a String `rawValue` | `whose cases are not all numbers` |
-| a force unwrap `o!` | `cannot lower this expression yet` |
 | a tuple pattern in a `switch` | `a tuple pattern over (Int32, Int32), which is held in memory` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
@@ -114,6 +113,15 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **`o!` and `o == nil` were not lowered.** A force unwrap had no
+  case in lowering at all, and a comparison against nil none either:
+  nil is not a value of a type core declares an operator over. Both
+  are questions about which case the optional holds, so both are a
+  switch — `!` traps on the none arm, which is what makes it an
+  assertion rather than a conversion, and with the same message and
+  the same signal swiftc gives. `nil == o` was also rejected outright,
+  since nil is not comparable to anything on its own and that was
+  asked of the left operand.
 - **An enum's `rawValue` could not be read.** The raw type was never
   recorded, though `rawValueOf` existed to read it — so the property
   did not exist, and the case values were checked against nothing. It
