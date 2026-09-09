@@ -126,9 +126,42 @@ func TestLower(t *testing.T) {
 // should be declared, or a program that writes it will not check.
 func TestDeclaresTheOperators(t *testing.T) {
 	src := Source()
-	for _, op := range []string{"+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">="} {
+	for _, op := range []string{
+		"+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=",
+		"&", "|", "^", "<<", ">>",
+		"&+", "&-", "&*", "&<<", "&>>",
+	} {
 		if !strings.Contains(src, "func "+op+" (lhs: Int, rhs: Int)") {
 			t.Errorf("core.swift does not declare %q on Int", op)
+		}
+	}
+}
+
+// TestWrapping: the three masking arithmetic operators are the same
+// machine instruction as the checked ones. What differs is the
+// operand that says whether to report the overflow, which the caller
+// passes -- so Lower answers for them, and Wrapping is what tells the
+// caller to pass a nothing.
+func TestWrapping(t *testing.T) {
+	for _, c := range []struct {
+		op   string
+		name string
+	}{
+		{"&+", "sadd_with_overflow_Int32"},
+		{"&-", "ssub_with_overflow_Int32"},
+		{"&*", "smul_with_overflow_Int32"},
+	} {
+		got, ok := Lower(c.op, types.Typ[types.Int32])
+		if !ok || got.Name != c.name || !got.Overflows {
+			t.Errorf("Lower(%q) = %+v, %v; want %s overflowing", c.op, got, ok, c.name)
+		}
+		if !Wrapping(c.op) {
+			t.Errorf("Wrapping(%q) is false; the overflow is dropped, not trapped on", c.op)
+		}
+	}
+	for _, op := range []string{"+", "-", "*", "&<<", "&>>"} {
+		if Wrapping(op) {
+			t.Errorf("Wrapping(%q) is true", op)
 		}
 	}
 }

@@ -143,7 +143,8 @@ func (g *gen) exprStmt(e ast.Expr) {
 // rather than storing one.
 func compoundOf(op string) (string, bool) {
 	switch op {
-	case "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=":
+	case "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=",
+		"&+=", "&-=", "&*=", "&<<=", "&>>=":
 		return op[:len(op)-1], true
 	}
 	return "", false

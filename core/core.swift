@@ -261,6 +261,72 @@ func ^ (lhs: UInt64, rhs: UInt64) -> UInt64
 func << (lhs: UInt64, rhs: UInt64) -> UInt64
 func >> (lhs: UInt64, rhs: UInt64) -> UInt64
 
+// ---- overflow ----
+
+// The masking operators. `&+` is `+` with the overflow dropped
+// rather than trapped on, and `&<<` is a shift whose count is taken
+// modulo the width. Same set, said the long way, for the same
+// reason the bitwise operators above are.
+
+func &+ (lhs: Int, rhs: Int) -> Int
+func &- (lhs: Int, rhs: Int) -> Int
+func &* (lhs: Int, rhs: Int) -> Int
+func &<< (lhs: Int, rhs: Int) -> Int
+func &>> (lhs: Int, rhs: Int) -> Int
+
+func &+ (lhs: Int8, rhs: Int8) -> Int8
+func &- (lhs: Int8, rhs: Int8) -> Int8
+func &* (lhs: Int8, rhs: Int8) -> Int8
+func &<< (lhs: Int8, rhs: Int8) -> Int8
+func &>> (lhs: Int8, rhs: Int8) -> Int8
+
+func &+ (lhs: Int16, rhs: Int16) -> Int16
+func &- (lhs: Int16, rhs: Int16) -> Int16
+func &* (lhs: Int16, rhs: Int16) -> Int16
+func &<< (lhs: Int16, rhs: Int16) -> Int16
+func &>> (lhs: Int16, rhs: Int16) -> Int16
+
+func &+ (lhs: Int32, rhs: Int32) -> Int32
+func &- (lhs: Int32, rhs: Int32) -> Int32
+func &* (lhs: Int32, rhs: Int32) -> Int32
+func &<< (lhs: Int32, rhs: Int32) -> Int32
+func &>> (lhs: Int32, rhs: Int32) -> Int32
+
+func &+ (lhs: Int64, rhs: Int64) -> Int64
+func &- (lhs: Int64, rhs: Int64) -> Int64
+func &* (lhs: Int64, rhs: Int64) -> Int64
+func &<< (lhs: Int64, rhs: Int64) -> Int64
+func &>> (lhs: Int64, rhs: Int64) -> Int64
+
+func &+ (lhs: UInt, rhs: UInt) -> UInt
+func &- (lhs: UInt, rhs: UInt) -> UInt
+func &* (lhs: UInt, rhs: UInt) -> UInt
+func &<< (lhs: UInt, rhs: UInt) -> UInt
+func &>> (lhs: UInt, rhs: UInt) -> UInt
+
+func &+ (lhs: UInt8, rhs: UInt8) -> UInt8
+func &- (lhs: UInt8, rhs: UInt8) -> UInt8
+func &* (lhs: UInt8, rhs: UInt8) -> UInt8
+func &<< (lhs: UInt8, rhs: UInt8) -> UInt8
+func &>> (lhs: UInt8, rhs: UInt8) -> UInt8
+
+func &+ (lhs: UInt16, rhs: UInt16) -> UInt16
+func &- (lhs: UInt16, rhs: UInt16) -> UInt16
+func &* (lhs: UInt16, rhs: UInt16) -> UInt16
+func &<< (lhs: UInt16, rhs: UInt16) -> UInt16
+func &>> (lhs: UInt16, rhs: UInt16) -> UInt16
+
+func &+ (lhs: UInt32, rhs: UInt32) -> UInt32
+func &- (lhs: UInt32, rhs: UInt32) -> UInt32
+func &* (lhs: UInt32, rhs: UInt32) -> UInt32
+func &<< (lhs: UInt32, rhs: UInt32) -> UInt32
+func &>> (lhs: UInt32, rhs: UInt32) -> UInt32
+
+func &+ (lhs: UInt64, rhs: UInt64) -> UInt64
+func &- (lhs: UInt64, rhs: UInt64) -> UInt64
+func &* (lhs: UInt64, rhs: UInt64) -> UInt64
+func &<< (lhs: UInt64, rhs: UInt64) -> UInt64
+func &>> (lhs: UInt64, rhs: UInt64) -> UInt64
 // ---- prefix ----
 
 prefix func ~ (operand: Int) -> Int
