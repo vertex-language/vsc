@@ -1586,15 +1586,29 @@ func (g *gen) conditional(e *ast.ConditionalExpr) *vil.Value {
 
 	g.blk.CondBr(bit, thenBlk, nil, elseBlk, nil)
 
+	// Each arm is evaluated on its own path, and hands the join the
+	// type the whole expression has rather than its own. Where that
+	// type is an optional and the arm's is not -- `c ? nil : v` --
+	// the value is injected here, on the arm, because that is the
+	// only block that has it. Handing the join four bytes where it
+	// takes five was caught by the verifier, which is where this was
+	// found.
+	t := g.typeOf(e)
 	g.blk = thenBlk
-	yes := g.rvalue(e.Then)
+	yes := g.branchArm(func() *vil.Value {
+		v := g.rvalue(e.Then)
+		return g.optionalFor(e.Then, v, g.typeOf(e.Then), t)
+	})
 	if yes == nil {
 		return nil
 	}
 	g.blk.Br(join, yes)
 
 	g.blk = elseBlk
-	no := g.rvalue(e.Else)
+	no := g.branchArm(func() *vil.Value {
+		v := g.rvalue(e.Else)
+		return g.optionalFor(e.Else, v, g.typeOf(e.Else), t)
+	})
 	if no == nil {
 		return nil
 	}
