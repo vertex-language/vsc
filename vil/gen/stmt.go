@@ -280,6 +280,17 @@ func (g *gen) lvalue(e ast.Expr) *vil.Value {
 		if n.Name == nil {
 			return nil
 		}
+		// A computed property is a getter and a setter with nothing
+		// behind them, so there is no storage to take the address of.
+		// Falling through named a field the type does not have, and
+		// the backend said so about a struct_element_addr rather than
+		// about the assignment: `c.doubled = 20` reported "no such
+		// field: doubled" with no line to look at.
+		if isComputedMember(g.typeOf(n.X), n.Name.Text(g.file)) {
+			g.refuse(n, "an assignment to a computed property, which is a call to "+
+				"its setter and not a write to storage")
+			return nil
+		}
 		t := lowerType(g.typeOf(n))
 		name := memberName(g.typeOf(n.X), n.Name.Text(g.file))
 

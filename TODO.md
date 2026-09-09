@@ -41,6 +41,10 @@ already correct; only the feature is missing.
 | a *stored* static property | `it needs storage of its own and the one-time initializer` |
 | binding an optional of a wide payload | `whose payload is more than one register` |
 | top-level code | `top-level code is not supported` |
+| assigning to a computed property | `a call to its setter and not a write to storage` |
+| a subscript | `cannot lower a subscript of 'T'` |
+| `super.method()` | `cannot lower this expression yet` |
+| a computed property of a class with a subclass | `reached through the table the instance carries` |
 
 **Top-level code is refused, not run.** Swift runs statements at file
 scope; here they are reported rather than discarded, which is the
@@ -84,6 +88,12 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A getter could be emitted from the setter's body.** Which
+  accessor a block is was decided by which came first rather than by
+  its keyword, so a property writing `set` before `get` had its setter
+  emitted as the getter. It compiled and ran, answering whatever the
+  setter's body left behind — a wrong answer with no diagnostic, and
+  the only one of these found that reached a running program.
 - **A computed property on a class emitted invalid VIL.** A getter's
   self is `@guaranteed` the way a method's is — the caller keeps the
   receiver alive across the call and the callee does not consume it —

@@ -140,7 +140,7 @@ func (g *gen) emitGetters(body *ast.MemberBlock, recv types.Type) {
 		}
 		static := isStaticDecl(m.Mods)
 		for _, b := range m.Bindings {
-			block := getterBody(b)
+			block := g.getterBody(b)
 			if block == nil {
 				continue
 			}
@@ -160,18 +160,43 @@ func (g *gen) emitGetters(body *ast.MemberBlock, recv types.Type) {
 // block is the binding's own; `var x: Int { get { … } }` writes the
 // accessor out. A `get` with no block is a protocol's requirement,
 // which promises a getter without saying what it does.
-func getterBody(b *ast.PatternBinding) *ast.CodeBlock {
+func (g *gen) getterBody(b *ast.PatternBinding) *ast.CodeBlock {
+	return g.accessorBody(b, "get")
+}
+
+// setterBody is the block a computed property's setter runs, or nil
+// where it has none.
+func (g *gen) setterBody(b *ast.PatternBinding) *ast.CodeBlock {
+	return g.accessorBody(b, "set")
+}
+
+// accessorBody is the block of the accessor with this keyword, or the
+// implicit getter's where the property was written as one.
+func (g *gen) accessorBody(b *ast.PatternBinding, want string) *ast.CodeBlock {
 	if b == nil {
 		return nil
 	}
 	if b.Body != nil {
+		// `var x: Int { … }` is the implicit getter and has no other
+		// accessor to be.
+		if want != "get" {
+			return nil
+		}
 		return b.Body
 	}
 	if b.Accessors == nil {
 		return nil
 	}
 	for _, a := range b.Accessors.Accessors {
-		if a != nil && a.Keyword != nil && a.Body != nil {
+		if a == nil || a.Keyword == nil || a.Body == nil {
+			continue
+		}
+		// The keyword decides which accessor this is. Taking the
+		// first one with a body took the setter's where a property
+		// wrote `set` before `get`, and emitted it as the getter --
+		// which compiled, ran, and answered whatever the setter's
+		// body left behind.
+		if g.text(a.Keyword) == want {
 			return a.Body
 		}
 	}
@@ -460,4 +485,15 @@ func (g *gen) implicitComputed(e *ast.IdentExpr) (*vil.Value, bool) {
 		}), true
 	}
 	return nil, false
+}
+
+// isComputedMember reports whether a name is a computed property of
+// this type rather than one of its stored fields.
+func isComputedMember(t types.Type, name string) bool {
+	for _, f := range computedOf(t) {
+		if f != nil && f.Name == name {
+			return true
+		}
+	}
+	return false
 }

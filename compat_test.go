@@ -475,3 +475,64 @@ func use() -> int32 {
 		}
 	}
 }
+
+// TestAccessorSelectedByKeyword: which accessor a block is was decided
+// by which came first, not by its keyword -- so a property writing
+// `set` before `get` had its setter emitted as the getter. It
+// compiled and ran, answering whatever the setter's body left behind.
+func TestAccessorSelectedByKeyword(t *testing.T) {
+	const src = `
+struct Reading {
+    var raw: int32
+    var doubled: int32 {
+        set { raw = newValue / 2 }
+        get { return raw * 2 }
+    }
+    var tripled: int32 {
+        get { return raw * 3 }
+        set { raw = newValue / 3 }
+    }
+    var negated: int32 { return -raw }
+}
+
+func use() -> int32 {
+    let r = Reading(raw: 7)
+    return r.doubled + r.tripled + r.negated
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestAssignToComputedRefused: a computed property is a getter and a
+// setter with nothing behind them, so there is no storage to write.
+// Falling through named a field the type does not have, and the
+// backend complained about a struct_element_addr with no line to look
+// at.
+func TestAssignToComputedRefused(t *testing.T) {
+	const src = `
+struct S {
+    var raw: int32
+    var doubled: int32 {
+        get { return raw * 2 }
+        set { raw = newValue / 2 }
+    }
+}
+
+func use() -> int32 {
+    var s = S(raw: 5)
+    s.doubled = 20
+    return s.raw
+}
+`
+	_, diags := compile(t, src, vsc.Options{})
+	if !vsc.Errors(diags) {
+		t.Fatal("an assignment to a computed property was lowered as a write to storage")
+	}
+	if !strings.Contains(diags[0].Message, "computed property") {
+		t.Errorf("diagnostic does not name the problem: %s", diags[0])
+	}
+}
