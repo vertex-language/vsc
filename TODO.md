@@ -95,6 +95,34 @@ Confirmed narrow: `a ?? z` with `z: int32` checks clean, and so does
 `a ?? 0` when `a` is `int?`, because there the literal's default is
 already the wrapped type.
 
+### Two imported modules cannot share a name
+
+```swift
+import A   // public func width() -> Int32
+import B   // public func width() -> Int32
+
+func main() -> int32 { return A.width() + B.width() }
+```
+
+```
+error: cannot find 'B.width' in scope: no such name in B
+```
+
+`A.width` resolves and `B.width` does not. Every import is declared
+into one shared scope so that an unqualified name finds them all, and
+`recordModule` then hands each symbol to the module that claimed it
+first -- so the second module's same-named declaration never reaches a
+scope of its own, and its qualified name cannot be looked up.
+
+Predates folder imports and is not caused by them: the reproduction
+above is two `.vertexinterface` files reached through `-I`. It matters
+more now, because a package directory makes `fmt.width` and
+`other.width` an ordinary pairing rather than a coincidence.
+
+The fix is for `recordModule` to fill each module's own scope from
+that module's declarations rather than from the shared scope's
+leftovers.
+
 ## Refused honestly
 
 Unimplemented, and they say so at the point of use. Nothing here is

@@ -6,12 +6,17 @@ design is left rather than by how much code.
 
 Additions only. Swift the compiler does not do yet is `TODO.md`.
 
-| Addition | State | Where the work is |
+| Addition | State | Where it lives |
 | --- | --- | --- |
 | Lowercase primitives | **done** | `types/universe.go` |
-| `kernel` / `graph` | syntax only | `parser`, then a refusal in `vil/gen` |
-| Optional argument labels | not built | five sites in `analyzer/call.go` |
-| Packages and folder imports | not built | `vsc.go` importer, plus a driver |
+| `kernel` / `graph` | **done** | `parser/decl.go`, refused in `vil/gen` |
+| Optional argument labels | **done** | `analyzer/call.go` |
+| Packages and folder imports | **done** | `vsc.go` importer, driver in `internal/cli` |
+
+All four are implemented. What follows is the design and the reasoning
+behind it, kept because the reasoning is what the next change to any
+of them has to agree with; where the built behaviour is narrower than
+the design, the section says so.
 
 Two through-lines. A module's identity is a single identifier, because
 that is what a symbol is mangled with — every proposal either respects
@@ -101,6 +106,20 @@ addUp(a: 1, b: 2)   // labels
 Four of the five are the same predicate written for different callers.
 The change is to make the predicate accept a missing label, and to
 leave the fifth — overload resolution — able to fail.
+
+**What shipped.** Strict first, lax as a fallback: a call whose labels
+are written the way the declaration asks resolves exactly as it always
+did, and only a call the strict rule rejects is tried again with
+labels optional. No program that compiled before can reach the second
+pass, so the change cannot alter an existing meaning. An unlabelled
+call matching more than one overload is
+`ambiguous use of 'label': 'a:', 'b:'`.
+
+The lax rule is confined to calls whose argument count matches the
+parameter count -- there, every argument is positional and a label
+decorates rather than decides. A short list skipping defaults, and the
+arguments of a variadic, still require their labels, for the reason
+below.
 
 **Variadics need more than a lax predicate.** `variadicParams` uses
 the label to decide where the variadic list *stops*: it takes every
@@ -432,9 +451,13 @@ a small package beside it.
 So (b) needs no change to `analyzer`, `vil/gen`, `lower`, `mangle` or
 `build`. It needs a driver they already support.
 
-Recommend (a) first and (b) immediately after, because (a) is the part
-the language has to define and (b) is a build-system feature that can
-land without touching the language definition again.
+**What shipped: both.** (a) is the importer reading a folder's `.vs`
+files and handing them to the checker as `analyzer.Import`, exactly as
+it hands over an interface. (b) is `Unit.Packages` -- the folders a
+compilation imported, in dependency order -- and a loop in
+`internal/cli/build.go` that compiles each with its own module name
+and adds its object to the link. The prediction held: nothing in
+`analyzer`, `vil/gen`, `lower`, `mangle` or `build` changed for it.
 
 ### What changes, and what does not
 

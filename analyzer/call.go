@@ -3,6 +3,7 @@ package analyzer
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/token"
@@ -52,6 +53,44 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 	}
 	c.info.Diagnostics = c.info.Diagnostics[:quiet]
 
+	// Strict first, then lax. A label that was written the way the
+	// declaration asks for it resolves exactly as it always did, so
+	// no program that compiled before can reach the second pass and
+	// change meaning. Only a call the strict rule rejects -- one that
+	// left a label out, or wrote one where the declaration says `_`
+	// -- is tried again with labels optional.
+	fits := c.candidatesFitting(candidates, args, argTypes, c.labelFits)
+	if len(fits) != 1 {
+		lax := c.candidatesFitting(candidates, args, argTypes, c.labelFitsLax)
+		// More than one only because the labels were left off: the
+		// labels are what told these declarations apart, and without
+		// them the call names all of them. Saying which is the
+		// caller's business, and guessing is how a program calls a
+		// function nobody asked for.
+		if len(lax) > 1 && len(fits) == 0 {
+			c.errorf(fun.Pos(), "ambiguous use of '%s': %s",
+				id.Name.Text(c.file), candidateLabels(lax))
+			return nil
+		}
+		fits = lax
+	}
+	if len(fits) != 1 {
+		return nil
+	}
+	// The winner, not just its signature. Everything downstream reads
+	// the name's meaning out of Uses -- lowering mangles a call from
+	// the symbol it finds there -- and leaving the first declaration
+	// in place meant every call to an overloaded name reached the
+	// first one, whichever the arguments actually chose. It compiled
+	// and it ran and it called the wrong function.
+	c.info.Uses[id.Name] = fits[0]
+	return fits[0].Signature()
+}
+
+// candidatesFitting is every candidate the arguments fit, with fitsLabel
+// deciding how strictly a label is read.
+func (c *checker) candidatesFitting(candidates []*FuncSymbol, args []*ast.CallArg,
+	argTypes []types.Type, fitsLabel func(*ast.CallArg, *types.Param) bool) []*FuncSymbol {
 	var fits []*FuncSymbol
 	for _, cand := range candidates {
 		sig := cand.Signature()
@@ -60,7 +99,7 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 		}
 		ok := true
 		for i, t := range argTypes {
-			if !c.labelFits(args[i], sig.Params[i]) {
+			if !fitsLabel(args[i], sig.Params[i]) {
 				ok = false
 				break
 			}
@@ -86,17 +125,30 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 			fits = append(fits, cand)
 		}
 	}
-	if len(fits) != 1 {
-		return nil
+	return fits
+}
+
+// candidateLabels spells the candidates for an ambiguity message, as
+// the labels that would have told them apart.
+func candidateLabels(fits []*FuncSymbol) string {
+	var sb strings.Builder
+	for i, f := range fits {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("'")
+		sig := f.Signature()
+		if sig == nil {
+			sb.WriteString("?")
+		} else {
+			for _, p := range sig.Params {
+				sb.WriteString(paramName(p))
+				sb.WriteString(":")
+			}
+		}
+		sb.WriteString("'")
 	}
-	// The winner, not just its signature. Everything downstream reads
-	// the name's meaning out of Uses -- lowering mangles a call from
-	// the symbol it finds there -- and leaving the first declaration
-	// in place meant every call to an overloaded name reached the
-	// first one, whichever the arguments actually chose. It compiled
-	// and it ran and it called the wrong function.
-	c.info.Uses[id.Name] = fits[0]
-	return fits[0].Signature()
+	return sb.String()
 }
 
 // labelFits reports whether an argument's label is the one a
@@ -112,6 +164,23 @@ func (c *checker) labelFits(arg *ast.CallArg, param *types.Param) bool {
 		return want == "" || want == "_"
 	}
 	return arg.Label.Text(c.file) == want
+}
+
+// labelFitsLax is labelFits with the label optional, which is what
+// Vertex allows: a label may be left off, and one may be written
+// where the declaration says `_`. Labels are carried for
+// compatibility rather than as grammar, so both spellings reach the
+// same parameter.
+//
+// A written label still has to name this parameter -- by its label or
+// by the name its body uses -- because a label that names nothing is
+// a mistake rather than a spelling.
+func (c *checker) labelFitsLax(arg *ast.CallArg, param *types.Param) bool {
+	if arg.Label == nil {
+		return true
+	}
+	written := arg.Label.Text(c.file)
+	return written == param.Label || written == param.Name
 }
 
 // inferInstance is the type an initializer call produces. For a
@@ -244,15 +313,21 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 			break
 		}
 
-		// Check label matching
-		if param.Label != "" && param.Label != "_" {
-			if arg.Label == nil || arg.Label.Text(c.file) != param.Label {
-				var actualLabel string
-				if arg.Label != nil {
-					actualLabel = arg.Label.Text(c.file)
-				}
-				c.errorf(arg.Pos(), "incorrect argument label (have '%s:', expected '%s:')", actualLabel, param.Label)
-			}
+		// A label may be left off, and one may be written where the
+		// declaration says `_`: labels are carried for compatibility
+		// rather than as grammar, so both spellings reach the same
+		// parameter. What is still wrong is a label naming no
+		// parameter here, which is a mistake and not a spelling.
+		//
+		// This is the path where the argument count matches the
+		// parameter count, so every argument is positional and a
+		// label decorates rather than decides. Where that is not true
+		// -- a short list skipping defaults, or a variadic -- the
+		// label is what says which parameter is meant, and
+		// matchByLabel and variadicParams still require it.
+		if arg.Label != nil && !c.labelFitsLax(arg, param) {
+			c.errorf(arg.Pos(), "incorrect argument label (have '%s:', expected '%s:')",
+				arg.Label.Text(c.file), paramName(param))
 		}
 
 		argType := c.checkExpr(arg.X, param.Type, scope)

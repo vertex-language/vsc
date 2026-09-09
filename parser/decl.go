@@ -25,6 +25,8 @@ func (p *parser) parseDecl() ast.Decl {
 	switch {
 	case p.at(token.IMPORT):
 		return p.parseImport(lo, attrs, mods)
+	case p.atPackageClauseAt(0):
+		return p.parsePackage(lo, attrs, mods)
 	case p.at(token.LET), p.at(token.VAR):
 		return p.parseVarDecl(lo, attrs, mods)
 	case p.at(token.TYPEALIAS):
@@ -71,6 +73,21 @@ func (p *parser) parseDecl() ast.Decl {
 
 // ---- import ----
 
+// parsePackage reads `package Name`: the module this file belongs to.
+func (p *parser) parsePackage(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
+	d := &ast.PackageDecl{Keyword: p.pos()}
+	if len(attrs) > 0 {
+		p.errAt(attrs[0], "a package declaration takes no attributes")
+	}
+	if len(mods) > 0 {
+		p.errAt(mods[0], "a package declaration takes no modifiers")
+	}
+	p.next()
+	d.Name = p.expectIdent()
+	d.Span = p.span(lo)
+	return d
+}
+
 func (p *parser) parseImport(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
 	d := &ast.ImportDecl{Attrs: attrs, Mods: mods, Import: p.pos()}
 	p.next()
@@ -92,6 +109,32 @@ func (p *parser) parseImport(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifi
 			d.Kind, d.KindPos = token.IDENT, p.pos()
 			p.next()
 		}
+	}
+
+	// The Vertex forms name a folder rather than a module built
+	// elsewhere: a string, a parenthesised group of them, or a name
+	// bound to one. All three are reached only through a string, so
+	// no identifier import is read differently than before.
+	switch {
+	case p.at(token.LPAREN):
+		d.Lparen = p.pos()
+		p.next()
+		for !p.at(token.RPAREN) && !p.at(token.EOF) {
+			spec := p.parseImportPath()
+			if spec == nil {
+				break
+			}
+			d.Paths = append(d.Paths, spec)
+		}
+		d.Rparen = p.expect(token.RPAREN)
+		d.Span = p.span(lo)
+		return d
+	case p.atStringStart(0), p.at(token.IDENT) && p.atStringStart(1):
+		if spec := p.parseImportPath(); spec != nil {
+			d.Paths = append(d.Paths, spec)
+		}
+		d.Span = p.span(lo)
+		return d
 	}
 
 	for {
@@ -277,6 +320,33 @@ func (p *parser) parseAssociatedType(lo token.Pos, attrs []*ast.Attr, mods []*as
 
 // ---- functions, initializers, subscripts ----
 
+// atStringStart reports whether the token n ahead begins a string
+// literal, counting the pound run of a raw one.
+func (p *parser) atStringStart(n int) bool {
+	k := p.peek(n)
+	if k == token.POUND_DELIM {
+		k = p.peek(n + 1)
+	}
+	return k == token.STRING_QUOTE || k == token.MULTILINE_STRING_QUOTE
+}
+
+// parseImportPath reads one string-form import, with the name it
+// binds where the source gave one.
+func (p *parser) parseImportPath() *ast.ImportPath {
+	lo := p.pos()
+	spec := &ast.ImportPath{}
+	if p.at(token.IDENT) && p.atStringStart(1) {
+		spec.Alias = p.ident()
+	}
+	spec.Path = p.parseStringLit()
+	if spec.Path == nil {
+		p.errHere("expected an import path")
+		return nil
+	}
+	spec.Span = p.span(lo)
+	return spec
+}
+
 func (p *parser) parseFunc(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
 	d := &ast.FuncDecl{Attrs: attrs, Mods: mods, Func: p.pos()}
 	p.next()
@@ -312,6 +382,7 @@ func (p *parser) parseFuncSig() *ast.FuncSig {
 	s.Rparen = p.expect(token.RPAREN)
 	s.Async = p.takeWord("async")
 	s.Throws = p.parseThrowsClause()
+	s.Exec, s.ExecPos = p.parseExecKind()
 	if p.at(token.ARROW) {
 		rlo := p.pos()
 		arrow := p.pos()
@@ -321,6 +392,23 @@ func (p *parser) parseFuncSig() *ast.FuncSig {
 	}
 	s.Span = p.span(lo)
 	return s
+}
+
+// parseExecKind takes a Vertex execution modifier if one is here.
+//
+// It sits between the throws clause and the result arrow, which is a
+// position nothing else in the grammar can occupy: after the closing
+// paren only async, throws and the arrow may appear. So `kernel` and
+// `graph` stay contextual -- a function, a parameter or a variable may
+// still be called either one -- and no Swift file changes meaning.
+func (p *parser) parseExecKind() (ast.ExecKind, token.Pos) {
+	switch {
+	case p.atWord("kernel"):
+		return ast.ExecKernel, p.takeWord("kernel")
+	case p.atWord("graph"):
+		return ast.ExecGraph, p.takeWord("graph")
+	}
+	return ast.ExecNone, token.NoPos
 }
 
 func (p *parser) parseInit(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {

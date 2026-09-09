@@ -77,9 +77,27 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 // the program itself: files and the tables their positions are
 // measured against.
 type Import struct {
-	Name  string
+	// Name is the module's own name: what its symbols are mangled
+	// with, and what an interface of its own would declare.
+	Name string
+	// As is the name this program refers to it by, which differs from
+	// Name only where an import renamed it. Empty means Name.
+	//
+	// The two are separate because a rename is about the reference
+	// and not about the module: renaming does not change a symbol, so
+	// two modules that share a Name still collide at the link however
+	// the importing file spells them.
+	As    string
 	Files []*ast.File
 	Units []*token.File
+}
+
+// bound is the name this program looks the module up under.
+func (i Import) bound() string {
+	if i.As != "" {
+		return i.As
+	}
+	return i.Name
 }
 
 // CheckImporting checks files as a module that can see imports.
@@ -238,8 +256,8 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 		// own -- which recordModule gives it once every declaration is
 		// in -- what is in scope is what has been read so far, which
 		// is where those names are.
-		if c.modules[imp.Name] == nil {
-			c.modules[imp.Name] = scope
+		if c.modules[imp.bound()] == nil {
+			c.modules[imp.bound()] = scope
 		}
 		for i, f := range imp.Files {
 			if i < len(imp.Units) {
@@ -279,10 +297,10 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 // scope so that an unqualified name finds them all, and `Foundation.Data`
 // has to be able to mean Foundation's and not somebody else's.
 func (c *checker) recordModule(imp Import, scope *Scope) {
-	own := c.modules[imp.Name]
+	own := c.modules[imp.bound()]
 	if own == nil || own == scope {
 		own = NewScope(nil, token.NoPos, token.NoPos)
-		c.modules[imp.Name] = own
+		c.modules[imp.bound()] = own
 	}
 	for _, sym := range scope.Symbols() {
 		if _, already := c.info.Imported[sym]; already {

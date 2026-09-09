@@ -824,6 +824,17 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	}
 	g.recv = recv
 
+	// An execution modifier is reserved and has no backend. Refusing
+	// here rather than lowering it as an ordinary function is the
+	// whole point: a kernel that quietly ran on the CPU would return
+	// a right-looking answer and pass every test that only reads the
+	// answer.
+	if d.Sig != nil && d.Sig.Exec != ast.ExecNone {
+		g.errorAt(d.Name, "cannot lower a "+d.Sig.Exec.String()+
+			" function yet: the modifier is reserved and has no backend")
+		return
+	}
+
 	if !g.checkExistentialSignature(d, sig) {
 		return
 	}

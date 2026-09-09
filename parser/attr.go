@@ -265,6 +265,10 @@ func (p *parser) declStartAt(n int) bool {
 			case text == "actor" || text == "macro":
 				// Contextual declaration keywords: a name follows.
 				return p.peek(n+1) == token.IDENT
+			case p.atPackageClauseAt(n):
+				// `package Name` is the Vertex clause, not the access
+				// level. See atPackageClauseAt.
+				return true
 			case modifierWords[text]:
 				n = p.afterModifierAt(n)
 			default:
@@ -274,6 +278,29 @@ func (p *parser) declStartAt(n int) bool {
 			return false
 		}
 	}
+}
+
+// atPackageClauseAt reports whether a `package` clause begins at n:
+// the Vertex form naming the module a file belongs to.
+//
+// Swift spends the same word on an access level, and the two never
+// look alike -- the clause is followed by a plain identifier, the
+// modifier by a declaration keyword or another modifier. So `package
+// main` is a clause, `package func f()` is the access level, and
+// `package open func f()` is still the access level because what
+// follows is another modifier. No new word is reserved and no valid
+// Swift file changes meaning.
+func (p *parser) atPackageClauseAt(n int) bool {
+	t := p.peekTok(n)
+	if p.peek(n) != token.IDENT || t.Flags.Has(token.FlagEscaped) ||
+		p.text(t) != "package" {
+		return false
+	}
+	if p.peek(n+1) != token.IDENT {
+		return false
+	}
+	next := p.text(p.peekTok(n + 1))
+	return !modifierWords[next] && next != "actor" && next != "macro"
 }
 
 // isDeclKeyword reports whether a reserved word opens a declaration.

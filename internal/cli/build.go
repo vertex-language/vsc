@@ -165,7 +165,21 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 	if entry == "" {
 		entry = vsc.EntrySymbol(target)
 	}
-	exe, err := build.Executable([]build.Input{{Name: outputName(srcs, ".o"), Data: obj}},
+	// The program's object, then one per folder it imported. The
+	// compiler produces one module at a time by design, so building a
+	// program of several is this loop rather than anything inside it:
+	// each package is a Compile of its own with its own module name,
+	// and the linker already takes a list.
+	inputs := []build.Input{{Name: outputName(srcs, ".o"), Data: obj}}
+	for _, pkg := range u.Packages {
+		pobj, code := buildPackage(pkg, bf, target, stderr)
+		if code != exitOK {
+			return "", code
+		}
+		inputs = append(inputs, build.Input{Name: pkg.Name + ".o", Data: pobj})
+	}
+
+	exe, err := build.Executable(inputs,
 		build.LinkOptions{
 			Target:       target,
 			Entry:        entry,
@@ -176,6 +190,26 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 		return "", exitUsage
 	}
 	return out, write(out, stdout, stderr, exe, true)
+}
+
+// buildPackage compiles one imported folder as its own module.
+//
+// Its name is the module's, not the program's, because that is what
+// every symbol it defines is mangled with -- the same name the
+// program's call was mangled to look for.
+func buildPackage(pkg vsc.Package, bf *buildFlags, target ir.Target, stderr io.Writer) ([]byte, int) {
+	opts := bf.options(target, vsc.All)
+	opts.Module = pkg.Name
+	u, diags := vsc.Compile(pkg.Sources, opts)
+	if printDiags(stderr, diags) {
+		return nil, exitDiags
+	}
+	obj, err := object(u.VIR)
+	if err != nil {
+		fmt.Fprintf(stderr, "vsc: package %s (%s): %v\n", pkg.Name, pkg.Dir, err)
+		return nil, exitUsage
+	}
+	return obj, exitOK
 }
 
 func object(m *ir.Module) ([]byte, error) { return build.Object(m, build.Options{}) }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/vertex-language/vsc/analyzer"
@@ -68,6 +69,11 @@ type Options struct {
 	// Stop says which phase to stop after. The zero value runs them
 	// all.
 	Stop Phase
+	// PackagePaths are the roots a string-form import is looked for
+	// in: `import "std/fmt"` is `<root>/std/fmt` in each, in order.
+	// A path beginning `./` or `../` ignores these and resolves
+	// against the importing file instead.
+	PackagePaths []string
 	// ImportPaths are the directories an `import` is looked for in.
 	//
 	// A module is found by name: `import Lib` looks for
@@ -113,6 +119,26 @@ type Unit struct {
 	VIL *vil.Module
 	// VIR is the machine IR.
 	VIR *ir.Module
+	// Packages are the source folders this unit imported, in
+	// dependency order -- a module after the ones whose names it
+	// uses. Compiling and linking each is what makes the program
+	// runnable, and is the caller's to do: this package produces one
+	// module at a time, and a build of several is a build system.
+	Packages []Package
+}
+
+// A Package is a folder of source that a program imported, and the
+// module it is to be compiled as.
+type Package struct {
+	// Name is the module's name, which is what its symbols are
+	// mangled with -- so it is what Options.Module has to be when
+	// this package is compiled.
+	Name string
+	// Dir is where the folder was found, for a diagnostic that has to
+	// say which one.
+	Dir string
+	// Sources are its files, in a stable order.
+	Sources []Source
 }
 
 // Compile runs the phases in order and stops at the first one that
@@ -144,7 +170,8 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	// file. Where there is one file there is no ambiguity; where there
 	// are several, the message is still right and the line is not, so
 	// it is left unattributed rather than attributed wrongly.
-	imports, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths)
+	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths)
+	u.Packages = pkgs
 	diags = append(diags, importDiags...)
 	if Errors(diags) {
 		return u, diags
@@ -250,8 +277,8 @@ var errNoTarget = errors.New("no target: lowering needs a machine to lower for")
 // asked for it. Nothing used to be: `import Anything` was accepted
 // and ignored, so a program that imported a module that was not there
 // failed later, on every name it expected to find in it.
-func loadImports(files []*ast.File, units []*token.File, paths []string) ([]analyzer.Import, []Diagnostic) {
-	l := &importer{paths: paths, seen: map[string]bool{}}
+func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []string) ([]analyzer.Import, []Package, []Diagnostic) {
+	l := &importer{paths: paths, pkgPaths: pkgPaths, seen: map[string]bool{}}
 	for i, f := range files {
 		unit := f.Unit
 		if i < len(units) && units[i] != nil {
@@ -259,15 +286,17 @@ func loadImports(files []*ast.File, units []*token.File, paths []string) ([]anal
 		}
 		l.readAll(f, unit, "")
 	}
-	return l.out, l.diags
+	return l.out, l.pkgs, l.diags
 }
 
 // An importer reads a module and everything it stands on.
 type importer struct {
-	paths []string
-	seen  map[string]bool
-	out   []analyzer.Import
-	diags []Diagnostic
+	paths    []string
+	pkgPaths []string
+	seen     map[string]bool
+	out      []analyzer.Import
+	pkgs     []Package
+	diags    []Diagnostic
 }
 
 // readAll reads every module a file imports. `via` is the module
@@ -279,7 +308,16 @@ func (l *importer) readAll(f *ast.File, unit *token.File, via string) {
 			continue
 		}
 		imp, ok := decl.D.(*ast.ImportDecl)
-		if !ok || len(imp.Path) == 0 || unit == nil {
+		if !ok || unit == nil {
+			continue
+		}
+		// The string form names a folder of source rather than a
+		// module built elsewhere. A group is punctuation standing for
+		// one import each, so it is the same loop.
+		for _, spec := range imp.Paths {
+			l.readFolder(spec, imp, unit, via)
+		}
+		if len(imp.Path) == 0 {
 			continue
 		}
 		// The first component names the module; a dotted path beyond
@@ -436,4 +474,186 @@ func inSwiftModule(dir string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// importPathText is the text of a string-form import path.
+//
+// A path is a plain string: one run of text, no interpolation. That
+// is not a restriction anyone will feel -- a folder name is not
+// computed -- and it means the path is read without the escape
+// decoding a general string literal needs.
+func importPathText(lit *ast.StringLit, unit *token.File) (string, bool) {
+	if lit == nil || lit.Multiline || len(lit.Segments) != 1 {
+		return "", false
+	}
+	text, ok := lit.Segments[0].(*ast.StringText)
+	if !ok {
+		return "", false
+	}
+	return string(unit.Slice(text.Lo, text.Hi)), true
+}
+
+// findFolder resolves an import path to a directory.
+//
+// A path beginning `./` or `../` is relative to the file that wrote
+// it, which is the marked form: it says "not from the package
+// directory", and is what local work and tests use. Everything else
+// is looked for under each package root in order, which is where a
+// package manager leaves what it downloads.
+func findFolder(path, fromDir string, pkgPaths []string) (string, bool) {
+	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") {
+		dir := filepath.Join(fromDir, path)
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir, true
+		}
+		return "", false
+	}
+	for _, root := range pkgPaths {
+		dir := filepath.Join(root, filepath.FromSlash(path))
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
+// packageNameOf is the module a folder's files declare, or "" where
+// none of them says.
+//
+// One file saying is enough, and two disagreeing is the folder's
+// mistake rather than the importer's: it is reported where the module
+// is built, not at every program that imports it.
+func packageNameOf(files []*ast.File, units []*token.File) string {
+	for i, f := range files {
+		unit := f.Unit
+		if i < len(units) && units[i] != nil {
+			unit = units[i]
+		}
+		for _, stmt := range f.Stmts {
+			decl, ok := stmt.(*ast.DeclStmt)
+			if !ok {
+				continue
+			}
+			if pkg, ok := decl.D.(*ast.PackageDecl); ok && pkg.Name != nil && unit != nil {
+				return pkg.Name.Text(unit)
+			}
+		}
+	}
+	return ""
+}
+
+// SourceExtension is what a Vertex source file is called. A folder
+// import reads every one of these in the directory it names.
+const SourceExtension = ".vs"
+
+// readFolder reads one string-form import: a folder of source files,
+// checked as the module they declare.
+//
+// The folder's files are parsed and handed to the checker the way an
+// interface is, because an interface is source with the bodies taken
+// out -- the same passes run over both, and the bodies are not
+// checked either way. So a folder of source needs nothing of the
+// checker that an interface did not already need.
+func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *token.File, via string) {
+	severity := token.Error
+	if via != "" {
+		severity = token.Warn
+	}
+	fail := func(msg string) {
+		if via != "" {
+			msg += " (imported by " + via + ")"
+		}
+		l.diags = append(l.diags, Diagnostic{File: unit, Diagnostic: token.Diagnostic{
+			Pos:      spec.Pos(),
+			End:      spec.End(),
+			Severity: severity,
+			File:     unit,
+			Message:  msg,
+		}})
+	}
+
+	path, ok := importPathText(spec.Path, unit)
+	if !ok || path == "" {
+		fail("an import path must be a plain string")
+		return
+	}
+	dir, found := findFolder(path, filepath.Dir(unit.Name()), l.pkgPaths)
+	if !found {
+		where := "the package directory"
+		if strings.HasPrefix(path, ".") {
+			where = filepath.Dir(unit.Name())
+		}
+		fail("no such package '" + path + "': looked in " + where)
+		return
+	}
+	sources, err := filepath.Glob(filepath.Join(dir, "*"+SourceExtension))
+	if err != nil || len(sources) == 0 {
+		fail("package '" + path + "' has no " + SourceExtension + " files: " + dir)
+		return
+	}
+	sort.Strings(sources)
+
+	var files []*ast.File
+	var units []*token.File
+	var srcs []Source
+	for _, src := range sources {
+		text, err := os.ReadFile(src)
+		if err != nil {
+			fail("cannot read '" + src + "': " + err.Error())
+			return
+		}
+		tf := token.NewFile(src, text)
+		parsed, ds := parser.ParseFile(tf, 0)
+		if len(ds) > 0 {
+			fail("package '" + path + "' has a file this compiler cannot read: " + src)
+			return
+		}
+		files = append(files, parsed)
+		units = append(units, tf)
+		srcs = append(srcs, Source{Name: src, Text: text})
+	}
+
+	// The module's identity is what its files declare, or its
+	// folder's name where they declare nothing -- the convention
+	// SwiftPM already follows, with the clause as the override for a
+	// directory whose name is not an identifier.
+	name := packageNameOf(files, units)
+	if name == "" {
+		name = lastSegment(path)
+	}
+	if name == "" {
+		fail("cannot name the module for '" + path + "': add a package declaration")
+		return
+	}
+	// A rename says what this file calls the module. It does not
+	// change what the module is: its symbols are mangled with its own
+	// name, so two modules that share one still collide at the link.
+	as := name
+	if spec.Alias != nil {
+		as = spec.Alias.Text(unit)
+	}
+	if l.seen[as] {
+		return
+	}
+	l.seen[as] = true
+
+	// Its own imports first, so that the list is in the order the
+	// checker needs: a module after the ones whose names it uses.
+	for i, f := range files {
+		l.readAll(f, units[i], name)
+	}
+	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units})
+	// After its own imports, so the list a caller compiles is in the
+	// order it has to compile them.
+	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs})
+}
+
+// lastSegment is the final component of an import path, which is the
+// folder's own name and so the module's.
+func lastSegment(path string) string {
+	path = strings.TrimSuffix(path, "/")
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }

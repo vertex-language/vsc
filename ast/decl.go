@@ -53,6 +53,41 @@ type ImportDecl struct {
 	Kind    token.Kind
 	KindPos token.Pos
 	Path    []*Ident
+	// Paths is the Vertex string form, which names a folder rather
+	// than a module built elsewhere. Empty for the identifier form
+	// above; one entry for `import "std/fmt"`; one per entry for the
+	// group form, which is punctuation standing for an import each.
+	//
+	// Lparen and Rparen are the group's parentheses, NoPos when the
+	// declaration named a single path without them.
+	Paths  []*ImportPath
+	Lparen token.Pos
+	Rparen token.Pos
+}
+
+// ImportPath is one string-form import: the folder it names, and the
+// name to bind it under where the source said one.
+//
+// Alias is `fmt` in `import fmt "acme/fmt"`. It is nil where the name
+// comes from the path's last segment, which is the ordinary case.
+type ImportPath struct {
+	Span
+	Alias *Ident
+	Path  *StringLit
+}
+
+// PackageDecl is `package Name` at the top of a file: the module the
+// file belongs to, said in the source rather than passed to the
+// compiler.
+//
+// It is a Vertex addition, and `package` is contextual here: Swift
+// spends the same word on an access level, and the two never look
+// alike -- the clause is followed by a plain identifier, the modifier
+// by a declaration keyword or another modifier.
+type PackageDecl struct {
+	Span
+	Keyword token.Pos
+	Name    *Ident
 }
 
 // VarDecl is a ConstantDeclaration or a VariableDeclaration; Kind is
@@ -153,7 +188,35 @@ type FuncDecl struct {
 	Body     *CodeBlock
 }
 
-// FuncSig is ( [ParameterList] ) [async] [ThrowsClause]
+// An ExecKind is a Vertex execution modifier: where a function is
+// meant to run, as opposed to what it does. ExecNone is the zero
+// value and means an ordinary function, which is every function
+// Swift can write.
+type ExecKind int
+
+const (
+	// ExecNone is an ordinary function.
+	ExecNone ExecKind = iota
+	// ExecKernel is `kernel`: a data-parallel unit, one thread per
+	// element.
+	ExecKernel
+	// ExecGraph is `graph`: a node in a dataflow graph, traced rather
+	// than executed.
+	ExecGraph
+)
+
+// String is the modifier as it is written.
+func (k ExecKind) String() string {
+	switch k {
+	case ExecKernel:
+		return "kernel"
+	case ExecGraph:
+		return "graph"
+	}
+	return ""
+}
+
+// FuncSig is ( [ParameterList] ) [async] [ThrowsClause] [ExecKind]
 // [FunctionResult]. Throws covers rethrows.
 type FuncSig struct {
 	Span
@@ -162,7 +225,12 @@ type FuncSig struct {
 	Rparen token.Pos
 	Async  token.Pos
 	Throws *ThrowsClause
-	Result *FuncResult
+	// Exec is the execution modifier, ExecNone where there is none.
+	// ExecPos is where it was written, so a diagnostic can point at
+	// the word rather than at the declaration.
+	Exec    ExecKind
+	ExecPos token.Pos
+	Result  *FuncResult
 }
 
 // MemberBlock is the '{' … '}' of a type declaration. Members holds
@@ -417,6 +485,7 @@ type MacroDecl struct {
 
 func (*BadDecl) declNode()             {}
 func (*ImportDecl) declNode()          {}
+func (*PackageDecl) declNode()         {}
 func (*VarDecl) declNode()             {}
 func (*TypealiasDecl) declNode()       {}
 func (*FuncDecl) declNode()            {}

@@ -41,55 +41,63 @@ Types are spelled in lowercase:
 
 Each aliases a capitalised counterpart — see [Grammar](#grammar).
 
-### Designed, not yet built
+### Packages
 
-On record, but not built: all of this is a syntax error today.
-
-**Packages and path-based imports.** File-level package declarations
-and path imports, resolving underneath to the module and ownership
-semantics described under [Modules](#modules):
+A file may say which module it belongs to, and an import may name a
+folder of source rather than a module built elsewhere:
 
 ```swift
-package main
-
-import (
-    "github.com/username/repo1"
-    "github.com/username/repo2"
-)
-
-func main() -> int32 {
-    yourpackage.Something()
-    return 0
-}
+package geometry
 ```
+
+```swift
+import "std/fmt"          // a folder in the package directory
+import "./geometry"       // a folder beside this file
+import acmefmt "acme/fmt" // bound under another name
+```
+
+A parenthesised group stands for one `import` each.
+
+A path's last segment names the module — `"std/fmt"` provides `fmt` —
+unless the folder's files say otherwise with `package`. A path
+beginning `./` or `../` resolves against the importing file; anything
+else is looked for under each package-directory root, which is `-P`
+then `VERTEXPATH`. `vsc build` compiles each imported folder as its own
+module and links them, so a multi-module program is one command.
+
+`package` stays contextual: before a plain identifier it is this
+clause, before a declaration or another modifier it is Swift's access
+level, unchanged.
+
+### `kernel` and `graph`
+
+Two reserved function modifiers for compute and dataflow targets — a
+data-parallel unit and a graph node:
+
+```swift
+func add(_ a: float32) kernel -> float32 { return a }
+func add(_ a: float32) graph  -> float32 { return a }
+```
+
+They parse and typecheck, and the compiler refuses to lower one rather
+than build it as an ordinary function that would run on the CPU and
+return a right-looking answer. Neither has a backend yet.
+
+### Designed, not yet built
 
 **Receiver methods.** Methods declared outside the host type's body,
 across `struct`, `enum` and `class`, to keep large packages flatter
-while preserving the ownership conventions:
+while preserving the ownership conventions. This is a syntax error
+today:
 
 ```swift
-struct vec2 {
-    var x: float32
-    var y: float32
-}
+struct vec2 { var x: float32; var y: float32 }
 
 func (v: borrowing vec2) length() -> float32 {
     return (v.x * v.x + v.y * v.y).squareRoot()
 }
 
-func (v: inout vec2) scale(k: float32) {
-    v.x *= k
-    v.y *= k
-}
-```
-
-**`kernel` and `graph`.** Two reserved function modifiers for compute
-and dataflow targets — a data-parallel unit and a graph node.
-Reserved is all they are: no syntax, no semantics, no backend.
-
-```swift
-func add() kernel -> float32 { }   // accelerated execution
-func add() graph  -> float32 { }   // graph-based pipelines
+func (v: inout vec2) scale(k: float32) { v.x *= k; v.y *= k }
 ```
 
 ## Status
@@ -107,8 +115,8 @@ wishlist. Roughly:
 - generics, constraints, `where` clauses, associated types
 - protocols and existentials, including dispatch through them
 - optionals, tuples, closures, computed properties, nested types
-- `switch` and pattern matching, operators and precedence groups
-- the integer and floating-point widths, and conversions between them
+- `switch` and pattern matching, operators, precedence groups
+- the integer and float widths, and conversions between them
 
 Not there yet: `async`/`await` and actors; `throws` past the interface
 boundary — it typechecks and it can call a throwing imported function,
@@ -237,8 +245,6 @@ distinction matters.
 
 ### Argument labels
 
-*Designed, not yet built — an unlabelled call is an error today.*
-
 Labels are part of what Vertex carries for compatibility. Write them
 or leave them out, in either direction: `_` on a parameter is
 optional, and so is the label at the call.
@@ -250,11 +256,13 @@ addUp(1, 2)         // no labels
 addUp(a: 1, b: 2)   // labels, the Swift spelling
 ```
 
-Both declaration forms accept both call forms. The one place a label
-still decides something is overloading: where declarations differ only
-by label, an unlabelled call is an error naming the candidates rather
-than a guess, since `label(a:)` and `label(b:)` mangle to different
-symbols and picking one would call a function the caller never named.
+Both declaration forms accept both call forms. Labels still decide two
+things. Overloading: where declarations differ only by label, an
+unlabelled call is `ambiguous use of 'label': 'a:', 'b:'` rather than
+a guess, since the two mangle to different symbols. And a call that
+supplies fewer arguments than there are parameters, or one filling a
+variadic, still needs its labels — there the label is what says which
+parameter is meant.
 
 ### The ecosystem
 

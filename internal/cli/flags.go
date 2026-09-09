@@ -24,6 +24,7 @@ type common struct {
 	target  string
 	module  string
 	include includePath
+	pkgs    includePath
 }
 
 // includePath collects -I, which may be given more than once. The
@@ -41,6 +42,24 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.target, "target", vsc.HostName(), "target to build for")
 	fs.StringVar(&c.module, "module", vsc.EntryModule, "the module being compiled")
 	fs.Var(&c.include, "I", "a directory to look for imported modules in (repeatable)")
+	fs.Var(&c.pkgs, "P", "a package directory root, for string-form imports (repeatable)")
+}
+
+// packagePaths are the roots a string-form import is looked for in:
+// every -P in order, then VERTEXPATH.
+//
+// The environment supplies the default and the flag overrides it,
+// which is what lets a test point at a directory it populated and a
+// build stay reproducible without reading a developer's home
+// directory.
+func (c *common) packagePaths() []string {
+	out := append([]string{}, c.pkgs...)
+	for _, dir := range filepath.SplitList(os.Getenv("VERTEXPATH")) {
+		if dir != "" {
+			out = append(out, dir)
+		}
+	}
+	return out
 }
 
 // resolve turns the target flag into a target.
@@ -65,10 +84,11 @@ func (c *common) resolve() (ir.Target, error) {
 // wants it stopped.
 func (c *common) options(t ir.Target, stop vsc.Phase) vsc.Options {
 	return vsc.Options{
-		Module:      c.module,
-		Target:      t,
-		Stop:        stop,
-		ImportPaths: c.include,
+		Module:       c.module,
+		Target:       t,
+		Stop:         stop,
+		ImportPaths:  c.include,
+		PackagePaths: c.packagePaths(),
 	}
 }
 
