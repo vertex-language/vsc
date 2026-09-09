@@ -420,3 +420,58 @@ func use() -> int32 { return Vec.two.x + Vec(x: 2).scaled }
 		}
 	}
 }
+
+// TestComputedPropertyOnClassBorrowsReceiver: a getter's self is
+// @guaranteed the way a method's is, so handing over an owned copy
+// left a class reference nothing destroyed -- invalid VIL rather than
+// a refusal, caught by the verifier.
+func TestComputedPropertyOnClassBorrowsReceiver(t *testing.T) {
+	const src = `
+class Box {
+    var n: int32 = 5
+    var doubled: int32 { return n * 2 }
+}
+
+func use() -> int32 {
+    let b = Box()
+    return b.doubled + Box().doubled
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestBareComputedNameInMember: `doubled` inside another member means
+// `self.doubled`, the way a bare stored name means `self.n`. It
+// resolved and had no case in lowering.
+func TestBareComputedNameInMember(t *testing.T) {
+	const src = `
+struct Vec {
+    var x: int32
+    var doubled: int32 { return x * 2 }
+    var quad: int32 { return doubled * 2 }
+    func viaMethod() -> int32 { return doubled + 1 }
+    mutating func grow() { x = x + doubled }
+}
+
+enum Flag {
+    case on
+    var one: int32 { return 1 }
+    var two: int32 { return one * 2 }
+}
+
+func use() -> int32 {
+    var v = Vec(x: 3)
+    v.grow()
+    return v.quad + v.viaMethod() + Flag.on.two
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

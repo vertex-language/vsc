@@ -401,6 +401,12 @@ func (g *gen) ident(e *ast.IdentExpr) *vil.Value {
 		if v, ok := g.implicitStatic(e); ok {
 			return v
 		}
+		// And it may be a computed property of the same type, which
+		// is a call rather than a field: `doubled` inside another
+		// member means `self.doubled`.
+		if v, ok := g.implicitComputed(e); ok {
+			return v
+		}
 		g.unsupported(e)
 		return nil
 	}

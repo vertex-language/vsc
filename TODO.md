@@ -84,6 +84,22 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A computed property on a class emitted invalid VIL.** A getter's
+  self is `@guaranteed` the way a method's is — the caller keeps the
+  receiver alive across the call and the callee does not consume it —
+  but the call handed over an owned copy, so on a class it left a
+  reference nothing destroyed. The verifier caught it: an owned value
+  not consumed on all paths. Worse than a refusal, because the
+  compiler was producing IR it would not accept.
+- **A bare computed name inside a member was not lowered.**
+  `doubled` inside another member is `self.doubled`, the way a bare
+  stored name is `self.n` — but it is a call rather than a field, and
+  lowering had no case for it.
+- **A getter did not clear self.** One emitted after a mutating method
+  or an initializer inherited the storage that one was handed and read
+  its properties through an address belonging to another function. The
+  same slip as in `functionNamed`, in a second emission path;
+  `witness.go` had it right all along.
 - **An enum's computed and static members were never recorded.**
   `readMembers` took a var declaration only where the type had
   somewhere to put all three kinds, and an enum has no stored

@@ -73,8 +73,18 @@ func computedOf(t types.Type) []*types.Field {
 // is not modelled -- so one is refused rather than bound to the
 // static type's, which is the mistake methodCall already documents.
 func (g *gen) getter(e *ast.MemberExpr, recv types.Type, f *types.Field) *vil.Value {
+	return g.getterCall(e, recv, f, func() *vil.Value { return g.expr(e.X) })
+}
+
+// getterCall is the call a computed property's read becomes, over a
+// receiver the caller supplies. `v.doubled` takes it from the
+// expression before the dot; a bare `doubled` inside a member takes
+// it from self.
+func (g *gen) getterCall(at ast.Node, recv types.Type, f *types.Field,
+	receiver func() *vil.Value) *vil.Value {
+
 	if cl, ok := receiverClass(recv); ok && g.poly[cl] {
-		g.refuse(e, "a computed property of a class with a subclass, whose getter is "+
+		g.refuse(at, "a computed property of a class with a subclass, whose getter is "+
 			"reached through the table the instance carries")
 		return nil
 	}
@@ -88,10 +98,15 @@ func (g *gen) getter(e *ast.MemberExpr, recv types.Type, f *types.Field) *vil.Va
 	}
 	name, err := mangle.Getter(d)
 	if err != nil {
-		g.errorAt(e, "cannot name the getter of '"+f.Name+"': "+err.Error())
+		g.errorAt(at, "cannot name the getter of '"+f.Name+"': "+err.Error())
 		return nil
 	}
-	self := g.rvalue(e.X)
+	// Borrowed, not copied. A getter's self is @guaranteed the way a
+	// method's is -- the caller keeps it alive across the call and
+	// the callee does not consume it -- so an owned copy would be one
+	// nothing afterwards destroys. On a class that is a reference the
+	// verifier rejected: an owned value not consumed on all paths.
+	self := receiver()
 	if self == nil {
 		return nil
 	}
@@ -245,6 +260,12 @@ func (g *gen) emitGetter(recv types.Type, name string, t types.Type,
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes = nil
 	g.loops, g.pending = nil, ""
+	// Cleared per function, like the locals. A getter emitted after a
+	// mutating method or an initializer inherited the storage that
+	// one was handed, and read its properties through an address
+	// belonging to another function -- which the verifier caught as a
+	// use its definition does not dominate.
+	g.self = nil
 	g.push()
 	g.blk = f.Entry()
 
@@ -408,6 +429,35 @@ func (g *gen) implicitStatic(e *ast.IdentExpr) (*vil.Value, bool) {
 		}
 		member := &ast.MemberExpr{Name: e.Name}
 		return g.staticGetter(member, g.recv, f), true
+	}
+	return nil, false
+}
+
+// implicitComputed reads a computed property of the type a member is
+// written in, for a bare name that is one.
+//
+// `doubled` inside another member of the same type means
+// `self.doubled`, the way a bare stored name means `self.n`. The
+// difference is that this one is a call: a computed property is a
+// getter with nothing behind it.
+func (g *gen) implicitComputed(e *ast.IdentExpr) (*vil.Value, bool) {
+	if g.recv == nil || e.Name == nil {
+		return nil, false
+	}
+	name := g.text(e.Name)
+	for _, f := range computedOf(g.recv) {
+		if f == nil || f.Name != name {
+			continue
+		}
+		return g.getterCall(e, g.recv, f, func() *vil.Value {
+			// Storage where the receiver is one -- an initializer's,
+			// or a mutating method's inout self -- and the value
+			// otherwise. Either way it is borrowed for the call.
+			if g.self != nil && g.self.addr != nil && !isClass(g.recv) {
+				return g.loaded(g.blk.Load(g.self.addr, loadQualifier(g.self.typ)), g.self.typ)
+			}
+			return g.selfValue()
+		}), true
 	}
 	return nil, false
 }
