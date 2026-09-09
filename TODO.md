@@ -32,11 +32,18 @@ that corpus and the three beside it.
 
 None known.
 
-Two have been found and both are gone: a getter emitted from the
-setter's body, and property observers that never ran. Each compiled,
-linked, and answered wrongly with nothing said anywhere — which is why
-this section stays at the front, and why "it builds" is never the
-test.
+Six have been found and all six are gone: a getter emitted from the
+setter's body, property observers that never ran, a shift that
+answered for counts in range and no others, a ternary arm that handed
+its join the wrong width, an assignment into an optional that stored
+four bytes over five, and a subclass whose inherited properties were
+never initialized.
+
+Every one of them compiled, linked and answered, and nothing was said
+anywhere — which is why this section stays at the front, and why "it
+builds" is never the test. Four of the six were found by writing a
+program into `tests/compiler/` and comparing the two answers, and
+none by reading the code.
 
 ## Wrongly accepted
 
@@ -56,6 +63,24 @@ member.
 Found by writing it into a corpus program and having *swiftc* reject
 the program rather than the compiler.
 
+### A constant that overflows is trapped rather than refused
+
+```swift
+func main() -> Int32 {
+    let lo: Int32 = -2147483648
+    return -lo
+}
+```
+
+swiftc refuses that at compile time — "arithmetic operation
+'0 - -2147483648' results in an overflow" — because both operands are
+constants and it can see the answer. This builds it and traps at run
+time, which is the same outcome said later.
+
+The mildest kind: a program that never produces a wrong number, and a
+diagnostic that arrives after the build rather than during it. The
+same expression over a variable traps in both, identically.
+
 ## Wrongly refused
 
 Valid programs that do not build yet. Each says so where it is
@@ -70,6 +95,7 @@ feature is missing.
 | a subscript | `cannot lower a subscript of 'Box' yet` |
 | `throw`, `do`/`catch` | `cannot lower a throw yet` |
 | a *stored* static property | `it needs storage of its own and the one-time initializer that fills it` |
+| `Int32.max`, `Int32.min` | `cannot lower this expression yet` |
 | top-level code | `top-level code is not supported` |
 | a global `let` or `var` | `cannot lower this expression yet`, at the read |
 | a user-declared operator | `cannot lower this expression yet` |
@@ -78,11 +104,22 @@ feature is missing.
 | a static computed property's setter | not emitted; static storage comes first |
 | a String `rawValue` | `whose cases are not all numbers` |
 | an optional payload that owns what it holds | `which owns what it holds` |
+| `Bool?` | `an optional with no tag byte whose payload is not a reference` |
 | a tuple pattern in a `switch` | `held in memory rather than in a register` |
 | a payload enum wider than one word | `an enum whose cases carry values … cannot cross a call` |
 | a protocol extension | `value of type 'S' has no member 'twice'` |
 
-Two of these entries want a note.
+Three of these entries want a note.
+
+**`Bool?`** is a layout question rather than a missing feature. It is
+one byte, not two: a Bool uses two of a byte's values and the empty
+case takes a third, which Swift calls an extra inhabitant.
+`types/layout.go` already knows that — `hasSpareValues` is where it
+decides — and `lower`'s optionalImage does not, because it knows the
+one shape where a tag byte follows the payload and no other. So the
+size is right everywhere and the bytes cannot be built. Every optional
+whose payload has spare values is the same entry; `Bool?` is the one
+reachable without a library.
 
 A tuple, a payload enum past a word, and an aggregate that owns
 something are **one piece of work, not three**: each is a value this
@@ -121,6 +158,20 @@ Kept short, because the shape of each is worth more than the detail.
 
 **Answered wrongly:**
 
+- **`<<` and `>>` answered only for counts in range.** They were
+  lowered to `shl` and `ashr`, which say nothing about a count of the
+  width or more; Swift's answer for every count there is, and a
+  negative one shifts the other way. `1 << 40` on an Int32 gave a
+  number where Swift gives zero.
+- A **subclass's inherited stored properties were never
+  initialized**. The default initializer stored what the class
+  declared, and an instance holds what its superclass declared too,
+  so those kept whatever the allocation left there.
+- A **ternary arm** handed its join the arm's own type rather than
+  the expression's, so `c ? nil : v` passed four bytes on one edge
+  and five on the other.
+- An **assignment into an optional did not inject**, so `d = 6 / 2`
+  stored the three over the tag byte's neighbour and left d nil.
 - A getter was emitted from the **setter's body**, wherever a property
   wrote `set` before `get`. Accessors were picked by position rather
   than by keyword.
@@ -138,6 +189,26 @@ Kept short, because the shape of each is worth more than the detail.
 
 **Refused wrongly:**
 
+- **`guard let` and `while let` did not bind**, and neither did a
+  second condition after a binding. Each statement built its control
+  flow from a bit, and a binding condition is a switch over which
+  case an optional holds; only `if` had a special case for it, for
+  exactly one condition.
+- **Half the operator table was missing a precedence group**, and an
+  operator with none falls back to a non-associative one, so
+  `a & b == 8` folded as `a & (b == 8)`.
+- The **masking operators** — `&+`, `&-`, `&*`, `&<<`, `&>>` — were
+  neither declared nor lowered, and neither were their compound
+  forms.
+- An **operator written where an optional was wanted** read its
+  operands as optionals: `let a: Int32? = 1 + 2` did not convert, and
+  `-7` there reported that `-` cannot be applied to an `Int32?`.
+- **Optionals could not be compared** — to each other, or to a value
+  that is not one. `a == b` typed and would not lower; `a == 7` did
+  not type.
+- An **inherited property could not be named without `self`**, because
+  the checker resolves an unqualified name through the scope chain
+  and inheritance is not lexical.
 - **`mutating` could not write to its receiver.** `self` crossed every
   call by value, so no `mutating func` on a value type could do the
   thing it exists for. Unblocked `inout` receivers too.

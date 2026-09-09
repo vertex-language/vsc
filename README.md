@@ -105,7 +105,7 @@ body reaches members by the receiver's name or by implicit `self`.
 One target: `aarch64-macos`. Apple silicon, macOS.
 
 What the language can express today is defined by `tests/compiler/` —
-156 whole programs the compiler builds and runs. A program goes in
+192 whole programs the compiler builds and runs. A program goes in
 once it works, and a refusal fails the suite rather than being
 skipped, so the corpus states what works rather than a wishlist.
 Roughly:
@@ -114,7 +114,8 @@ Roughly:
 - `struct`, `class`, `enum` with payloads, inheritance, initializers
 - generics, constraints, `where` clauses, associated types
 - protocols and existentials, including dispatch through them
-- optionals, tuples, closures, computed properties, nested types
+- optionals: binding conditions, chains, `??`, `!`, and comparison
+- tuples, closures, computed properties, nested types
 - `switch` and pattern matching, operators, precedence groups
 - the integer and float widths, and conversions between them
 
@@ -383,7 +384,7 @@ Four corpora, each asking one question. A file belongs to exactly one.
 | --- | ---: | --- |
 | `tests/syntax/` | 94 files | Does it parse? |
 | `tests/check/` | 62 files | Does it typecheck, and say the right thing when it does not? |
-| `tests/compiler/` | 156 programs | Does the program do what it says? |
+| `tests/compiler/` | 192 programs | Does the program do what it says? |
 | `tests/interop/` | 20 cases | Does what this builds agree with the ecosystem it links against? |
 
 ```bash
