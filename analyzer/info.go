@@ -55,6 +55,12 @@ type Info struct {
 	// Receivers is the type a receiver method belongs to: the method
 	// written outside its type's body, with the receiver named.
 	Receivers map[*ast.FuncDecl]types.Type
+	// FieldDefaults is the expression a stored property was declared
+	// with, for the properties that have one. A memberwise
+	// initializer that leaves one out is asking for this, and it
+	// lives on the declaration rather than at the call -- so without
+	// it there is nothing at the call to lower.
+	FieldDefaults map[*types.Field]ast.Expr
 
 	// Specializations is what a call to a generic function resolved
 	// to: which type each of its parameters took.
@@ -115,6 +121,7 @@ func NewInfo() *Info {
 		Methods:         make(map[*ast.MemberExpr]*MethodRef),
 		Extensions:      make(map[*ast.ExtensionDecl]types.Type),
 		Receivers:       make(map[*ast.FuncDecl]types.Type),
+		FieldDefaults:   make(map[*types.Field]ast.Expr),
 		Specializations: make(map[*ast.CallExpr]Specialization),
 		Defaults:        make(map[*types.Param]ast.Expr),
 		Imported:        make(map[Symbol]string),

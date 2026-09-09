@@ -241,9 +241,14 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 		for i, el := range elems {
 			c.declareCasePattern(el.Pat, elementAt(assoc, i, len(elems)), scope)
 		}
+	// `case (0, let b)` matches a tuple element by element, so each
+	// one is checked against the subject's element at that position.
+	// Passing the whole tuple down made every element an error about
+	// a scalar that cannot match a tuple -- and gave a binding the
+	// tuple's type rather than its own.
 	case *ast.TuplePattern:
-		for _, el := range p.Elems {
-			c.declareCasePattern(el.Pat, subjectType, scope)
+		for i, el := range p.Elems {
+			c.declareCasePattern(el.Pat, elementAt(subjectType, i, len(p.Elems)), scope)
 		}
 	}
 }

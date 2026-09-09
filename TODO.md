@@ -42,6 +42,8 @@ already correct; only the feature is missing.
 | binding an optional of a wide payload | `whose payload is more than one register` |
 | top-level code | `top-level code is not supported` |
 | a static computed property's setter | not emitted; static storage first |
+| `defer` | `cannot lower a defer` |
+| a tuple pattern in a `switch` | `cannot lower this pattern in a switch` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
 | a computed property of a class with a subclass | `reached through the table the instance carries` |
@@ -88,6 +90,20 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A memberwise initializer could not leave a property to its
+  default.** `S()` where `S` declares `var n: int32 = 5` was refused —
+  as ordinary as Swift gets. The default is an expression on the
+  declaration rather than at the call, so nothing at the call had it
+  to lower; the analyzer recorded *that* there was one and not what it
+  was. It records the expression now, and construction walks the
+  properties in order taking the argument where there is one and the
+  default where there is not.
+- **A tuple pattern checked every element against the whole tuple.**
+  `case (0, 0)` over a pair of `int32` was two errors about a scalar
+  that cannot match a tuple, and a binding in one got the tuple's type
+  rather than its own. Each element is checked against the subject's
+  element at that position now — which the enum-case branch beside it
+  had been doing all along.
 - **A `switch` could not bind or guard.** `case let k` was refused as
   "this pattern in a switch", and a `where` clause with it. A binding
   names the subject and matches whatever it is, so it is a default

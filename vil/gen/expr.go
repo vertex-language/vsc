@@ -816,22 +816,58 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *vil.Value
 	if e.Args != nil {
 		args = e.Args.Args
 	}
-	if len(args) != len(st.Fields) {
-		g.refuse(e, "a constructor that leaves a property to its default")
-		return nil
-	}
 
-	values := make([]*vil.Value, 0, len(args))
-	for _, a := range args {
-		v := g.rvalue(a.X)
+	// One value per stored property, in declaration order, which is
+	// the order the memberwise initializer takes them in. A property
+	// the call left out is its default, lowered from the declaration
+	// -- the expression is not at the call, which is why this needed
+	// the syntax the type was written in.
+	values := make([]*vil.Value, 0, len(st.Fields))
+	next := 0
+	for _, f := range st.Fields {
+		if f == nil {
+			g.refuse(e, "a constructor of a type whose properties this cannot read")
+			return nil
+		}
+		var from ast.Expr
+		switch {
+		case next < len(args) && g.argIsFor(args[next], f):
+			from = args[next].X
+			next++
+		case f.HasDefault:
+			from = g.info.FieldDefaults[f]
+		}
+		if from == nil {
+			g.refuse(e, "a constructor with no value for '"+f.Name+"'")
+			return nil
+		}
+		v := g.rvalue(from)
 		if v == nil {
 			return nil
 		}
 		values = append(values, v)
 	}
+	if next != len(args) {
+		g.refuse(e, "a constructor whose arguments do not match the properties in order")
+		return nil
+	}
 	made := g.blk.Struct(lowerType(t), values...)
 	g.destroyLater(made)
 	return made
+}
+
+// argIsFor reports whether this argument is the one the memberwise
+// initializer takes for that property. A memberwise argument is
+// labelled with the property's own name, and one written without a
+// label is for the property it stands in front of.
+func (g *gen) argIsFor(a *ast.CallArg, f *types.Field) bool {
+	if a == nil {
+		return false
+	}
+	if a.Label == nil {
+		return true
+	}
+	return g.text(a.Label) == f.Name
 }
 
 // makeClass makes an instance of a class.

@@ -540,12 +540,19 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 	if !ok {
 		return nil
 	}
-	return []*types.Field{{
+	f := &types.Field{
 		Name:       idPat.Name.Text(c.file),
 		Type:       fieldType,
 		IsConst:    isConst,
 		HasDefault: b.Value != nil,
-	}}
+	}
+	// What the default is, and not only that there is one. A
+	// memberwise initializer that leaves the property out is asking
+	// for this expression, which lives here rather than at the call.
+	if b.Value != nil {
+		c.info.FieldDefaults[f] = b.Value
+	}
+	return []*types.Field{f}
 }
 
 // isComputed reports whether a binding is a computed property rather

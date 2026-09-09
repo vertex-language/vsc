@@ -666,3 +666,60 @@ func doubleIt(_ n: int32) -> int32 {
 		}
 	}
 }
+
+// TestMemberwiseDefaults: a memberwise initializer may leave a
+// property to its default. The default is an expression on the
+// declaration rather than at the call, so the call had nothing to
+// lower and every such construction was refused.
+func TestMemberwiseDefaults(t *testing.T) {
+	const src = `
+struct Config {
+    var width: int32 = 10
+    var height: int32 = 20
+    var depth: int32
+}
+
+struct All {
+    var a: int32 = 1
+    var b: int32 = 2
+}
+
+struct Derived {
+    var base: int32 = 6 * 7
+}
+
+func use() -> int32 {
+    let a = Config(depth: 3)
+    let b = Config(width: 5, depth: 7)
+    let d = All()
+    let e = All(a: 9)
+    return a.width + b.height + d.b + e.a + Derived().base
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestTuplePattern: a tuple pattern matches element by element, so
+// each is checked against the subject's element at that position.
+// Passing the whole tuple down made every element an error.
+func TestTuplePattern(t *testing.T) {
+	const src = `
+func pairKind(_ p: (int32, int32)) -> int32 {
+    switch p {
+    case (0, 0): return 1
+    case (let a, 0): return a
+    case (0, let b): return b
+    case (let a, let b): return a + b
+    }
+}
+`
+	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
