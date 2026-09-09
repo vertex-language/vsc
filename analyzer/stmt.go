@@ -420,7 +420,9 @@ func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
 		c.checkMembers(d, d.Body, c.declaredType(d.Name, scope))
 
 	case *ast.EnumDecl:
-		c.checkMembers(d, d.Body, c.declaredType(d.Name, scope))
+		self := c.declaredType(d.Name, scope)
+		c.checkMembers(d, d.Body, self)
+		numberRawCases(self)
 
 	case *ast.ExtensionDecl:
 		c.checkMembers(d, d.Body, c.resolveType(d.Type, scope))
@@ -561,9 +563,15 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 	// type is fixed by the enum's own declaration.
 	case *ast.EnumCaseDecl:
 		for _, el := range m.Elements {
-			if el.Value != nil {
-				c.checkExpr(el.Value, rawValueOf(self), typeScope)
+			if el.Value == nil {
+				continue
 			}
+			c.checkExpr(el.Value, rawValueOf(self), typeScope)
+			// And what the value is, not only that it fits. A case's
+			// raw value is what `rawValue` answers, and it is not the
+			// case's tag: `case bad = 7` is the second case and
+			// carries a 7.
+			c.recordRawValue(self, el)
 		}
 
 	// A nested type is a type: its members are checked in its own
@@ -575,7 +583,9 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 	case *ast.ActorDecl:
 		c.checkMembers(m, m.Body, c.declaredType(m.Name, typeScope))
 	case *ast.EnumDecl:
-		c.checkMembers(m, m.Body, c.declaredType(m.Name, typeScope))
+		inner := c.declaredType(m.Name, typeScope)
+		c.checkMembers(m, m.Body, inner)
+		numberRawCases(inner)
 	case *ast.ExtensionDecl:
 		c.checkMembers(m, m.Body, c.resolveType(m.Type, typeScope))
 	}
@@ -743,5 +753,61 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 		for _, st := range d.Body.Stmts {
 			c.checkStmt(st, bodyScope)
 		}
+	}
+}
+
+// recordRawValue stores the number a case of a raw-value enum was
+// declared with, where it is one this compiler can read.
+//
+// Only integers: a string raw value needs a string constant to answer
+// with, and there is no answering one yet.
+func (c *checker) recordRawValue(self types.Type, el *ast.EnumCaseElem) {
+	en, ok := self.Underlying().(*types.Enum)
+	if !ok || en.RawType == nil || el.Name == nil {
+		return
+	}
+	v, found := c.info.Values[el.Value]
+	if !found || v.Kind != IntValue {
+		return
+	}
+	name := el.Name.Text(c.file)
+	for _, k := range en.Cases {
+		if k != nil && k.Name == name {
+			k.RawInt, k.HasRawInt = int64(v.Int), true
+			return
+		}
+	}
+}
+
+// numberRawCases fills in the raw values a declaration left out.
+//
+// Swift numbers an integer-raw enum from zero and continues from the
+// last case that said a number: `case a, b, c` is 0, 1, 2, and
+// `case a = 3, b` is 3 then 4. Only integers -- a String raw value
+// left out is the case's own name, which needs a string constant to
+// answer with.
+func numberRawCases(self types.Type) {
+	if self == nil {
+		return
+	}
+	en, ok := self.Underlying().(*types.Enum)
+	if !ok || en.RawType == nil {
+		return
+	}
+	b, ok := en.RawType.Underlying().(*types.Basic)
+	if !ok || b.Info()&types.IsInteger == 0 {
+		return
+	}
+	next := int64(0)
+	for _, k := range en.Cases {
+		if k == nil {
+			continue
+		}
+		if k.HasRawInt {
+			next = k.RawInt + 1
+			continue
+		}
+		k.RawInt, k.HasRawInt = next, true
+		next++
 	}
 }

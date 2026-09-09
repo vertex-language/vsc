@@ -492,6 +492,13 @@ type EnumCase struct {
 	Name           string
 	AssociatedType Type
 	RawValue       string
+
+	// RawInt is the number a case of a raw-value enum was declared
+	// with, and HasRawInt says there is one. `case bad = 7` carries a
+	// 7, which is not its tag -- the tag is where the case sits among
+	// the others, and rawValue answers what the source wrote.
+	RawInt    int64
+	HasRawInt bool
 }
 
 // Enum is a type that is one of its cases. RawType is set for one

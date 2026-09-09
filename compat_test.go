@@ -928,3 +928,52 @@ func use() -> int32 {
 		t.Errorf("diagnostic names the operand's type, not the operator's: %s", diags[0])
 	}
 }
+
+// TestEnumRawValue: the raw type was never recorded, so `rawValue`
+// did not exist -- and exposing it without lowering it answered the
+// case's tag, which is not the value the source wrote.
+func TestEnumRawValue(t *testing.T) {
+	const src = `
+enum Code: int32 {
+    case ok = 1
+    case bad = 7
+}
+
+enum Step: int32 {
+    case first
+    case second
+    case third
+}
+
+enum Port: int32 {
+    case low = 10
+    case mid
+}
+
+func use() -> int32 {
+    return Code.bad.rawValue + Step.third.rawValue + Port.mid.rawValue
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestStringRawValueRefused: a String raw value needs a string
+// constant to answer with, and there is no making one yet -- so it is
+// refused rather than answered with something else.
+func TestStringRawValueRefused(t *testing.T) {
+	const src = `
+enum Name: string {
+    case a = "x"
+    case b = "y"
+}
+
+func use() -> string { return Name.a.rawValue }
+`
+	if _, diags := compile(t, src, vsc.Options{}); !vsc.Errors(diags) {
+		t.Error("a string rawValue was lowered")
+	}
+}

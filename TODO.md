@@ -25,27 +25,6 @@ section is worth keeping in front of the rest.
 
 ## Accepted where Swift refuses
 
-### An enum's rawValue cannot be read
-
-```swift
-enum Code: int32 {
-    case ok = 1
-    case bad = 7
-}
-```
-
-```
-error: value of type 'Code' has no member 'rawValue'
-```
-
-Swift synthesizes the property for an enum that declares a raw type,
-and nothing here declares it. The raw type is recorded now, which is
-what the case values are checked against — but reading one back needs
-lowering that maps a case to the value it was declared with, and
-without that the member answers the tag: `Code.bad.rawValue` would be
-1 rather than 7. So the type is known and the property is still
-absent, which is the honest half of it.
-
 
 
 
@@ -77,6 +56,7 @@ already correct; only the feature is missing.
 | an optional chain | `cannot lower this expression yet` |
 | a failable initializer | `cannot lower a failable initializer` |
 | a user-declared operator | `cannot lower this expression yet` |
+| a String `rawValue` | `whose cases are not all numbers` |
 | a force unwrap `o!` | `cannot lower this expression yet` |
 | a tuple pattern in a `switch` | `a tuple pattern over (Int32, Int32), which is held in memory` |
 | a subscript | `cannot lower a subscript of 'T'` |
@@ -134,6 +114,15 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **An enum's `rawValue` could not be read.** The raw type was never
+  recorded, though `rawValueOf` existed to read it — so the property
+  did not exist, and the case values were checked against nothing. It
+  is a switch over the case now, each arm handing the join what the
+  source wrote, because the value is not the tag: `case bad = 7` is
+  the second case carrying a 7, and answering the tag answers 1.
+  Cases the declaration leaves out are numbered Swift's way, from
+  zero and continuing from the last that said a number. A String raw
+  value is refused: answering one needs a string constant.
 - **A custom operator over literals took the wrong type.** A literal
   has no type of its own to match a declaration with, and an
   operator's operands have no context until the operator is known —

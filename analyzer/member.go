@@ -329,6 +329,12 @@ func (c *checker) lookupMember(t types.Type, name string) types.Type {
 			return c.lookupMember(b.Superclass, name)
 		}
 	case *types.Enum:
+		// `Code.ok.rawValue` is the value the case was declared with.
+		// Swift synthesizes the property for an enum that declares a
+		// raw type, and nothing here declares it.
+		if name == "rawValue" && !onType && b.RawType != nil {
+			return known(b.RawType)
+		}
 		for _, f := range b.Computed {
 			if f.Name == name && !onType {
 				return known(f.Type)

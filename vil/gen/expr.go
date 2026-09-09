@@ -529,6 +529,13 @@ func (g *gen) member(e *ast.MemberExpr) *vil.Value {
 			"other than a function through a module")
 		return nil
 	}
+	// `c.rawValue` on an enum declared with a raw type. The value is
+	// not the case's tag -- `case bad = 7` is the second case and
+	// carries a 7 -- so it is a switch over the case, each arm
+	// handing the join what the source wrote.
+	if en, ok := rawValueRead(g.typeOf(e.X), g.text(e.Name)); ok {
+		return g.rawValue(e, en)
+	}
 	// A computed property is a function that looks like a field:
 	// there is no storage to read, so this is a call to its getter.
 	// See computed.go.
