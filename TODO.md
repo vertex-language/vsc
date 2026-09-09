@@ -17,15 +17,17 @@ Vertex is an independent compiler targeting the Swift language specification plu
 * **Functions & closures:** Capturing closures, failable initializers, custom operators, and `super` calls.
 * **Declarations & members:** Subscripts, global variables/constants, stored static properties, and computed properties on subclassed classes.
 * **Objective-C:** `@objc` is rejected outright; it needs the Objective-C runtime, message dispatch, and class metadata, none of which exist.
-* **C entry points beyond scalars:** `@_cdecl` is rejected for any signature whose parameters or result do not cross in a register.
-* **Types & data layout:** `Bool?` and other optionals relying on spare bits/extra inhabitants, tuple pattern matching in `switch`, and payload enums exceeding one word in width.
+* **C entry points beyond scalars and pointers:** `@_cdecl` is rejected for any signature whose parameters or result do not cross in a register.
+* **Pointer arithmetic and allocation:** `p + n`, `p.advanced(by:)`, `p[i]`, `allocate(capacity:)` and `deallocate()` are not implemented. `p[i]` needs subscripts; allocation can be reached through C's own `malloc` and `free` in the meantime.
+* **Buffer pointers:** `UnsafeBufferPointer` and its mutable form are not modelled.
+* **Converting an optional pointer:** `UnsafeRawPointer(p)` where `p` is already optional is rejected; the result's optionality is not decided.
+* **Types & data layout:** `Bool?` (and any optional whose payload's spare representation is not null — references and pointers work), tuple pattern matching in `switch`, and payload enums exceeding one word in width.
 * **Protocols & extensions:** Protocol extensions cannot resolve protocol requirements or expose default implementations to conforming types.
 * **Top-level code:** File-scope executable statements are rejected (requires an explicit `func main`).
 
 
 * **Unimplemented Subsystems:**
 * Concurrency (`async`/`await`, actors).
-* C-compatible pointer types (`UnsafePointer`, `UnsafeMutablePointer`, `OpaquePointer`, etc.). These are what block every C signature that is not scalars, so they gate the rest of C interop.
 * Clang importer (bridging headers, C module maps, and Objective-C runtime dispatch).
 
 
@@ -63,6 +65,11 @@ Vertex is an independent compiler targeting the Swift language specification plu
 * Functions declared with no body and no symbol attribute are rejected instead of silently lowering to a trap.
 * Duplicate object-file symbols are caught in both declaration orders rather than producing one function with two bodies.
 * New `tests/cinterop/` corpus: a C program built by clang links against a module built by this compiler and calls into it, and Vertex calls back into C.
+* Unsafe pointer types (`UnsafePointer`, `UnsafeMutablePointer`, `UnsafeRawPointer`, `UnsafeMutableRawPointer`, `OpaquePointer`) with layout, mangling, and calling convention identical to swiftc's.
+* `p.pointee` reads and writes through an address; writing through an immutable `UnsafePointer` is rejected.
+* `&x` where a pointer is wanted is Swift's inout-to-pointer conversion, so C functions with out-parameters are callable from Vertex.
+* Optional pointers are one word, using null as the empty case exactly as Swift does, so a nullable C pointer is the same argument in both languages.
+* Pointer-to-pointer conversions and pointer equality.
 
 
 * **Semantic Validation Fixes:**

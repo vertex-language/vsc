@@ -70,6 +70,39 @@ func (m *mangler) typ(t types.Type) error {
 		m.writeByte('G')
 		return nil
 
+	// The unsafe pointers. Four have a standard substitution of their
+	// own -- Swift spends two letters on each because a C-facing
+	// signature is made of them -- and OpaquePointer does not, being
+	// an ordinary struct in the standard library.
+	//
+	//	SP  UnsafePointer            SV  UnsafeRawPointer
+	//	Sp  UnsafeMutablePointer     Sv  UnsafeMutableRawPointer
+	//
+	// The typed ones take their element the way Array takes its own:
+	// the nominal, `y`, the argument, `G`.
+	case *types.Pointer:
+		switch {
+		case t.Opaque:
+			m.write("s13OpaquePointerV")
+			return nil
+		case t.Elem == nil && t.Mutable:
+			m.write("Sv")
+			return nil
+		case t.Elem == nil:
+			m.write("SV")
+			return nil
+		case t.Mutable:
+			m.write("Sp")
+		default:
+			m.write("SP")
+		}
+		m.writeByte('y')
+		if err := m.typ(t.Elem); err != nil {
+			return err
+		}
+		m.writeByte('G')
+		return nil
+
 	// A generic type with its arguments given. Swift writes the
 	// nominal, then `y`, then the arguments, then `G` -- the same
 	// shape Array uses above, which is that spelling with the

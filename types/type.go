@@ -621,6 +621,52 @@ type Dictionary struct {
 func (d *Dictionary) Underlying() Type { return d }
 func (d *Dictionary) String() string   { return fmt.Sprintf("[%s: %s]", d.Key, d.Value) }
 
+// Pointer is one of Swift's unsafe pointers: a machine address, and
+// whatever the language is willing to say about the other end of it.
+//
+//	UnsafePointer<T>          Elem = T,   Mutable = false
+//	UnsafeMutablePointer<T>   Elem = T,   Mutable = true
+//	UnsafeRawPointer          Elem = nil, Mutable = false
+//	UnsafeMutableRawPointer   Elem = nil, Mutable = true
+//	OpaquePointer             Opaque
+//
+// One type here rather than five, because at run time they are one
+// thing -- a word -- and the differences are all questions the
+// checker asks. Whether there is an element decides if the address
+// can be read through and what it strides by; whether it is mutable
+// decides if it can be written through; and an opaque one is the C
+// pointer to a type nobody described, which is why it has neither.
+//
+// Swift declares these as structs around a Builtin.RawPointer rather
+// than as a kind of their own. This does not, for the same reason
+// Array and Optional are kinds here: what the generic machinery would
+// buy is a pointee type this already has a field for.
+type Pointer struct {
+	Elem    Type // what it points at; nil for a raw or opaque pointer
+	Mutable bool
+	Opaque  bool
+}
+
+func (p *Pointer) Underlying() Type { return p }
+
+func (p *Pointer) String() string {
+	switch {
+	case p.Opaque:
+		return "OpaquePointer"
+	case p.Elem == nil && p.Mutable:
+		return "UnsafeMutableRawPointer"
+	case p.Elem == nil:
+		return "UnsafeRawPointer"
+	case p.Mutable:
+		return fmt.Sprintf("UnsafeMutablePointer<%s>", p.Elem)
+	}
+	return fmt.Sprintf("UnsafePointer<%s>", p.Elem)
+}
+
+// Dereferenceable reports whether the address can be read through
+// with `pointee`, which needs a type at the other end to read.
+func (p *Pointer) Dereferenceable() bool { return p != nil && p.Elem != nil && !p.Opaque }
+
 // Optional is `T?`: the wrapped value, or none. What it costs is in
 // layout.go, and it is not always a byte more than T.
 type Optional struct {

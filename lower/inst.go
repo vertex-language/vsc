@@ -75,9 +75,10 @@ func (c *fn) inst(in *vil.Inst) error {
 		return c.initExistential(in)
 	case vil.CopyAddr:
 		return c.copyAddr(in)
-	case vil.PointerToAddress:
-		// A pointer taken as an address. No bits move: what changes
-		// is what the type system will let it be used for.
+	case vil.PointerToAddress, vil.AddressToPointer:
+		// An address and a pointer are one register. No bits move in
+		// either direction: what changes is what the type system will
+		// let it be used for.
 		c.forward(in.Result(), in.Args()[0])
 		return nil
 	case vil.IndexAddr:

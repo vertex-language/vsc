@@ -54,6 +54,13 @@ func (g *gen) convert(e *ast.CallExpr, to types.Type) (*vil.Value, bool) {
 	}
 	from := g.typeOf(args[0].X)
 
+	// One pointer read as another. Every unsafe pointer is the same
+	// address, so this changes what the checker knows and nothing the
+	// machine does. See pointer.go.
+	if v, isPointer := g.pointerConvert(e, args[0].X, from, to); isPointer {
+		return v, true
+	}
+
 	// A conversion that ends in a floating-point type cannot fail:
 	// every integer and every narrower float has a value there, even
 	// where it rounds. See floatConvert.

@@ -27,6 +27,22 @@ func (c *checker) resolveType(astType ast.Type, scope *Scope) types.Type {
 	return t
 }
 
+// pointerType is the unsafe pointer a name spells, if it spells one.
+//
+// The typed ones take their element from the type argument; the raw
+// and opaque ones take none, and are reached through
+// types.LookupUniverse instead, because they are names rather than
+// generic types. Only the typed spellings come through here.
+func pointerType(name string, elem types.Type) (types.Type, bool) {
+	switch name {
+	case "UnsafePointer":
+		return &types.Pointer{Elem: elem}, true
+	case "UnsafeMutablePointer":
+		return &types.Pointer{Elem: elem, Mutable: true}, true
+	}
+	return nil, false
+}
+
 func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type {
 	switch t := astType.(type) {
 	case *ast.IdentType:
@@ -43,6 +59,10 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 					Key:   c.resolveType(t.Args.Args[0], scope),
 					Value: c.resolveType(t.Args.Args[1], scope),
 				}
+			}
+			if p, ok := pointerType(name, c.resolveType(t.Args.Args[0], scope)); ok &&
+				len(t.Args.Args) == 1 {
+				return p
 			}
 		}
 
@@ -296,6 +316,11 @@ func (c *checker) moduleMember(t *ast.MemberType, module, name string, scope *Sc
 			return &types.Optional{Wrapped: args[0]}
 		case name == "Dictionary" && len(args) == 2:
 			return &types.Dictionary{Key: args[0], Value: args[1]}
+		}
+		if len(args) == 1 {
+			if p, ok := pointerType(name, args[0]); ok {
+				return p
+			}
 		}
 	}
 	var base types.Type

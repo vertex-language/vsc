@@ -269,6 +269,15 @@ func (c *checker) lookupMember(t types.Type, name string) types.Type {
 		return known(m.Result)
 	}
 	switch b := t.Underlying().(type) {
+	// `p.pointee` is what is at the other end of an unsafe pointer.
+	// A raw or opaque one has no other end the language will name --
+	// a raw pointer is read with `load(as:)` and an opaque one is not
+	// read at all -- so only a typed pointer has it.
+	case *types.Pointer:
+		if name == "pointee" && !onType && b.Dereferenceable() {
+			return known(b.Elem)
+		}
+		return nil
 	// A tuple's elements are named by number, and by their label
 	// where the type gave them one.
 	case *types.Tuple:
@@ -385,6 +394,12 @@ func (c *checker) membersKnown(t types.Type) bool {
 	}
 	switch t.Underlying().(type) {
 	case *types.Struct, *types.Class, *types.Enum:
+		return true
+	// A pointer's members are known because there is exactly one:
+	// `pointee`, on the typed pointers. Anything else on any of them
+	// is a mistake and is worth saying so -- `p.pointee` on a raw
+	// pointer used to reach the verifier as a value of no type.
+	case *types.Pointer:
 		return true
 	}
 	return false

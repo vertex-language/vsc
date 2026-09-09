@@ -315,6 +315,12 @@ func (g *gen) lvalue(e ast.Expr) *vil.Value {
 		if n.Name == nil {
 			return nil
 		}
+		// `p.pointee = v` writes through the address the pointer
+		// holds. There is no storage of this function's to take the
+		// address of -- the address is the value. See pointer.go.
+		if p, ok := g.isPointee(n); ok {
+			return g.pointeeAddrForWrite(n, p)
+		}
 		// A computed property is a getter and a setter with nothing
 		// behind them, so there is no storage to take the address of.
 		// Falling through named a field the type does not have, and

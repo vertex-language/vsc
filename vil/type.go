@@ -74,6 +74,12 @@ func trivial(t types.Type) bool {
 		return n.name != "NativeObject"
 	case *types.Metatype:
 		return true
+	// An unsafe pointer owns nothing, which is the whole of what
+	// "unsafe" means here: ARC never touches it, and what is at the
+	// other end is somebody else's to keep alive. Swift says the same
+	// -- these are the trivial types a C signature is made of.
+	case *types.Pointer:
+		return true
 	// A function value owns its context, and while a closure that
 	// captures is refused there is no context to own: what a signature
 	// holds is a code address. lower relies on this from the other

@@ -291,6 +291,16 @@ func (b *Block) ClassMetatype(instance Type, accessor string) *Value {
 // PointerToAddress takes a Builtin.RawPointer as the address of a
 // value of a type. It moves no bits: what changes is what the type
 // system will let the pointer be used for.
+// AddressToPointer takes an address as a Builtin.RawPointer, which is
+// what `&x` becomes where a pointer is wanted: the storage is already
+// there and what crosses is where it is.
+//
+// The inverse of PointerToAddress, and lowered the same way -- no
+// bits move, and what changes is what the type system will allow.
+func (b *Block) AddressToPointer(addr *Value, t Type) *Value {
+	return b.add(AddressToPointer, Aux{Type: t}, []*Value{addr}, t).Result()
+}
+
 func (b *Block) PointerToAddress(p *Value, t Type) *Value {
 	return b.add(PointerToAddress, Aux{Type: t}, []*Value{p}, t).Result()
 }

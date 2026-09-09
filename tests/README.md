@@ -131,8 +131,10 @@ that failed otherwise, which is interop/'s convention for the same
 reason: a program that is half this compiler's has no oracle, so it
 checks itself.
 
-What is *not* here is everything an importer would bring. A C
-signature that is not scalars has no lowering yet -- see the TODO --
-so the cases are the widths, void, and the two directions.
+What is *not* here is everything an importer would bring: the header
+that would have declared these, and every C type that is not a scalar
+or a pointer. What is here is the widths, void, the two directions,
+and pointers -- including a null one, which is an optional here and
+one word in both languages.
 
 Used by `build`, in `cinterop_test.go`.

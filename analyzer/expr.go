@@ -386,6 +386,24 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	// `&x` in an argument: the type is the operand's, and what the
 	// ampersand says is about how it is passed.
 	case *ast.InOutExpr:
+		// Unless a pointer is wanted, in which case it is Swift's
+		// inout-to-pointer conversion: `&x` where the parameter is an
+		// `UnsafeMutablePointer<T>` hands over where x lives. The
+		// storage is x's either way -- what differs is that the
+		// callee is given an address rather than an inout binding,
+		// which is what a C function takes.
+		//
+		// A nullable C pointer is an optional here, and `&x` is never
+		// null, so the expectation is unwrapped first and the
+		// injection happens above this the way it does for any other
+		// value written where an optional is wanted.
+		if p, ok := unwrappedContext(expected).(*types.Pointer); ok && p.Dereferenceable() {
+			got := c.checkExpr(e.X, p.Elem, scope)
+			if types.Identical(got, p.Elem) {
+				return p
+			}
+			return got
+		}
 		return c.checkExpr(e.X, expected, scope)
 
 	// The prefix operators Swift declares on its numeric types. Any
@@ -411,6 +429,16 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 
 	case *ast.IdentExpr:
 		name := e.Name.Text(c.file)
+		// `UnsafeMutablePointer<Int32>(p)` names a type and is a
+		// conversion. The typed pointers are spelled with a type
+		// argument, so the bare name is not a type and has no symbol
+		// -- with an argument it names one, and this is where that
+		// argument is in hand.
+		if e.Args != nil && len(e.Args.Args) == 1 {
+			if p, ok := pointerType(name, c.resolveType(e.Args.Args[0], scope)); ok {
+				return &types.Metatype{Instance: p}
+			}
+		}
 		sym := c.lookupValue(scope, name)
 		if sym == nil {
 			// A builtin type's name: it is in no scope, and in

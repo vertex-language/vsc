@@ -40,6 +40,13 @@ var Typ = [...]*Basic{
 // accepts; removing one of the first tier would change what Swift
 // accepts, which is not a thing this compiler may do.
 var swiftTypes = map[string]Type{
+	// The pointers with no element to name. The typed ones are
+	// spelled with a type argument and are made where a generic name
+	// is resolved; these three are plain names and live here.
+	"UnsafeRawPointer":        &Pointer{},
+	"UnsafeMutableRawPointer": &Pointer{Mutable: true},
+	"OpaquePointer":           &Pointer{Opaque: true},
+
 	"Bool":      Typ[Bool],
 	"Int":       Typ[Int],
 	"Int8":      Typ[Int8],
@@ -117,6 +124,29 @@ func VertexAliases() map[string]Type {
 	out := make(map[string]Type, len(vertexTypes))
 	for name, t := range vertexTypes {
 		out[name] = t
+	}
+	return out
+}
+
+// PointerNames is the universe's pointer types, by the name each is
+// spelled with.
+//
+// Apart from LookupUniverse because a name in expression position
+// needs a symbol rather than a lookup: `UnsafeRawPointer(p)` is a
+// conversion, and a name with no symbol is a type in type position
+// and nothing at all in an expression -- which is the shape the
+// lowercase primitives had before they were given symbols of their
+// own.
+//
+// Only the three with no element. The typed ones are spelled with a
+// type argument, so their name alone is not a type and there is
+// nothing to insert.
+func PointerNames() map[string]Type {
+	out := map[string]Type{}
+	for name, t := range swiftTypes {
+		if _, ok := t.(*Pointer); ok {
+			out[name] = t
+		}
 	}
 	return out
 }

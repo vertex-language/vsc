@@ -127,6 +127,11 @@ func resultOwnership(op Op, aux Aux, t Type, args []*Value) Ownership {
 		OpenExistentialAddr, InitEnumDataAddr,
 		PointerToAddress, IndexAddr:
 		return None
+	// An address taken as a pointer is still not a value that owns
+	// anything: an unsafe pointer is trivial, which is the whole of
+	// what makes it unsafe.
+	case AddressToPointer:
+		return None
 	// Marking says something about storage without taking anything,
 	// so the result owns exactly what the operand did. Applied to an
 	// alloc_stack that is nothing, which is what put it among the

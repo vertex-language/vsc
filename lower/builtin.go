@@ -37,6 +37,34 @@ func (c *fn) builtin(name string, args []ir.Value) ([]ir.Value, error) {
 		return c.intBuiltin(name, verb, r, args)
 	case ir.TypeF32, ir.TypeF64:
 		return c.floatBuiltin(name, verb, r, args)
+	case ir.TypePtr:
+		return c.ptrBuiltin(name, verb, args)
+	}
+	return nil, c.fail(ErrBuiltin, "builtin", name)
+}
+
+// ptrBuiltin translates the builtins over an address. Only the two
+// comparisons: an address is a place, and what a program may ask
+// about two of them is whether they are the same place.
+//
+// Ordering is deliberately absent. Swift has `<` on pointers through
+// Comparable and it is only meaningful inside one allocation, which
+// is a rule nothing here can check -- so it is left out rather than
+// offered with a caveat nobody reads.
+func (c *fn) ptrBuiltin(name, verb string, args []ir.Value) ([]ir.Value, error) {
+	if len(args) < 2 {
+		return nil, c.fail(ErrBuiltin, "builtin", name+": too few operands")
+	}
+	a, aok := args[0].(ir.Ptr)
+	b, bok := args[1].(ir.Ptr)
+	if !aok || !bok {
+		return nil, c.fail(ErrBuiltin, "builtin", name+": operand is not an address")
+	}
+	switch verb {
+	case "cmp_eq":
+		return []ir.Value{c.b.Ptr.Eq(a, b)}, nil
+	case "cmp_ne":
+		return []ir.Value{c.b.Ptr.Ne(a, b)}, nil
 	}
 	return nil, c.fail(ErrBuiltin, "builtin", name)
 }

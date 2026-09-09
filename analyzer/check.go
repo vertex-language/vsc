@@ -136,6 +136,13 @@ func CheckImporting(files []*ast.File, imports []Import) (*Info, []token.Diagnos
 			universeScope.Insert(NewTypeName(name, typ, token.NoPos))
 		}
 	}
+	// The pointers, for the same reason said the same way:
+	// `UnsafeRawPointer(p)` is a conversion in expression position,
+	// and without a symbol the name is a type in type position and
+	// nothing here.
+	for name, typ := range types.PointerNames() {
+		universeScope.Insert(NewTypeName(name, typ, token.NoPos))
+	}
 
 	// 2. The built-in module, between the universe and the program.
 	//

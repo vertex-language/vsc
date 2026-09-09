@@ -64,10 +64,12 @@ const (
 	InitEnumDataAddr  Op = "init_enum_data_addr"
 	InjectEnumAddr    Op = "inject_enum_addr"
 
-	// Raw memory: a pointer taken as an address, and one element of
-	// an array of them. SIL's own two, and they are what an array
-	// literal fills its storage through.
+	// Raw memory: a pointer taken as an address and an address taken
+	// as a pointer, and one element of an array of them. SIL's own
+	// three, and they are what an array literal fills its storage
+	// through and what `&x` becomes where a pointer is wanted.
 	PointerToAddress Op = "pointer_to_address"
+	AddressToPointer Op = "address_to_pointer"
 	IndexAddr        Op = "index_addr"
 
 	// References and dispatch.

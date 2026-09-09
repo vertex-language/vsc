@@ -105,7 +105,7 @@ body reaches members by the receiver's name or by implicit `self`.
 One target: `aarch64-macos`. Apple silicon, macOS.
 
 What the language can express today is defined by `tests/compiler/` —
-193 whole programs the compiler builds and runs. A program goes in
+194 whole programs the compiler builds and runs. A program goes in
 once it works, and a refusal fails the suite rather than being
 skipped, so the corpus states what works rather than a wishlist.
 Roughly:
@@ -119,6 +119,7 @@ Roughly:
 - `switch` and pattern matching, operators, precedence groups
 - the integer and float widths, and conversions between them
 - C entry points and calls into C, by symbol: `@_cdecl`, `@_silgen_name`
+- unsafe pointers: `pointee`, `&x`, nullability, and the conversions
 
 Not there yet: `async`/`await` and actors; `throws` past the interface
 boundary — it typechecks and can call a throwing imported function,
@@ -384,10 +385,10 @@ Five corpora, each asking one question. A file belongs to exactly one.
 | Corpus | Size | Question |
 | --- | ---: | --- |
 | `tests/syntax/` | 94 files | Does it parse? |
-| `tests/check/` | 62 files | Does it typecheck, and say the right thing when it does not? |
-| `tests/compiler/` | 193 programs | Does the program do what it says? |
+| `tests/check/` | 72 files | Does it typecheck, and say the right thing when it does not? |
+| `tests/compiler/` | 194 programs | Does the program do what it says? |
 | `tests/interop/` | 20 cases | Does what this builds agree with the ecosystem it links against? |
-| `tests/cinterop/` | 3 cases | Is what this builds callable from C, and can it call C back? |
+| `tests/cinterop/` | 5 cases | Is what this builds callable from C, and can it call C back? |
 
 ```bash
 go test ./...              # front end and CLI; ~20s

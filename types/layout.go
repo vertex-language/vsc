@@ -72,6 +72,10 @@ func Alignof(t Type, target *Target) int64 {
 	case *Class, *Array, *Dictionary, *Signature, *Metatype,
 		*Existential, *Protocol:
 		return target.WordSize
+	// A pointer is an address, whatever it points at -- the element
+	// type is the checker's business and costs nothing at run time.
+	case *Pointer:
+		return target.WordSize
 	case *Optional:
 		return Alignof(tt.Wrapped, target)
 	// Two bounds, laid out as a struct of two of them would be.
@@ -139,6 +143,10 @@ func Sizeof(t Type, target *Target) int64 {
 
 	// A reference, a buffer pointer, or a metatype: one word.
 	case *Class, *Array, *Dictionary, *Metatype:
+		return target.WordSize
+	// An address, and nothing else. What it points at is a fact the
+	// checker keeps and the machine never sees.
+	case *Pointer:
 		return target.WordSize
 
 	// A function value is a pair: the code, and the context it
@@ -250,6 +258,12 @@ func hasSpareValues(t Type) bool {
 		}
 	case *Class, *Array, *Dictionary, *Signature, *Metatype,
 		*Existential, *Protocol:
+		return true
+	// An address in use is never null, so null is the representation
+	// the empty case takes: `UnsafePointer<T>?` is one word, which is
+	// what makes a nullable C pointer the same size in both
+	// languages.
+	case *Pointer:
 		return true
 	case *Struct:
 		for _, f := range tt.Fields {

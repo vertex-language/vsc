@@ -69,6 +69,9 @@ func machineOf(t types.Type) (repr, bool) {
 		// is a fact about that type. A reference's is null, and a
 		// null is a pointer like any other.
 		//
+		// A pointer's is null too, for the same reason and with the
+		// same bytes.
+		//
 		// A Bool's is not. It leaves 254 of its 256 spare and Swift
 		// takes the first, so `nil as Bool?` is the byte 2 -- which a
 		// one-bit Bool cannot hold. Modelling that needs a Bool that
@@ -81,6 +84,17 @@ func machineOf(t types.Type) (repr, bool) {
 		return repr{}, false
 	case *types.Class:
 		// A class value is the reference, never the object.
+		return repr{reg: ir.TypePtr}, true
+	// An unsafe pointer is an address, which is what a pointer
+	// register holds. What it points at changes nothing here: the
+	// element type decides what a read through it loads, and that is
+	// a question asked where the read is.
+	//
+	// It follows that `UnsafePointer<T>?` needs no tag byte, because
+	// null is a representation an address in use does not have --
+	// which is what Swift does too, and why a nullable C pointer is
+	// one word in both.
+	case *types.Pointer:
 		return repr{reg: ir.TypePtr}, true
 	// An Array is one word too: a reference to the storage that holds
 	// the elements. swiftc's own code for a function taking one reads

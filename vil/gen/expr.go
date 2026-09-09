@@ -56,6 +56,20 @@ func (g *gen) expr(e ast.Expr) *vil.Value {
 			g.refuse(n, "'&' on "+g.exprKind(n.X)+", which has no address")
 			return nil
 		}
+		// Where a pointer is wanted the checker typed this as one,
+		// and what crosses is the address rather than an inout
+		// binding. The access is still opened -- the callee may write
+		// through it, and the scope is what says so -- and a pointer
+		// taken out of it is the address it holds. See pointer.go.
+		if p, ok := pointerOf(g.typeOf(n)); ok {
+			kind := "modify"
+			if !p.Mutable {
+				kind = "read"
+			}
+			access := g.blk.BeginAccess(addr, kind, "unknown")
+			g.endAccessLater(access)
+			return g.blk.AddressToPointer(access, lowerType(g.typeOf(n)))
+		}
 		access := g.blk.BeginAccess(addr, "modify", "unknown")
 		g.endAccessLater(access)
 		return access
@@ -539,6 +553,11 @@ func (g *gen) member(e *ast.MemberExpr) *vil.Value {
 	if en, ok := rawValueRead(g.typeOf(e.X), g.text(e.Name)); ok {
 		return g.rawValue(e, en)
 	}
+	// `p.pointee` is a load through an address rather than a field of
+	// a value. See pointer.go.
+	if p, ok := g.isPointee(e); ok {
+		return g.pointeeRead(e, p)
+	}
 	// A computed property is a function that looks like a field:
 	// there is no storage to read, so this is a call to its getter.
 	// See computed.go.
@@ -646,6 +665,15 @@ func (g *gen) call(e *ast.CallExpr) *vil.Value {
 			}
 			return g.selfValue()
 		})
+	}
+	// `UnsafeMutablePointer<Int32>(p)` names a pointer type and is a
+	// conversion. There is no symbol to find: the typed pointers are
+	// spelled with a type argument, so the name alone is not a type.
+	// What it converts to is what the checker gave the call.
+	if _, ok := pointerOf(g.typeOf(e)); ok {
+		if v, isConversion := g.convert(e, g.typeOf(e)); isConversion {
+			return v
+		}
 	}
 	// A type's name in expression position is a constructor call:
 	// `P(x: 1)` names a type rather than a function.
@@ -1574,6 +1602,12 @@ func (g *gen) binary(e *ast.BinaryExpr) *vil.Value {
 		// lowered here. See optional.go.
 		if g.text(e.Op) == "??" {
 			return g.nilCoalescing(e)
+		}
+		// Two addresses compared. core declares no operator over a
+		// pointer either, and the question is whether they are the
+		// same place. See pointer.go.
+		if v, isPointer := g.pointerEquality(e, g.text(e.Op)); isPointer {
+			return v
 		}
 		// And `==` over an optional has none either: nil is not a
 		// value of a type core declares an operator over, and neither

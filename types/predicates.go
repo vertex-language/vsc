@@ -83,6 +83,16 @@ func Identical(x, y Type) bool {
 		if yt, ok := y.(*Optional); ok {
 			return Identical(xt.Wrapped, yt.Wrapped)
 		}
+	// Two pointers are one type when they point at the same thing in
+	// the same way. Mutability is part of it: `UnsafePointer<T>` and
+	// `UnsafeMutablePointer<T>` are the difference between `const T *`
+	// and `T *`, and Swift keeps them apart too.
+	case *Pointer:
+		if yt, ok := y.(*Pointer); ok {
+			return xt.Mutable == yt.Mutable && xt.Opaque == yt.Opaque &&
+				(xt.Elem == nil) == (yt.Elem == nil) &&
+				(xt.Elem == nil || Identical(xt.Elem, yt.Elem))
+		}
 	case *Metatype:
 		if yt, ok := y.(*Metatype); ok {
 			return Identical(xt.Instance, yt.Instance)
@@ -342,6 +352,10 @@ func Comparable(t Type) bool {
 		return tt.info&(IsNumeric|IsBoolean|IsString) != 0 || tt.kind == Character
 	case *Optional:
 		return Comparable(tt.Wrapped)
+	// Two addresses compare as two numbers, whatever is at either
+	// end. `p == q` asks whether they are the same place.
+	case *Pointer:
+		return true
 	case *Tuple:
 		for _, elem := range tt.Elements {
 			if !Comparable(elem.Type) {
