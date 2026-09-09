@@ -786,6 +786,14 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 				got := c.storedField(b, isConst, typeScope)
 				switch {
 				case static:
+					// A static may be stored or computed, and they
+					// share one list. Only the stored ones need
+					// storage, so which it is has to survive.
+					if c.isComputed(b) {
+						for _, f := range got {
+							f.IsComputed = true
+						}
+					}
 					*statics = append(*statics, got...)
 				case c.isComputed(b):
 					*computed = append(*computed, got...)

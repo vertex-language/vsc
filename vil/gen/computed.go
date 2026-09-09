@@ -120,9 +120,10 @@ func (g *gen) emitGetters(body *ast.MemberBlock, recv types.Type) {
 	}
 	for _, mem := range body.Members {
 		m, ok := mem.(*ast.VarDecl)
-		if !ok || isStaticDecl(m.Mods) {
+		if !ok {
 			continue
 		}
+		static := isStaticDecl(m.Mods)
 		for _, b := range m.Bindings {
 			block := getterBody(b)
 			if block == nil {
@@ -132,7 +133,7 @@ func (g *gen) emitGetters(body *ast.MemberBlock, recv types.Type) {
 			if name == "" || ftype == nil {
 				continue
 			}
-			g.emitGetter(recv, name, ftype, block)
+			g.emitGetter(recv, name, ftype, block, static)
 		}
 	}
 }
@@ -171,6 +172,16 @@ func (g *gen) bindingType(b *ast.PatternBinding, recv types.Type) types.Type {
 			return f.Type
 		}
 	}
+	// A static computed property is among the type's statics rather
+	// than among its computed ones -- the two kinds share that list.
+	// Looking only at the instance ones left a static getter with no
+	// type, so none was emitted and the call site named a symbol
+	// nothing defined.
+	for _, f := range staticsOf(recv) {
+		if f != nil && f.Name == name && f.IsComputed {
+			return f.Type
+		}
+	}
 	return nil
 }
 
@@ -203,7 +214,9 @@ func isStaticDecl(mods []*ast.Modifier) bool {
 
 // emitGetter lowers one getter: a method taking the receiver and
 // returning the property's value.
-func (g *gen) emitGetter(recv types.Type, name string, t types.Type, body *ast.CodeBlock) {
+func (g *gen) emitGetter(recv types.Type, name string, t types.Type,
+	body *ast.CodeBlock, static bool) {
+
 	sig := &types.Signature{Results: t}
 	d := mangle.Decl{
 		Module:    g.moduleOfType(recv),
@@ -213,6 +226,11 @@ func (g *gen) emitGetter(recv types.Type, name string, t types.Type, body *ast.C
 		ModuleOf:  g.moduleOfType,
 	}
 	symbol, err := mangle.Getter(d)
+	if static {
+		// A property of the type rather than of an instance: the same
+		// name with Z after it, which is what swiftc writes.
+		symbol, err = mangle.StaticGetter(d)
+	}
 	if err != nil {
 		g.errorAt(body, "cannot name the getter of '"+name+"': "+err.Error())
 		return
@@ -230,9 +248,14 @@ func (g *gen) emitGetter(recv types.Type, name string, t types.Type, body *ast.C
 	g.push()
 	g.blk = f.Entry()
 
-	st := lowerType(recv)
-	f.Param(st, selfConvention(st))
-	f.Type().Convention = vil.Method
+	// A static getter has no instance to read. What stands in for one
+	// is the metatype, and a struct's is thin -- the type is known,
+	// so there is nothing to carry and no parameter to declare.
+	if !static {
+		st := lowerType(recv)
+		f.Param(st, selfConvention(st))
+		f.Type().Convention = vil.Method
+	}
 	f.SetResult(lowerType(t), resultConvention(lowerType(t)))
 
 	g.block(body)
@@ -292,6 +315,12 @@ func staticsOf(t types.Type) []*types.Field {
 // the first time if it has to -- and swiftc's own client code calls
 // that accessor and loads what comes back.
 func (g *gen) staticRead(e *ast.MemberExpr, recv types.Type, f *types.Field) *vil.Value {
+	// A computed static is a getter with nothing behind it, so there
+	// is no storage to want: it is a call, and the same call whether
+	// the type was declared here or imported.
+	if f.IsComputed {
+		return g.staticGetter(e, recv, f)
+	}
 	// Only one declared elsewhere. A static of this module's own
 	// would need the storage and the one-time initializer that fills
 	// it -- swiftc emits a global and a `_WZ` beside it -- and this
@@ -322,4 +351,32 @@ func (g *gen) staticRead(e *ast.MemberExpr, recv types.Type, f *types.Field) *vi
 	addr := g.blk.Apply(g.blk.FunctionRef(callee), t.Address())
 	v := g.blk.Load(addr, loadQualifier(t))
 	return g.loaded(v, t)
+}
+
+// staticGetter lowers `Counter.base` where base is a computed
+// property of the type: a call to the getter, with no instance to
+// pass and no storage to read.
+func (g *gen) staticGetter(e *ast.MemberExpr, recv types.Type, f *types.Field) *vil.Value {
+	sig := &types.Signature{Results: f.Type}
+	d := mangle.Decl{
+		Module:    g.moduleOfType(recv),
+		Context:   nominalChain(recv),
+		Name:      f.Name,
+		Signature: sig,
+		ModuleOf:  g.moduleOfType,
+	}
+	name, err := mangle.StaticGetter(d)
+	if err != nil {
+		g.errorAt(e, "cannot name the getter of '"+f.Name+"': "+err.Error())
+		return nil
+	}
+	callee := g.m.Func(name).SetSourceName(f.Name)
+	if g.needsType(callee) {
+		callee.Type().Params = nil
+		callee.SetResult(lowerType(f.Type), resultConvention(lowerType(f.Type)))
+	}
+	ref := g.blk.FunctionRef(callee)
+	v := g.blk.Apply(ref, lowerType(f.Type))
+	g.destroyLater(v)
+	return v
 }

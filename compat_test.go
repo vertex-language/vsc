@@ -312,3 +312,46 @@ func use() -> int32 {
 		}
 	}
 }
+
+// TestStaticComputedProperty: a static may be stored or computed and
+// the two shared one list, so a computed one was counted among the
+// properties needing storage and a one-time initializer -- which a
+// getter with nothing behind it has no use for. It is a call now, to
+// a getter with no receiver.
+func TestStaticComputedProperty(t *testing.T) {
+	const src = `
+struct Vec {
+    var x: int32
+    static var zero: Vec { return Vec(x: 0) }
+    static var unit: Vec { return Vec(x: 1) }
+}
+
+class Limits {
+    static var high: int32 { return 100 }
+}
+
+func use() -> int32 { return Vec.zero.x + Vec.unit.x + Limits.high }
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestStaticStoredPropertyStillRefused is the other half: a stored
+// static does need storage and a one-time initializer, and there are
+// no globals yet, so it is still refused -- and for that reason.
+func TestStaticStoredPropertyStillRefused(t *testing.T) {
+	const src = `
+struct C { static var base: int32 = 100 }
+func use() -> int32 { return C.base }
+`
+	_, diags := compile(t, src, vsc.Options{})
+	if !vsc.Errors(diags) {
+		t.Fatal("a stored static was lowered with no storage behind it")
+	}
+	if !strings.Contains(diags[0].Message, "storage of its own") {
+		t.Errorf("diagnostic does not say why: %s", diags[0])
+	}
+}

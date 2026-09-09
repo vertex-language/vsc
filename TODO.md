@@ -18,6 +18,39 @@ then do something other than what the source says — the failure the
 compiler's own rule exists to prevent — so it is the one to keep
 empty.
 
+## Resolved wrongly
+
+### An enum's static property is not found
+
+```swift
+enum E {
+    case a
+    static var v: int32 { return 4 }
+}
+```
+
+```
+error: value of type 'E.Type' has no member 'v'
+```
+
+A static *function* on an enum resolves; a static *property* does not.
+The analyzer collects them — `sinksOf` hands an enum's statics to
+`readMembers` like a struct's — so what is missing is the lookup
+through the metatype, not the declaration.
+
+### A bare static name inside a static getter is not resolved
+
+```swift
+struct Vec {
+    static var unit: Vec { return Vec(x: 1) }
+    static var two: Vec { return Vec(x: unit.x * 2) }   // `unit` unresolved
+}
+```
+
+Qualifying it as `Vec.unit` works. Inside a static member, the type's
+own statics should be in scope unqualified the way an instance's
+members are through implicit `self`.
+
 ## Accepted where Swift refuses
 
 The compiler is quiet about a program Swift would reject, so the first
@@ -38,6 +71,8 @@ already correct; only the feature is missing.
 | --- | --- |
 | `throw`, `do`/`catch` | `cannot lower a throw yet`, `cannot lower a do block yet` |
 | a global `let` or `var` | `cannot lower this expression yet`, where it is read |
+| a *stored* static property | `it needs storage of its own and the one-time initializer` |
+| binding an optional of a wide payload | `whose payload is more than one register` |
 | top-level code | `top-level code is not supported` |
 
 **Top-level code is refused, not run.** Swift runs statements at file
@@ -82,6 +117,13 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A static computed property was refused as though it were stored.**
+  A static may be stored or computed and the two shared one list, so
+  a computed one was counted among the properties that need storage
+  and a one-time initializer — which a getter with nothing behind it
+  has no use for. It is a call now, to a getter with no receiver,
+  named the way swiftc names one: the instance getter's symbol with Z
+  after it, which `mangle.StaticGetter` already wrote.
 - **A payload enum could not cross a call**, if it fitted in one
   word. Its memory image is words, and a multi-word one is passed as
   those words — which the ABI arranges out of its leaves. A one-word

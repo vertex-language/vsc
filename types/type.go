@@ -268,6 +268,13 @@ type Field struct {
 	// value, which is what lets the memberwise initializer leave its
 	// parameter out.
 	HasDefault bool
+
+	// IsComputed says the property is a getter with nothing behind
+	// it. It matters among a type's statics, where the two kinds live
+	// in one list and only the stored ones need storage: a computed
+	// one is a function to call, and saying it needs a global is
+	// saying the wrong thing about it.
+	IsComputed bool
 }
 
 // Method is a function declared in a type, or promised by a
