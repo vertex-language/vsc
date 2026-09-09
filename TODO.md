@@ -1,8 +1,8 @@
 # TODO
 
-Swift the compiler does not do yet. Distinct from `proposed.md`, which
-is about additions Vertex makes on top; everything here is a gap in
-the compatibility layer — Swift a program may reasonably write that
+Swift the compiler does not do yet. Distinct from
+`docs/vertex_spec.md`, which defines the additions Vertex makes on
+top; everything here is a gap in the compatibility layer — Swift a program may reasonably write that
 this compiler gets wrong, refuses, or has not reached.
 
 Ordered by how it fails rather than by size, because the compiler's own
@@ -159,9 +159,9 @@ report comes from `swiftc` or from a reader.
 - **`mutating` on a class method.** Swift rejects it outright -- a
   class receiver is a reference, and a method that changes a property
   needs nothing to say so. This compiler accepts it silently. It
-  matters for [receiver methods](proposed.md), whose `inout` receiver
-  on a class has to be refused and so cannot lean on a check that is
-  not there.
+  matters for [receiver methods](docs/vertex_spec.md), whose `inout`
+  receiver on a class has to be refused and so cannot lean on a check
+  that is not there.
 - **Protocol extensions.** `extension P { func f() { ... } }` neither
   sees `P`'s own requirements from inside nor reaches conforming
   types, so a default implementation is not one. Nothing is reported;

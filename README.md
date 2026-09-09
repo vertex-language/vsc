@@ -226,8 +226,8 @@ defaults to `main`, and why building a library means saying so.
 Vertex looks to support as much of Swift's grammar as it can, for
 interop-related tasks of Swift's ecosystem, when possible.
 
-**Swift is the base.** Every Vertex addition is written down, in [The
-language](#the-language) and `proposed.md`. Anything else differing
+**Swift is the base.** Every Vertex addition is specified in
+[docs/vertex_spec.md](docs/vertex_spec.md). Anything else differing
 from Swift is a bug, not a design decision — a program Swift accepts
 and this rejects, one Swift rejects and this accepts, or one the two
 read differently. `TODO.md` holds the known ones.
