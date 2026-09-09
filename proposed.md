@@ -338,6 +338,27 @@ What is left: a receiver clause in the parser, building the
 `ExtensionDecl` the rest of the pipeline already understands, and
 binding the receiver's name in the body's scope.
 
+### Staging: `borrowing` first
+
+The type kind is not what makes this big — the parser cannot tell an
+enum from a struct, `sinksOf` routes all three to the same method
+sink, and enum is a value type behaving exactly as struct does, which
+is why the table above has two rows and not three. Excluding a kind
+would mean *adding* a check after type resolution, a diagnostic, and a
+documented divergence from Swift, where extending an enum is ordinary.
+
+The axis that shrinks it is ownership. A `borrowing` receiver needs
+nothing that does not already work:
+
+- a struct or enum method that reads — ordinary today
+- a class method that reads, and one that *writes a property*, since
+  the receiver is a reference and needs no mutability of its own
+
+That covers most of the value and hits neither blocker below, because
+both are about assigning through a mutable *value* receiver. So
+`borrowing` can ship on the machinery that exists, and `inout` and
+`consuming` follow once the two are fixed.
+
 ### What is in the way
 
 Two gaps an `inout` receiver would hit immediately, both of which
