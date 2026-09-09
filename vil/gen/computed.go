@@ -149,6 +149,13 @@ func (g *gen) emitGetters(body *ast.MemberBlock, recv types.Type) {
 				continue
 			}
 			g.emitGetter(recv, name, ftype, block, static)
+			// A setter is emitted beside it where the property
+			// declares one. Static setters wait on static storage.
+			if !static {
+				if set := g.setterAccessor(b); set != nil {
+					g.emitSetter(recv, name, ftype, set)
+				}
+			}
 		}
 	}
 }
@@ -496,4 +503,166 @@ func isComputedMember(t types.Type, name string) bool {
 		}
 	}
 	return false
+}
+
+// setterAccessor is the `set` clause of a computed property, or nil
+// where it has none.
+func (g *gen) setterAccessor(b *ast.PatternBinding) *ast.Accessor {
+	if b == nil || b.Accessors == nil {
+		return nil
+	}
+	for _, a := range b.Accessors.Accessors {
+		if a != nil && a.Keyword != nil && a.Body != nil && g.text(a.Keyword) == "set" {
+			return a
+		}
+	}
+	return nil
+}
+
+// emitSetter lowers the setter a computed property declares.
+//
+// Its shape is the getter's turned around: the value goes in rather
+// than coming out. Swift's convention puts the new value first and
+// self last, and self is @inout on a value type -- writing a property
+// through it is the whole point, and a copy would be written and
+// dropped.
+func (g *gen) emitSetter(recv types.Type, name string, t types.Type, a *ast.Accessor) {
+	d := mangle.Decl{
+		Module:    g.moduleOfType(recv),
+		Context:   nominalChain(recv),
+		Name:      name,
+		Signature: &types.Signature{Results: t},
+		ModuleOf:  g.moduleOfType,
+	}
+	symbol, err := mangle.Setter(d)
+	if err != nil {
+		g.errorAt(a.Body, "cannot name the setter of '"+name+"': "+err.Error())
+		return
+	}
+
+	f := g.m.Func(symbol).SetSourceName(name).
+		SetLinkage(vil.Hidden).SetAttr("ossa")
+	g.fn = f
+	g.recv = recv
+	g.entry = false
+	f.Type().Params = nil
+	g.locals = map[analyzer.Symbol]*local{}
+	g.scopes = nil
+	g.loops, g.pending = nil, ""
+	g.self = nil
+	g.push()
+	g.blk = f.Entry()
+
+	// The new value, first.
+	vt := lowerType(t)
+	value := f.Param(vt, paramConvention(&types.Param{Type: t}, vt))
+	if sym := g.accessorValue(a); sym != nil {
+		g.locals[sym] = &local{value: value, typ: vt}
+		g.blk.DebugValue(value, "newValue", "let", "argno 1")
+	}
+
+	// Then self. A class receiver is a reference and a write goes
+	// through it; a value receiver has to be the caller's storage or
+	// the write lands in a copy.
+	st := lowerType(recv)
+	if isClass(recv) {
+		f.Param(st, selfConvention(st))
+	} else {
+		g.self = &local{addr: f.Param(st.Address(), vil.ParamInout), typ: st}
+	}
+	f.Type().Convention = vil.Method
+
+	g.block(a.Body)
+	// A setter returns nothing, so falling off the end is how it
+	// ordinarily finishes.
+	if g.blk != nil && g.blk.Term() == nil {
+		g.unwind()
+		g.blk.Return(g.void())
+	}
+	g.pop()
+	g.fn, g.blk, g.recv, g.self = nil, nil, nil, nil
+}
+
+// accessorValue is the symbol a setter's incoming value was declared
+// under, which the analyzer put in the accessor's own scope.
+func (g *gen) accessorValue(a *ast.Accessor) analyzer.Symbol {
+	scope := g.info.Scopes[a]
+	if scope == nil {
+		return nil
+	}
+	name := "newValue"
+	if a.Name != nil {
+		name = g.text(a.Name)
+	}
+	return scope.Lookup(name)
+}
+
+// computedField is the computed property of this type with this name.
+func computedField(t types.Type, name string) (*types.Field, bool) {
+	for _, f := range computedOf(t) {
+		if f != nil && f.Name == name {
+			return f, true
+		}
+	}
+	return nil, false
+}
+
+// setterCall lowers `c.doubled = 20`: the new value and the receiver,
+// handed to the property's setter.
+//
+// The receiver is storage on a value type -- the setter writes a
+// property through it, and a copy would be written and dropped -- and
+// the reference itself on a class, where the write goes through the
+// reference and the object is what changes.
+func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, value ast.Expr) {
+	if cl, ok := receiverClass(recv); ok && g.poly[cl] {
+		g.refuse(mem, "a computed property of a class with a subclass, whose setter is "+
+			"reached through the table the instance carries")
+		return
+	}
+	d := mangle.Decl{
+		Module:    g.moduleOfType(recv),
+		Context:   nominalChain(recv),
+		Name:      f.Name,
+		Signature: &types.Signature{Results: f.Type},
+		ModuleOf:  g.moduleOfType,
+	}
+	name, err := mangle.Setter(d)
+	if err != nil {
+		g.errorAt(mem, "cannot name the setter of '"+f.Name+"': "+err.Error())
+		return
+	}
+	v := g.rvalue(value)
+	if v == nil {
+		return
+	}
+	var self *vil.Value
+	if isClass(recv) {
+		self = g.expr(mem.X)
+	} else {
+		self = g.lvalue(mem.X)
+	}
+	if self == nil {
+		g.refuse(mem, "an assignment to a computed property of something that is "+
+			"not storage the setter can write through")
+		return
+	}
+
+	callee := g.m.Func(name).SetSourceName(f.Name)
+	if g.needsType(callee) {
+		vt := lowerType(f.Type)
+		st := lowerType(recv)
+		callee.Type().Params = append(callee.Type().Params,
+			vil.Param{Type: vt, Convention: paramConvention(&types.Param{Type: f.Type}, vt)})
+		if isClass(recv) {
+			callee.Type().Params = append(callee.Type().Params,
+				vil.Param{Type: st, Convention: selfConvention(st)})
+		} else {
+			callee.Type().Params = append(callee.Type().Params,
+				vil.Param{Type: st.Address(), Convention: vil.ParamInout})
+		}
+		callee.Type().Convention = vil.Method
+	}
+	ref := g.blk.FunctionRef(callee)
+	g.blk.Apply(ref, vil.Object(types.Typ[types.Void]), v, self)
 }

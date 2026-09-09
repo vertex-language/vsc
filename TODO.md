@@ -41,7 +41,8 @@ already correct; only the feature is missing.
 | a *stored* static property | `it needs storage of its own and the one-time initializer` |
 | binding an optional of a wide payload | `whose payload is more than one register` |
 | top-level code | `top-level code is not supported` |
-| assigning to a computed property | `a call to its setter and not a write to storage` |
+| compound assignment to a computed property | `a call to its setter and not a write to storage` |
+| a static computed property's setter | not emitted; static storage first |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
 | a computed property of a class with a subclass | `reached through the table the instance carries` |
@@ -88,6 +89,14 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A computed property could not be written.** Assigning to one took
+  the address of storage it does not have, naming a field the type
+  lacks — which the backend reported about a `struct_element_addr`,
+  with no line to look at. Setters are emitted now and the assignment
+  calls one: the new value first and self last, `@inout` on a value
+  type so the write is the caller's, and the reference itself on a
+  class. `mangle.Setter` is the one accessor kind the mangler was
+  missing.
 - **A getter could be emitted from the setter's body.** Which
   accessor a block is was decided by which came first rather than by
   its keyword, so a property writing `set` before `get` had its setter

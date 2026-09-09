@@ -507,12 +507,12 @@ func use() -> int32 {
 	}
 }
 
-// TestAssignToComputedRefused: a computed property is a getter and a
-// setter with nothing behind them, so there is no storage to write.
-// Falling through named a field the type does not have, and the
-// backend complained about a struct_element_addr with no line to look
+// TestAssignToComputedCallsSetter: a computed property is written by
+// calling its setter. There is no storage to store into, and taking
+// an address named a field the type does not have -- which the
+// backend reported about a struct_element_addr, with no line to look
 // at.
-func TestAssignToComputedRefused(t *testing.T) {
+func TestAssignToComputedCallsSetter(t *testing.T) {
 	const src = `
 struct S {
     var raw: int32
@@ -520,19 +520,32 @@ struct S {
         get { return raw * 2 }
         set { raw = newValue / 2 }
     }
+    var named: int32 {
+        get { return raw }
+        set(v) { raw = v + 1 }
+    }
+}
+
+class Box {
+    var n: int32 = 0
+    var doubled: int32 {
+        get { return n * 2 }
+        set { n = newValue / 2 }
+    }
 }
 
 func use() -> int32 {
     var s = S(raw: 5)
     s.doubled = 20
-    return s.raw
+    s.named = 6
+    let b = Box()
+    b.doubled = 14
+    return s.raw + b.n
 }
 `
-	_, diags := compile(t, src, vsc.Options{})
-	if !vsc.Errors(diags) {
-		t.Fatal("an assignment to a computed property was lowered as a write to storage")
-	}
-	if !strings.Contains(diags[0].Message, "computed property") {
-		t.Errorf("diagnostic does not name the problem: %s", diags[0])
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
 	}
 }

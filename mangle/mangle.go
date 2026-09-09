@@ -193,6 +193,12 @@ func Getter(d Decl) (string, error) { return accessor(d, "vg") }
 // rather than of an instance: the same name with Z after it.
 func StaticGetter(d Decl) (string, error) { return accessor(d, "vgZ") }
 
+// Setter is the symbol of the function that writes a computed
+// property. Its type is the property's, the same as the getter's --
+// what differs is the letter, and that the value goes in rather than
+// coming out.
+func Setter(d Decl) (string, error) { return accessor(d, "vs") }
+
 // Addressor is the symbol of the function that hands back the address
 // of a stored property of the type.
 //

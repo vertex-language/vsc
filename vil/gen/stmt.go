@@ -197,6 +197,16 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 // rather than `store`: whether the destination already held something
 // is what definite initialization decides, and it has not run yet.
 func (g *gen) assign(e *ast.BinaryExpr) {
+	// A computed property is written by calling its setter. There is
+	// no storage to store into: `c.doubled = 20` is a call, and
+	// taking an address would name a field the type does not have.
+	if mem, ok := e.X.(*ast.MemberExpr); ok && mem.Name != nil {
+		recv := g.typeOf(mem.X)
+		if f, isComputed := computedField(recv, g.text(mem.Name)); isComputed {
+			g.setterCall(mem, recv, f, e.Y)
+			return
+		}
+	}
 	// Counted so that a destination which already said why it could not
 	// be written to is not told off a second time in more general
 	// terms. Two diagnostics for one mistake sends the reader looking
