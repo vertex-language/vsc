@@ -304,6 +304,13 @@ func (g *gen) symbol(sym *analyzer.FuncSymbol) string {
 	if g.isEntry(sym) {
 		return EntryName
 	}
+	// `@_silgen_name` says what the symbol is, which is the whole of
+	// what the attribute does. It answers here rather than at the
+	// definition so that a call finds the same name -- the point of
+	// naming a symbol is that both ends say it. See interop.go.
+	if name, has := g.silgenName(sym); has && name != "" {
+		return name
+	}
 	// A function declared inside another is local to it, so two of
 	// them with the same name in different enclosing functions are
 	// two functions. Mangling only the name gave them one symbol, and
@@ -902,6 +909,13 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 		return
 	}
 
+	// The attributes that decide what this is called outside the
+	// module, and the ones that ask for something there is no backend
+	// for. See interop.go.
+	if !g.interopAttrs(d) {
+		return
+	}
+
 	// The entry point is named, called and returned from differently
 	// from every other function, and a main this compiler cannot use
 	// as one is refused here rather than left to the linker.
@@ -923,12 +937,46 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 		})
 	}
 
+	// A declaration with no body and a symbol to name is a
+	// declaration of somebody else's function: state its type and
+	// leave it, so the linker resolves it. Building an entry block
+	// for it would define the symbol here -- as a function that falls
+	// off its end and traps, which is what `@_silgen_name` used to
+	// produce and what made calling libc look like it worked.
+	if d.Body == nil {
+		if silgen, has := g.silgenName(sym); has && silgen != "" {
+			f := g.m.Func(name).SetSourceName(sym.Name())
+			if g.needsType(f) {
+				g.declare(f, sym)
+			}
+			return
+		}
+		// Anything else with no body is a function nothing defines
+		// and nothing names. Swift refuses it outright; this used to
+		// emit a body that traps, so a program calling it built,
+		// linked, ran and died.
+		g.errorAt(d, "'"+sym.Name()+"' has no body: a function without one "+
+			"needs '@_silgen_name(\"…\")' to say which symbol it is")
+		return
+	}
+
 	linkage := linkageOf(sym.Access())
 	if g.entry {
 		// A program's entry point leaves its object file whatever the
 		// source said about who may call it, because what resolves it
 		// is the linker rather than another module.
 		linkage = vil.Public
+	}
+	// Two declarations wanting one symbol. It happens through
+	// `@_cdecl`, whose name is written rather than derived, and the
+	// consequence is a function with two bodies -- the second
+	// appended to the first, which the verifier reports as a
+	// terminator in the middle of a block rather than as the
+	// collision it is.
+	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
+		g.errorAt(d, "'"+sym.Name()+"' and something else in this module are "+
+			"both '"+name+"'")
+		return
 	}
 	f := g.m.Func(name).SetSourceName(sym.Name()).
 		SetLinkage(linkage).SetAttr("ossa")
@@ -1058,9 +1106,7 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 		f.SetResult(lowerType(sig.Results), resultConvention(lowerType(sig.Results)))
 	}
 
-	if d.Body != nil {
-		g.block(d.Body)
-	}
+	g.block(d.Body)
 	// A body that falls off the end returns nothing, which only a
 	// void function may do — and the checker already said so.
 	//
@@ -1081,6 +1127,12 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	g.fn = nil
 	g.entry = false
 	g.recv = nil
+
+	// The C entry point `@_cdecl` asks for, beside the function
+	// rather than instead of it. Emitted last because it calls what
+	// was just built, and because it is a second function: everything
+	// above belongs to the one the source wrote. See interop.go.
+	g.cdeclThunk(d, sym, name)
 }
 
 // void is the empty tuple every function without a result returns.

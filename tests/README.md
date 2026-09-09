@@ -1,6 +1,6 @@
 # tests
 
-Four corpora, asking four different questions. Each is named for its
+Five corpora, asking five different questions. Each is named for its
 question, and a file belongs in exactly one of them.
 
 ## syntax/
@@ -104,3 +104,35 @@ the program is this compiler's alone -- so it checks itself, which is
 what tests/compiler does for the same reason.
 
 Used by `build`, in `interop_test.go`.
+
+## cinterop/
+
+Is what this compiler builds callable from C, and can it call C back?
+
+The same question as interop/ asked of the other boundary, and it is
+a different question. There is no importer and no header here: what
+crosses is a symbol and a register and nothing else. Two attributes
+name the symbol -- `@_cdecl` for one this compiler defines, and
+`@_silgen_name` for one it does not -- and neither can be checked by
+reading anything. The object file has to go to clang and the result
+has to run.
+
+Each case is a directory of two files:
+
+    library.swift   built by this compiler, as a module of its own
+    host.c          built by clang, and holds main
+
+The library has no entry point, because the entry point is C's. And
+nothing here links the Swift runtime -- that is rather the point,
+since a C caller has none.
+
+A program returns 42 when it is satisfied and the number of the check
+that failed otherwise, which is interop/'s convention for the same
+reason: a program that is half this compiler's has no oracle, so it
+checks itself.
+
+What is *not* here is everything an importer would bring. A C
+signature that is not scalars has no lowering yet -- see the TODO --
+so the cases are the widths, void, and the two directions.
+
+Used by `build`, in `cinterop_test.go`.
