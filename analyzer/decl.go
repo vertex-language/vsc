@@ -720,6 +720,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 			if t, inner, params, ok := c.openType(d, d.Name, d.Generics, d.Body, scope); ok {
 				n := t.(*types.Enum)
 				n.TypeParams = params
+				n.RawType = c.rawTypeOf(d.Inherit, scope)
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
 				c.readMembers(d.Body, inner, nil, &n.Methods, n, nil, &n.Computed, &n.Statics)
 			}
@@ -1310,4 +1311,29 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 	for _, inh := range proto.Inherited {
 		c.checkConformance(pos, conformer, typeName, inh, fields, methods)
 	}
+}
+
+// rawTypeOf is the type an enum's cases are numbered or named with:
+// the first entry of its inheritance clause, where that names a type
+// rather than a protocol.
+//
+// `enum Code: Int32` is such an enum, and its cases carry Int32
+// values. Nothing recorded which type that was, so the raw values
+// were checked against it -- rawValueOf reads this -- and could not
+// be read back: `Code.ok.rawValue` was a member the type did not
+// have.
+func (c *checker) rawTypeOf(inherit *ast.InheritanceClause, scope *Scope) types.Type {
+	if inherit == nil || len(inherit.Items) == 0 || inherit.Items[0] == nil {
+		return nil
+	}
+	t := c.resolveType(inherit.Items[0].Type, scope)
+	if t == nil || isInvalid(t) {
+		return nil
+	}
+	// A protocol there is a conformance, which is what the rest of
+	// the clause always is.
+	if _, isProtocol := t.Underlying().(*types.Protocol); isProtocol {
+		return nil
+	}
+	return t
 }

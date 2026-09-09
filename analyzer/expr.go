@@ -555,6 +555,18 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			c.info.Operators[e] = sym
 			return sym.Signature().Results
 		}
+		// A literal operand has no type of its own to match a
+		// declaration with. `2 <+> 3` defaulted both to Int, so an
+		// operator declared over Int32 did not fit and the result
+		// fell back to the left operand's type -- which is the wrong
+		// answer whatever the operator returns, and silently so where
+		// the two happen to agree. Read them again in the
+		// parameters' types, which is what gives a literal its type
+		// everywhere else.
+		if sym := c.operatorAdoptingLiterals(scope, opName, e, lhs, rhs); sym != nil {
+			c.info.Operators[e] = sym
+			return sym.Signature().Results
+		}
 
 		switch opName {
 		case "==", "!=", "<", "<=", ">", ">=":

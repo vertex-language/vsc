@@ -25,6 +25,29 @@ section is worth keeping in front of the rest.
 
 ## Accepted where Swift refuses
 
+### An enum's rawValue cannot be read
+
+```swift
+enum Code: int32 {
+    case ok = 1
+    case bad = 7
+}
+```
+
+```
+error: value of type 'Code' has no member 'rawValue'
+```
+
+Swift synthesizes the property for an enum that declares a raw type,
+and nothing here declares it. The raw type is recorded now, which is
+what the case values are checked against — but reading one back needs
+lowering that maps a case to the value it was declared with, and
+without that the member answers the tag: `Code.bad.rawValue` would be
+1 rather than 7. So the type is known and the property is still
+absent, which is the honest half of it.
+
+
+
 
 
 The compiler is quiet about a program Swift would reject, so the first
@@ -53,6 +76,8 @@ already correct; only the feature is missing.
 | a closure that captures | `cannot lower a closure that captures 'k'` |
 | an optional chain | `cannot lower this expression yet` |
 | a failable initializer | `cannot lower a failable initializer` |
+| a user-declared operator | `cannot lower this expression yet` |
+| a force unwrap `o!` | `cannot lower this expression yet` |
 | a tuple pattern in a `switch` | `a tuple pattern over (Int32, Int32), which is held in memory` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
@@ -109,6 +134,14 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A custom operator over literals took the wrong type.** A literal
+  has no type of its own to match a declaration with, and an
+  operator's operands have no context until the operator is known —
+  a circle. Both defaulted to Int, so an operator declared over Int32
+  did not fit, and the result fell back to the *left operand's* type:
+  wrong whatever the operator returns, and silently so where the two
+  agree. The operands are read again in the parameters' types now,
+  and only where the plain lookup found nothing.
 - **`return` in an initializer did not compile.** It was checked
   against the type being made, so a bare `return` was Void where the
   type was wanted — the one return statement an initializer may write,

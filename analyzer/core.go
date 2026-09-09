@@ -90,3 +90,42 @@ func (c *checker) operatorSpelling(n ast.Node) string {
 	}
 	return string(c.file.Slice(n.Pos(), n.End()))
 }
+
+// operatorAdoptingLiterals resolves an operator whose operands are
+// literals, by reading each one again in the parameter's type.
+//
+// A literal has no type of its own to match a declaration with: it
+// takes the one the context asks for, and an operator's operands have
+// no context until the operator is known -- which is the circle this
+// breaks. Only where the plain lookup found nothing, so an operator
+// that resolves on the operands' own types is unaffected.
+func (c *checker) operatorAdoptingLiterals(scope *Scope, op string,
+	e *ast.BinaryExpr, lhs, rhs types.Type) *FuncSymbol {
+
+	sym, _ := scope.Lookup(op).(*FuncSymbol)
+	if sym == nil {
+		return nil
+	}
+	for _, cand := range sym.Overloads() {
+		sig := cand.Signature()
+		if sig == nil || len(sig.Params) != 2 {
+			continue
+		}
+		l, r := lhs, rhs
+		if !types.AssignableTo(l, sig.Params[0].Type) {
+			if t, ok := c.adoptTree(e.X, sig.Params[0].Type, scope); ok {
+				l = t
+			}
+		}
+		if !types.AssignableTo(r, sig.Params[1].Type) {
+			if t, ok := c.adoptTree(e.Y, sig.Params[1].Type, scope); ok {
+				r = t
+			}
+		}
+		if types.AssignableTo(l, sig.Params[0].Type) &&
+			types.AssignableTo(r, sig.Params[1].Type) {
+			return cand
+		}
+	}
+	return nil
+}

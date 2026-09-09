@@ -882,3 +882,49 @@ struct Even {
 		}
 	}
 }
+
+// TestCustomOperatorOverLiterals: a literal operand has no type of
+// its own to match a declaration with, and an operator's operands
+// have no context until the operator is known. Both defaulted to Int,
+// so an operator declared over Int32 did not fit and the result fell
+// back to the left operand's type -- wrong whatever the operator
+// returns, and silently so where the two agree.
+func TestCustomOperatorOverLiterals(t *testing.T) {
+	const src = `
+infix operator <+> : AdditionPrecedence
+func <+> (a: int32, b: int32) -> int32 { return a * 10 + b }
+
+infix operator <=> : ComparisonPrecedence
+func <=> (a: int32, b: int32) -> bool { return a < b }
+
+func sum() -> int32 { return 2 <+> 3 }
+func less() -> bool { return 1 <=> 2 }
+`
+	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestCustomOperatorResultType is the other half: the result is the
+// operator's, not the left operand's, so misusing it is reported
+// against the type it actually answers.
+func TestCustomOperatorResultType(t *testing.T) {
+	const src = `
+infix operator <=> : ComparisonPrecedence
+func <=> (a: int32, b: int32) -> bool { return a < b }
+
+func use() -> int32 {
+    let r: int32 = 1 <=> 2
+    return r
+}
+`
+	_, diags := compile(t, src, vsc.Options{Stop: vsc.Checked})
+	if !vsc.Errors(diags) {
+		t.Fatal("a Bool-returning operator was accepted as an int32")
+	}
+	if !strings.Contains(diags[0].Message, "Bool") {
+		t.Errorf("diagnostic names the operand's type, not the operator's: %s", diags[0])
+	}
+}
