@@ -393,6 +393,14 @@ func (g *gen) ident(e *ast.IdentExpr) *vil.Value {
 		if v, ok := g.implicitSelf(e, sym); ok {
 			return v
 		}
+		// And it may be a static of the same type, which is in scope
+		// unqualified inside any of its members: `unit` in a static
+		// getter of Vec is `Vec.unit`. There is no receiver to reach
+		// it through -- a static belongs to the type -- so it is the
+		// same call the qualified form makes.
+		if v, ok := g.implicitStatic(e); ok {
+			return v
+		}
 		g.unsupported(e)
 		return nil
 	}

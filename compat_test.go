@@ -355,3 +355,68 @@ func use() -> int32 { return C.base }
 		t.Errorf("diagnostic does not say why: %s", diags[0])
 	}
 }
+
+// TestEnumComputedAndStaticMembers: readMembers took a var
+// declaration only where the type had somewhere to put all three
+// kinds, and an enum has no stored properties and so no field sink --
+// which dropped its computed and static ones with them.
+func TestEnumComputedAndStaticMembers(t *testing.T) {
+	const src = `
+enum Dir {
+    case up, down
+    static var count: int32 { return 2 }
+    var code: int32 { return self == Dir.up ? 1 : 2 }
+    func flipped() -> Dir { return self == Dir.up ? Dir.down : Dir.up }
+}
+
+func use() -> int32 {
+    let d = Dir.up
+    return Dir.count + d.code + d.flipped().code
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestStoredPropertyInEnumRefused: an enum's storage is its cases.
+// Swift refuses a stored property there; this used to drop it.
+func TestStoredPropertyInEnumRefused(t *testing.T) {
+	const src = `
+enum E {
+    case a
+    var x: int32 = 5
+}
+`
+	_, diags := compile(t, src, vsc.Options{Stop: vsc.Checked})
+	if !vsc.Errors(diags) {
+		t.Fatal("a stored property in an enum was accepted")
+	}
+	if !strings.Contains(diags[0].Message, "enums must not contain stored properties") {
+		t.Errorf("diagnostic is not swiftc's: %s", diags[0])
+	}
+}
+
+// TestBareStaticNameInMember: a type's statics are in scope
+// unqualified inside its own members, the way its properties are
+// through implicit self. The analyzer resolved one; lowering stopped
+// at the name.
+func TestBareStaticNameInMember(t *testing.T) {
+	const src = `
+struct Vec {
+    var x: int32
+    static var unit: Vec { return Vec(x: 1) }
+    static var two: Vec { return Vec(x: unit.x * 2) }
+    var scaled: int32 { return x * unit.x }
+}
+
+func use() -> int32 { return Vec.two.x + Vec(x: 2).scaled }
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

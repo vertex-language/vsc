@@ -380,3 +380,34 @@ func (g *gen) staticGetter(e *ast.MemberExpr, recv types.Type, f *types.Field) *
 	g.destroyLater(v)
 	return v
 }
+
+// implicitStatic reads a static of the type a member is written in,
+// for a bare name that is one.
+//
+// A type's statics are in scope unqualified inside its own members,
+// the way its instance properties are through implicit self --
+// `unit` in a static getter of Vec means `Vec.unit`. There is no
+// receiver: a static belongs to the type, so this is the same call
+// the qualified form makes.
+func (g *gen) implicitStatic(e *ast.IdentExpr) (*vil.Value, bool) {
+	if g.recv == nil || e.Name == nil {
+		return nil, false
+	}
+	name := g.text(e.Name)
+	for _, f := range staticsOf(g.recv) {
+		if f == nil || f.Name != name {
+			continue
+		}
+		if !f.IsComputed {
+			// A stored one still needs the storage and the one-time
+			// initializer that fills it. Saying so here rather than
+			// falling through keeps the reason with the name.
+			g.refuse(e, "a stored property of a type declared here: it needs storage of "+
+				"its own and the one-time initializer that fills it")
+			return nil, true
+		}
+		member := &ast.MemberExpr{Name: e.Name}
+		return g.staticGetter(member, g.recv, f), true
+	}
+	return nil, false
+}

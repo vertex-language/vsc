@@ -770,9 +770,11 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 	for _, mem := range body.Members {
 		switch m := mem.(type) {
 		case *ast.VarDecl:
-			if fields == nil || computed == nil || statics == nil {
-				continue
-			}
+			// Each kind is taken where the type has somewhere to put
+			// it. Requiring all three meant an enum -- which has no
+			// stored properties and so no field sink -- recorded no
+			// computed and no static members either, and `E.v` was
+			// "no member 'v'" for something the type plainly declares.
 			// Only what the instance actually holds. A computed
 			// property is a getter and a setter with nothing behind
 			// them, and a static one is the type's storage rather
@@ -786,6 +788,9 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 				got := c.storedField(b, isConst, typeScope)
 				switch {
 				case static:
+					if statics == nil {
+						continue
+					}
 					// A static may be stored or computed, and they
 					// share one list. Only the stored ones need
 					// storage, so which it is has to survive.
@@ -796,8 +801,19 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 					}
 					*statics = append(*statics, got...)
 				case c.isComputed(b):
+					if computed == nil {
+						continue
+					}
 					*computed = append(*computed, got...)
 				default:
+					if fields == nil {
+						// A type with no field sink is one that
+						// cannot hold anything: an enum's storage is
+						// its cases. Swift refuses a stored property
+						// there rather than ignoring it.
+						c.errorf(b.Pos(), "enums must not contain stored properties")
+						continue
+					}
 					*fields = append(*fields, got...)
 				}
 			}

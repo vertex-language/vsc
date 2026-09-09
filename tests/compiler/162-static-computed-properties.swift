@@ -14,9 +14,9 @@ struct Vec {
     static var unit: Vec { return Vec(x: 1, y: 1) }
 
     // One that reads another, so the getter is a call from a getter.
-    // Qualified: a bare static name inside a static getter does not
-    // resolve yet -- see TODO.md.
-    static var two: Vec { return Vec(x: Vec.unit.x * 2, y: Vec.unit.y * 2) }
+    // Written bare: a type's statics are in scope unqualified inside
+    // its own members, the way its properties are through self.
+    static var two: Vec { return Vec(x: unit.x * 2, y: unit.y * 2) }
 
     var sum: Int32 { return x + y }
 }

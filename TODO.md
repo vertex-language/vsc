@@ -18,39 +18,6 @@ then do something other than what the source says — the failure the
 compiler's own rule exists to prevent — so it is the one to keep
 empty.
 
-## Resolved wrongly
-
-### An enum's static property is not found
-
-```swift
-enum E {
-    case a
-    static var v: int32 { return 4 }
-}
-```
-
-```
-error: value of type 'E.Type' has no member 'v'
-```
-
-A static *function* on an enum resolves; a static *property* does not.
-The analyzer collects them — `sinksOf` hands an enum's statics to
-`readMembers` like a struct's — so what is missing is the lookup
-through the metatype, not the declaration.
-
-### A bare static name inside a static getter is not resolved
-
-```swift
-struct Vec {
-    static var unit: Vec { return Vec(x: 1) }
-    static var two: Vec { return Vec(x: unit.x * 2) }   // `unit` unresolved
-}
-```
-
-Qualifying it as `Vec.unit` works. Inside a static member, the type's
-own statics should be in scope unqualified the way an instance's
-members are through implicit `self`.
-
 ## Accepted where Swift refuses
 
 The compiler is quiet about a program Swift would reject, so the first
@@ -117,6 +84,19 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **An enum's computed and static members were never recorded.**
+  `readMembers` took a var declaration only where the type had
+  somewhere to put all three kinds, and an enum has no stored
+  properties and so no field sink — which dropped its computed and
+  static ones with them. `Dir.count` was "no member 'count'" for
+  something the type plainly declares. Each kind is taken where there
+  is somewhere to put it now, and a stored property in an enum is
+  refused in swiftc's own words rather than ignored.
+- **A bare static name inside a member was not lowered.** A type's
+  statics are in scope unqualified inside its own members, the way its
+  properties are through implicit `self`, and the analyzer resolved
+  one — but lowering had no case for it and stopped at the name. It is
+  the same call the qualified form makes.
 - **A static computed property was refused as though it were stored.**
   A static may be stored or computed and the two shared one list, so
   a computed one was counted among the properties that need storage
