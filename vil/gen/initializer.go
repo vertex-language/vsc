@@ -77,12 +77,14 @@ func (g *gen) initializer(d *ast.InitDecl, recv types.Type) {
 		pending string
 		recv    types.Type
 		self    *local
-	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self}
+		initRet func()
+	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.initReturn}
 	defer func() {
 		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
 		g.scopes, g.locals = outer.scopes, outer.locals
 		g.loops, g.pending = outer.loops, outer.pending
 		g.recv, g.self = outer.recv, outer.self
+		g.initReturn = outer.initRet
 	}()
 
 	g.fn = f
@@ -124,14 +126,22 @@ func (g *gen) initializer(d *ast.InitDecl, recv types.Type) {
 	addr := g.blk.ProjectBox(borrow, 0, t)
 	g.self = &local{addr: addr, box: marked, typ: t}
 
-	g.block(d.Body)
-
-	if g.blk != nil && g.blk.Term() == nil {
+	// What a return from this initializer emits, wherever it is
+	// written: the value built so far, with the box torn down. A bare
+	// `return` in the body leaves early with the same thing the end
+	// of the body produces.
+	g.initReturn = func() {
 		v := g.blk.Load(addr, loadQualifier(t))
 		g.blk.EndBorrow(borrow)
 		g.blk.DestroyValue(marked)
 		g.unwind()
 		g.blk.Return(v)
+	}
+
+	g.block(d.Body)
+
+	if g.blk != nil && g.blk.Term() == nil {
+		g.initReturn()
 	}
 }
 
@@ -193,7 +203,7 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 	f.Type().Params = nil
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes, g.loops, g.pending = nil, nil, ""
-	g.recv, g.self = recv, nil
+	g.recv, g.self, g.initReturn = recv, nil, nil
 	g.push()
 	g.blk = f.Entry()
 
@@ -219,11 +229,19 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 	f.SetResult(t, resultConvention(t))
 	g.blk.DebugValue(self, "self", "let")
 
+	// What a return from this initializer emits. A class's is the
+	// instance it was handed rather than a box it filled, but a bare
+	// `return` in the body means the same thing it does in a struct's:
+	// leave early with what has been made.
+	g.initReturn = func() {
+		g.unwind()
+		g.blk.Return(g.blk.CopyValue(self))
+	}
+
 	g.block(d.Body)
 
 	if g.blk != nil && g.blk.Term() == nil {
-		g.unwind()
-		g.blk.Return(g.blk.CopyValue(self))
+		g.initReturn()
 	}
 }
 
@@ -292,11 +310,13 @@ func (g *gen) saveFunction() func() {
 	scopes, locals := g.scopes, g.locals
 	loops, pending := g.loops, g.pending
 	recv, self := g.recv, g.self
+	initRet := g.initReturn
 	return func() {
 		g.fn, g.entry, g.blk = fn, entry, blk
 		g.scopes, g.locals = scopes, locals
 		g.loops, g.pending = loops, pending
 		g.recv, g.self = recv, self
+		g.initReturn = initRet
 	}
 }
 

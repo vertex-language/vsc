@@ -25,28 +25,6 @@ section is worth keeping in front of the rest.
 
 ## Accepted where Swift refuses
 
-### A failable initializer cannot return nil
-
-```swift
-struct Even {
-    var n: int32
-    init?(_ n: int32) {
-        if n % 2 != 0 { return nil }
-        self.n = n
-    }
-}
-```
-
-```
-error: cannot convert return value of type 'untyped nil' to expected
-return type 'Even'
-```
-
-`init?` is modelled as an ordinary initializer, so the one thing it
-exists to do is the one thing it cannot. swiftc accepts the program.
-Not silently wrong — it is rejected rather than mis-compiled — but it
-is valid Swift that does not build, so it belongs with the others
-here rather than under the honest refusals.
 
 
 The compiler is quiet about a program Swift would reject, so the first
@@ -74,6 +52,7 @@ already correct; only the feature is missing.
 | `defer` | `cannot lower a defer` |
 | a closure that captures | `cannot lower a closure that captures 'k'` |
 | an optional chain | `cannot lower this expression yet` |
+| a failable initializer | `cannot lower a failable initializer` |
 | a tuple pattern in a `switch` | `cannot lower this pattern in a switch` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
@@ -121,6 +100,16 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **`return` in an initializer did not compile.** It was checked
+  against the type being made, so a bare `return` was Void where the
+  type was wanted — the one return statement an initializer may write,
+  and swiftc is exact about it: *"'nil' is the only return value
+  permitted in an initializer"*. An initializer's return takes no
+  value now, and lowering gives it the same thing the end of the body
+  gives: the value built so far, with the box torn down. `init?` may
+  return nil, which is the one thing it exists to do; lowering one is
+  still refused, so it stops honestly at the backend rather than
+  confusingly at the checker.
 - **An optional chain lost its optionality.** `p?.x` answered
   `Invalid` — the lookup ran on a doubly optional type, since `p?`
   wraps whatever it followed and `p` was already optional, and found

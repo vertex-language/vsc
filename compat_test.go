@@ -830,3 +830,55 @@ func chain(_ p: P?) -> int32 {
 		t.Errorf("diagnostic does not name the optional: %s", diags[0])
 	}
 }
+
+// TestInitReturn: `return` in an initializer leaves early with what
+// has been built. It was checked against the type being made, so a
+// bare return was Void where the type was wanted -- the one return
+// statement an initializer may write did not compile.
+func TestInitReturn(t *testing.T) {
+	const src = `
+struct Clamped {
+    var n: int32
+    init(_ v: int32) {
+        self.n = v
+        if v > 10 { return }
+        self.n = v * 2
+    }
+}
+
+final class Counter {
+    var n: int32
+    init(_ v: int32) {
+        self.n = v
+        return
+    }
+}
+
+func use() -> int32 { return Clamped(20).n + Clamped(3).n + Counter(4).n }
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestFailableInitChecks: `init?` may return nil, which is the one
+// thing it exists to do and was a type error. Lowering one is still
+// refused, so this stops at the checker.
+func TestFailableInitChecks(t *testing.T) {
+	const src = `
+struct Even {
+    var n: int32
+    init?(_ v: int32) {
+        if v % 2 != 0 { return nil }
+        self.n = v
+    }
+}
+`
+	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

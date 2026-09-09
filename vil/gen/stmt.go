@@ -521,6 +521,13 @@ func storeQualifier(t vil.Type) string {
 // must not be destroyed by it.
 func (g *gen) ret(s *ast.ReturnStmt) {
 	if s.X == nil {
+		// A bare `return` in an initializer leaves early with the
+		// value built so far -- an initializer returns what it made,
+		// and `return` in one is not a void return.
+		if g.initReturn != nil {
+			g.initReturn()
+			return
+		}
 		// `return` with nothing to return: the empty tuple, or the
 		// exit status in the entry point, which says zero.
 		g.unwind()

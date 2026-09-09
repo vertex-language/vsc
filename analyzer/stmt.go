@@ -528,8 +528,17 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 		c.checkMutatingPlacement(m, self)
 		c.checkFuncBody(m, typeScope)
 
+	// An initializer returns nothing. `return` in one leaves early,
+	// and `nil` is the only value any of them may return -- and only
+	// a failable one may. Passing the type itself made a bare return
+	// a conversion error, and made `return nil` in an `init?`
+	// impossible: the one thing it exists to do.
 	case *ast.InitDecl:
-		c.checkBodyWithParams(m, m.Sig, m.Body, typeScope, self)
+		result := types.Type(types.Typ[types.Void])
+		if m.Question.IsValid() || m.Exclaim.IsValid() {
+			result = &types.Optional{Wrapped: types.Typ[types.Void]}
+		}
+		c.checkBodyWithParams(m, m.Sig, m.Body, typeScope, result)
 
 	case *ast.DeinitDecl:
 		c.checkBodyWithParams(m, nil, m.Body, typeScope, nil)

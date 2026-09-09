@@ -455,6 +455,14 @@ type gen struct {
 	// method's receiver is the last entry argument and this is nil.
 	self *local
 
+	// initReturn emits the return an initializer makes: the value
+	// built so far, with the box it was built in torn down. A bare
+	// `return` in an initializer leaves early with that value, which
+	// is what the end of the body returns too -- so both go through
+	// here rather than one of them returning void. Nil outside an
+	// initializer.
+	initReturn func()
+
 	diags []token.Diagnostic
 }
 
