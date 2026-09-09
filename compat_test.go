@@ -636,3 +636,33 @@ func classify(_ n: int32) -> int32 {
 		}
 	}
 }
+
+// TestSwitchBindingAndWhere: a case may bind what it matched and
+// guard it with a condition. Neither was lowered -- a binding pattern
+// was refused, and a where clause with it.
+func TestSwitchBindingAndWhere(t *testing.T) {
+	const src = `
+func classify(_ n: int32) -> int32 {
+    switch n {
+    case 0: return 1
+    case let k where k < 0: return -k
+    case 1..<10: return 2
+    case 10...20 where n % 2 == 0: return 3
+    case let k where k > 100: return k / 10
+    default: return 9
+    }
+}
+
+func doubleIt(_ n: int32) -> int32 {
+    switch n {
+    case 0: return 0
+    case let k: return k * 2
+    }
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

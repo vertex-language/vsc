@@ -829,14 +829,16 @@ func (g *gen) switchOnValue(s *ast.SwitchStmt, subject *vil.Value, t types.Type,
 
 	// The default is where a subject that matched nothing goes, and the
 	// continuation is that when there is none.
+	//
+	// Asked for at the end rather than here: a case that always
+	// matches -- `case let k`, which is a default with a name -- means
+	// nothing reaches the fallback, and a continuation made eagerly
+	// for it would be a block with no predecessors.
 	fallback := (*vil.Block)(nil)
 	for i, cs := range clauses {
 		if cs.Kind == token.DEFAULT {
 			fallback = bodies[i]
 		}
-	}
-	if fallback == nil {
-		fallback = cont()
 	}
 
 	for i, cs := range clauses {
@@ -844,44 +846,92 @@ func (g *gen) switchOnValue(s *ast.SwitchStmt, subject *vil.Value, t types.Type,
 			continue
 		}
 		for _, item := range cs.Items {
-			if item.Where != nil {
-				g.refuse(s, "a switch with a `where` clause")
-				return false
-			}
-			pat, ok := item.Pat.(*ast.ExprPattern)
+			test, ok := g.caseTest(item, subject, t)
 			if !ok {
-				g.refuse(item.Pat, "this pattern in a switch")
 				return false
 			}
-			// `case 1...5` matches everything between its bounds, so
-			// it is two comparisons rather than one equality.
-			if eq := g.rangeMatch(pat, subject, t); eq != nil {
-				next := g.fn.Block()
-				g.blk.CondBr(eq, bodies[i], nil, next, nil)
-				g.blk = next
-				continue
-			}
-			n := len(g.diags)
-			want := g.rvalue(pat.X)
-			if want == nil {
-				// Whatever stopped it said so, unless nothing did.
-				if len(g.diags) == n {
-					g.refuse(item.Pat, "this pattern in a switch")
-				}
-				return false
-			}
-			eq := g.equals(subject, want, t)
-			if eq == nil {
-				g.refuse(item.Pat, "a switch over "+t.String())
-				return false
+			// A pattern that only binds matches whatever it is given,
+			// so nothing after it is reachable: `case let k` is a
+			// default with a name. Branching unconditionally is what
+			// says so, and the fallback below would be a second
+			// terminator on a block that already has one.
+			if test == nil {
+				g.blk.Br(bodies[i])
+				return true
 			}
 			next := g.fn.Block()
-			g.blk.CondBr(eq, bodies[i], nil, next, nil)
+			g.blk.CondBr(test, bodies[i], nil, next, nil)
 			g.blk = next
 		}
 	}
+	if fallback == nil {
+		fallback = cont()
+	}
 	g.blk.Br(fallback)
 	return true
+}
+
+// caseTest is the bit that decides whether one case item matches, or
+// nil where it always does. It binds whatever the pattern names
+// first, because a where clause is written about those names.
+func (g *gen) caseTest(item *ast.CaseItem, subject *vil.Value, t types.Type) (*vil.Value, bool) {
+	var test *vil.Value
+
+	switch pat := item.Pat.(type) {
+	case *ast.ExprPattern:
+		// `case 1...5` matches everything between its bounds, so it
+		// is two comparisons rather than one equality.
+		if eq := g.rangeMatch(pat, subject, t); eq != nil {
+			test = eq
+			break
+		}
+		n := len(g.diags)
+		want := g.rvalue(pat.X)
+		if want == nil {
+			// Whatever stopped it said so, unless nothing did.
+			if len(g.diags) == n {
+				g.refuse(item.Pat, "this pattern in a switch")
+			}
+			return nil, false
+		}
+		test = g.equals(subject, want, t)
+		if test == nil {
+			g.refuse(item.Pat, "a switch over "+t.String())
+			return nil, false
+		}
+
+	// `case let k` names the subject and matches it whatever it is.
+	// What decides the case is then the where clause, or nothing.
+	case *ast.ValueBindingPattern, *ast.IdentPattern, *ast.WildcardPattern:
+		if !g.bindPatternTo(item.Pat, subject, t) {
+			return nil, false
+		}
+
+	default:
+		g.refuse(item.Pat, "this pattern in a switch")
+		return nil, false
+	}
+
+	if item.Where == nil {
+		return test, true
+	}
+	// The condition is read after the binding, which is what it is
+	// written about.
+	cond := g.rvalue(item.Where.Cond)
+	if cond == nil {
+		return nil, false
+	}
+	bit := g.machine(cond, types.Typ[types.Bool])
+	if bit == nil {
+		g.refuse(item.Where.Cond, "a where clause of "+g.typeOf(item.Where.Cond).String())
+		return nil, false
+	}
+	if test == nil {
+		return bit, true
+	}
+	// Both, without a branch: the pattern's test has no effect to
+	// skip, and neither does the condition once it is evaluated.
+	return g.blk.Builtin("and_Int1", vil.Object(vil.BuiltinInt1), test, bit), true
 }
 
 // rangeMatch is the test a range pattern makes: the subject is at

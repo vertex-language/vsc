@@ -42,7 +42,6 @@ already correct; only the feature is missing.
 | binding an optional of a wide payload | `whose payload is more than one register` |
 | top-level code | `top-level code is not supported` |
 | a static computed property's setter | not emitted; static storage first |
-| a `switch` with a `where` clause | `cannot lower a switch with a where clause` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
 | a computed property of a class with a subclass | `reached through the table the instance carries` |
@@ -89,6 +88,13 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A `switch` could not bind or guard.** `case let k` was refused as
+  "this pattern in a switch", and a `where` clause with it. A binding
+  names the subject and matches whatever it is, so it is a default
+  with a name — nothing after it is reachable, and the continuation is
+  not made where nothing reaches it. A `where` clause is read after
+  the binding, since it is written about the names the pattern
+  declares, and the two are and-ed without a branch.
 - **Every range pattern was an error.** `case 1...5` compared the
   range against the subject, and a `ClosedRange<Int>` is not an `Int`
   — so it failed at every subject type, not only where the literals
