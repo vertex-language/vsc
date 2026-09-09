@@ -1,0 +1,15 @@
+// vertex-interface-format-version: 1.0
+// vertex-module-name: Metrics
+//
+// Written the way swiftc writes a .swiftinterface: every name
+// qualified by the module it came from, including the ones that are
+// spelled bare everywhere else. `Swift.Int32` and `Int32` are one
+// type, and an interface says the first.
+
+public func mean(_ a: Swift.Int32, _ b: Swift.Int32) -> Swift.Int32
+
+public func medianOf(_ a: Swift.Int32, _ b: Swift.Int32, _ c: Swift.Int32) -> Swift.Int32
+
+public func digitsInDescription(_ n: Swift.Int32) -> Swift.Int32
+
+public func roundedTenths(_ n: Swift.Int32) -> Swift.Int32

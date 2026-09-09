@@ -1,0 +1,10 @@
+// vertex-interface-format-version: 1.0
+// vertex-module-name: Net
+
+public func portOf(_ which: Int32) -> Int32
+
+public func pathComponentCount(_ which: Int32) -> Int32
+
+public func queryValue(_ key: Int32) -> Int32
+
+public func percentEncodes() -> Int32

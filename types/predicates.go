@@ -1,0 +1,374 @@
+package types
+
+// Identical reports whether x and y are identical types.
+// SameDecl reports whether two function signatures belong to the same
+// declaration, which is a different question from whether they are the
+// same type.
+//
+// Swift's full name for a function is its base name and its argument
+// labels together, so `label(a:)` and `label(b:)` are two declarations
+// and may both exist. Their *types* are identical -- SE-0111 took
+// labels out of the type system -- which is why Identical says yes to
+// the same pair and why the two questions cannot share an answer:
+// asking Identical about a redeclaration rejected every overload that
+// differed only in its labels, and asking SameDecl about an assignment
+// would reject every declared function used as a value.
+func SameDecl(x, y *Signature) bool {
+	if !Identical(x, y) {
+		return false
+	}
+	if x == nil || y == nil {
+		return x == y
+	}
+	for i, p := range x.Params {
+		if p.Label != y.Params[i].Label {
+			return false
+		}
+	}
+	return true
+}
+
+func Identical(x, y Type) bool {
+	if x == y {
+		return true
+	}
+	if x == nil || y == nil {
+		return false
+	}
+
+	// A typealias is another spelling of the type it names, not a new
+	// one, so it is looked through. A Named with nothing under it is
+	// a name this compiler could not resolve, and stays opaque.
+	if n, ok := x.(*Named); ok && n.underlying != nil {
+		return Identical(n.Underlying(), y)
+	}
+	if n, ok := y.(*Named); ok && n.underlying != nil {
+		return Identical(x, n.Underlying())
+	}
+
+	switch xt := x.(type) {
+	case *Basic:
+		if yt, ok := y.(*Basic); ok {
+			return xt.kind == yt.kind
+		}
+	case *Named:
+		if yt, ok := y.(*Named); ok {
+			return xt.Name == yt.Name && xt.Pkg == yt.Pkg
+		}
+	case *Struct:
+		if yt, ok := y.(*Struct); ok {
+			return xt == yt || (xt.Name != "" && xt.Name == yt.Name)
+		}
+	case *Class:
+		if yt, ok := y.(*Class); ok {
+			return xt == yt || (xt.Name != "" && xt.Name == yt.Name)
+		}
+	case *Enum:
+		if yt, ok := y.(*Enum); ok {
+			return xt == yt || (xt.Name != "" && xt.Name == yt.Name)
+		}
+	case *Protocol:
+		if yt, ok := y.(*Protocol); ok {
+			return xt == yt || (xt.Name != "" && xt.Name == yt.Name)
+		}
+	case *Array:
+		if yt, ok := y.(*Array); ok {
+			return Identical(xt.Elem, yt.Elem)
+		}
+	case *Dictionary:
+		if yt, ok := y.(*Dictionary); ok {
+			return Identical(xt.Key, yt.Key) && Identical(xt.Value, yt.Value)
+		}
+	case *Optional:
+		if yt, ok := y.(*Optional); ok {
+			return Identical(xt.Wrapped, yt.Wrapped)
+		}
+	case *Metatype:
+		if yt, ok := y.(*Metatype); ok {
+			return Identical(xt.Instance, yt.Instance)
+		}
+	case *Tuple:
+		if yt, ok := y.(*Tuple); ok {
+			if len(xt.Elements) != len(yt.Elements) {
+				return false
+			}
+			for i, elem := range xt.Elements {
+				if elem.Name != yt.Elements[i].Name || !Identical(elem.Type, yt.Elements[i].Type) {
+					return false
+				}
+			}
+			return true
+		}
+	case *Signature:
+		if yt, ok := y.(*Signature); ok {
+			if len(xt.Params) != len(yt.Params) || xt.Async != yt.Async {
+				return false
+			}
+			if xt.Throws != yt.Throws {
+				return false
+			}
+			if (xt.Thrown == nil) != (yt.Thrown == nil) {
+				return false
+			}
+			if xt.Thrown != nil && !Identical(xt.Thrown, yt.Thrown) {
+				return false
+			}
+			if !Identical(xt.Results, yt.Results) {
+				return false
+			}
+			// An argument label is part of a declaration's name and
+			// not of its type: SE-0111 took labels out of the type
+			// system, so `func triple(_ n: Int32) -> Int32` has type
+			// `(Int32) -> Int32` and is assignable to a variable of
+			// it. swiftc accepts both spellings against the same
+			// annotation, and comparing labels here rejected every
+			// declared function used as a value.
+			for i, p := range xt.Params {
+				yp := yt.Params[i]
+				if p.Ownership != yp.Ownership || p.Variadic != yp.Variadic || !Identical(p.Type, yp.Type) {
+					return false
+				}
+			}
+			return true
+		}
+	case *TypeParam:
+		if yt, ok := y.(*TypeParam); ok {
+			return xt.Name == yt.Name
+		}
+	// Two dependent member types are the same type when they are
+	// reached through the same parameter and name the same associated
+	// type. `C.Item` is `C.Item`, however many times it was written.
+	case *Dependent:
+		if yt, ok := y.(*Dependent); ok {
+			return xt.Name == yt.Name && Identical(xt.Base, yt.Base)
+		}
+	case *GenericInstance:
+		if yt, ok := y.(*GenericInstance); ok {
+			if !Identical(xt.Base, yt.Base) || len(xt.Args) != len(yt.Args) {
+				return false
+			}
+			for i, arg := range xt.Args {
+				if !Identical(arg, yt.Args[i]) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// ConformsTo reports whether t conforms to proto.
+//
+// Conformance is nominal, as it is in Swift: a type conforms to a
+// protocol because it was declared to, in its own declaration or in
+// an extension, and never because its members happen to line up. Two
+// types with the same shape are not interchangeable, which is the
+// whole point of a protocol being a name.
+func ConformsTo(t Type, proto *Protocol) bool {
+	if t == nil || proto == nil {
+		return false
+	}
+	if proto.Name == "Any" {
+		return true
+	}
+
+	containsProto := func(list []*Protocol) bool {
+		for _, p := range list {
+			if Identical(p, proto) || ConformsTo(p, proto) {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch tt := t.(type) {
+	case *Protocol:
+		if Identical(tt, proto) {
+			return true
+		}
+		return containsProto(tt.Inherited)
+
+	case *Struct:
+		return containsProto(tt.Conformances)
+
+	case *Class:
+		if containsProto(tt.Conformances) {
+			return true
+		}
+		return tt.Superclass != nil && ConformsTo(tt.Superclass, proto)
+
+	case *Enum:
+		return containsProto(tt.Conformances)
+
+	case *GenericInstance:
+		return ConformsTo(tt.Base, proto)
+
+	case *Existential:
+		for _, p := range tt.Protocols {
+			if ConformsTo(p, proto) {
+				return true
+			}
+		}
+		return false
+
+	case *TypeParam:
+		for _, c := range tt.Constraints {
+			if ConformsTo(c, proto) {
+				return true
+			}
+		}
+		return false
+
+	case *Named:
+		if tt.underlying != nil {
+			return ConformsTo(tt.underlying, proto)
+		}
+		return false
+
+	default:
+		return false
+	}
+}
+
+// AssignableTo reports whether a value of type from is assignable to a variable of type to.
+func AssignableTo(from, to Type) bool {
+	if from == nil || to == nil {
+		return false
+	}
+	if Identical(from, to) {
+		return true
+	}
+	// Never is the bottom type, assignable to anything
+	if from == Typ[Never] {
+		return true
+	}
+
+	// Any / Existential conformance
+	if ex, ok := to.(*Existential); ok {
+		if len(ex.Protocols) == 0 {
+			return true // Any accepts everything
+		}
+		for _, p := range ex.Protocols {
+			if !ConformsTo(from, p) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Protocol target
+	if proto, ok := to.(*Protocol); ok {
+		return ConformsTo(from, proto)
+	}
+
+	// Untyped literals
+	if bFrom, ok := from.(*Basic); ok && bFrom.info&IsUntyped != 0 {
+		// Through the name, not at it: a typealias is another
+		// spelling of the type it names, so a literal fits `Num`
+		// exactly when it fits the Int32 that Num is. Asserting on
+		// the type as written meant a parameter declared with an
+		// alias took no literal at all.
+		if bTo, ok := to.Underlying().(*Basic); ok {
+			switch bFrom.kind {
+			case UntypedInt:
+				return bTo.info&IsNumeric != 0
+			case UntypedFloat:
+				return bTo.info&IsFloat != 0
+			case UntypedBool:
+				return bTo.info&IsBoolean != 0
+			case UntypedString:
+				return bTo.info&IsString != 0
+			}
+		}
+		if bFrom.kind == UntypedNil {
+			_, isOpt := to.(*Optional)
+			return isOpt
+		}
+	}
+
+	// Optional promotion: T is assignable to T?
+	if toOpt, ok := to.(*Optional); ok {
+		if AssignableTo(from, toOpt.Wrapped) {
+			return true
+		}
+	}
+
+	// GenericInstance compatibility
+	if genFrom, ok := from.(*GenericInstance); ok {
+		if genTo, ok := to.(*GenericInstance); ok {
+			if Identical(genFrom.Base, genTo.Base) && len(genFrom.Args) == len(genTo.Args) {
+				match := true
+				for i, a := range genFrom.Args {
+					if !AssignableTo(a, genTo.Args[i]) {
+						match = false
+						break
+					}
+				}
+				if match {
+					return true
+				}
+			}
+		}
+	}
+
+	// Class inheritance: subclass is assignable to superclass
+	if fromClass, ok := from.(*Class); ok {
+		if toClass, ok := to.(*Class); ok {
+			curr := fromClass.Superclass
+			for curr != nil {
+				if Identical(curr, toClass) {
+					return true
+				}
+				if c, ok := curr.(*Class); ok {
+					curr = c.Superclass
+				} else {
+					break
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// Comparable reports whether t supports equality operations.
+func Comparable(t Type) bool {
+	if t == nil {
+		return false
+	}
+	switch tt := t.(type) {
+	case *Basic:
+		return tt.info&(IsNumeric|IsBoolean|IsString) != 0 || tt.kind == Character
+	case *Optional:
+		return Comparable(tt.Wrapped)
+	case *Tuple:
+		for _, elem := range tt.Elements {
+			if !Comparable(elem.Type) {
+				return false
+			}
+		}
+		return true
+	case *Enum:
+		return true
+	case *Class:
+		return true // reference identity
+	default:
+		return false
+	}
+}
+
+// IsCopyable reports whether values of type t can be implicitly copied.
+func IsCopyable(t Type) bool {
+	if t == nil {
+		return true
+	}
+	switch tt := t.Underlying().(type) {
+	case *Struct:
+		return tt.Copyable
+	case *Enum:
+		return tt.Copyable
+	default:
+		return true
+	}
+}

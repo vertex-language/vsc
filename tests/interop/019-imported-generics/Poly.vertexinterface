@@ -1,0 +1,19 @@
+// swift-interface-format-version: 1.0
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Poly
+import Swift
+public func tag<T>(_ x: T) -> Swift.Int32
+public func same<T>(_ x: T) -> T
+public func pick<T>(_ a: T, _ b: T, _ first: Swift.Bool) -> T
+public func both<T, U>(_ a: T, _ b: U) -> Swift.Int32
+public func after<T>(_ n: Swift.Int32, _ x: T) -> T
+public struct Wide {
+  public var a: Swift.Int64
+  public var b: Swift.Int64
+  public var c: Swift.Int64
+  public var d: Swift.Int64
+  public var e: Swift.Int64
+  public init(a: Swift.Int64)
+}
+public func first<T>(_ x: T, _ y: T) -> T
+public func widen(_ a: Swift.Int64) -> Poly.Wide
+public func sumWide(_ w: Poly.Wide) -> Swift.Int64

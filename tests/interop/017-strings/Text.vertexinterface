@@ -1,0 +1,9 @@
+// swift-interface-format-version: 1.0
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Text
+import Swift
+public func lengthOf(_ s: Swift.String) -> Swift.Int32
+public func firstByte(_ s: Swift.String) -> Swift.Int32
+public func lastByte(_ s: Swift.String) -> Swift.Int32
+public func repeated(_ s: Swift.String, _ n: Swift.Int32) -> Swift.String
+public func echo(_ s: Swift.String) -> Swift.String
+public func isEmptyString(_ s: Swift.String) -> Swift.Int32

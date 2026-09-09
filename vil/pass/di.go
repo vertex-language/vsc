@@ -1,0 +1,108 @@
+package pass
+
+import (
+	"github.com/vertex-language/vsc/vil"
+)
+
+// Definite initialization, as much of it as is provably right.
+//
+// `assign` is what SILGen writes for a store to a variable, and it
+// means "put this here, and destroy whatever was here already". Which
+// of those two halves is real depends on whether the destination had
+// been initialized yet, and that is a question about every path
+// reaching the store rather than about the store — which is why Swift
+// answers it in a dataflow pass and why canonical SIL has no `assign`
+// left in it.
+//
+// This does the half that needs no dataflow. A trivial type owns
+// nothing, so there is nothing to destroy, so the assignment is a
+// store whether the location was initialized or not — the answer is
+// the same down every path and the analysis is not needed to find it.
+// Int, Bool, and the floats are trivial, which is every type a `var`
+// can hold in this compiler today.
+//
+// What is deliberately left alone is an assignment to a location
+// holding something owned. Turning that into a store would leak what
+// was there, and turning it into destroy-then-store would double-free
+// where the location was not yet initialized. Both are wrong, and
+// which one is wrong here is exactly what the dataflow would say — so
+// the `assign` stays, and lowering refuses it by name rather than
+// guessing. When there is a real definite-initialization pass, it
+// replaces this one and this comment goes with it.
+
+// eraseMarks removes the mark_uninitialized instructions.
+//
+// Marking is a note to this pass and to nothing else: it says the
+// storage under it is not yet a value, so that a read before the last
+// write can be reported. Having decided, the note has served its
+// purpose -- the verifier says so, refusing one in any stage past
+// raw -- and what it marked is what everything downstream should see.
+//
+// The check the note asks for is not written. What is written is the
+// removal, so that the storage reaches the passes that follow as the
+// storage it is: an alloc_box marked for an initializer's self was
+// not promoted to a stack slot, because the promotion looks at what
+// uses the box and found a mark it did not recognise.
+func eraseMarks(f *vil.Func) {
+	if f.IsDeclaration() {
+		return
+	}
+	for _, b := range f.Blocks() {
+		insts := make([]*vil.Inst, len(b.Insts()))
+		copy(insts, b.Insts())
+		for _, in := range insts {
+			if in.Op() != vil.MarkUninitialized {
+				continue
+			}
+			args := in.Args()
+			if len(args) != 1 || in.Result() == nil {
+				continue
+			}
+			vil.ReplaceAllUses(in.Result(), args[0])
+			b.Erase(in)
+		}
+	}
+}
+
+// resolveAssigns rewrites the assignments whose answer is not in
+// doubt.
+func resolveAssigns(f *vil.Func) {
+	if f.IsDeclaration() {
+		return
+	}
+	for _, b := range f.Blocks() {
+		for _, in := range b.Insts() {
+			if in.Op() != vil.Assign {
+				continue
+			}
+			// assign %value to %address.
+			args := in.Args()
+			if len(args) != 2 || args[0] == nil {
+				continue
+			}
+			if args[0].Type().Trivial() {
+				in.Reshape(vil.Store, vil.Aux{Attrs: []string{"trivial"}})
+				continue
+			}
+			// The slot owns what it holds, so the old value has to go
+			// somewhere. swiftc's own lowering of this is three
+			// instructions and the order of the last two is the whole
+			// point:
+			//
+			//	%old = load %addr
+			//	store %new to %addr
+			//	strong_release %old
+			//
+			// Releasing before storing would free the object first,
+			// and `x = x` would then store a dangling reference.
+			// Taking the old value rather than copying it is what
+			// makes the release balance: the slot is about to be
+			// overwritten, so nothing is left behind to own it.
+			addr := args[1]
+			old := b.InsertBefore(in, vil.Load, vil.Aux{Attrs: []string{"take"}},
+				[]*vil.Value{addr}, args[0].Type())
+			in.Reshape(vil.Store, vil.Aux{Attrs: []string{"init"}})
+			b.InsertAfter(in, vil.DestroyValue, vil.Aux{}, []*vil.Value{old.Result()})
+		}
+	}
+}
