@@ -273,6 +273,11 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 	if v == nil {
 		return
 	}
+	// A value written into an optional is injected here, the same as
+	// one written into a binding's initializer. Without it `d = 6 / 2`
+	// stored four bytes over a five-byte slot and left the tag byte
+	// saying none, so the assignment ran and d was still nil.
+	v = g.optionalFor(e.Y, v, g.typeOf(e.Y), g.typeOf(e.X))
 	access := g.blk.BeginAccess(addr, "modify", "unknown")
 	g.blk.Assign(v, access)
 	g.blk.EndAccess(access)

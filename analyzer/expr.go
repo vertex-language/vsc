@@ -154,6 +154,12 @@ func literalUnder(e ast.Expr) (*ast.BasicLit, bool) {
 // some program declared, and resolving it is overload resolution's
 // business.
 func (c *checker) checkPrefix(e *ast.PrefixExpr, expected types.Type, scope *Scope) types.Type {
+	// A value written where a `T?` is wanted is a `T` that is
+	// injected on the way in, so the context the operand sees is the
+	// wrapped type. `-7` written there is a negated Int32 and not a
+	// negation applied to an `Int32?`, which is what it was read as
+	// and refused for.
+	expected = unwrappedContext(expected)
 	op := ""
 	if e.Op != nil {
 		op = string(c.file.Slice(e.Op.Pos(), e.Op.End()))
@@ -532,7 +538,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// fall back on their own defaults.
 		var operandCtx types.Type
 		if expected != nil && sharesOperandType(opName) {
-			operandCtx = expected
+			// The wrapped type where an optional is wanted, for the
+			// reason checkPrefix gives: `let a: Int32? = 1 + 2` is an
+			// Int32 sum injected, and reading the operands as
+			// `Int32?`s left them at Int's default and failed to
+			// convert.
+			operandCtx = unwrappedContext(expected)
 		}
 		// A range's operands are its bounds, so what they take from
 		// the context is the element rather than the range. In a
@@ -1318,6 +1329,18 @@ func (c *checker) moduleMemberValue(e *ast.MemberExpr, scope *Scope) (types.Type
 func isUntypedNil(t types.Type) bool {
 	b, ok := t.(*types.Basic)
 	return ok && b.Kind() == types.UntypedNil
+}
+
+// unwrappedContext is the type an operand is checked against where an
+// optional is wanted: what a `T?` wraps, because a value written
+// there is a `T` and the injection happens above the operator.
+//
+// One level, which is all the injection does.
+func unwrappedContext(t types.Type) types.Type {
+	if o, ok := t.(*types.Optional); ok {
+		return o.Wrapped
+	}
+	return t
 }
 
 // isOptionalType reports whether a type is an optional.
