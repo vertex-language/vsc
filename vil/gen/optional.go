@@ -414,10 +414,20 @@ func (g *gen) optionalChain(e *ast.MemberExpr, opt *ast.OptionalExpr) *vil.Value
 	if _, answersOptional := optionalOf(result); !answersOptional {
 		return nil
 	}
+	// The same two limits every switch over an optional has, and they
+	// are the optional's rather than the block argument's: lower
+	// takes a block argument of several registers, and does not take
+	// an optional whose payload is more than one -- optionalImage
+	// knows the one-tag-byte shape and no other.
 	wrapped := lowerType(o.Wrapped)
-	if !wrapped.Trivial() || !oneRegister(o.Wrapped) {
+	if !wrapped.Trivial() {
 		g.refuse(e, "a chain through an optional of "+o.Wrapped.String()+
-			", whose payload is more than a register or owns what it holds")
+			", which owns what it holds")
+		return nil
+	}
+	if !oneRegister(o.Wrapped) {
+		g.refuse(e, "a chain through an optional of "+o.Wrapped.String()+
+			", whose payload is more than one register")
 		return nil
 	}
 	field, isStored := storedField(o.Wrapped, g.text(e.Name))
