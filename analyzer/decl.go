@@ -827,6 +827,12 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 func (c *checker) declareFunctions(decls []ast.Decl, scope *Scope) {
 	for _, d := range decls {
 		if f, ok := d.(*ast.FuncDecl); ok {
+			// A receiver method is a member of the type its clause
+			// names, not a name at this level. resolveReceivers
+			// declares it where it belongs.
+			if f.Recv != nil {
+				continue
+			}
 			name := f.Name.Text(c.file)
 			sig := c.buildGenericFuncSig(f, scope)
 			sym := NewFunc(name, sig, f.Name.Pos())
@@ -1050,6 +1056,60 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		}
 		en, _ := extType.Underlying().(*types.Enum)
 		c.readMembers(ext.Body, typeScope, fields, methods, en, inits, computed, statics)
+	}
+}
+
+// resolveReceivers attaches every receiver method to the type its
+// clause names.
+//
+// A receiver method is an extension member written the other way
+// round, so this does for one function what resolveExtensions does
+// for a block of them: resolve the type, put the method in the type's
+// own scope, and add it to the type's method list so a call through a
+// value of that type finds it.
+func (c *checker) resolveReceivers(decls []ast.Decl, scope *Scope) {
+	for _, d := range decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || fn.Name == nil {
+			continue
+		}
+		recv := c.resolveType(fn.Recv.Type, scope)
+		if recv == nil || isInvalid(recv) {
+			continue
+		}
+		// A class receiver is a reference: a method that changes a
+		// property changes the object, and the receiver itself needs
+		// no mutability. Swift has no `mutating` on a class method,
+		// and `inout` here would have to mean rebinding the
+		// reference, which no method can do. Refused by name rather
+		// than quietly read as borrowing.
+		if _, isClass := recv.Underlying().(*types.Class); isClass &&
+			c.ownershipOf(fn.Recv.Mods) == types.InOut {
+			c.errorf(fn.Recv.Pos(), "an 'inout' receiver is not allowed on a class: "+
+				"'%s' is a reference, and a method that changes a property needs no mutable receiver", recv)
+			continue
+		}
+		c.info.Receivers[fn] = recv
+
+		typeScope := c.typeScopes[typeNameOf(recv)]
+		if typeScope == nil {
+			typeScope = NewScope(scope, fn.Pos(), fn.End())
+		}
+		_, methods, _, _, _, _ := sinksOf(recv.Underlying())
+		if methods == nil {
+			c.errorf(fn.Recv.Pos(), "cannot add a method to '%s'", recv)
+			continue
+		}
+		name := fn.Name.Text(c.file)
+		sig := c.buildFuncSig(fn.Sig, typeScope)
+		*methods = append(*methods, &types.Method{
+			Name: name, Sig: sig, IsStatic: isStatic(fn.Mods),
+		})
+		sym := NewFunc(name, sig, fn.Name.Pos())
+		sym.SetDecl(fn)
+		sym.SetAccess(c.accessOf(fn.Mods))
+		typeScope.Insert(sym)
+		c.info.Defs[fn.Name] = sym
 	}
 }
 

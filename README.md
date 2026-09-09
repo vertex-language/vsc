@@ -65,12 +65,12 @@ each package-directory root, which is `-P` then `VERTEXPATH`. `vsc
 build` compiles each imported folder as its own module and links them,
 so a multi-module program is one command.
 
-`package` stays contextual: before a plain identifier it is this
-clause, before a declaration or modifier it is Swift's access level.
+`package` is contextual: before a plain identifier it is this clause,
+before a declaration or modifier it is Swift's access level.
 
 ### `kernel` and `graph`
 
-Two reserved function modifiers for compute and dataflow targets — a
+Reserved function modifiers for compute and dataflow targets — a
 data-parallel unit and a graph node:
 
 ```swift
@@ -78,25 +78,28 @@ func add(_ a: float32) kernel -> float32 { return a }
 func add(_ a: float32) graph  -> float32 { return a }
 ```
 
-They parse and typecheck, and the compiler refuses to lower one rather
-than build it as an ordinary CPU function returning a right-looking
-answer. Neither has a backend yet.
+They parse and typecheck, and are refused at lowering rather than
+built as ordinary CPU functions returning right-looking answers.
 
-### Designed, not yet built
+### Receiver methods
 
-**Receiver methods.** Methods declared outside the host type's body,
-across `struct`, `enum` and `class`, to keep large packages flatter
-while preserving the ownership conventions — an extension member with
-a named receiver, `borrowing` for an ordinary method and `inout` for a
-`mutating` one. A syntax error today:
+Methods written outside the type's body, with the receiver named — an
+extension member the other way round, on `struct`, `class` and `enum`:
 
 ```swift
 func (v: borrowing vec2) length() -> float32 {
     return (v.x * v.x + v.y * v.y).squareRoot()
 }
-
-func (v: inout vec2) scale(k: float32) { v.x *= k; v.y *= k }
 ```
+
+The ownership word is what Swift spells on the method: `borrowing` an
+ordinary method, `consuming` a `consuming func`, `inout` a `mutating
+func`. A class receiver is a reference, so a `borrowing` one still
+assigns to a property, and `inout` there is refused — Swift has no
+`mutating` method on a class. The body reaches members by the
+receiver's name or by implicit `self`. `inout` receivers typecheck but
+do not build yet: no `mutating` method can write to its receiver,
+receiver clause or not — see `TODO.md`.
 
 ## Status
 
@@ -118,8 +121,8 @@ Roughly:
 
 Not there yet: `async`/`await` and actors; `throws` past the interface
 boundary — it typechecks and can call a throwing imported function,
-but no compiled program here raises one; `weak` and `unowned`, which
-parse but carry no meaning; and reflection.
+but no compiled program raises one; `weak` and `unowned`, which parse
+but carry no meaning; reflection.
 
 ## Install
 
@@ -201,11 +204,9 @@ cross-target builds. The target table has one row.
 
 ## Modules
 
-A module is imported by name. `import Geometry` looks for
-`Geometry.vertexinterface` in each `-I` directory, in order, and takes
-the first.
-
-An interface is *source* — the language with the bodies taken out — so
+A module is imported by name: `import Geometry` takes the first
+`Geometry.vertexinterface` in the `-I` directories, in order. An
+interface is *source* — the language with the bodies taken out — so
 compiling against one needs no binary module format:
 
 ```swift
@@ -216,10 +217,9 @@ public func mean(_ a: int32, _ b: int32) -> int32
 ```
 
 `vsc build --emit interface` writes one. The module name decides the
-entry point: `main` in module `main` is
-the program's, every other module's `main` is an ordinary function.
-That is why `-module` defaults to `main`, and why building a library
-means saying so.
+entry point: `main` in module `main` is the program's, every other
+module's `main` is an ordinary function — which is why `-module`
+defaults to `main`, and why building a library means saying so.
 
 ## Compatibility
 

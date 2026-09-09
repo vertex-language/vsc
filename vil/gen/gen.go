@@ -46,7 +46,10 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 					len(sym.Signature().TypeParams) > 0 {
 					continue
 				}
-				g.function(d, nil)
+				// A receiver method is a method of the type its
+				// clause named, and is emitted exactly as one written
+				// inside that type's braces would be.
+				g.function(d, g.info.Receivers[d])
 			case *ast.StructDecl:
 				g.members(d.Name, d.Body)
 			case *ast.ClassDecl:
@@ -943,8 +946,23 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 		// is known, so there is nothing to carry and no parameter to
 		// declare.
 		t := lowerType(recv)
-		f.Param(t, selfConvention(t))
+		self := f.Param(t, selfConvention(t))
 		f.Type().Convention = vil.Method
+		// A receiver method named its receiver, and that name means
+		// the same value `self` does. Binding it to the same
+		// parameter is the whole of what the name costs: it is not a
+		// second thing to pass.
+		//
+		// By value, because selfConvention passes self by value --
+		// which is also why a mutating receiver does not lower yet.
+		// Writing through one needs self passed as @inout, and that
+		// is a change to the method convention rather than to this
+		// binding. See TODO.md.
+		if sym := receiverSymbol(d, g.info, g.file); sym != nil {
+			g.locals[sym] = &local{value: self, typ: t}
+			g.blk.DebugValue(self, d.Recv.Name.Text(g.file), "let",
+				"argno "+itoa(len(sig.Params)+1))
+		}
 	}
 
 	switch {
@@ -991,6 +1009,19 @@ func isVoid(t types.Type) bool {
 
 // paramSymbols is the symbol each parameter binds, so that a use of
 // the name inside the body finds the value.
+// receiverSymbol is the symbol a receiver method's receiver name was
+// declared under, or nil where the function has no receiver clause.
+func receiverSymbol(d *ast.FuncDecl, info *analyzer.Info, f *token.File) analyzer.Symbol {
+	if d.Recv == nil || d.Recv.Name == nil {
+		return nil
+	}
+	scope := info.Scopes[d]
+	if scope == nil {
+		return nil
+	}
+	return scope.Lookup(d.Recv.Name.Text(f))
+}
+
 func paramSymbols(d *ast.FuncDecl, info *analyzer.Info, f *token.File) []analyzer.Symbol {
 	if d.Sig == nil {
 		return nil

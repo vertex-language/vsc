@@ -189,6 +189,16 @@ func CheckImporting(files []*ast.File, imports []Import) (*Info, []token.Diagnos
 		c.resolveExtensions(declsOf(f.Stmts), pkgScope)
 	}
 
+	// Pass 3.6: receiver methods, which are extension members written
+	// the other way round. After the extensions, so that a receiver
+	// method may name a type an extension is also adding to.
+	for _, f := range files {
+		if f.Unit != nil {
+			c.file = f.Unit
+		}
+		c.resolveReceivers(declsOf(f.Stmts), pkgScope)
+	}
+
 	// Pass 3.75: what each type chose for the associated types its
 	// protocols name. After the extensions, because an extension may
 	// be where the method that implies the choice was written.

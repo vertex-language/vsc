@@ -12,7 +12,7 @@ anything else that differs from Swift is a bug.
 | `kernel` / `graph` | **done** | `parser/decl.go`, refused in `vil/gen` |
 | Optional argument labels | **done** | `analyzer/call.go` |
 | Packages and folder imports | **done** | `vsc.go` importer, driver in `internal/cli` |
-| Receiver methods | not built | `parser`, desugaring to an extension |
+| Receiver methods | **borrowing and consuming** | `parser`, `analyzer`, `vil/gen` |
 
 Two through-lines. A module's identity is a single identifier, because
 that is what a symbol is mangled with. And Swift's semantics stay
@@ -338,40 +338,63 @@ What is left: a receiver clause in the parser, building the
 `ExtensionDecl` the rest of the pipeline already understands, and
 binding the receiver's name in the body's scope.
 
-### Staging: `borrowing` first
+### What shipped
 
-The type kind is not what makes this big — the parser cannot tell an
-enum from a struct, `sinksOf` routes all three to the same method
-sink, and enum is a value type behaving exactly as struct does, which
-is why the table above has two rows and not three. Excluding a kind
-would mean *adding* a check after type resolution, a diagnostic, and a
-documented divergence from Swift, where extending an enum is ordinary.
+`borrowing` and `consuming` receivers work on `struct`, `class` and
+`enum`, reaching members through the receiver's name and through
+implicit `self` alike. A class receiver assigns to a property without
+being mutable, as it should. An `inout` receiver on a class is refused
+by name. And a receiver method is a member of its type rather than a
+name of its own, so it is not callable as a free function.
 
-The axis that shrinks it is ownership. A `borrowing` receiver needs
-nothing that does not already work:
+`inout` receivers on a value type typecheck and stop at lowering,
+because `selfConvention` passes `self` by value and never `@inout` --
+so no `mutating` method can write to its receiver today, receiver
+method or not. That is one fix at the method convention, in `TODO.md`,
+and it is the whole of what is left.
 
-- a struct or enum method that reads — ordinary today
-- a class method that reads, and one that *writes a property*, since
-  the receiver is a reference and needs no mutability of its own
+The implementation is the desugaring, no more: `resolveReceivers`
+mirrors `resolveExtensions` for a single function -- resolve the type,
+put the method in the type's scope, add it to the type's method list
+-- and `checkReceiverMethod` checks the body in that scope with
+`currType` set, which is what `checkMembers` does for an extension.
+`vil/gen` calls the same `g.function(d, recv)` an extension member
+gets, and binds the receiver's name to the self parameter it already
+passes.
 
-That covers most of the value and hits neither blocker below, because
-both are about assigning through a mutable *value* receiver. So
-`borrowing` can ship on the machinery that exists, and `inout` and
-`consuming` follow once the two are fixed.
+### Why the type kind is not the axis
+
+Worth recording, because the obvious way to make this smaller does the
+opposite. Restricting it to struct and class would *cost* work: the
+parser cannot tell an enum from a struct — a receiver clause names a
+type, and the kind is known only after the analyzer resolves it — and
+`sinksOf` already routes all three to the same method sink. Excluding
+one would mean adding a check after resolution, a diagnostic, and a
+divergence from Swift, where extending an enum is ordinary. Enum is a
+value type behaving exactly as struct does, which is why the table
+above has two rows and not three.
+
+The axis that mattered was ownership, and only one point on it:
+`borrowing` and `consuming` needed nothing new, and `inout` needed a
+change to the method convention that is not about receivers at all.
 
 ### What is in the way
 
-Two gaps an `inout` receiver would hit immediately, both of which
-`mutating` hits today. They are `TODO.md` items and should be fixed
-first, or a receiver method built on top will look broken for reasons
-that are not its own:
+One thing, and it is not the receiver's. `selfConvention` passes
+`self` by value and never `@inout`, so no `mutating` method can write
+to its receiver — with a receiver clause or without one. An ordinary
+`inout` parameter works, so the machinery exists and is not reaching
+`self`.
 
-- Assignment to an implicit-`self` property in a `mutating` method is
-  rejected, with a message saying to declare it `mutating` — which it
-  is. Reading a bare `x` works; assigning to one does not.
-- Assignment through explicit `self` is not lowered: `self.x = self.x
-  * k` typechecks, then `cannot lower an assignment to this
-  expression yet`.
+Until that is fixed, an `inout` receiver typechecks and then reports
+`cannot lower an assignment to this expression yet`, which is the same
+wall `mutating func` hits today. See `TODO.md`.
+
+The other gap listed here before — an implicit-`self` assignment not
+seeing the method's mutability — turned out not to block receiver
+methods, because a named receiver is an ordinary symbol with its own
+ownership rather than the implicit-self path. It is still a bug, and
+still in `TODO.md`.
 
 ### Still open
 

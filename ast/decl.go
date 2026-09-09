@@ -181,11 +181,37 @@ type FuncDecl struct {
 	Attrs    []*Attr
 	Mods     []*Modifier
 	Func     token.Pos
+	// Recv is the Vertex receiver clause, nil for an ordinary
+	// function. A function that has one is a method of the type the
+	// clause names, written outside that type's body.
+	Recv     *Receiver
 	Name     *Ident
 	Generics *GenericParams
 	Sig      *FuncSig
 	Where    *GenericWhereClause
 	Body     *CodeBlock
+}
+
+// Receiver is `(v: borrowing vec2)` between `func` and the name: the
+// type this method belongs to, and the name its body calls it by.
+//
+// It is an extension member written the other way round, so the
+// ownership word is what Swift spells on the method -- borrowing is
+// an ordinary method, inout is `mutating`, consuming is `consuming`.
+// The name is the part Swift has no way to write: its receiver is
+// always `self`.
+//
+// No label. It reads like a parameter and is not one, so the grammar
+// is a name, a colon, an optional ownership word and a type -- which
+// cannot be confused with the parameter list that follows.
+type Receiver struct {
+	Span
+	Lparen token.Pos
+	Name   *Ident
+	Colon  token.Pos
+	Mods   []*Modifier // the ownership word, if one was written
+	Type   Type
+	Rparen token.Pos
 }
 
 // An ExecKind is a Vertex execution modifier: where a function is

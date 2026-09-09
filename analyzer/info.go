@@ -52,6 +52,9 @@ type Info struct {
 	// the extended type as their receiver, and the syntax only names
 	// the type rather than pointing at it.
 	Extensions map[*ast.ExtensionDecl]types.Type
+	// Receivers is the type a receiver method belongs to: the method
+	// written outside its type's body, with the receiver named.
+	Receivers map[*ast.FuncDecl]types.Type
 
 	// Specializations is what a call to a generic function resolved
 	// to: which type each of its parameters took.
@@ -111,6 +114,7 @@ func NewInfo() *Info {
 		Values:          make(map[ast.Node]Value),
 		Methods:         make(map[*ast.MemberExpr]*MethodRef),
 		Extensions:      make(map[*ast.ExtensionDecl]types.Type),
+		Receivers:       make(map[*ast.FuncDecl]types.Type),
 		Specializations: make(map[*ast.CallExpr]Specialization),
 		Defaults:        make(map[*types.Param]ast.Expr),
 		Imported:        make(map[Symbol]string),

@@ -179,6 +179,18 @@ missing.
 | `int32(x)` conversions | `cannot lower a constructor call yet` |
 | `self.x = …` in a method | `cannot lower an assignment to this expression yet` |
 
+The last is the widest of the three: **no `mutating` method can write
+to its receiver.** `selfConvention` in `vil/gen` returns `@unowned` or
+`@guaranteed` and never `@inout`, so `self` is passed by value and
+there is nothing to write through. An ordinary `inout` *parameter*
+works — `func scale(_ s: inout S, _ k: int32) { s.x = s.x * k }` runs
+— so the machinery exists and is not reaching `self`.
+
+Fixing it means passing `self` as `@inout` for a mutating method,
+which changes the method convention at every call site rather than in
+one place. It is what blocks `inout` receivers, which typecheck today
+and stop here.
+
 Both typecheck first and refuse at lowering, which is the right shape:
 the front end understands the program, and the back end admits what it
 cannot build. `throws` in a signature is already read across the

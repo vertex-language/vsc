@@ -210,3 +210,66 @@ func write(t *testing.T, path, text string) {
 		t.Fatal(err)
 	}
 }
+
+// TestReceiverMethods is the desugaring: a method written outside its
+// type's body is a member of that type, and reaches its fields both
+// through the receiver's name and through implicit self.
+func TestReceiverMethods(t *testing.T) {
+	const src = `
+struct vec2 { var x: int32; var y: int32 }
+class Box { var v: int32 = 5 }
+enum Dir { case up, down }
+
+func (v: borrowing vec2) sum() -> int32 { return v.x + v.y }
+func (v: borrowing vec2) implicit() -> int32 { return x + y }
+func (b: borrowing Box) doubled() -> int32 { return b.v * 2 }
+func (b: borrowing Box) bump() -> int32 { b.v = b.v + 1; return b.v }
+func (d: borrowing Dir) code() -> int32 { return d == Dir.up ? 1 : 2 }
+func (v: consuming vec2) taken() -> int32 { return v.x }
+
+func use() -> int32 {
+    let p = vec2(x: 3, y: 4)
+    let bx = Box()
+    return p.sum() + p.implicit() + bx.doubled() + bx.bump() + Dir.up.code() + p.taken()
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestInoutReceiverOnClassRefused is the one case the ownership word
+// cannot mean what it means elsewhere. A class receiver is a
+// reference, Swift has no mutating method on a class, and inout there
+// would have to rebind the reference -- so it is refused by name
+// rather than read as borrowing.
+func TestInoutReceiverOnClassRefused(t *testing.T) {
+	const src = `
+class Box { var v: int32 = 0 }
+func (b: inout Box) bad() { b.v = 1 }
+`
+	_, diags := compile(t, src, vsc.Options{Stop: vsc.Checked})
+	if !vsc.Errors(diags) {
+		t.Fatal("an inout receiver on a class was accepted")
+	}
+	if !strings.Contains(diags[0].Message, "'inout' receiver is not allowed on a class") {
+		t.Errorf("diagnostic does not say why: %s", diags[0])
+	}
+}
+
+// TestReceiverIsNotATopLevelName says the desugaring went the whole
+// way: a receiver method is a member of its type, so its name is not
+// callable on its own.
+func TestReceiverIsNotATopLevelName(t *testing.T) {
+	const src = `
+struct S { var x: int32 }
+func (s: borrowing S) get() -> int32 { return s.x }
+
+func use() -> int32 { return get() }
+`
+	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); !vsc.Errors(diags) {
+		t.Error("a receiver method was callable as a free function")
+	}
+}

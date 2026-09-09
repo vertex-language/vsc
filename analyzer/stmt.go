@@ -380,6 +380,10 @@ func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
 		}
 
 	case *ast.FuncDecl:
+		if d.Recv != nil {
+			c.checkReceiverMethod(d, scope)
+			break
+		}
 		c.checkFuncBody(d, scope)
 
 	case *ast.StructDecl:
@@ -397,6 +401,32 @@ func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
 	case *ast.ExtensionDecl:
 		c.checkMembers(d, d.Body, c.resolveType(d.Type, scope))
 	}
+}
+
+// checkReceiverMethod checks a method written outside its type's
+// body, with self bound the way an extension member's is.
+//
+// The body is checked in the type's own scope, so a bare member name
+// means the same thing it would inside the braces, and the receiver's
+// own name is bound on top of that by checkFuncBody.
+func (c *checker) checkReceiverMethod(d *ast.FuncDecl, scope *Scope) {
+	self := c.info.Receivers[d]
+	if self == nil {
+		return
+	}
+	typeScope := c.typeScopes[typeNameOf(self)]
+	if typeScope == nil {
+		typeScope = scope
+	}
+	prevType, prevActor := c.currType, c.currActor
+	c.currType = self
+	if cl, ok := self.(*types.Class); ok && cl.IsActor {
+		c.currActor = cl
+	} else {
+		c.currActor = nil
+	}
+	defer func() { c.currType, c.currActor = prevType, prevActor }()
+	c.checkFuncBody(d, typeScope)
 }
 
 // declaredType is the type a nominal declaration's name denotes.
@@ -609,6 +639,20 @@ func (c *checker) checkReturningBlock(body *ast.CodeBlock, scope *Scope, result 
 func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 	fnScope := NewScope(scope, d.Pos(), d.End())
 	c.info.Scopes[d] = fnScope
+
+	// The receiver is in scope under the name its clause gave it. It
+	// is not a parameter -- the method already receives self, and
+	// this is another way to say it -- so it is inserted rather than
+	// built from the signature.
+	if d.Recv != nil && d.Recv.Name != nil {
+		if self := c.info.Receivers[d]; self != nil {
+			own := c.ownershipOf(d.Recv.Mods)
+			sym := NewVar(d.Recv.Name.Text(c.file), self, d.Recv.Name.Pos(),
+				own != types.InOut, own)
+			fnScope.Insert(sym)
+			c.info.Defs[d.Recv.Name] = sym
+		}
+	}
 
 	sig := c.buildFuncSig(d.Sig, scope)
 	for _, p := range sig.Params {

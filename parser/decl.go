@@ -73,6 +73,50 @@ func (p *parser) parseDecl() ast.Decl {
 
 // ---- import ----
 
+// parseReceiver reads `(v: borrowing vec2)`, the clause that makes a
+// function a method of the type it names.
+func (p *parser) parseReceiver() *ast.Receiver {
+	lo := p.pos()
+	r := &ast.Receiver{Lparen: p.pos()}
+	p.next()
+	r.Name = p.expectIdent()
+	r.Colon = p.expect(token.COLON)
+	// The ownership word, where one was written. It is taken here
+	// rather than by parseModifiers, which requires a declaration to
+	// follow a contextual word and would read `borrowing` as the
+	// receiver's type. borrowing is the default and needs no saying.
+	if m := p.parseOwnership(); m != nil {
+		r.Mods = append(r.Mods, m)
+	}
+	r.Type = p.parseType()
+	r.Rparen = p.expect(token.RPAREN)
+	r.Span = p.span(lo)
+	return r
+}
+
+// parseOwnership takes one ownership word if it is here: the
+// reserved `inout`, or a contextual borrowing or consuming and their
+// underscored spellings.
+func (p *parser) parseOwnership() *ast.Modifier {
+	lo := p.pos()
+	if p.at(token.INOUT) {
+		m := &ast.Modifier{Kind: token.INOUT}
+		p.next()
+		m.Span = p.span(lo)
+		return m
+	}
+	if !p.at(token.IDENT) {
+		return nil
+	}
+	switch p.text(p.tok()) {
+	case "borrowing", "consuming", "__owned", "__shared":
+		m := &ast.Modifier{Kind: token.IDENT, Name: p.ident()}
+		m.Span = p.span(lo)
+		return m
+	}
+	return nil
+}
+
 // parsePackage reads `package Name`: the module this file belongs to.
 func (p *parser) parsePackage(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
 	d := &ast.PackageDecl{Keyword: p.pos()}
@@ -350,6 +394,13 @@ func (p *parser) parseImportPath() *ast.ImportPath {
 func (p *parser) parseFunc(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
 	d := &ast.FuncDecl{Attrs: attrs, Mods: mods, Func: p.pos()}
 	p.next()
+	// A receiver clause stands between `func` and the name. Nothing
+	// else may: a function is named by an identifier or an operator,
+	// and `(` is neither, so an open paren here is unambiguous and no
+	// Swift file reaches this.
+	if p.at(token.LPAREN) {
+		d.Recv = p.parseReceiver()
+	}
 	d.Name = p.parseFuncName()
 	d.Generics = p.parseGenericParams()
 	d.Sig = p.parseFuncSig()
