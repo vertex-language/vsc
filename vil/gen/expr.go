@@ -1575,10 +1575,11 @@ func (g *gen) binary(e *ast.BinaryExpr) *vil.Value {
 		if g.text(e.Op) == "??" {
 			return g.nilCoalescing(e)
 		}
-		// And `o == nil` has none: nil is not a value of a type core
-		// declares an operator over, so the comparison is a question
-		// about which case the optional holds.
-		if v, isNilTest := g.nilComparison(e, g.text(e.Op)); isNilTest {
+		// And `==` over an optional has none either: nil is not a
+		// value of a type core declares an operator over, and neither
+		// is an optional. The comparison is a question about which
+		// case each side holds. See optional.go.
+		if v, isOptional := g.optionalComparison(e, g.text(e.Op)); isOptional {
 			return v
 		}
 		g.expr(e.X)

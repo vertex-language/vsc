@@ -266,39 +266,92 @@ func (g *gen) forceUnwrap(e *ast.ForceExpr) *vil.Value {
 	return payload
 }
 
-// nilComparison lowers `o == nil` and `o != nil`, and reports whether
-// the expression was one.
+// optionalComparison lowers `==` and `!=` where either side is an
+// optional, and reports whether the expression was one.
 //
-// switch_enum over the case, each arm handing the join the answer for
-// that case: `== nil` is true where it holds nothing, and `!= nil` is
-// the other way round. Which is the same shape as `??` and `!`, and
-// for the same reason -- what an optional is, is which case it holds.
-func (g *gen) nilComparison(e *ast.BinaryExpr, op string) (*vil.Value, bool) {
+// Everything about an optional is a question about which case it
+// holds, and equality is no different: two optionals are equal when
+// they hold the same case and, where that case carries something, the
+// same payload. `o == nil` is the special case where one side is
+// known to be the empty one and no payload is ever compared, and
+// `o == 7` the one where the other side is known to be full.
+//
+// switch_enum asks the question, each arm hands the join the answer
+// for its case, and `!=` is the same shape with the answers swapped.
+// The payloads, where two of them meet, are compared by the same
+// instruction that would compare them unwrapped -- which is why this
+// asks operate for the comparison rather than emitting one.
+func (g *gen) optionalComparison(e *ast.BinaryExpr, op string) (*vil.Value, bool) {
 	if op != "==" && op != "!=" {
 		return nil, false
 	}
-	subject, ok := e.X, false
-	if isNilLiteral(g.fold(e.Y)) {
-		subject, ok = e.X, true
-	} else if isNilLiteral(g.fold(e.X)) {
-		subject, ok = e.Y, true
+	x, y := g.fold(e.X), g.fold(e.Y)
+	xNil, yNil := isNilLiteral(x), isNilLiteral(y)
+	xOpt, xIsOpt := optionalOf(g.typeOf(x))
+	yOpt, yIsOpt := optionalOf(g.typeOf(y))
+
+	switch {
+	// `o == nil`: the answer is the case, and no payload is read.
+	case xIsOpt && yNil:
+		return g.emptyTest(e, x, xOpt, op), true
+	case yIsOpt && xNil:
+		return g.emptyTest(e, y, yOpt, op), true
+	// Both optional: the cases have to agree, and where both hold
+	// something the payloads do too.
+	case xIsOpt && yIsOpt:
+		return g.bothOptional(e, x, y, xOpt, yOpt, op), true
+	// One optional and one not. The plain side is a value that is
+	// always there, so the empty case is unequal and the full case is
+	// the comparison of the payload with it.
+	case xIsOpt:
+		return g.halfOptional(e, x, y, xOpt, op, false), true
+	case yIsOpt:
+		return g.halfOptional(e, y, x, yOpt, op, true), true
 	}
-	if !ok {
-		return nil, false
+	return nil, false
+}
+
+// comparable reports whether an optional's payload can take part in a
+// comparison here, and says why where it cannot.
+//
+// The same two limits every switch over an optional has: the payload
+// arrives as one block argument, and one that owns what it holds
+// needs a lifetime this does not arrange.
+func (g *gen) comparable(at ast.Node, o *types.Optional) bool {
+	if !lowerType(o.Wrapped).Trivial() {
+		g.refuse(at, "comparing an optional of "+o.Wrapped.String()+
+			", which owns what it holds")
+		return false
 	}
-	if _, isOptional := optionalOf(g.typeOf(subject)); !isOptional {
-		return nil, false
+	return true
+}
+
+// boolOf wraps a machine bit in the Bool the expression's type is.
+//
+// The bit is what a branch takes, and the value is what an expression
+// answers. Handing back the bit made the VIL ill-typed -- a
+// struct_extract of #Bool._value from a $Builtin.Int1 -- which
+// happened to lower to the right thing and would not have to.
+func (g *gen) boolOf(bit *vil.Value) *vil.Value {
+	return g.blk.Struct(lowerType(types.Typ[types.Bool]), bit)
+}
+
+// emptyTest is `o == nil` and `o != nil`: the answer is which case it
+// holds, and the payload is never read.
+func (g *gen) emptyTest(e *ast.BinaryExpr, subject ast.Expr, o *types.Optional, op string) *vil.Value {
+	// The payload is never read, and the arm still takes it: the
+	// case's edge hands it over. A payload that owns something is
+	// therefore still a lifetime this does not arrange, and saying so
+	// is better than the leak the verifier reports for it.
+	if !g.comparable(e, o) {
+		return nil
 	}
 	v := g.rvalue(subject)
 	if v == nil {
-		return nil, true
+		return nil
 	}
-
-	o, _ := optionalOf(g.typeOf(subject))
 	bit := vil.Object(vil.BuiltinInt1)
-	some := g.fn.Block()
-	none := g.fn.Block()
-	join := g.fn.Block()
+	some, none, join := g.fn.Block(), g.fn.Block(), g.fn.Block()
 	answer := join.Arg(bit, vil.None)
 	// The some arm declares the payload even though the answer does
 	// not read it: the case's edge hands it over, and an arm that
@@ -308,17 +361,163 @@ func (g *gen) nilComparison(e *ast.BinaryExpr, op string) (*vil.Value, bool) {
 		vil.Case{Member: optionalSome, Dest: some},
 		vil.Case{Member: optionalNone, Dest: none})
 
-	yes, no := int64(-1), int64(0)
+	full, empty := int64(0), int64(-1)
 	if op == "!=" {
-		yes, no = 0, -1
+		full, empty = -1, 0
 	}
 	g.blk = some
-	g.blk.Br(join, g.blk.IntegerLiteral(bit, no))
+	g.blk.Br(join, g.blk.IntegerLiteral(bit, full))
 	g.blk = none
-	g.blk.Br(join, g.blk.IntegerLiteral(bit, yes))
+	g.blk.Br(join, g.blk.IntegerLiteral(bit, empty))
 
 	g.blk = join
-	return answer, true
+	return g.boolOf(answer)
+}
+
+// halfOptional is `o == v` and `v == o`, where v is not an optional.
+//
+// A value that is not an optional is always there, so the empty case
+// cannot be equal to it and the full case is the comparison of the
+// payload with it. flipped says the plain side was written first,
+// which matters for an operator that is not symmetric -- `==` and
+// `!=` are, and keeping the order is what makes this reusable if a
+// third ever arrives.
+func (g *gen) halfOptional(e *ast.BinaryExpr, opt, plain ast.Expr,
+	o *types.Optional, op string, flipped bool) *vil.Value {
+	if !g.comparable(e, o) {
+		return nil
+	}
+	v := g.rvalue(opt)
+	if v == nil {
+		return nil
+	}
+	bit := vil.Object(vil.BuiltinInt1)
+	some, none, join := g.fn.Block(), g.fn.Block(), g.fn.Block()
+	answer := join.Arg(bit, vil.None)
+	payload := some.Arg(lowerType(o.Wrapped), vil.Unowned)
+	g.blk.SwitchEnum(v,
+		vil.Case{Member: optionalSome, Dest: some},
+		vil.Case{Member: optionalNone, Dest: none})
+
+	g.blk = some
+	other := g.rvalue(plain)
+	if other == nil {
+		return nil
+	}
+	lhs, rhs := payload, other
+	if flipped {
+		lhs, rhs = other, payload
+	}
+	same := g.comparePayloads(e, o.Wrapped, op, lhs, rhs)
+	if same == nil {
+		return nil
+	}
+	g.blk.Br(join, same)
+
+	// Nothing on one side and something on the other: unequal.
+	g.blk = none
+	unequal := int64(0)
+	if op == "!=" {
+		unequal = -1
+	}
+	g.blk.Br(join, g.blk.IntegerLiteral(bit, unequal))
+
+	g.blk = join
+	return g.boolOf(answer)
+}
+
+// bothOptional is `a == b` where both are optionals: equal when they
+// hold the same case, and where that case is the full one, when the
+// payloads are equal too.
+//
+//	switch a:  some -> switch b: some -> payloads
+//	                            none -> unequal
+//	           none -> switch b: some -> unequal
+//	                            none -> equal
+func (g *gen) bothOptional(e *ast.BinaryExpr, xe, ye ast.Expr,
+	xo, yo *types.Optional, op string) *vil.Value {
+	if !g.comparable(e, xo) || !g.comparable(e, yo) {
+		return nil
+	}
+	x := g.rvalue(xe)
+	if x == nil {
+		return nil
+	}
+	bit := vil.Object(vil.BuiltinInt1)
+	equal, unequal := int64(-1), int64(0)
+	if op == "!=" {
+		equal, unequal = 0, -1
+	}
+
+	xSome, xNone, join := g.fn.Block(), g.fn.Block(), g.fn.Block()
+	answer := join.Arg(bit, vil.None)
+	xPayload := xSome.Arg(lowerType(xo.Wrapped), vil.Unowned)
+	g.blk.SwitchEnum(x,
+		vil.Case{Member: optionalSome, Dest: xSome},
+		vil.Case{Member: optionalNone, Dest: xNone})
+
+	// The right operand is read on both arms rather than before the
+	// switch, because reading it may itself be a branch -- a chain,
+	// or another comparison -- and a value defined before this one
+	// would still be the same value. What must not happen is reading
+	// it once into a block neither arm dominates.
+	g.blk = xSome
+	ySome, yNone := g.fn.Block(), g.fn.Block()
+	yPayload := ySome.Arg(lowerType(yo.Wrapped), vil.Unowned)
+	yFull := g.rvalue(ye)
+	if yFull == nil {
+		return nil
+	}
+	g.blk.SwitchEnum(yFull,
+		vil.Case{Member: optionalSome, Dest: ySome},
+		vil.Case{Member: optionalNone, Dest: yNone})
+
+	g.blk = ySome
+	same := g.comparePayloads(e, xo.Wrapped, op, xPayload, yPayload)
+	if same == nil {
+		return nil
+	}
+	g.blk.Br(join, same)
+
+	g.blk = yNone
+	g.blk.Br(join, g.blk.IntegerLiteral(bit, unequal))
+
+	// The left holds nothing, so the answer is whether the right
+	// holds nothing too.
+	g.blk = xNone
+	emptySome, emptyNone := g.fn.Block(), g.fn.Block()
+	emptySome.Arg(lowerType(yo.Wrapped), vil.Unowned)
+	yEmpty := g.rvalue(ye)
+	if yEmpty == nil {
+		return nil
+	}
+	g.blk.SwitchEnum(yEmpty,
+		vil.Case{Member: optionalSome, Dest: emptySome},
+		vil.Case{Member: optionalNone, Dest: emptyNone})
+
+	g.blk = emptySome
+	g.blk.Br(join, g.blk.IntegerLiteral(bit, unequal))
+	g.blk = emptyNone
+	g.blk.Br(join, g.blk.IntegerLiteral(bit, equal))
+
+	g.blk = join
+	return g.boolOf(answer)
+}
+
+// comparePayloads answers the bit two payloads' comparison produces.
+//
+// operate is what compares them, because the payloads are ordinary
+// values of an ordinary type and `==` on that type is whatever core
+// says it is -- an instruction for a number, and the enum's own
+// comparison for an enum.
+func (g *gen) comparePayloads(at ast.Node, wrapped types.Type, op string,
+	lhs, rhs *vil.Value) *vil.Value {
+	v := g.operate(at, op, wrapped, types.Typ[types.Bool], lhs, rhs)
+	if v == nil {
+		g.refuse(at, "comparing two optionals of "+wrapped.String())
+		return nil
+	}
+	return g.machine(v, types.Typ[types.Bool])
 }
 
 // isNilLiteral reports whether an expression is the literal nil.

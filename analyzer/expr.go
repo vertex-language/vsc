@@ -590,6 +590,17 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					isUntypedNil(rhs) && isOptionalType(lhs)) {
 				return types.Typ[types.Bool]
 			}
+			// `o == 7`, where one side is an optional and the other
+			// is not. Swift injects the plain side and compares two
+			// optionals; either way the answer is a Bool, and the
+			// operands agree once the plain side is read against the
+			// wrapped type -- without that the literal sat at Int's
+			// default and the two operands looked unrelated.
+			if opName == "==" || opName == "!=" {
+				if c.optionalOperands(e, lhs, rhs, scope) {
+					return types.Typ[types.Bool]
+				}
+			}
 			if !types.Comparable(lhs) {
 				c.typeErrorf(e.Op.Pos(), "type '%s' is not comparable", lhs)
 			}
@@ -1329,6 +1340,34 @@ func (c *checker) moduleMemberValue(e *ast.MemberExpr, scope *Scope) (types.Type
 func isUntypedNil(t types.Type) bool {
 	b, ok := t.(*types.Basic)
 	return ok && b.Kind() == types.UntypedNil
+}
+
+// optionalOperands settles an equality where at least one side is an
+// optional, and reports whether it was one this can settle.
+//
+// The plain side is read again in the wrapped type, which is what
+// gives an untyped literal there its type: `o == 7` against an
+// `Int32?` left the seven at Int's default, and Int and `Int32?` are
+// two types nothing relates.
+func (c *checker) optionalOperands(e *ast.BinaryExpr, lhs, rhs types.Type, scope *Scope) bool {
+	lo, lIsOpt := lhs.(*types.Optional)
+	ro, rIsOpt := rhs.(*types.Optional)
+	switch {
+	case lIsOpt && rIsOpt:
+		return types.AssignableTo(ro.Wrapped, lo.Wrapped) ||
+			types.AssignableTo(lo.Wrapped, ro.Wrapped)
+	case lIsOpt:
+		if t, adopted := c.adoptTree(e.Y, lo.Wrapped, scope); adopted {
+			rhs = t
+		}
+		return types.AssignableTo(rhs, lo.Wrapped)
+	case rIsOpt:
+		if t, adopted := c.adoptTree(e.X, ro.Wrapped, scope); adopted {
+			lhs = t
+		}
+		return types.AssignableTo(lhs, ro.Wrapped)
+	}
+	return false
 }
 
 // lookupValue is scope.Lookup with the one fallback a class body
