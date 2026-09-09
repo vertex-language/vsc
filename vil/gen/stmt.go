@@ -921,6 +921,23 @@ func (g *gen) caseTest(item *ast.CaseItem, subject *vil.Value, t types.Type) (*v
 			return nil, false
 		}
 
+	// `case (0, let b)` matches a tuple element by element, and the
+	// elements have to be takeable out of the subject. A tuple of
+	// more than one word is memory -- its elements are separate
+	// leaves rather than parts of a register -- so there is nothing
+	// to extract from, and every tuple this compiler can hold is one
+	// of those.
+	//
+	// Refused here rather than left to the backend, which said so
+	// about a builtin whose operand was in memory and named no line.
+	// The elements are still checked: the analyzer gives each one the
+	// subject's element at that position, so a mistake inside one is
+	// reported where it is written.
+	case *ast.TuplePattern:
+		g.refuse(item.Pat, "a tuple pattern over "+t.String()+
+			", which is held in memory rather than in a register")
+		return nil, false
+
 	default:
 		g.refuse(item.Pat, "this pattern in a switch")
 		return nil, false

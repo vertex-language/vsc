@@ -53,10 +53,19 @@ already correct; only the feature is missing.
 | a closure that captures | `cannot lower a closure that captures 'k'` |
 | an optional chain | `cannot lower this expression yet` |
 | a failable initializer | `cannot lower a failable initializer` |
-| a tuple pattern in a `switch` | `cannot lower this pattern in a switch` |
+| a tuple pattern in a `switch` | `a tuple pattern over (Int32, Int32), which is held in memory` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
 | a computed property of a class with a subclass | `reached through the table the instance carries` |
+
+**A tuple pattern needs the subject in a register.** Its elements are
+taken out of the subject, and a tuple of more than one word is memory
+— its elements are separate leaves rather than parts of a register —
+so there is nothing to extract from, and every tuple this compiler can
+hold is one of those. Lowering one waits on the same layout work as a
+wide struct and a payload enum wider than a word. The elements are
+checked either way, so a mistake inside one is reported where it is
+written.
 
 **Top-level code is refused, not run.** Swift runs statements at file
 scope; here they are reported rather than discarded, which is the
