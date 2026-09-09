@@ -13,36 +13,10 @@ broken.
 
 ## Silently wrong
 
-These typecheck clean and then do something other than what the source
-says. Worth fixing first, whatever they cost.
-
-### Two imported modules cannot share a declaration name
-
-```swift
-import A   // public func width() -> Int32
-import B   // public func width() -> Int32
-
-func main() -> int32 { return A.width() + B.width() }
-```
-
-```
-error: cannot find 'B.width' in scope: no such name in B
-```
-
-`A.width` resolves and `B.width` does not. Every import is declared
-into one shared scope so that an unqualified name finds them all, and
-`recordModule` then hands each symbol to the module that claimed it
-first — so the second module's same-named declaration never reaches a
-scope of its own, and its qualified name cannot be looked up.
-
-Reproduced with two `.vertexinterface` files through `-I`, so it
-predates folder imports. It matters more now: a package directory
-makes `fmt.width` and `other.width` an ordinary pairing rather than a
-coincidence.
-
-The fix is for `recordModule` to fill each module's own scope from
-that module's declarations rather than from the shared scope's
-leftovers.
+Nothing known. This section is for programs that typecheck clean and
+then do something other than what the source says — the failure the
+compiler's own rule exists to prevent — so it is the one to keep
+empty.
 
 ## Rejected with the wrong reason
 
@@ -142,3 +116,11 @@ feature and the shape is worth remembering.
   the compiler in its own words.
 - **`mutating` was accepted on a class method**, where Swift rejects
   it outright.
+- **Two imported modules could not share a declaration name.** Every
+  import was declared into one shared scope, and `Scope.Insert` keeps
+  the first symbol of a name — so the second module's `width` existed
+  nowhere at all, and `B.width` could not be resolved. Each module is
+  now read into a staging scope of its own and keeps every symbol it
+  declared, in a scope with no parent so a qualified name is exact;
+  the shared scope still keeps the first of a name, which is what an
+  unqualified reference finds.

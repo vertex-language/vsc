@@ -1,8 +1,11 @@
 package vsc_test
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vertex-language/ir"
 
 	"github.com/vertex-language/vsc"
 )
@@ -133,5 +136,37 @@ func TestLibraryNeedsNoEntryPoint(t *testing.T) {
 		for _, d := range diags {
 			t.Errorf("%s", d)
 		}
+	}
+}
+
+// TestTwoModulesSharingAName: every import was declared into one
+// shared scope, and Scope.Insert keeps the first symbol of a name --
+// so the second module's same-named declaration existed nowhere, and
+// its qualified name could not be resolved. Each module now has a
+// scope of its own, with no parent, so a qualified name is exact.
+func TestTwoModulesSharingAName(t *testing.T) {
+	iface := func(name string) vsc.Source {
+		return vsc.Source{Name: name + ".vertexinterface", Text: []byte(
+			"// vertex-interface-format-version: 1.0\n" +
+				"// vertex-module-name: " + name + "\n\n" +
+				"public func width() -> Int32\n")}
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"A", "B"} {
+		src := iface(name)
+		write(t, filepath.Join(dir, src.Name), string(src.Text))
+	}
+	const prog = `
+import A
+import B
+
+func main() -> int32 { return A.width() + B.width() }
+`
+	_, diags := vsc.Compile(
+		[]vsc.Source{{Name: "m.vs", Text: []byte(prog)}},
+		vsc.Options{Module: "main", Target: ir.AArch64MacOS, Stop: vsc.Checked,
+			ImportPaths: []string{dir}})
+	for _, d := range diags {
+		t.Errorf("%s", d)
 	}
 }

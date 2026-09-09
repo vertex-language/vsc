@@ -266,8 +266,18 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 		// own -- which recordModule gives it once every declaration is
 		// in -- what is in scope is what has been read so far, which
 		// is where those names are.
+		//
+		// Each module is read into a staging scope of its own rather
+		// than straight into the shared one. Scope.Insert keeps the
+		// first symbol of a name, so two modules that both export
+		// `width` used to leave the second one's nowhere at all --
+		// not in the shared scope, and so not in its own module's
+		// either, which made `B.width` unresolvable. Staging is
+		// chained to the shared scope so an interface can still name
+		// what modules read before it declared.
+		staging := NewScope(scope, token.NoPos, token.NoPos)
 		if c.modules[imp.bound()] == nil {
-			c.modules[imp.bound()] = scope
+			c.modules[imp.bound()] = staging
 		}
 		for i, f := range imp.Files {
 			if i < len(imp.Units) {
@@ -277,25 +287,25 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 			}
 			decls := declsOf(f.Stmts)
 			c.declarePrecedenceAndOperators(decls)
-			c.declareTypes(decls, scope)
+			c.declareTypes(decls, staging)
 		}
 		for i, f := range imp.Files {
 			if i < len(imp.Units) {
 				c.file = imp.Units[i]
 			}
 			decls := declsOf(f.Stmts)
-			c.resolveTypeMembers(decls, scope)
+			c.resolveTypeMembers(decls, staging)
 		}
 		for i, f := range imp.Files {
 			if i < len(imp.Units) {
 				c.file = imp.Units[i]
 			}
 			decls := declsOf(f.Stmts)
-			c.resolveExtensions(decls, scope)
-			c.resolveAssociatedTypes(decls, scope)
-			c.declareFunctions(decls, scope)
+			c.resolveExtensions(decls, staging)
+			c.resolveAssociatedTypes(decls, staging)
+			c.declareFunctions(decls, staging)
 		}
-		c.recordModule(imp, scope)
+		c.recordModule(imp, staging, scope)
 	}
 }
 
@@ -306,23 +316,29 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 // what a qualified name is looked up in: every import shares one
 // scope so that an unqualified name finds them all, and `Foundation.Data`
 // has to be able to mean Foundation's and not somebody else's.
-func (c *checker) recordModule(imp Import, scope *Scope) {
-	own := c.modules[imp.bound()]
-	if own == nil || own == scope {
-		own = NewScope(nil, token.NoPos, token.NoPos)
-		c.modules[imp.bound()] = own
-	}
-	for _, sym := range scope.Symbols() {
-		if _, already := c.info.Imported[sym]; already {
-			continue
-		}
-		c.info.Imported[sym] = imp.Name
+func (c *checker) recordModule(imp Import, staging, scope *Scope) {
+	// The module's own scope has no parent: a qualified name is
+	// exact, and must not fall through to what another module
+	// declared under the same name.
+	own := NewScope(nil, token.NoPos, token.NoPos)
+	c.modules[imp.bound()] = own
+
+	for _, sym := range staging.Symbols() {
 		own.Insert(sym)
+		if _, already := c.info.Imported[sym]; !already {
+			c.info.Imported[sym] = imp.Name
+		}
+		// The shared scope keeps the first of a name, which is what
+		// an unqualified reference finds. The module keeps all of
+		// them, which is what a qualified one needs.
+		scope.Insert(sym)
 		if tn, ok := sym.(*TypeNameSymbol); ok && tn.Type() != nil {
 			// Under both spellings: a lookup may arrive with the name
 			// or with what the name stands for.
-			c.info.ImportedTypes[tn.Type()] = imp.Name
-			c.info.ImportedTypes[tn.Type().Underlying()] = imp.Name
+			if _, already := c.info.ImportedTypes[tn.Type()]; !already {
+				c.info.ImportedTypes[tn.Type()] = imp.Name
+				c.info.ImportedTypes[tn.Type().Underlying()] = imp.Name
+			}
 		}
 	}
 }
