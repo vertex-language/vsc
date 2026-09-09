@@ -10,7 +10,7 @@ package main
 import (
 	"os"
 
-	"github.com/vertex-language/vsc/cmd/cli"
+	"github.com/vertex-language/vsc/internal/cli"
 )
 
 func main() { os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr)) }

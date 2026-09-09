@@ -2,17 +2,15 @@ module github.com/vertex-language/vsc/cmd
 
 go 1.23
 
-require (
-	github.com/vertex-language/ir v0.0.0
-	github.com/vertex-language/vsc v0.0.0
-	github.com/vertex-language/vsc/build v0.0.0
-)
+require github.com/vertex-language/vsc v0.0.0
 
 require (
 	github.com/vertex-language/arm64 v0.0.0 // indirect
 	github.com/vertex-language/asm v0.0.0 // indirect
+	github.com/vertex-language/ir v0.0.0 // indirect
 	github.com/vertex-language/ir/lower v0.0.0 // indirect
 	github.com/vertex-language/macho v0.0.0 // indirect
+	github.com/vertex-language/vsc/build v0.0.0 // indirect
 )
 
 replace (

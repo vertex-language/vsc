@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/vertex-language/vsc"
-	"github.com/vertex-language/vsc/cmd/cli"
+	"github.com/vertex-language/vsc/internal/cli"
 )
 
 const program = `
