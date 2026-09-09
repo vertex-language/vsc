@@ -1,87 +1,22 @@
-<p align="center">
-  <img src="docs/assets/logo.png" alt="Vertex" width="100%">
-</p>
+# vsc
 
-<p align="center">
-  <img src="https://img.shields.io/badge/spec-0.1-22E0E6?style=flat-square&labelColor=14254E" alt="Spec 0.1">
-  <img src="https://img.shields.io/badge/compiler-0.1.0-4EC8F0?style=flat-square&labelColor=14254E" alt="Compiler 0.1.0">
-  <img src="https://img.shields.io/badge/go-1.23%2B-2E9FE0?style=flat-square&labelColor=14254E" alt="Go 1.23+">
-  <img src="https://img.shields.io/badge/license-MIT-1E6FC4?style=flat-square&labelColor=14254E" alt="MIT License">
-</p>
+The Vertex Source Compiler. It takes Vertex source and produces a native
+Mach-O executable — no assembler, no linker, no `cc`, nothing from a
+platform toolchain. The instruction selector, the object writer and
+the linker are all libraries in this project's family, so a machine
+with none of that installed still builds and runs a program.
 
-**Vertex is a safe, fast, and expressive general-purpose programming language.**
-Statically typed, compiled, multi-platform, with native accelerated compute:
-`kernel` and `graph` are function qualifiers, not a separate toolchain.
+For interop with Swift's ecosystem, see [Compatibility](#compatibility).
 
-**vsc** is its compiler — a front end for the Vertex language and a native
-backend, written in Go, with no dependency on a host `cc`, `as`, or `ld`. It
-reads `.vs` source and writes a linked executable, an object file, or VIR, the
-typed IR shared across the Vertex toolchain. Code generation, object encoding,
-and linking are all in the box, so cross-compiling needs no external toolchain
-installed.
+## The language
 
-It is a command and a library, running the same code: `vsc build` and
-`vsc.Build("app", "main.vs")` reach the same compiler, because the command is a
-wrapper over the package at the root of this repository and has nothing of its
-own.
-
-**Where this is.** `vsc build hello.vs && ./hello` works, with no toolchain
-installed: source text through the scanner, parser, checker, the ownership IR
-and its passes, down to VIR, to an aarch64 Mach-O object, to a signed
-executable — and no `cc`, `as` or `ld` is invoked at any point. What is not
-there yet is most of a language: no standard library, no generics past a
-structural match, no classes that allocate. The other targets, the device
-path, and everything else this README describes are the design being built to,
-and each is marked where it appears — [Architecture](#architecture) has the
-table.
-
-Swift is the core dialect: the language `vsc` reads is Swift, and what Vertex
-adds sits on top of it and is optional — see [Swift, and what Vertex adds
-to it](#swift-and-what-vertex-adds-to-it).
-
----
-
-- [Install](#install)
-- [Quick start](#quick-start)
-- [Language](#language)
-- [Kernels and graphs](#kernels-and-graphs)
-- [Swift, and what Vertex adds to it](#swift-and-what-vertex-adds-to-it)
-- [Targets](#targets)
-- [CLI](#cli)
-- [Go API](#go-api)
-- [Architecture](#architecture)
-
----
-
-## Install
-
-```console
-$ GOPROXY=direct go install github.com/vertex-language/vsc/cmd/vsc@latest
-```
-
-Requires Go 1.23 or newer. Nothing else — no `cc`, no `as`, no `ld`, on the
-machine that builds `vsc` or on the machine `vsc` builds for. A hosted link
-does need the platform's own libraries, which on macOS means an SDK; `vsc env`
-says whether it found one.
-
-For the library alone, without a backend:
-
-```console
-$ GOPROXY=direct go get github.com/vertex-language/vsc@latest
-```
-
-Console sessions in this README that describe something not built yet are
-marked where they appear, and the [Architecture](#architecture) table says
-which packages are behind each.
-
----
-
-## Quick start
+A program is functions. `main` returning `int32` is the entry point,
+and what it returns is the process exit status — there is no
+top-level code.
 
 ```swift
-// fib.vs
 func fib(_ n: int32) -> int32 {
-    if n <= 1 { return n }
+    if n < 2 { return n }
     return fib(n - 1) + fib(n - 2)
 }
 
@@ -90,556 +25,368 @@ func main() -> int32 {
 }
 ```
 
-```console
-$ vsc build -o fib fib.vs
-$ ./fib; echo $?
-55
+### Primitives
 
-$ vsc run fib.vs; echo $?
-55
+Types are spelled in lowercase:
 
-$ vsc check fib.vs && echo ok
-ok
-```
+| Vertex | What it is |
+| --- | --- |
+| `bool` | true or false |
+| `int`, `int8`, `int16`, `int32`, `int64` | signed integers; `int` is 64-bit |
+| `uint`, `uint8`, `uint16`, `uint32`, `uint64` | unsigned; `uint` is 64-bit |
+| `float`, `float32` | 32-bit binary float |
+| `double`, `float64` | 64-bit binary float |
+| `string`, `char` | text, and one character of it |
+| `void`, `never`, `any` | no value, no return, any value |
 
-That is a program this compiler builds and runs today, and it is deliberately
-the plainest one. `int32` beside `Int32` is a Vertex spelling and works; three
-things this README describes do not yet, and the example avoids all of them.
-There is no standard library, so no `print` and no string interpolation — a
-program says what it has to say through its exit status, which is `main`'s
-result. `package main` does not parse: which module is being compiled is
-`-module`, and it defaults to `main`. And argument labels are still Swift's
-rule rather than Vertex's opt-in one, so a parameter that takes no label says
-`_`.
+Each aliases a capitalised counterpart — see [Grammar](#grammar).
 
-The same thing without the command around it, which is what `cmd/vsc` is a
-wrapper over:
+### Designed, not yet built
 
-```go
-u, diags := vsc.Compile([]vsc.Source{{Name: "fib.swift", Text: src}},
-	vsc.Options{Module: "main", Target: target})
-if vsc.Errors(diags) {
-	// every diagnostic is sited in the file you wrote
-}
-obj, _ := build.Object(u.VIR, build.Options{})
-exe, _ := build.Executable([]build.Input{{Name: "fib.o", Data: obj}},
-	build.LinkOptions{Target: target})
-```
+On record, but not built: all of this is a syntax error today.
 
-`exe` is a signed Mach-O executable. `build/link_test.go` writes one out and
-runs it for its exit status, with nothing on the path: the linker is
-`macho/link`, the same one `vcc` uses, and like every stage below VIR it takes
-bytes and gives bytes back.
-
-`main` in module `main` is the entry point. `vsc build --emit vir` stops after
-lowering and prints the module — typed, in SSA form, with explicit control
-flow, the same shape the backends select instructions from. `--emit vil` stops
-a phase earlier and prints the ownership IR in SIL's own syntax, which is what
-makes it diffable against `swiftc -emit-silgen`:
-
-```console
-$ vsc build --emit vir -o - fib.vs
-```
-
-```vertex-ir
-export func @main.fib(%n i32) i32 nounwind {
-@entry:
-  %0 = i32.const 1
-  %1 = i32.sle %n, %0
-  brif %1, @then, @else
-
-@then:
-  return %n
-
-@else:
-  %2 = i32.const 1
-  %3 = i32.sub %n, %2
-  %4 = call @main.fib(%3)
-  %5 = i32.const 2
-  %6 = i32.sub %n, %5
-  %7 = call @main.fib(%6)
-  %8 = i32.add %4, %7
-  return %8
-}
-```
-
----
-
-## Language
-
-Vertex compiles ahead of time to a native binary. No interpreter, no VM,
-nothing to install next to the program you built.
-
-**Types and memory.** `struct` and `enum` are value types with inline layout
-and no header. `class` is a reference type, heap-allocated and reference
-counted — ARC, with `weak` and `unowned` — and retain and release are emitted
-inline rather than called into a runtime library, so code that declares no
-classes links no refcounting at all. `protocol` is a compile-time constraint;
-generics are resolved by monomorphization, so a generic call is a direct call
-and witness tables appear only where you ask for an existential.
-
-**Ownership.** `borrowing` and `consuming` parameter modifiers, `~Copyable`
-types, `consume` and `borrow` expressions, and lifetime checking in the
-analyzer rather than as a later pass. Value types move by default where a copy
-is not observed.
-
-**Naming.** Type names are lowercase — `int32`, `string`, `vec2`, `parser` —
-and that is the style for new code. Capitalized names are accepted and mean the
-same thing.
-
-**Argument labels are opt-in.** A parameter is positional unless given a label,
-so `func fib(n: int32)` is called as `fib(10)`. Write a label in front of the
-name when the call site reads better for it — `func move(to dest: point)`,
-called as `move(to: p)`.
-
-**Packages.** Every file opens with a `package` declaration, and the package is
-the unit of compilation, naming, and visibility. Imports name packages, not
-files.
-
-**Receivers.** Methods may be declared outside the type they belong to, on
-`struct`, `enum` and `class` alike:
+**Packages and path-based imports.** File-level package declarations
+and path imports, resolving underneath to the module and ownership
+semantics described under [Modules](#modules):
 
 ```swift
-package geom
+package main
 
+import (
+    "github.com/username/repo1"
+    "github.com/username/repo2"
+)
+
+func main() -> int32 {
+    yourpackage.Something()
+    return 0
+}
+```
+
+**Receiver methods.** Methods declared outside the host type's body,
+across `struct`, `enum` and `class`, to keep large packages flatter
+while preserving the ownership conventions:
+
+```swift
 struct vec2 {
     var x: float32
     var y: float32
 }
 
-func (v borrowing vec2) length() -> float32 {
+func (v: borrowing vec2) length() -> float32 {
     return (v.x * v.x + v.y * v.y).squareRoot()
 }
 
-func (v inout vec2) scale(k: float32) {
+func (v: inout vec2) scale(k: float32) {
     v.x *= k
     v.y *= k
 }
 ```
 
-The receiver takes the same ownership modifiers a parameter does, which is the
-reason the form exists: `borrowing`, `consuming` and `inout` are visible in the
-signature instead of implied by a keyword on the body. Members declared inside
-the type body produce the same symbol.
-
-**Direct control where you want it.** Explicit pointer types — `rawpointer`,
-`pointer<T>`, `buffer<T>` — with alignment and volatility in the type. `unsafe`
-blocks for pointer arithmetic and type punning. Layout attributes, `@packed`
-and `@align(n)`. C interop by declaration with `@extern(c)`, using the C ABI of
-the selected target. None of it is needed to write ordinary code.
-
-**No mandatory runtime.** No garbage collector, no reflection metadata, no
-dynamic casting, no unwinding tables, and no standard library you cannot
-compile without. Heap allocation is a call you wrote or a class you
-instantiated, and nothing else.
-
-Diagnostics do not depend on what the compiler does afterwards. Analysis runs
-before the IR exists, so `vsc check` and `vsc build` report the same set, and a
-rejection cites the section of the spec it violates.
-
-The test suite is a corpus of self-checking `.vs` programs, each compiled,
-linked, and run against an expected exit status and output — see
-[`tests/`](tests/).
-
----
-
-## Kernels and graphs
-
-Accelerated code is written in Vertex, in the same file, checked by the same
-front end. `kernel` and `graph` sit where an effect goes — after the parameter
-list, before the return arrow — because that is what they are: a statement
-about where and how the function runs.
-
-### `kernel` — data-parallel, one thread per element
+**`kernel` and `graph`.** Two reserved function modifiers for compute
+and dataflow targets — a data-parallel unit and a graph node.
+Reserved is all they are: no syntax, no semantics, no backend.
 
 ```swift
-package compute
-
-func add(x: buffer<float32>, y: buffer<float32>) kernel -> float32 {
-    let i = thread.x
-    return x[i] + y[i]
-}
+func add() kernel -> float32 { }   // accelerated execution
+func add() graph  -> float32 { }   // graph-based pipelines
 ```
 
-A kernel body is written from the point of view of one thread and returns the
-element that thread produced. The launch shape and the output buffer come from
-the call site, so the common case needs no bounds guard and no output
-parameter:
+## Status
+
+One target: `aarch64-macos`. Apple silicon, macOS.
+
+What the language can express today is defined by `tests/compiler/` —
+156 whole programs the compiler builds and runs. A program goes in
+there once it works, and a refusal fails the suite rather than being
+skipped, so the corpus is a statement of what works rather than a
+wishlist. Roughly:
+
+- functions, recursion, argument labels, default arguments, `inout`
+- `struct`, `class`, `enum` with payloads, inheritance, initializers
+- generics, constraints, `where` clauses, associated types
+- protocols and existentials, including dispatch through them
+- optionals, tuples, closures, computed properties, nested types
+- `switch` and pattern matching, operators and precedence groups
+- the integer and floating-point widths, and conversions between them
+
+Not there yet: `async`/`await` and actors; `throws` past the interface
+boundary — it typechecks and it can call a throwing imported function,
+but no compiled program here raises one; the `weak` and `unowned`
+semantics that break reference cycles, which parse but carry no
+meaning yet; and reflection.
+
+## Install
+
+The repositories are separate Go modules and find each other by
+relative path, so they must be checked out beside one another:
+
+```
+parent/
+  vsc/     this repository
+  ir/      the machine IR, and lower/ inside it
+  arm64/   the AArch64 assembler, with asm/ beside it
+  macho/   the Mach-O reader, writer and linker
+```
+
+Then build the command (Go 1.23 or later), and put it on your `PATH`:
+
+```bash
+cd vsc/cmd && go build -o bin/vsc ./vsc
+```
+
+`cmd` is its own module, so `go build ./...` from the repository root
+will not build the command — building it needs the backend.
+
+## Quick start
+
+Put the program above in `fib.vs` and:
+
+```bash
+vsc run fib.vs; echo $?    # 55
+vsc check fib.vs           # typecheck only, no build
+```
+
+Errors come with the source line and a caret:
+
+```
+bad.vs:2:18: error: cannot convert value of type 'String' to specified type 'Int'
+        let x: Int = "hello"
+                     ^
+```
+
+Exit codes: `0` no errors, `1` diagnostics with errors, `2` a bad
+invocation or an I/O failure — so `vsc check f.vs && echo ok` means
+what it looks like.
+
+## The command
+
+```
+vsc build  [flags] [files...]   compile and link; with --emit, stop earlier
+vsc run    [flags] [files...]   build to a temporary path and run it
+vsc check  [flags] [files...]   parse and typecheck; print diagnostics
+vsc ast    [flags] [file]       parse and dump the syntax tree
+vsc tokens [flags] [file]       dump the token stream
+vsc env    [flags]              print the resolved target and SDK
+```
+
+A file of `-`, or no file at all, reads standard input.
+
+| Flag | Meaning |
+| --- | --- |
+| `-target T` | target to build for (default: this host) |
+| `-module name` | the module being compiled (default: `main`) |
+| `-o file` | write output here; `-` is standard output |
+| `-I dir` | look for imported modules here (repeatable) |
+| `-entry sym` | the program's entry symbol |
+| `-freestanding` | link no platform libraries |
+
+`build` and `run` also take `--emit`:
+
+| `--emit` | Stops after |
+| --- | --- |
+| `exe` | compile and link (the default) |
+| `obj` | an object file |
+| `vil` | the ownership IR |
+| `vir` | the machine IR |
+| `interface` | the module's public face, for another module to compile against |
+
+Not yet: `--emit asm`, `--emit device`, `-L`, `-l`, `-static`, and
+cross-target builds. The target table has one row.
+
+## Modules
+
+A module is imported by name. `import Geometry` looks for
+`Geometry.vertexinterface` in each `-I` directory, in order, and takes
+the first.
+
+An interface is *source* — the language with the bodies taken out —
+which is why compiling against one needs no separate binary module
+format:
 
 ```swift
-let z = add(x, y).launch(over: x.count)   // z: buffer<float32>
+// vertex-interface-format-version: 1.0
+// vertex-module-name: Metrics
+
+public func mean(_ a: int32, _ b: int32) -> int32
 ```
 
-Everything a hand-written device kernel needs is still reachable. `thread.x`,
-`thread.y`, `thread.z` and `group` give position; `@shared` declares
-group-local storage; `barrier()` synchronizes a group; `launch(grid:group:)`
-takes the shape explicitly when the default tiling is wrong. A kernel that
-returns nothing writes through an `inout buffer` instead — the form to reach
-for when the output shape is not the input shape.
+`vsc build --emit interface` writes one.
 
-### `graph` — whole-array, traced rather than executed
+The module name decides the entry point: `main` in module `main` is
+the program's, every other module's `main` is an ordinary function.
+That is why `-module` defaults to `main`, and why building a library
+means saying so.
+
+## Compatibility
+
+Vertex looks to support as much of Swift's grammar as it can, for
+interop-related tasks of Swift's ecosystem, when possible.
+
+### Grammar
+
+A valid Swift file is a valid Vertex file. Every Vertex addition is an
+opt-in on top, and none of them changes the meaning of a program that
+does not use them.
+
+That is why the primitives have capitalised counterparts: `int32` and
+`Int32` denote one type. Swift's own names resolve first, so a program
+that writes only those reads exactly the universe `swiftc` does, and
+the checker keeps a Swift-only view of the universe for the times that
+distinction matters.
+
+### Argument labels
+
+*Designed, not yet built — an unlabelled call is an error today.*
+
+Labels are part of what Vertex carries for compatibility. Write them
+or leave them out, in either direction: `_` on a parameter is
+optional, and so is the label at the call.
 
 ```swift
-func attention(q: tensor<float32>, k: tensor<float32>, v: tensor<float32>) graph -> tensor<float32> {
-    let scores = matmul(q, k.transposed()) / sqrt(float32(q.shape[-1]))
-    return matmul(softmax(scores, axis: -1), v)
-}
+func addUp(a: int32, b: int32) -> int32 { return a + b }
+
+addUp(1, 2)         // no labels
+addUp(a: 1, b: 2)   // labels, the Swift spelling
 ```
 
-A `graph` function does not run when you call it. It is traced at compile time
-into a dataflow module, shape- and dtype-checked against its signature, and
-lowered as a whole — so fusion, layout, and scheduling are decided with the
-entire function in view, which a kernel-at-a-time model structurally cannot do.
-Vertex emits StableHLO for it, making TPUs and other accelerators with a
-StableHLO ingest path targets rather than ports.
+Both declaration forms accept both call forms. The one place a label
+still decides something is overloading: where declarations differ only
+by label, an unlabelled call is an error naming the candidates rather
+than a guess, since `label(a:)` and `label(b:)` mangle to different
+symbols and picking one would call a function the caller never named.
 
-### Both are ordinary functions
+### The ecosystem
 
-Same types, same generics, same ownership rules, same diagnostics. A buffer
-handed to a kernel is borrowed for the duration of the launch and the analyzer
-knows it, so use-after-free across a launch boundary is a compile error rather
-than a debugging session. Device code that fails to typecheck fails
-`vsc check`, at the line you wrote, before any device toolchain is involved —
-because there isn't one.
+Vertex has no standard library of its own. A compiler does not have to
+implement a library to call it — it has to agree with it about names
+and calling conventions. So `String`, `Array`, `Codable` and
+Foundation come from Swift's own library, built by `swiftc` and linked
+against code this compiler produced.
 
-Device lowering is Vertex's own, shared with `v++`. No nvcc, no NVRTC, no LLVM,
-no XLA. `vsc` emits device code the way it emits AMD64: through VIR, to an
-encoder in the toolchain. `--emit vir` shows host and device modules together,
-in the same textual form.
+A `.swiftinterface` that `swiftc` emitted can be read unedited, which
+`tests/interop/006-swiftc-emitted-interface` holds the compiler to.
 
----
+### VIL and SIL
 
-## Swift, and what Vertex adds to it
+The Vertex Intermediate Language mirrors SIL's grammar, its passes and
+its naming, so `--emit vil` prints something a compiler engineer can
+read without a legend:
 
-Swift is the core dialect. The language `vsc` reads is Swift — its syntax, and
-the ownership model behind it: value and reference types, ARC, borrowing and
-consuming — and being on par with Swift's own compiler is the standard the
-front end is held to, not an approximation of it. Where the published grammar
-and `swiftc` disagree, `swiftc` is right, and the tests say so:
-`parser/oracle_test.go` parses every module interface in every installed SDK
-and compares verdicts with `swiftc` over a corpus of malformed sources, and
-[`parser/README.md`](parser/README.md) catalogues every place the language
-turned out to be wider than the published grammar, and
-[`analyzer/README.md`](analyzer/README.md) says what the checker knows and
-what it deliberately stays quiet about. What comes after them is `vil/`,
-whose own package documentation says what the ownership IR is and what each
-pass proves about it.
+```
+sil_stage lowered
 
-What Vertex adds sits on top of that, and every piece of it is optional.
-Package declarations, receivers, opt-in argument labels, `kernel` and `graph`,
-and the lowercase type names are Vertex spellings: a program that uses none of
-them is a Swift program, and a program that uses them is Swift and something
-else. The type names are the clearest case of the rule. `Int`, `Int32`,
-`String` and `Double` are the language's names and always will be; `int`,
-`int32`, `string` and `float64` are aliases Vertex offers beside them, never in
-place of them, and a Swift program that never writes one is unaffected by their
-existence.
-
-What is not here is the rest of a Swift toolchain: no Swift standard library,
-no Foundation, no Objective-C interop, no `.swiftmodule` to import. The `.vs`
-extension will be enforced for that reason — `vsc` will not compile a `.swift`
-file, so a Swift source tree is never silently built against a library it was
-not written for. That belongs to the command, which is not built yet:
-`vsc.Compile` takes a name and bytes and enforces nothing, and the sources in
-this repository are `.swift` because every one of them is a case `swiftc` is
-asked about too.
-
----
-
-## Targets
-
-`vsc` composes the same object encoders and linkers `vcc` does, so every target
-is available from any host with no cross-toolchain installed. `vsc env` prints
-the target resolved for the current machine.
-
-> **Planned, except one.** `build/` writes and links aarch64 Mach-O today, and
-> `build.Host()` is what resolves the current machine. The rest of this table
-> is the target set being built to; the backends and linkers behind it exist
-> as `vertex-language` repositories, and `build/` is where each is wired in —
-> a case in a switch and an import in `register.go`, not new code.
-
-**Host**
-
-| Target | Container | |
-|---|---|---|
-| `aarch64-macos`, `x86_64-macos` | Mach-O | |
-| `aarch64-linux`, `x86_64-linux` | ELF | |
-| `wasm32-vertex-none` | Wasm | freestanding: linear memory, no host runtime |
-| `x86_64-elf`, `aarch64-elf` | ELF | freestanding: no OS, no libc |
-| `x86_64-windows` | PE / COFF | modelled, not yet buildable |
-
-**Device**
-
-| Target | Emits | |
-|---|---|---|
-| `nvptx64-vertex` | PTX | `kernel` functions |
-| `amdgcn-vertex` | GCN | `kernel` functions; modelled, not yet buildable |
-| `stablehlo-vertex` | StableHLO | `graph` functions |
-
-Select a host target with `-target` and a device target with `-device`:
-
-```console
-$ vsc build -target x86_64-linux -device nvptx64-vertex -o app main.vs   # planned
+sil hidden @$s4main3fibyS2iF : $@convention(thin) (Int) -> Int {
+bb0(%0 : $Int):
+  debug_value %0, let, name "n", argno 1
+  %1 = integer_literal $Builtin.Int64, 2
+  ...
 ```
 
-A target name decides two things at once — the type model the front end sizes
-against, and the architecture, container and symbol prefix below the IR — and
-both halves live in one table, so a name means one thing. `x86_64-windows` and
-`amdgcn-vertex` are in it with the second half complete and no backend behind
-them, which `vsc` says rather than hides.
+Sharing the vocabulary is also what makes the symbols line up: a name
+this compiler mangles is the name `swiftc` mangles, which is the whole
+of what a linker needs from both of them.
 
----
+### How it is checked
 
-## CLI
-
-Verb first, like `go` and `git` — `vsc build main.vs`, not `vsc main.vs`. Each
-verb runs the same pipeline phases the compiler runs, so an inspection command
-can never show something `vsc build` would reject.
-
-| Command | |
-|---|---|
-| `vsc build` | compile and link; with `--emit`, stop earlier |
-| `vsc run` | compile, link to a temp path, execute, forward the exit code |
-| `vsc check` | parse and typecheck; no artifact |
-| `vsc ast` | parse and dump the syntax tree |
-| `vsc tokens` | dump the token stream |
-| `vsc env` | print the resolved target, entry symbol, and SDK |
-
-`--emit` replaces the mode flags with one option:
-
-| | | like |
-|---|---|---|
-| `--emit exe` | compile and link (default) | |
-| `--emit obj` | an object file | `cc -c` |
-| `--emit vil` | the ownership IR, in SIL's syntax | `swiftc -emit-sil` |
-| `--emit vir` | the lowered IR module | |
-| `--emit asm` | target assembly — *planned* | `cc -S` |
-| `--emit device` | device code alone: PTX, GCN, or StableHLO — *planned* | |
-
-Flags today: `-o`, `-target`, `-module`, `-entry`, `-freestanding`, `--emit`.
-`-` means stdin or stdout anywhere a path is accepted, and everything after a
-bare `--` is the program's arguments rather than `vsc`'s.
-
-`-module` is the one with no counterpart in a C compiler, and it decides more
-than a name: the module called `main` is the program, so its `main` becomes
-the entry point and every other module's `main` stays an ordinary mangled
-function. Building a library means saying `-module` and getting no `_main` at
-all.
-
-*Planned:* `-I` for a package search path, `-L` and `-l` for libraries,
-`-static`, `-device`, and passing a `.o` or `.a` through to the linker in
-command-line order — a static link is order-sensitive, and reordering it would
-be `vsc` deciding something you said.
-
----
+`swiftc` is used as the oracle for the corpora. Nothing in them writes
+down an expected value: a number beside a program is a hand-maintained
+claim, wrong the moment it drifts, while `swiftc`'s answer cannot. So
+the runners compile twice, run twice, and compare — exit status, or
+the same signal for a program that traps.
 
 ## Go API
 
-`vsc` is a library, and the root of this repository is the package. It is the
-phases composed and nothing of its own: one call runs them in order, stops at
-the first that reports an error, and hands back what each one produced.
+The compiler is a library first; the command is a thin wrapper over it.
 
 ```go
 import "github.com/vertex-language/vsc"
 
-u, diags := vsc.Compile([]vsc.Source{{Name: "hello.swift", Text: src}}, vsc.Options{
-	Module: "hello",
-	Target: target,
-})
-```
-
-`Options.Stop` says how far to go — `Parsed`, `Checked`, `Raw`, `Canonical`,
-`Lowered`, or the zero value for all of them — and the `Unit` that comes back
-has a field per phase, nil where the phase did not run:
-
-```go
-u.Files      // []*ast.File, in the order they were given
-u.Info       // what the checker learned
-u.VIL        // the ownership IR; its stage says how far the passes got
-u.VIR        // the machine IR
-```
-
-Diagnostics are returned rather than printed, sited in the file you wrote, and
-a warning does not stop anything — it is the caller's business how to show
-them and whether to care:
-
-```go
-if vsc.Errors(diags) {
-	for _, d := range diags {   // d.Severity, d.Site, d.Message
-		fmt.Println(d)
-	}
-}
-```
-
-Turning `u.VIR` into something that runs is [`build/`](build/), which is its
-own Go module so that a program wanting only to typecheck something does not
-pull a backend in with it:
-
-```go
-import "github.com/vertex-language/vsc/build"
-
-target, ok := build.Host()
-obj, err := build.Object(u.VIR, build.Options{})
-exe, err := build.Executable([]build.Input{{Name: "a.o", Data: obj}},
-	build.LinkOptions{Target: target})
-```
-
-Nothing there shells out. `build.SDK()` finds the macOS SDK the way Apple's
-own tools do — `$SDKROOT`, then `xcrun`, then the Command Line Tools path —
-because that is where `libSystem`'s stub lives and a hosted link needs it;
-`LinkOptions.Freestanding` is how a program says it needs none of it.
-`vsc.EntrySymbol(target)` is the symbol the program starts at, and
-`vsc.SymbolPrefix(target)` the underscore Mach-O puts in front of every name.
-
-### Planned
-
-The surface above is the pipeline. The surface below is the compiler as a
-product — a target, a device, package paths, libraries, and linking — and it
-is not built yet.
-
-`vsc.Build("hello", "hello.vs")` and `vsc.Run("hello.vs")` are the two
-shorthands, and past them everything is a `Compiler` and a parameter struct.
-The zero `Compiler` builds for this host; a target, a device, a package path,
-or libraries are fields:
-
-```go
-c := &vsc.Compiler{
-	Target:      "x86_64-linux",
-	Device:      "nvptx64-vertex",
-	PackageDirs: []string{"packages"},
-}
-
-err := c.Build(vsc.BuildParams{
-	Output:  "app",
-	Inputs:  []vsc.Input{vsc.File("main.vs"), vsc.File("compute.vs"), vsc.File("libfoo.a")},
-	Libs:    []string{"m"},
-	LibDirs: []string{"vendor/lib"},
-})
-```
-
-Every phase is reachable on its own, each rung the one below it plus one step —
-`Source`, `Parse`, `Check`, `IR`, `Object`, `Build` — which is `Options.Stop`
-grown into methods. Diagnostics come back as values, sited in the file you
-wrote:
-
-```go
-diags, err := c.Check(vsc.File("main.vs"))   // err means vsc could not run
-for _, d := range diags {                    // d.Severity, d.Site, d.Message
-	fmt.Println(d)
-}
-```
-
-Source does not have to be a file. `vsc.Text(name, data)` compiles bytes the
-caller already has, an object comes back as bytes, and the linkers take bytes,
-so a build can run start to finish without touching the filesystem:
-
-```go
-obj, diags, err := c.Object(vsc.Text("gen.vs", src))
-prog, err := c.Program(vsc.BuildParams{Inputs: []vsc.Input{vsc.ObjectBytes("gen.o", obj)}})
-defer prog.Close()
-
-cmd := prog.Command("--flag")   // an unstarted *exec.Cmd: running is os/exec's job
-cmd.Stdout = &buf
-err = cmd.Run()
-```
-
-### The front end alone
-
-For tooling that wants only the front end, the sub-packages cost nothing else,
-and this much works today:
-
-```go
-import (
-	"github.com/vertex-language/vsc/ast"
-	"github.com/vertex-language/vsc/parser"
-	"github.com/vertex-language/vsc/token"
+target, _ := vsc.HostTarget()
+unit, diags := vsc.Compile(
+    []vsc.Source{{Name: "fib.vs", Text: src}},
+    vsc.Options{Module: "main", Target: target},
 )
-
-unit := token.NewFile("a.vs", src)
-file, diags := parser.ParseFile(unit, parser.DefaultMode)
-defer file.Release()
-
-ast.Inspect(file, func(n ast.Node) bool {
-	return true
-})
+if vsc.Errors(diags) {
+    // report and stop
+}
+// unit.Files, unit.Info, unit.VIL, unit.VIR
 ```
 
-`ParseFile` runs the scanner itself and always returns a non-nil tree — a
-partial parse yields `Bad*` placeholder nodes rather than nothing. See
-[`parser/`](parser/) and [`ast/`](ast/).
+`Compile` stops at the first phase that reports an error — at the
+*end* of that phase, so a file with three type errors reports three
+rather than one and its consequences. Diagnostics are returned, not
+printed: how to show them is the caller's business.
 
----
+`Options.Stop` takes it partway, through `Parsed`, `Checked`, `Raw`,
+`Canonical` and `Lowered`; the zero value runs all of them, and a
+`Unit` field is nil where its phase did not run.
+
+Turning a `Unit` into an object or an executable is the separate
+`vsc/build` module, so typechecking alone pulls in no backend.
 
 ## Architecture
 
-Each stage is its own package with minimal cross-dependencies:
-
 ```
-scanner → parser → analyzer → vil/gen → vil/pass → lower → build
- tokens     AST     types,      the       ownership   VIL    isel,
-                    generics,   ownership erased      to     encode,
-                    ownership,  IR                    VIR    link
-                    shapes
+source → scanner → parser → analyzer → vil/gen → vil/pass → lower → VIR → build
+         tokens    AST      types      VIL       ownership  machine  obj + link
 ```
 
-Ownership is written down twice. The analyzer checks it against the typed
-tree, and `vil/gen` records it in the IR as the instructions Swift's SIL uses
-— `copy_value`, `destroy_value`, the borrow scopes — where `vil/verify` can
-hold a module to the rules a sound one keeps. `vil/pass` then erases that
-form, turning it into the retain and release calls a runtime actually makes,
-and only a module in that shape may be lowered. So the VIR a backend sees has
-no implicit lifetime operations left in it, and a module that still carries
-them is refused rather than lowered with its retains dropped on the floor.
-`kernel` and `graph` bodies are planned to go through the same phases, with
-`lower` splitting the module in two, host and device, before either reaches a
-backend.
+The seam is `lower`. Above it everything is the language — formal
+types, ownership, the vocabulary a diagnostic is written in. Below it
+is machine, and VIR is shared with the family's C and C++ compilers,
+so nothing language-shaped may cross.
 
-The root package is the composition and nothing else: it runs the phases in
-order, names the artifact each one produces, and stops at VIR. Instruction
-selection, object writing and linking are `build/`, which is its own Go module
-so that a program wanting only to typecheck something does not pull a backend
-in with it. `cmd/` is a third module for the same reason from the other side:
-the command is the one program that wants everything, so it is where the front
-end and the backend meet, and `cmd/cli` is a wrapper over the root with
-nothing of its own — as is any other program that wants a Vertex compiler.
+| Package | Lines | Does |
+| --- | ---: | --- |
+| `token` | 714 | positions, kinds, diagnostics |
+| `scanner` | 1531 | source to tokens |
+| `ast` | 2227 | the syntax tree; nodes hold no text |
+| `parser` | 4477 | tokens to tree, with error recovery |
+| `types` | 2137 | the type model |
+| `analyzer` | 6150 | names, then types, then bodies |
+| `core` | 430 | the built-in module: operators and layout |
+| `vil` | 1990 | the ownership IR |
+| `vil/gen` | 8864 | checked tree to raw VIL |
+| `vil/pass` | 503 | the passes that must run |
+| `vil/verify` | 1043 | checks the ownership rules |
+| `lower` | 6018 | VIL to VIR |
+| `mangle` | 1424 | declarations to symbol names |
+| `iface` | 426 | reading and writing module interfaces |
+| `build` | 420 | VIR to object, objects to executable |
 
-What is in this repository today is the front end, the two IRs below it, and
-the back: source text to a checked tree, the checked tree to VIL, VIL to VIR,
-VIR to an object file for aarch64 Mach-O, and objects to a signed executable. It is held to Swift by oracles at every
-stage — every module interface in every installed SDK must parse, `swiftc`
-must agree about which programs are Swift and which are not, and the VIL and
-the mangled symbols are diffed against `swiftc` output rather than against a
-golden file this repository wrote. Everything past that — linking, the other
-targets, the device path — is described here as the design it is being built
-to; the table says which of it exists.
+Two rules the front end is built on, both worth knowing before reading
+it:
 
-| Package | | |
-|---|---|---|
-| [`token/`](token/) | lexical vocabulary, source positions, file model | |
-| [`scanner/`](scanner/) | tokenization, literal decoding | |
-| [`parser/`](parser/) · [`ast/`](ast/) | tokens to AST; the syntax tree | |
-| [`analyzer/`](analyzer/) · [`types/`](types/) | name resolution, types, layout, ownership | |
-| [`vil/`](vil/) | the ownership IR: a clone of Swift's SIL | started |
-| [`vil/gen/`](vil/gen/) | the checked tree lowered into raw VIL | started |
-| [`vil/text/`](vil/text/) | VIL in SIL's syntax, so the output can be diffed against `swiftc -emit-silgen` | started |
-| [`vil/verify/`](vil/verify/) | the rules a sound VIL module keeps | started |
-| [`vil/pass/`](vil/pass/) | the passes that must run: erasing the ownership form | started |
-| [`lower/`](lower/) | lowered VIL to VIR | started |
-| [`core/`](core/) | the built-in module: the operators, and what a primitive is made of | started |
-| [`mangle/`](mangle/) | Swift's symbol mangling, cloned | started |
-| [`.`](doc.go) | the phases composed | started |
-| [`build/`](build/) | VIR to an object file, and objects to a program; its own module | aarch64 Mach-O only |
-| [`cmd/cli/`](cmd/cli/) · [`cmd/vsc/`](cmd/vsc/) | verb dispatch and the executable; its own module | started |
+**Where the checker does not know, it says nothing.** An invented type
+is worse than no type, so a type the analyzer cannot work out is
+`Invalid`, a diagnostic about an `Invalid` is not reported, and one
+mistake in the source is one diagnostic in the output.
 
-Everything downstream of `lower` — instruction selection and encoding for
-AMD64, ARM64, and Wasm, the PTX and StableHLO device emitters, and the ELF,
-Mach-O, and PE writers and linkers — lives in independent `vertex-language`
-repositories shared with `vcc` and `v++`. `build/` is the only package here
-that imports them, and it imports nothing of the `vsc` front end in return, so
-the compilers in the family meet at VIR and nowhere else.
+**Ownership is emitted, not inferred.** `vil/gen` writes down every
+copy and destroy as it goes, so `vil/verify` checks the rules against
+what was emitted rather than what a later pass hopes to work out.
 
----
+## Tests
+
+Four corpora, each asking one question. A file belongs to exactly one.
+
+| Corpus | Size | Question |
+| --- | ---: | --- |
+| `tests/syntax/` | 94 files | Does it parse? |
+| `tests/check/` | 62 files | Does it typecheck, and say the right thing when it does not? |
+| `tests/compiler/` | 156 programs | Does the program do what it says? |
+| `tests/interop/` | 20 cases | Does what this builds agree with the ecosystem it links against? |
+
+```bash
+go test ./...              # front end and CLI; ~20s
+cd build && go test ./...  # the corpora; ~3 minutes
+```
+
+The `build` suite needs an Apple-silicon Mac, plus `swiftc` and
+`clang` on the `PATH` for its half of every comparison. Without them
+it skips rather than fails — there is no oracle to compare against.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. Copyright (c) 2026 Netangular Technologies.
