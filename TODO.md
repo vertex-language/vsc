@@ -81,6 +81,40 @@ The mildest kind: a program that never produces a wrong number, and a
 diagnostic that arrives after the build rather than during it. The
 same expression over a variable traps in both, identically.
 
+### An interop attribute parses and means nothing
+
+```swift
+@_cdecl("vs_add")
+func add(_ a: Int32, _ b: Int32) -> Int32 { return a + b }
+```
+
+That builds, and the object file exports no `vs_add`. The attribute
+is read as a name and a balanced token list and then dropped, which
+is what happens to every declaration attribute: `ast.Attr` is parsed
+everywhere and consulted nowhere — the one `.Attrs` loop in the
+checker is for precedence groups, which are not these.
+
+Four attributes are wrong in this particular way, because each one's
+whole purpose is a symbol or a dispatch that does not appear:
+
+| Written | What it promises | What happens |
+| --- | --- | --- |
+| `@_cdecl("f")` | a C-callable symbol `f` | no such symbol |
+| `@_silgen_name("f")` | this declaration *is* `f` | a body-less function that traps |
+| `@objc` | an Objective-C entry point | nothing |
+| `@convention(c)` on a value | a C function pointer | `@convention(thin)`, the ordinary one |
+
+`@_silgen_name` is the sharpest: the program links, runs, and dies on
+a trap where the call should have been. `@_cdecl` builds a library
+nobody can link against. `@convention(c)` is the quietest, because a
+value written that way and then called from Vertex answers correctly
+— the convention is only wrong at the boundary it exists for.
+
+Parsing without meaning is the shape `weak` and `unowned` have too,
+and it is the wrong-answer shape wearing a different coat: the source
+says one thing and the program does another with nothing said. These
+should refuse until they work.
+
 ## Wrongly refused
 
 Valid programs that do not build yet. Each says so where it is
@@ -151,6 +185,68 @@ requiring `func main` is a defensible rule, and it is at least
 - **Most of the standard library**, by design rather than omission: it
   is linked from Swift's own, and `tests/interop/` is what holds that
   together.
+- **C and Objective-C interoperability**, which is the whole axis
+  described below.
+
+## C and Objective-C
+
+Swift calls this **C and Objective-C interoperability**, and the part
+of the compiler that does it is the **Clang importer**: the unit it
+imports is a *Clang module* — a `module.modulemap` naming headers —
+or, for a mixed target, a *bridging header*. Nothing here does any of
+it. `import Darwin` reports `no such module`, which is at least true:
+there is no importer, so there is no way to name a C declaration at
+all.
+
+`tests/interop/` proves the Swift-to-Swift half — this compiler calls
+libraries swiftc built, agreeing about mangled names and registers.
+The C half has no equivalent, and would need its own corpus for the
+same reason: nothing short of running the two together shows it.
+
+It is not one feature, and the pieces are not the same size.
+
+**Calling C** is the smallest and is mostly a type mapping. A header's
+declarations become signatures, and C's types become Swift's: `int` is
+`CInt`, `char *` is `UnsafeMutablePointer<CChar>!`, `void *` is
+`UnsafeMutableRawPointer`, a pointer to an incomplete struct is
+`OpaquePointer`, a function pointer is `@convention(c)`, an `NS_ENUM`
+is an `enum` and an `NS_OPTIONS` an `OptionSet`. Nullability decides
+which of those are optional: an audited header's `_Nullable` is a
+`T?`, and an unaudited one's pointers are implicitly unwrapped.
+
+The blocker under all of that is that **the pointer types do not
+exist**. `UnsafePointer`, `UnsafeMutablePointer`, `UnsafeRawPointer`
+and `OpaquePointer` are all `cannot find type … in scope`, and no C
+signature can be spelled without them.
+
+**Being called from C** is smaller still and is the other half of
+`@_cdecl`: a symbol with the platform convention, and `@convention(c)`
+function values so a callback can be handed over.
+
+**Objective-C is much larger than either**, because it is a runtime
+and not a calling convention. It needs `objc_msgSend` dispatch and the
+`@convention(objc_method)` thunks around it; classes that are also
+Objective-C classes, with metadata the runtime recognises; `@objc`
+members, `dynamic`, `#selector` and `#keyPath`; ARC across the
+boundary, which is `Unmanaged`, toll-free bridging and autorelease
+pools; the error convention that turns a trailing `NSError**` into
+`throws`; `@objc protocol` with optional requirements; and, for the
+reverse direction, the generated `<Module>-Swift.h`. SIL has
+instructions for most of this — `objc_method`, `objc_super_method`,
+`objc_protocol`, `thick_to_objc_metatype`, `ref_to_unmanaged` — and
+VIL has none of them.
+
+**C++ interoperability** is a separate mode in Swift
+(`-cxx-interoperability-mode`) and a separate question here.
+
+Two things are worth saying about where this sits against the rest of
+this file. Every other entry is a lowering this compiler does not
+emit yet; the Clang importer is a front end for another language,
+which is why Swift does not write one either and hands the job to
+Clang. And the four attributes above are not waiting on any of it —
+refusing them is a small change and is owed now, because a program
+that says `@_cdecl` and exports nothing is the failure this file puts
+first.
 
 ## Fixed
 
