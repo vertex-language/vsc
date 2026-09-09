@@ -25,6 +25,30 @@ section is worth keeping in front of the rest.
 
 ## Accepted where Swift refuses
 
+### A failable initializer cannot return nil
+
+```swift
+struct Even {
+    var n: int32
+    init?(_ n: int32) {
+        if n % 2 != 0 { return nil }
+        self.n = n
+    }
+}
+```
+
+```
+error: cannot convert return value of type 'untyped nil' to expected
+return type 'Even'
+```
+
+`init?` is modelled as an ordinary initializer, so the one thing it
+exists to do is the one thing it cannot. swiftc accepts the program.
+Not silently wrong — it is rejected rather than mis-compiled — but it
+is valid Swift that does not build, so it belongs with the others
+here rather than under the honest refusals.
+
+
 The compiler is quiet about a program Swift would reject, so the first
 report comes from `swiftc` or from a reader.
 
@@ -49,6 +73,7 @@ already correct; only the feature is missing.
 | a static computed property's setter | not emitted; static storage first |
 | `defer` | `cannot lower a defer` |
 | a closure that captures | `cannot lower a closure that captures 'k'` |
+| an optional chain | `cannot lower this expression yet` |
 | a tuple pattern in a `switch` | `cannot lower this pattern in a switch` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
@@ -96,6 +121,14 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **An optional chain lost its optionality.** `p?.x` answered
+  `Invalid` — the lookup ran on a doubly optional type, since `p?`
+  wraps whatever it followed and `p` was already optional, and found
+  nothing without reporting it. So the chain was assignable to
+  anything, which Swift refuses, and `??` after one saw a left side
+  that was not an optional at all. A chain reaches through both
+  layers now and answers an optional of the member, flattened rather
+  than nested.
 - **Property observers were parsed and dropped.** A write to a
   property with `willSet` or `didSet` stored the value and ran
   neither, so the program compiled, ran and did half of what its

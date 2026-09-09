@@ -789,3 +789,44 @@ func use() -> int32 {
 		}
 	}
 }
+
+// TestOptionalChainIsOptional: `p?.x` is the member where p holds
+// something and nothing where it does not. The lookup ran on a doubly
+// optional type -- `p?` wraps whatever it followed, and p was already
+// optional -- found nothing, and answered Invalid without reporting
+// it. So the chain was assignable to anything, and `??` saw a left
+// side that was not an optional at all.
+func TestOptionalChainIsOptional(t *testing.T) {
+	const src = `
+struct P { var x: int32 }
+
+func chain(_ p: P?) -> int32? { return p?.x }
+func withDefault(_ p: P?) -> int32 { return p?.x ?? -1 }
+`
+	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestOptionalChainNotAssignableToBare is the other half: losing the
+// optionality let a chain be assigned to a non-optional, which Swift
+// refuses.
+func TestOptionalChainNotAssignableToBare(t *testing.T) {
+	const src = `
+struct P { var x: int32 }
+
+func chain(_ p: P?) -> int32 {
+    let v: int32 = p?.x
+    return v
+}
+`
+	_, diags := compile(t, src, vsc.Options{Stop: vsc.Checked})
+	if !vsc.Errors(diags) {
+		t.Fatal("an optional chain was assigned to a non-optional")
+	}
+	if !strings.Contains(diags[0].Message, "Int32?") {
+		t.Errorf("diagnostic does not name the optional: %s", diags[0])
+	}
+}

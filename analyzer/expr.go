@@ -842,6 +842,25 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		baseType := c.checkExpr(e.X, nil, scope)
 		memberName := e.Name.Text(c.file)
 
+		// `p?.x` reaches through the optional: the member is looked
+		// up on what p holds. Two layers come off -- the one `p?`
+		// added, since a `?` in isolation is an optional of whatever
+		// it followed, and p's own -- and without that the lookup ran
+		// on a doubly optional type, found nothing, and answered
+		// Invalid. Which reported nothing, so the chain was
+		// assignable to anything and `??` saw a left side that was
+		// not an optional at all.
+		_, chained := e.X.(*ast.OptionalExpr)
+		if chained {
+			for i := 0; i < 2; i++ {
+				o, isOpt := baseType.(*types.Optional)
+				if !isOpt {
+					break
+				}
+				baseType = o.Wrapped
+			}
+		}
+
 		if cl, ok := baseType.Underlying().(*types.Class); ok && cl.IsActor && c.currActor != cl && !c.inAwait {
 			for _, f := range cl.Fields {
 				if f.Name == memberName {
@@ -851,6 +870,20 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 
 		if t := c.lookupMemberFor(e, baseType, memberName); t != nil {
+			// `p?.x` is a chain: it is the member where p holds
+			// something and nothing where it does not, so it is an
+			// optional whatever the member is. Losing that made the
+			// chain assignable to a non-optional -- which Swift
+			// refuses -- and left `??` with a left side that was not
+			// an optional at all.
+			//
+			// Flattened rather than nested: `p?.x` where x is itself
+			// optional is one optional, which is what Swift answers.
+			if chained {
+				if _, already := t.(*types.Optional); !already {
+					return &types.Optional{Wrapped: t}
+				}
+			}
 			return t
 		}
 		// A type declared in this compilation has a member list, so a
