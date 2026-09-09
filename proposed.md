@@ -536,6 +536,58 @@ The receiver's ownership is what Swift spells on the method:
 | `inout` | `mutating func` |
 | `consuming` | `consuming func` |
 
+### Which types, and what the receiver means on each
+
+Anywhere an extension goes, which is any nominal type. The receiver's
+ownership means what it means for that kind of type, and that is not
+uniform -- which is the reason to write the three out rather than say
+"it works on types":
+
+```swift
+struct vec2 { var x: float32; var y: float32 }
+class  Box  { var v: int32 }
+enum   Dir  { case up, down }
+
+func (v: borrowing vec2) length() -> float32 { ... }   // reads a value
+func (v: inout vec2) scale(k: float32)       { ... }   // mutating func
+func (b: borrowing Box) doubled() -> int32   { ... }   // reads through a reference
+func (b: borrowing Box) bump()               { b.v += 1 }  // still borrowing
+func (d: borrowing Dir) code() -> int32      { ... }   // reads a value
+```
+
+| Receiver kind | `borrowing` | `inout` | `consuming` |
+| --- | --- | --- | --- |
+| `struct`, `enum` | ordinary method | `mutating func` | `consuming func` |
+| `class` | ordinary method | **no meaning** | `consuming func` |
+
+The class row is the one worth stating. A class receiver is a
+reference, so a method that changes a property changes the object
+without the receiver itself being mutable -- `bump()` above is
+`borrowing` and still assigns to `b.v`, which is exactly how Swift
+behaves and how this compiler already behaves for a class extension.
+Swift has no `mutating` on a class method at all; `inout` there would
+have to mean rebinding the reference, which no Swift method can do. So
+an `inout` receiver on a class should be refused, and refused by name
+rather than quietly treated as `borrowing`.
+
+That refusal has to be written, not inherited: this compiler currently
+accepts `mutating func` inside a `class`, which Swift rejects, so
+there is no existing check to lean on. See `TODO.md`.
+
+**Protocols are the fourth case and are blocked.** A receiver method
+on a protocol is a protocol extension -- a default implementation --
+and protocol extensions do not work here yet: a member declared in one
+cannot see the protocol's own requirements, and conforming types do
+not gain it. Until they do, a receiver method on a protocol has
+nothing to desugar into. When they arrive it brings Swift's sharpest
+dispatch rule with it: a method in a protocol extension that is *not*
+also a requirement is statically dispatched, so the conforming type's
+own version is not called through the protocol.
+
+Verified as it stands today: extensions on `struct`, `class` and
+`enum` all work, including a class extension assigning to a property
+with no `mutating` anywhere; an extension on a protocol does not.
+
 Everything else follows from being an extension member, and none of it
 is a choice this language gets to make differently:
 

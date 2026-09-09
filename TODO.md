@@ -150,6 +150,23 @@ Worse than a refusal, because the message names the fix and the fix is
 already applied. Anyone who hits this will re-read their own correct
 code looking for the mistake.
 
+## Accepted where Swift refuses
+
+The same mistake as the section above, pointing the other way: the
+compiler is quiet about a program Swift would reject, so the first
+report comes from `swiftc` or from a reader.
+
+- **`mutating` on a class method.** Swift rejects it outright -- a
+  class receiver is a reference, and a method that changes a property
+  needs nothing to say so. This compiler accepts it silently. It
+  matters for [receiver methods](proposed.md), whose `inout` receiver
+  on a class has to be refused and so cannot lean on a check that is
+  not there.
+- **Protocol extensions.** `extension P { func f() { ... } }` neither
+  sees `P`'s own requirements from inside nor reaches conforming
+  types, so a default implementation is not one. Nothing is reported;
+  the member simply is not there.
+
 ## Refused honestly
 
 Unimplemented, and they say so at the point of use. Nothing here is

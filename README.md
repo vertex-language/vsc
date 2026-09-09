@@ -59,15 +59,14 @@ import acmefmt "acme/fmt" // bound under another name
 A parenthesised group stands for one `import` each.
 
 A path's last segment names the module — `"std/fmt"` provides `fmt` —
-unless the folder's files say otherwise with `package`. A path
-beginning `./` or `../` resolves against the importing file; anything
-else is looked for under each package-directory root, which is `-P`
-then `VERTEXPATH`. `vsc build` compiles each imported folder as its own
-module and links them, so a multi-module program is one command.
+unless the folder's files say otherwise with `package`. `./` and `../`
+resolve against the importing file; anything else is looked for under
+each package-directory root, which is `-P` then `VERTEXPATH`. `vsc
+build` compiles each imported folder as its own module and links them,
+so a multi-module program is one command.
 
 `package` stays contextual: before a plain identifier it is this
-clause, before a declaration or another modifier it is Swift's access
-level, unchanged.
+clause, before a declaration or modifier it is Swift's access level.
 
 ### `kernel` and `graph`
 
@@ -80,19 +79,18 @@ func add(_ a: float32) graph  -> float32 { return a }
 ```
 
 They parse and typecheck, and the compiler refuses to lower one rather
-than build it as an ordinary function that would run on the CPU and
-return a right-looking answer. Neither has a backend yet.
+than build it as an ordinary CPU function returning a right-looking
+answer. Neither has a backend yet.
 
 ### Designed, not yet built
 
 **Receiver methods.** Methods declared outside the host type's body,
 across `struct`, `enum` and `class`, to keep large packages flatter
-while preserving the ownership conventions. This is a syntax error
-today:
+while preserving the ownership conventions — an extension member with
+a named receiver, `borrowing` for an ordinary method and `inout` for a
+`mutating` one. A syntax error today:
 
 ```swift
-struct vec2 { var x: float32; var y: float32 }
-
 func (v: borrowing vec2) length() -> float32 {
     return (v.x * v.x + v.y * v.y).squareRoot()
 }
@@ -106,9 +104,9 @@ One target: `aarch64-macos`. Apple silicon, macOS.
 
 What the language can express today is defined by `tests/compiler/` —
 156 whole programs the compiler builds and runs. A program goes in
-there once it works, and a refusal fails the suite rather than being
-skipped, so the corpus is a statement of what works rather than a
-wishlist. Roughly:
+once it works, and a refusal fails the suite rather than being
+skipped, so the corpus states what works rather than a wishlist.
+Roughly:
 
 - functions, recursion, argument labels, default arguments, `inout`
 - `struct`, `class`, `enum` with payloads, inheritance, initializers
@@ -119,10 +117,9 @@ wishlist. Roughly:
 - the integer and float widths, and conversions between them
 
 Not there yet: `async`/`await` and actors; `throws` past the interface
-boundary — it typechecks and it can call a throwing imported function,
-but no compiled program here raises one; the `weak` and `unowned`
-semantics that break reference cycles, which parse but carry no
-meaning yet; and reflection.
+boundary — it typechecks and can call a throwing imported function,
+but no compiled program here raises one; `weak` and `unowned`, which
+parse but carry no meaning; and reflection.
 
 ## Install
 
@@ -208,9 +205,8 @@ A module is imported by name. `import Geometry` looks for
 `Geometry.vertexinterface` in each `-I` directory, in order, and takes
 the first.
 
-An interface is *source* — the language with the bodies taken out —
-which is why compiling against one needs no separate binary module
-format:
+An interface is *source* — the language with the bodies taken out — so
+compiling against one needs no binary module format:
 
 ```swift
 // vertex-interface-format-version: 1.0
@@ -219,9 +215,8 @@ format:
 public func mean(_ a: int32, _ b: int32) -> int32
 ```
 
-`vsc build --emit interface` writes one.
-
-The module name decides the entry point: `main` in module `main` is
+`vsc build --emit interface` writes one. The module name decides the
+entry point: `main` in module `main` is
 the program's, every other module's `main` is an ordinary function.
 That is why `-module` defaults to `main`, and why building a library
 means saying so.
@@ -231,6 +226,12 @@ means saying so.
 Vertex looks to support as much of Swift's grammar as it can, for
 interop-related tasks of Swift's ecosystem, when possible.
 
+**Swift is the base.** Every Vertex addition is written down, in [The
+language](#the-language) and `proposed.md`. Anything else differing
+from Swift is a bug, not a design decision — a program Swift accepts
+and this rejects, one Swift rejects and this accepts, or one the two
+read differently. `TODO.md` holds the known ones.
+
 ### Grammar
 
 A valid Swift file is a valid Vertex file. Every Vertex addition is an
@@ -239,9 +240,8 @@ does not use them.
 
 That is why the primitives have capitalised counterparts: `int32` and
 `Int32` denote one type. Swift's own names resolve first, so a program
-that writes only those reads exactly the universe `swiftc` does, and
-the checker keeps a Swift-only view of the universe for the times that
-distinction matters.
+writing only those reads exactly the universe `swiftc` does, and the
+checker keeps a Swift-only view for when that distinction matters.
 
 ### Argument labels
 
@@ -330,8 +330,8 @@ printed: how to show them is the caller's business.
 `Canonical` and `Lowered`; the zero value runs all of them, and a
 `Unit` field is nil where its phase did not run.
 
-Turning a `Unit` into an object or an executable is the separate
-`vsc/build` module, so typechecking alone pulls in no backend.
+Turning a `Unit` into an object or executable is the separate
+`vsc/build` module, so typechecking pulls in no backend.
 
 ## Architecture
 
