@@ -252,3 +252,24 @@ struct S {
 		}
 	}
 }
+
+// TestFloatToIntegerConversion: `Int32(d)` was refused because the
+// bound Swift traps on was never computed. It is computed against the
+// source's own type now -- a signed destination of n bits holds
+// [-2^(n-1), 2^(n-1)), and both powers of two are exact in binary
+// floating point -- so the test is the range rather than an
+// approximation of it, and a NaN fails it and traps.
+func TestFloatToIntegerConversion(t *testing.T) {
+	const src = `
+func toInt32(_ d: double) -> int32 { return int32(d) }
+func toInt64(_ d: double) -> int64 { return int64(d) }
+func fromFloat(_ f: float) -> int32 { return int32(f) }
+func unsigned(_ d: double) -> uint32 { return uint32(d) }
+func toInt8(_ d: double) -> int8 { return int8(d) }
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

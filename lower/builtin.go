@@ -204,6 +204,48 @@ func (c *fn) floatConvertBuiltin(verb string, from, to repr, a ir.Value) ([]ir.V
 			return fail()
 		}
 		return []ir.Value{c.b.F32.FCvtF64(f)}, true, nil
+
+	case "fptosi", "fptoui":
+		// Truncation toward zero, which is what the instruction does
+		// and what Swift's initializer says. Whether the value has a
+		// place in the destination at all was settled before the
+		// call: vil/gen emits the bounds check and the trap, so what
+		// arrives here is known to fit.
+		//
+		// Only the two register widths appear: a destination narrower
+		// than a word is held in an i32 by §2 of the VIR spec, so the
+		// verb names Int32 and the narrowing to Int8 or Int16 is the
+		// conversion above this one.
+		signed := verb == "fptosi"
+		switch f := a.(type) {
+		case ir.F64:
+			switch to.reg {
+			case ir.TypeI64:
+				if signed {
+					return []ir.Value{c.b.I64.SCvtF64(f)}, true, nil
+				}
+				return []ir.Value{c.b.I64.UCvtF64(f)}, true, nil
+			case ir.TypeI32:
+				if signed {
+					return []ir.Value{c.b.I32.SCvtF64(f)}, true, nil
+				}
+				return []ir.Value{c.b.I32.UCvtF64(f)}, true, nil
+			}
+		case ir.F32:
+			switch to.reg {
+			case ir.TypeI64:
+				if signed {
+					return []ir.Value{c.b.I64.SCvtF32(f)}, true, nil
+				}
+				return []ir.Value{c.b.I64.UCvtF32(f)}, true, nil
+			case ir.TypeI32:
+				if signed {
+					return []ir.Value{c.b.I32.SCvtF32(f)}, true, nil
+				}
+				return []ir.Value{c.b.I32.UCvtF32(f)}, true, nil
+			}
+		}
+		return fail()
 	}
 	return nil, false, nil
 }

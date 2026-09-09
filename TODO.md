@@ -37,7 +37,6 @@ already correct; only the feature is missing.
 | Swift | What happens now |
 | --- | --- |
 | `throw`, `do`/`catch` | `cannot lower a throw yet`, `cannot lower a do block yet` |
-| a float-to-integer conversion | `what Swift traps on is a bound in the source's own arithmetic` |
 | a global `let` or `var` | `cannot lower this expression yet`, where it is read |
 | top-level code | `top-level code is not supported` |
 
@@ -83,6 +82,14 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **A float-to-integer conversion was refused**, because the bound
+  Swift traps on was never computed. It is computed against the
+  source's own type now — a signed destination of n bits holds
+  [-2^(n-1), 2^(n-1)) and an unsigned one [0, 2^n), and every one of
+  those powers of two is exact in binary floating point, so the test
+  is the range rather than an approximation of it. A NaN compares
+  false against both bounds and traps, and `fptosi`/`fptoui` reached
+  the backend, which recognised the verbs but did not lower them.
 - **`??` was not lowered.** It is the conditional operator's shape
   asked of the case rather than of a bit: `switch_enum` says which
   case the optional holds, the some arm hands its payload to the

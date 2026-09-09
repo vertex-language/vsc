@@ -1,6 +1,8 @@
 package gen
 
 import (
+	"math"
+
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/types"
@@ -63,10 +65,7 @@ func (g *gen) convert(e *ast.CallExpr, to types.Type) (*vil.Value, bool) {
 		return nil, false
 	}
 	if isFloat(from) {
-		g.refuse(e, "a conversion from '"+typeName(from)+"' to '"+typeName(to)+
-			"': what Swift traps on is a bound in the source's own arithmetic, "+
-			"and this compiler does not compute one")
-		return nil, true
+		return g.intFromFloat(e, args[0].X, from, to, dst)
 	}
 	src, ok := intRangeOf(from)
 	if !ok {
@@ -277,4 +276,93 @@ func floatBits(t types.Type) int {
 		return 32
 	}
 	return 64
+}
+
+// intFromFloat lowers `Int32(d)`: truncation toward zero, trapping
+// where the value has no place in the destination.
+//
+// Swift's initializer traps rather than wrapping, so the bounds are
+// checked before the conversion. They are written as values of the
+// source's own type, which is what makes the test exact: a signed
+// destination of n bits holds [-2^(n-1), 2^(n-1)) and an unsigned one
+// holds [0, 2^n), and both powers of two are exactly representable in
+// binary floating point at every width here -- 2^63 and 2^64 included.
+// So `lo <= d && d < hi` is the range and not an approximation of it.
+//
+// The test is written as two refusals of the negation rather than as
+// one conjunction, which is also what catches NaN: a NaN compares
+// false against every bound, so it fails the first test and traps
+// there.
+func (g *gen) intFromFloat(e *ast.CallExpr, arg ast.Expr, from, to types.Type,
+	dst intRange) (*vil.Value, bool) {
+
+	v := g.rvalue(arg)
+	if v == nil {
+		return nil, true
+	}
+	raw := g.machine(v, from)
+	if raw == nil {
+		g.unsupported(e)
+		return nil, true
+	}
+	src := floatBuiltinName(from)
+	srcT := vil.Object(builtinNamed(src))
+
+	lo, hi := floatBounds(dst)
+	loV := g.blk.FloatLiteral(srcT, floatLiteralBits(from, lo))
+	hiV := g.blk.FloatLiteral(srcT, floatLiteralBits(from, hi))
+
+	for _, check := range []struct {
+		a, b *vil.Value
+		msg  string
+	}{
+		{loV, raw, "Float value cannot be converted to " + typeName(to) +
+			" because it is less than " + typeName(to) + ".min"},
+		{raw, hiV, "Float value cannot be converted to " + typeName(to) +
+			" because it is either infinite, NaN, or greater than " +
+			typeName(to) + ".max"},
+	} {
+		ok := g.compareRaw("<=", check.a, check.b, from)
+		if check.a == raw {
+			ok = g.compareRaw("<", check.a, check.b, from)
+		}
+		if ok == nil {
+			g.unsupported(e)
+			return nil, true
+		}
+		bad := g.blk.Builtin("xor_Int1", vil.Object(vil.BuiltinInt1),
+			ok, g.blk.IntegerLiteral(vil.Object(vil.BuiltinInt1), -1))
+		g.blk.CondFail(bad, check.msg)
+	}
+
+	// The value fits, so what is left is the instruction. A
+	// destination narrower than a word arrives in an i32 and is
+	// narrowed after, which is the same shape the integer path has.
+	verb := "fptosi"
+	if !dst.signed {
+		verb = "fptoui"
+	}
+	out := g.blk.Builtin(verb+"_"+src+"_"+dst.machine,
+		vil.Object(builtinNamed(dst.machine)), raw)
+	return g.blk.Struct(lowerType(to), out), true
+}
+
+// floatBounds is the half-open range a destination integer type
+// holds, as the two numbers a comparison against the source's own
+// type needs.
+func floatBounds(dst intRange) (lo, hi float64) {
+	if !dst.signed {
+		return 0, math.Ldexp(1, dst.bits)
+	}
+	return -math.Ldexp(1, dst.bits-1), math.Ldexp(1, dst.bits-1)
+}
+
+// floatLiteralBits is a number written as the bit pattern of the
+// source's own floating-point type, which is what a float literal
+// carries.
+func floatLiteralBits(from types.Type, v float64) int64 {
+	if b, ok := from.Underlying().(*types.Basic); ok && b.Kind() == types.Float {
+		return int64(math.Float32bits(float32(v)))
+	}
+	return int64(math.Float64bits(v))
 }
