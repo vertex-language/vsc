@@ -170,3 +170,85 @@ func main() -> int32 { return A.width() + B.width() }
 		t.Errorf("%s", d)
 	}
 }
+
+// TestMutatingMethodWritesThroughSelf: `self` was passed by value and
+// never @inout, so a mutating method had nothing to write to that the
+// caller would see -- the assignment was refused rather than lowered.
+// It is handed the receiver's storage now.
+func TestMutatingMethodWritesThroughSelf(t *testing.T) {
+	const src = `
+struct Counter {
+    var n: int32
+    mutating func bump() { n = n + 1 }
+    mutating func bumpTwice() { bump(); bump() }
+    mutating func setTo(_ k: int32) { self.n = k }
+    func read() -> int32 { return n }
+}
+
+func use() -> int32 {
+    var c = Counter(n: 0)
+    c.bumpTwice()
+    c.setTo(7)
+    return c.read()
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestNonMutatingWriteStillRefused is the other half: a method that
+// changes a value receiver without saying `mutating` writes to a copy
+// nobody sees, and is still refused.
+func TestNonMutatingWriteStillRefused(t *testing.T) {
+	const src = `
+struct S {
+    var x: int32
+    func bad(_ k: int32) { x = x * k }
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); !vsc.Errors(diags) {
+		t.Error("a non-mutating method wrote to its receiver")
+	}
+}
+
+// TestInoutReceiverLowers: an inout receiver is what `mutating` is on
+// a method written outside the braces, and it reaches the same
+// convention.
+func TestInoutReceiverLowers(t *testing.T) {
+	const src = `
+struct S { var x: int32 }
+func (s: inout S) scale(_ k: int32) { s.x = s.x * k }
+
+func use() -> int32 {
+    var v = S(x: 7)
+    v.scale(6)
+    return v.x
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestNonMutatingMethodAfterMutating: self is cleared per function.
+// Left set, an ordinary method lowered after a mutating one read its
+// properties through an address belonging to the other function.
+func TestNonMutatingMethodAfterMutating(t *testing.T) {
+	const src = `
+struct S {
+    var x: int32
+    mutating func bump() { x = x + 1 }
+    func read() -> int32 { return x }
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

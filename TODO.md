@@ -8,8 +8,8 @@ or has not reached.
 
 Ordered by how it fails rather than by size, because the compiler's
 own rule is that where it does not know, it says nothing and never
-invents an answer. The first two sections are where that rule is
-broken.
+invents an answer. The first two sections are where that rule would be
+broken, and both are empty.
 
 ## Silently wrong
 
@@ -17,31 +17,6 @@ Nothing known. This section is for programs that typecheck clean and
 then do something other than what the source says — the failure the
 compiler's own rule exists to prevent — so it is the one to keep
 empty.
-
-## Rejected with the wrong reason
-
-### `mutating` is not seen for an implicit-`self` assignment
-
-```swift
-struct vec2 {
-    var x: int32
-    mutating func scale(_ k: int32) { x = x * k }
-}
-```
-
-```
-error: cannot assign to 'x': the receiver is a value, and a method
-that changes one has to be declared 'mutating'
-```
-
-The method *is* declared `mutating`. Reading a bare `x` in the same
-body works, and writing `self.x` instead gets past the checker — so
-what is missed is the connection between an implicit-`self` assignment
-and the receiver's mutability, not the modifier itself.
-
-Worse than a refusal, because the message names the fix and the fix is
-already applied. Anyone who hits this re-reads their own correct code
-looking for the mistake.
 
 ## Accepted where Swift refuses
 
@@ -65,20 +40,7 @@ already correct; only the feature is missing.
 | `int32(x)` conversions | `cannot lower a constructor call yet` |
 | `a ?? b` | `cannot lower this expression yet` |
 | a global `let` or `var` | `cannot lower this expression yet`, where it is read |
-| `self.x = …` in a method | `cannot lower an assignment to this expression yet` |
 | top-level code | `top-level code is not supported` |
-
-Two are worth more than their line.
-
-**No `mutating` method can write to its receiver.** `selfConvention`
-in `vil/gen` returns `@unowned` or `@guaranteed` and never `@inout`,
-so `self` is passed by value and there is nothing to write through. An
-ordinary `inout` *parameter* works — `func scale(_ s: inout S, _ k:
-int32) { s.x = s.x * k }` runs — so the machinery exists and is not
-reaching `self`. Fixing it means passing `self` as `@inout` for a
-mutating method, which changes the method convention at every call
-site rather than in one place. It is also what blocks `inout`
-receivers, which typecheck and stop here.
 
 **Top-level code is refused, not run.** Swift runs statements at file
 scope; here they are reported rather than discarded, which is the
@@ -116,6 +78,15 @@ feature and the shape is worth remembering.
   the compiler in its own words.
 - **`mutating` was accepted on a class method**, where Swift rejects
   it outright.
+- **No `mutating` method could write to its receiver.** `self` crossed
+  the call by value and never `@inout`, so there was nothing to write
+  through: an assignment was refused rather than lowered, and an
+  implicit-`self` one was refused with a message saying to declare the
+  method `mutating`, which it already was. A mutating method on a
+  value type is handed the receiver's storage now — the caller passes
+  an address, the callee writes through it, and one mutating method
+  calling another passes on what it was given. It is also what
+  unblocked `inout` receivers.
 - **Two imported modules could not share a declaration name.** Every
   import was declared into one shared scope, and `Scope.Insert` keeps
   the first symbol of a name — so the second module's `width` existed

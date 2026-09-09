@@ -579,6 +579,18 @@ func (c *checker) isComputed(b *ast.PatternBinding) bool {
 
 // isStatic reports whether a declaration belongs to the type rather
 // than to an instance of it.
+// isMutating reports whether `mutating` was written. On a value type
+// it says the method may change its receiver, which decides how self
+// crosses the call.
+func (c *checker) isMutating(mods []*ast.Modifier) bool {
+	for _, m := range mods {
+		if m != nil && m.Name != nil && m.Name.Text(c.file) == "mutating" {
+			return true
+		}
+	}
+	return false
+}
+
 func isStatic(mods []*ast.Modifier) bool {
 	for _, m := range mods {
 		if m == nil {
@@ -813,6 +825,7 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			sig := c.buildFuncSig(m.Sig, typeScope)
 			*methods = append(*methods, &types.Method{
 				Name: name, Sig: sig, IsStatic: isStatic(m.Mods),
+				IsMutating: c.isMutating(m.Mods),
 			})
 			sym := NewFunc(name, sig, m.Name.Pos())
 			sym.SetDecl(m)
@@ -1104,6 +1117,9 @@ func (c *checker) resolveReceivers(decls []ast.Decl, scope *Scope) {
 		sig := c.buildFuncSig(fn.Sig, typeScope)
 		*methods = append(*methods, &types.Method{
 			Name: name, Sig: sig, IsStatic: isStatic(fn.Mods),
+			// An `inout` receiver is what `mutating` is on a method
+			// written inside the braces.
+			IsMutating: c.ownershipOf(fn.Recv.Mods) == types.InOut,
 		})
 		sym := NewFunc(name, sig, fn.Name.Pos())
 		sym.SetDecl(fn)

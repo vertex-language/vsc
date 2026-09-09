@@ -930,6 +930,13 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes = nil
 	g.loops, g.pending = nil, ""
+	// Cleared per function, not per gen: a mutating method sets it to
+	// the storage it was handed, and a non-mutating one lowered after
+	// it must not inherit that. Leaving it set read every property of
+	// an ordinary method through an address belonging to another
+	// function, which the verifier caught as a use that its
+	// definition does not dominate.
+	g.self = nil
 	g.push()
 	g.blk = f.Entry()
 
@@ -986,20 +993,39 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 		// is known, so there is nothing to carry and no parameter to
 		// declare.
 		t := lowerType(recv)
-		self := f.Param(t, selfConvention(t))
+		// A mutating method on a value type is handed the receiver's
+		// storage, not a copy of what is in it: @inout, and the body
+		// writes through the address. Without this a `mutating func`
+		// had nothing to write to that the caller would ever see, and
+		// the assignment was refused rather than lowered.
+		//
+		// A class receiver is a reference and is never inout: a
+		// method changes the object without changing the receiver,
+		// which is why Swift has no mutating method on a class.
+		mutates := g.mutatingSelf(d, recv)
+		var self *vil.Value
+		if mutates {
+			self = f.Param(t.Address(), vil.ParamInout)
+			g.self = &local{addr: self, typ: t}
+		} else {
+			self = f.Param(t, selfConvention(t))
+		}
 		f.Type().Convention = vil.Method
 		// A receiver method named its receiver, and that name means
 		// the same value `self` does. Binding it to the same
 		// parameter is the whole of what the name costs: it is not a
 		// second thing to pass.
 		//
-		// By value, because selfConvention passes self by value --
-		// which is also why a mutating receiver does not lower yet.
-		// Writing through one needs self passed as @inout, and that
-		// is a change to the method convention rather than to this
-		// binding. See TODO.md.
+		// An inout receiver was handed storage, so the name is bound
+		// to that address and every use goes through it -- which is
+		// what makes `s.x = …` write what the caller sees. A
+		// borrowing or consuming one is bound to the value.
 		if sym := receiverSymbol(d, g.info, g.file); sym != nil {
-			g.locals[sym] = &local{value: self, typ: t}
+			if mutates {
+				g.locals[sym] = &local{addr: self, typ: t}
+			} else {
+				g.locals[sym] = &local{value: self, typ: t}
+			}
 			g.blk.DebugValue(self, d.Recv.Name.Text(g.file), "let",
 				"argno "+itoa(len(sig.Params)+1))
 		}
@@ -1049,6 +1075,31 @@ func isVoid(t types.Type) bool {
 
 // paramSymbols is the symbol each parameter binds, so that a use of
 // the name inside the body finds the value.
+// mutatingSelf reports whether this declaration's receiver is handed
+// over as storage rather than as a value.
+//
+// `mutating` says so on a method written inside the braces, and an
+// `inout` receiver says so on one written outside them. Neither means
+// anything on a class, where the receiver is a reference.
+func (g *gen) mutatingSelf(d *ast.FuncDecl, recv types.Type) bool {
+	if recv == nil || isClass(recv) {
+		return false
+	}
+	if d.Recv != nil {
+		for _, m := range d.Recv.Mods {
+			if m != nil && m.Kind == token.INOUT {
+				return true
+			}
+		}
+	}
+	for _, m := range d.Mods {
+		if m != nil && m.Name != nil && g.text(m.Name) == "mutating" {
+			return true
+		}
+	}
+	return false
+}
+
 // receiverSymbol is the symbol a receiver method's receiver name was
 // declared under, or nil where the function has no receiver clause.
 func receiverSymbol(d *ast.FuncDecl, info *analyzer.Info, f *token.File) analyzer.Symbol {

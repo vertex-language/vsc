@@ -286,15 +286,14 @@ program of several modules is one command.
 | Primitive spellings | 2.1 | complete |
 | Package declaration | 3.1 | complete |
 | Import declarations | 3.2 | complete |
-| Receiver methods | 3.3 | `borrowing` and `consuming` |
-| Execution modifiers | 3.4 | parsed and refused, by design |
+| Receiver methods | 3.3 | complete |
+| Execution modifiers | 3.4 | reserved: parsed, then refused |
 | Argument labels | 4.1 | complete |
 | Modules and packages | 5 | complete |
 
-An `inout` receiver (§3.3) typechecks and is refused at lowering. It
-is blocked by a limitation that is not the receiver's: `self` is
-passed by value and never `@inout`, so no `mutating` method can write
-to its receiver, receiver clause or not. See `TODO.md`.
+Everything specified here is implemented, except that `kernel` and
+`graph` (§3.4) are reserved by design rather than unfinished: they
+parse and typecheck, and no backend generates code for either.
 
 ## 7. Open questions
 

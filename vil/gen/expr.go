@@ -429,12 +429,24 @@ func (g *gen) implicitSelf(e *ast.IdentExpr, sym analyzer.Symbol) (*vil.Value, b
 	if !ok {
 		return nil, false
 	}
+	t := lowerType(field.Type)
+	member := memberName(g.recv, name)
+	// Where the receiver is storage rather than a value -- an
+	// initializer's, or a mutating method's inout self -- a property
+	// is read through that address. Extracting from the address as
+	// though it were the value is what made `x * k` in a mutating
+	// method an operand of the wrong type.
+	if g.self != nil && g.self.addr != nil && !isClass(g.recv) {
+		addr := g.blk.StructElementAddr(g.self.addr, member, t.Address())
+		access := g.blk.BeginAccess(addr, "read", "unknown")
+		v := g.blk.Load(access, loadQualifier(t))
+		g.blk.EndAccess(access)
+		return g.loaded(v, t), true
+	}
 	self := g.selfValue()
 	if self == nil {
 		return nil, false
 	}
-	t := lowerType(field.Type)
-	member := memberName(g.recv, name)
 	if isClass(g.recv) {
 		addr := g.blk.RefElementAddr(self, member, t)
 		access := g.blk.BeginAccess(addr, "read", "dynamic")
@@ -601,7 +613,15 @@ func (g *gen) call(e *ast.CallExpr) *vil.Value {
 	// methods: `doubled()` there means `self.doubled()`, and its symbol
 	// is mangled inside the type rather than beside it.
 	if ref, ok := g.implicitMethod(id); ok {
-		return g.methodCall(e, ref, func() *vil.Value { return g.selfValue() })
+		return g.methodCall(e, ref, func() *vil.Value {
+			// One mutating method calling another on the same
+			// receiver passes the storage it was given, not a copy of
+			// it.
+			if mutatingRef(ref) && g.self != nil && g.self.addr != nil {
+				return g.self.addr
+			}
+			return g.selfValue()
+		})
 	}
 	// A type's name in expression position is a constructor call:
 	// `P(x: 1)` names a type rather than a function.
@@ -1049,6 +1069,12 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *vil.Value {
 		return g.existentialCall(e, ref, mem, ex)
 	}
 	return g.methodCall(e, ref, func() *vil.Value {
+		// A mutating method is handed where the receiver lives, so
+		// that what it writes is what the caller sees. Passing a
+		// value here would hand over a copy and lose every change.
+		if mutatingRef(ref) {
+			return g.lvalue(mem.X)
+		}
 		// The receiver is borrowed rather than copied: self is
 		// @guaranteed, which says the caller keeps it alive across the
 		// call and the callee does not consume it. rvalue would hand
@@ -1284,14 +1310,33 @@ func (g *gen) declareMethod(f *vil.Func, ref *analyzer.MethodRef) {
 		f.Type().Params = append(f.Type().Params,
 			vil.Param{Type: t, Convention: conv})
 	}
-	self := lowerType(ref.Recv)
-	f.Type().Params = append(f.Type().Params,
-		vil.Param{Type: self, Convention: selfConvention(self)})
+	f.Type().Params = append(f.Type().Params, selfParam(ref))
 	f.Type().Convention = vil.Method
 	if sig.Results != nil && !isVoid(sig.Results) {
 		t := lowerType(sig.Results)
 		f.SetResult(t, resultConvention(t))
 	}
+}
+
+// selfParam is how the receiver appears in a method's parameter list.
+//
+// A mutating method on a value type is handed the storage rather than
+// a copy of what is in it, so its receiver is an address passed
+// @inout. Everything else is a value: a struct the callee only reads,
+// or a class reference the caller keeps alive across the call.
+func selfParam(ref *analyzer.MethodRef) vil.Param {
+	self := lowerType(ref.Recv)
+	if mutatingRef(ref) {
+		return vil.Param{Type: self.Address(), Convention: vil.ParamInout}
+	}
+	return vil.Param{Type: self, Convention: selfConvention(self)}
+}
+
+// mutatingRef reports whether a call has to hand over the receiver's
+// storage. A class is never one: the receiver is a reference, and a
+// method changes the object without changing the receiver.
+func mutatingRef(ref *analyzer.MethodRef) bool {
+	return ref != nil && ref.Method != nil && ref.Method.IsMutating && !isClass(ref.Recv)
 }
 
 // selfConvention is how a receiver crosses the call. A struct is a value

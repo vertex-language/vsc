@@ -96,10 +96,9 @@ The ownership word is what Swift spells on the method: `borrowing` an
 ordinary method, `consuming` a `consuming func`, `inout` a `mutating
 func`. A class receiver is a reference, so a `borrowing` one still
 assigns to a property, and `inout` there is refused — Swift has no
-`mutating` method on a class. The body reaches members by the
-receiver's name or by implicit `self`. `inout` receivers typecheck but
-do not build yet: no `mutating` method can write to its receiver,
-receiver clause or not — see `TODO.md`.
+`mutating` method on a class. An `inout` receiver is handed
+the receiver's storage, so what it writes is what the caller sees. The
+body reaches members by the receiver's name or by implicit `self`.
 
 ## Status
 

@@ -281,6 +281,17 @@ type Method struct {
 	// which of the two a name is decides where it may be reached
 	// from -- and the symbol says so as well, ending in Z.
 	IsStatic bool
+
+	// IsMutating marks a method that may change its receiver, which
+	// is what `mutating` says on a value type and what an `inout`
+	// receiver says on a receiver method. It decides how self crosses
+	// the call: a mutating method is handed the storage rather than a
+	// copy of what is in it, so a caller passes an address and the
+	// callee writes through it.
+	//
+	// It is meaningless on a class, where the receiver is a reference
+	// and a method changes the object without changing the receiver.
+	IsMutating bool
 }
 
 // Requirement is what a protocol promises: a method, with a
