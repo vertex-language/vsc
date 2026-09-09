@@ -123,11 +123,7 @@ func (g *gen) ifLet(s *ast.IfStmt) bool {
 			", which owns what it holds")
 		return true
 	}
-	if !oneRegister(o.Wrapped) {
-		g.refuse(b, "a binding condition on an optional of "+o.Wrapped.String()+
-			", whose payload is more than one register")
-		return true
-	}
+
 
 	v := g.rvalue(subject)
 	if v == nil {
@@ -244,11 +240,7 @@ func (g *gen) nilCoalescing(e *ast.BinaryExpr) *vil.Value {
 			", which owns what it holds")
 		return nil
 	}
-	if !oneRegister(o.Wrapped) {
-		g.refuse(e, "'??' on an optional of "+o.Wrapped.String()+
-			", whose payload is more than one register")
-		return nil
-	}
+
 
 	v := g.rvalue(e.X)
 	if v == nil {
@@ -308,11 +300,7 @@ func (g *gen) forceUnwrap(e *ast.ForceExpr) *vil.Value {
 			", which owns what it holds")
 		return nil
 	}
-	if !oneRegister(o.Wrapped) {
-		g.refuse(e, "'!' on an optional of "+o.Wrapped.String()+
-			", whose payload is more than one register")
-		return nil
-	}
+
 
 	v := g.rvalue(e.X)
 	if v == nil {
@@ -423,11 +411,6 @@ func (g *gen) optionalChain(e *ast.MemberExpr, opt *ast.OptionalExpr) *vil.Value
 	if !wrapped.Trivial() {
 		g.refuse(e, "a chain through an optional of "+o.Wrapped.String()+
 			", which owns what it holds")
-		return nil
-	}
-	if !oneRegister(o.Wrapped) {
-		g.refuse(e, "a chain through an optional of "+o.Wrapped.String()+
-			", whose payload is more than one register")
 		return nil
 	}
 	field, isStored := storedField(o.Wrapped, g.text(e.Name))

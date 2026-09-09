@@ -1018,3 +1018,37 @@ func forced(_ r: Reading?) -> int32 { return (r?.value)! }
 		}
 	}
 }
+
+// TestWideOptionalPayloads: switching over an optional passed the
+// some arm the payload's first register, so everything about
+// optionals was limited to payloads of one -- a struct of two fields
+// could not be chained through, bound, unwrapped or defaulted.
+func TestWideOptionalPayloads(t *testing.T) {
+	const src = `
+struct Point { var x: int32; var y: int32 }
+struct Wide { var a: int32; var b: int32; var c: int32 }
+
+func chained(_ p: Point?) -> int32 { return p?.x ?? -1 }
+func forced(_ p: Point?) -> int32 { return (p!).y }
+
+func bound(_ p: Point?) -> int32 {
+    if let q = p { return q.x + q.y }
+    return -2
+}
+
+func defaulted(_ p: Point?, _ f: Point) -> int32 {
+    let r = p ?? f
+    return r.x + r.y
+}
+
+func third(_ w: Wide?) -> int32 {
+    if let v = w { return v.c }
+    return 0
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

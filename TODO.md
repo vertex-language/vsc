@@ -71,7 +71,6 @@ already correct; only the feature is missing.
 | a static computed property's setter | not emitted; static storage first |
 | `defer` | `cannot lower a defer` |
 | a closure that captures | `cannot lower a closure that captures 'k'` |
-| a switch over an optional whose payload is more than a register | `whose payload is more than one register` |
 | a failable initializer | `cannot lower a failable initializer` |
 | a user-declared operator | `cannot lower this expression yet` |
 | a String `rawValue` | `whose cases are not all numbers` |
@@ -79,20 +78,6 @@ already correct; only the feature is missing.
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
 | a computed property of a class with a subclass | `reached through the table the instance carries` |
-
-**One layout gap is behind most of what is left.** An optional's image
-is its payload beside a tag byte, and `optionalImage` in `lower` knows
-that shape and no other — so every switch over an optional needs the
-payload in one register: a chain through a two-field struct, an `if
-let` on one, `??` and `!` over one. It is not the block argument that
-is the limit; `lower` already takes an argument of several registers,
-"the way a struct parameter arrives as its words". Checked by removing
-the guard and reading what the backend said: `an optional whose
-payload is more than one register: switch_enum`.
-
-The same shape of gap stops a tuple pattern and a payload enum wider
-than a word, and the three are one piece of work: a layout for
-aggregates that do not fit a register.
 
 **A tuple pattern needs the subject in a register.** Its elements are
 taken out of the subject, and a tuple of more than one word is memory
@@ -145,6 +130,15 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **An optional's payload could only be one register.** Switching over
+  one passed the some arm the payload's *first* register and refused
+  the rest, so everything about optionals was limited to payloads of
+  one: a struct of two fields could not be chained through, bound,
+  unwrapped or defaulted. The declaring side was never the limit —
+  `lower` already gives a block argument one parameter per leaf, "the
+  way a struct parameter arrives as its words" — it was the edge,
+  which passed `parts[0]` where the payload is everything before the
+  tag. Four guards in `gen` cited a limit that had stopped being one.
 - **An optional chain was not lowered.** Its type was fixed earlier;
   the lowering is a switch with the member read inside the some arm,
   which is what makes a chain a chain — the read only happens where

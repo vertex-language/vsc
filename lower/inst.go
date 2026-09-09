@@ -1896,19 +1896,18 @@ func (c *fn) switchOptional(in *vil.Inst, o *types.Optional) error {
 	if len(parts) < 2 {
 		return c.fail(ErrUnsupported, in.Op(), "an optional with no tag to switch on")
 	}
-	// The payload is everything before the tag. A block argument is
-	// one register, so only a payload of one is passed on -- gen
-	// refuses the rest before it gets here.
-	if len(parts) != 2 {
-		return c.fail(ErrUnsupported, in.Op(),
-			"an optional whose payload is more than one register")
-	}
-	tag, ok := c.toWord(parts[1], 8)
+	// The payload is everything before the tag, which is last. A
+	// block argument may be several registers -- the arm declares one
+	// parameter per leaf, the way a struct parameter arrives as its
+	// words -- so the whole payload is passed on rather than its
+	// first register.
+	payload := parts[:len(parts)-1]
+	tag, ok := c.toWord(parts[len(parts)-1], 8)
 	if !ok {
 		return c.fail(ErrType, in.Op(), "a tag this cannot read")
 	}
 	isSome := c.b.I64.Eq(tag, c.b.I64.Const(0))
-	c.b.BrIf(isSome, some.To(parts[0]), none.To())
+	c.b.BrIf(isSome, some.To(payload...), none.To())
 	return nil
 }
 
