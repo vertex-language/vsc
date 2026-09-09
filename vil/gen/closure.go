@@ -277,7 +277,7 @@ func (g *gen) captured(e ast.Node) (string, bool) {
 			// so it is not caught above and has to be asked for
 			// separately.
 			if g.recv != nil {
-				if _, ok := storedField(g.recv, g.text(x.Name)); ok {
+				if _, _, ok := storedField(g.recv, g.text(x.Name)); ok {
 					name, found = g.text(x.Name), true
 				}
 			}

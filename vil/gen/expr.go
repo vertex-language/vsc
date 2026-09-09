@@ -442,12 +442,12 @@ func (g *gen) implicitSelf(e *ast.IdentExpr, sym analyzer.Symbol) (*vil.Value, b
 		return nil, false
 	}
 	name := g.text(e.Name)
-	field, ok := storedField(g.recv, name)
+	owner, field, ok := storedField(g.recv, name)
 	if !ok {
 		return nil, false
 	}
 	t := lowerType(field.Type)
-	member := memberName(g.recv, name)
+	member := memberName(owner, name)
 	// Where the receiver is storage rather than a value -- an
 	// initializer's, or a mutating method's inout self -- a property
 	// is read through that address. Extracting from the address as
@@ -474,26 +474,21 @@ func (g *gen) implicitSelf(e *ast.IdentExpr, sym analyzer.Symbol) (*vil.Value, b
 	return g.blk.StructExtract(self, member, t), true
 }
 
-// storedField is the property of a type with this name.
-func storedField(t types.Type, name string) (*types.Field, bool) {
-	if t == nil {
-		return nil, false
-	}
-	var fields []*types.Field
-	switch b := t.Underlying().(type) {
-	case *types.Struct:
-		fields = b.Fields
-	case *types.Class:
-		fields = b.Fields
-	default:
-		return nil, false
-	}
-	for _, f := range fields {
-		if f != nil && f.Name == name {
-			return f, true
+// storedField is the property of a type with this name, and the type
+// that declares it -- which is the type itself for a struct, and for
+// a class is wherever up the chain the property was written.
+//
+// An instance of a subclass holds its superclass's stored properties,
+// so a name that is one of them is a property of the instance: `n`
+// and `self.n` inside a subclass both mean the inherited one, and
+// stopping at the class's own fields refused them.
+func storedField(t types.Type, name string) (types.Type, *types.Field, bool) {
+	for _, held := range storedChain(t) {
+		if held.field.Name == name {
+			return held.owner, held.field, true
 		}
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 // borrow opens a borrow that the enclosing scope closes, which is how
@@ -926,44 +921,111 @@ func (g *gen) makeClass(e *ast.CallExpr, tn *analyzer.TypeNameSymbol, cl *types.
 	// Every stored property has to have somewhere to get its value
 	// from, and the only source without a declared initializer is the
 	// property's own initial value.
-	values := g.classDefaults(tn)
-	for _, f := range cl.Fields {
-		if f == nil {
-			continue
-		}
-		if _, ok := values[f.Name]; !ok {
+	//
+	// Every property the instance holds, which is more than the class
+	// declares: an instance of a subclass holds its superclass's
+	// stored properties too, and their initial values live on the
+	// superclass's declaration. Storing only the class's own left the
+	// inherited ones as whatever the allocation gave them, and the
+	// program read that back as the value -- `B()` where A declared
+	// `var n = 1` answered zero.
+	held := storedChain(t)
+	for _, held := range held {
+		if _, ok := g.classDefaults(held.owner)[held.field.Name]; !ok {
 			g.errorAt(e, "'"+tn.Name()+"' cannot be made without arguments: '"+
-				f.Name+"' has no initial value and there is no initializer to give it one")
+				held.field.Name+"' has no initial value and there is no "+
+				"initializer to give it one")
 			return nil
 		}
 	}
 
 	obj := g.blk.AllocRef(lowerType(t))
-	for _, f := range cl.Fields {
-		if f == nil {
-			continue
-		}
-		v := g.rvalue(values[f.Name])
+	// In the order the fields are laid out, which is the superclass's
+	// first -- the same order SILGen's initializers run in, because a
+	// subclass's initializer calls up before it stores its own.
+	for _, held := range held {
+		v := g.rvalue(g.classDefaults(held.owner)[held.field.Name])
 		if v == nil {
 			return nil
 		}
-		ft := lowerType(f.Type)
-		addr := g.blk.RefElementAddr(obj, memberName(t, f.Name), ft)
+		ft := lowerType(held.field.Type)
+		// Named for the class that declares it rather than the one
+		// being made, which is what SIL writes: `#A.n`, not `#B.n`.
+		addr := g.blk.RefElementAddr(obj, memberName(held.owner, held.field.Name), ft)
 		g.blk.Store(v, addr, storeQualifier(ft))
 	}
 	g.destroyLater(obj)
 	return obj
 }
 
-// classDefaults is the initial value each stored property was
-// declared with, by name.
+// A heldField is one stored property an instance holds, together with
+// the class that declares it -- which is what a member reference
+// names, and where the property's initial value is written.
+type heldField struct {
+	owner types.Type
+	field *types.Field
+}
+
+// storedChain is every stored property an instance of t holds, the
+// superclass's first, each paired with the class it was declared in.
+//
+// types.ClassFields answers the same list and in the same order; what
+// it cannot say is which class each field came from, because it
+// flattens the chain. The order is the layout's, and the layout puts
+// the superclass first so that a subclass is usable where the
+// superclass is.
+func storedChain(t types.Type) []heldField {
+	if t == nil {
+		return nil
+	}
+	// A struct has no chain: what it declares is what it holds.
+	if st, ok := t.Underlying().(*types.Struct); ok {
+		var out []heldField
+		for _, f := range st.Fields {
+			if f != nil {
+				out = append(out, heldField{owner: t, field: f})
+			}
+		}
+		return out
+	}
+	var chain []types.Type
+	seen := map[*types.Class]bool{}
+	for cur := t; cur != nil; {
+		cl, ok := cur.Underlying().(*types.Class)
+		if !ok || seen[cl] {
+			break
+		}
+		seen[cl] = true
+		chain = append([]types.Type{cur}, chain...)
+		cur = cl.Superclass
+	}
+	var out []heldField
+	for _, owner := range chain {
+		cl, _ := owner.Underlying().(*types.Class)
+		if cl == nil {
+			continue
+		}
+		for _, f := range cl.Fields {
+			if f != nil {
+				out = append(out, heldField{owner: owner, field: f})
+			}
+		}
+	}
+	return out
+}
+
+// classDefaults is the initial value each of a class's own stored
+// properties was declared with, by name.
 //
 // It goes back to the syntax because that is where a default lives:
 // types/ holds no expressions on purpose, so the type can say that a
-// property has a value but not what it is.
-func (g *gen) classDefaults(tn *analyzer.TypeNameSymbol) map[string]ast.Expr {
+// property has a value but not what it is. Which is also why this
+// takes a type rather than a symbol: reaching the syntax means
+// finding the declaration the type was written as, and a superclass
+// arrives as a type with no symbol attached.
+func (g *gen) classDefaults(t types.Type) map[string]ast.Expr {
 	out := map[string]ast.Expr{}
-	body := classBody(tn.Decl())
+	body := classBody(g.classDecl(t))
 	if body == nil {
 		return out
 	}
@@ -986,6 +1048,28 @@ func (g *gen) classDefaults(tn *analyzer.TypeNameSymbol) map[string]ast.Expr {
 
 // classBody is the member block of whichever declaration declares a
 // class.
+// classDecl is the declaration a class type was written as.
+//
+// gen holds no map from a type to its syntax, so this goes through
+// the symbols the checker defined: one of them names this type, and
+// the declaration hangs off it.
+func (g *gen) classDecl(t types.Type) ast.Decl {
+	if t == nil {
+		return nil
+	}
+	want := t.Underlying()
+	for _, sym := range g.info.Defs {
+		tn, ok := sym.(*analyzer.TypeNameSymbol)
+		if !ok || tn.Type() == nil {
+			continue
+		}
+		if tn.Type().Underlying() == want {
+			return tn.Decl()
+		}
+	}
+	return nil
+}
+
 func classBody(d ast.Decl) *ast.MemberBlock {
 	switch n := d.(type) {
 	case *ast.ClassDecl:

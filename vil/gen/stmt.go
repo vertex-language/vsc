@@ -368,7 +368,7 @@ func (g *gen) implicitSelfAddr(e *ast.IdentExpr) *vil.Value {
 		return nil
 	}
 	name := g.text(e.Name)
-	field, ok := storedField(g.recv, name)
+	owner, field, ok := storedField(g.recv, name)
 	if !ok {
 		return nil
 	}
@@ -378,7 +378,7 @@ func (g *gen) implicitSelfAddr(e *ast.IdentExpr) *vil.Value {
 	// ordinary method on a value type.
 	if g.self != nil && g.self.addr != nil {
 		return g.blk.StructElementAddr(g.self.addr,
-			memberName(g.recv, name), lowerType(field.Type).Address())
+			memberName(owner, name), lowerType(field.Type).Address())
 	}
 	self := g.selfValue()
 	if self == nil {
@@ -389,7 +389,7 @@ func (g *gen) implicitSelfAddr(e *ast.IdentExpr) *vil.Value {
 			"method that changes one has to be declared 'mutating'")
 		return nil
 	}
-	return g.blk.RefElementAddr(self, memberName(g.recv, name), lowerType(field.Type))
+	return g.blk.RefElementAddr(self, memberName(owner, name), lowerType(field.Type))
 }
 
 // text is a node's spelling.

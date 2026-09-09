@@ -355,7 +355,7 @@ func (g *gen) optionalChain(e *ast.MemberExpr, opt *ast.OptionalExpr) *vil.Value
 			", which owns what it holds")
 		return nil
 	}
-	field, isStored := storedField(o.Wrapped, g.text(e.Name))
+	owner, field, isStored := storedField(o.Wrapped, g.text(e.Name))
 	if !isStored {
 		// A computed property through a chain is a call that only
 		// happens on one arm, which is more than this arranges.
@@ -378,7 +378,7 @@ func (g *gen) optionalChain(e *ast.MemberExpr, opt *ast.OptionalExpr) *vil.Value
 		vil.Case{Member: optionalNone, Dest: none})
 
 	g.blk = some
-	member := memberName(o.Wrapped, field.Name)
+	member := memberName(owner, field.Name)
 	ft := lowerType(field.Type)
 	var read *vil.Value
 	if isClass(o.Wrapped) {

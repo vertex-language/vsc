@@ -411,7 +411,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 
 	case *ast.IdentExpr:
 		name := e.Name.Text(c.file)
-		sym := scope.Lookup(name)
+		sym := c.lookupValue(scope, name)
 		if sym == nil {
 			// A builtin type's name: it is in no scope, and in
 			// expression position it denotes its own metatype.
@@ -471,7 +471,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			var lhs types.Type
 			if id, ok := e.X.(*ast.IdentExpr); ok {
 				name := id.Name.Text(c.file)
-				sym := scope.Lookup(name)
+				sym := c.lookupValue(scope, name)
 				if sym != nil {
 					c.info.Uses[id.Name] = sym
 					lhs = sym.Type()
@@ -1329,6 +1329,47 @@ func (c *checker) moduleMemberValue(e *ast.MemberExpr, scope *Scope) (types.Type
 func isUntypedNil(t types.Type) bool {
 	b, ok := t.(*types.Basic)
 	return ok && b.Kind() == types.UntypedNil
+}
+
+// lookupValue is scope.Lookup with the one fallback a class body
+// needs: an unqualified name there may be a stored property the class
+// inherits, and that property is in no scope the body is inside.
+//
+// A type's own members are declared into its type scope, which the
+// scope chain of a body inside it reaches. A superclass's members are
+// declared into the superclass's type scope, and nothing links the
+// two, because inheritance is not lexical -- a superclass may be
+// declared anywhere, or in another file. So the walk up the chain
+// happens here, which is the same walk `self.n` already takes through
+// lookupMember, and `n` and `self.n` mean the same thing in Swift.
+func (c *checker) lookupValue(scope *Scope, name string) Symbol {
+	if scope != nil {
+		if sym := scope.Lookup(name); sym != nil {
+			return sym
+		}
+	}
+	cl, ok := c.currType.(*types.Class)
+	if !ok {
+		return nil
+	}
+	seen := map[*types.Class]bool{cl: true}
+	for super := cl.Superclass; super != nil; {
+		next, ok := super.(*types.Class)
+		if !ok {
+			next, _ = super.Underlying().(*types.Class)
+		}
+		if next == nil || seen[next] {
+			return nil
+		}
+		seen[next] = true
+		if s := c.typeScopes[next.Name]; s != nil {
+			if sym := s.LookupLocal(name); sym != nil {
+				return sym
+			}
+		}
+		super = next.Superclass
+	}
+	return nil
 }
 
 // unwrappedContext is the type an operand is checked against where an
