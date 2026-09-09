@@ -42,6 +42,7 @@ already correct; only the feature is missing.
 | binding an optional of a wide payload | `whose payload is more than one register` |
 | top-level code | `top-level code is not supported` |
 | a static computed property's setter | not emitted; static storage first |
+| a `switch` with a `where` clause | `cannot lower a switch with a where clause` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
 | a computed property of a class with a subclass | `reached through the table the instance carries` |
@@ -88,6 +89,17 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **Every range pattern was an error.** `case 1...5` compared the
+  range against the subject, and a `ClosedRange<Int>` is not an `Int`
+  — so it failed at every subject type, not only where the literals
+  needed adopting. What agrees with the subject is the range's
+  *element*: Swift matches through `~=` over a RangeExpression, whose
+  Bound is the subject's type. The bounds take the element's context
+  now, so they do not default to Int, and lowering is two comparisons
+  rather than one equality — closed or half-open as the operator says.
+- **A `case let` binding was not in scope in its own `where` clause.**
+  The condition was checked before the pattern declared anything, so
+  `case let k where k < 0` reported the name it was about to declare.
 - **A computed property could not be written.** Assigning to one took
   the address of storage it does not have, naming a field the type
   lacks — which the backend reported about a `struct_element_addr`,

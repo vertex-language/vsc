@@ -587,3 +587,52 @@ func use() -> int32 {
 		}
 	}
 }
+
+// TestRangePattern: a range matches everything between its bounds, so
+// what agrees with the subject is the element and not the range.
+// Comparing the range itself made every range pattern an error, at
+// every subject type -- and the bounds defaulted to Int rather than
+// taking the subject's width.
+func TestRangePattern(t *testing.T) {
+	const src = `
+func grade(_ n: int32) -> int32 {
+    switch n {
+    case 0..<10: return 1
+    case 10...20: return 2
+    default: return 9
+    }
+}
+
+func wide(_ n: int) -> int {
+    switch n {
+    case 1...5: return 2
+    default: return 4
+    }
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
+// TestCaseLetWhere: a binding in a case pattern is what the where
+// clause is written about, so it has to be declared before the
+// condition is read. It was read first.
+func TestCaseLetWhere(t *testing.T) {
+	const src = `
+func classify(_ n: int32) -> int32 {
+    switch n {
+    case let k where k < 0: return -k
+    case let k where k > 100: return 100
+    default: return 0
+    }
+}
+`
+	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

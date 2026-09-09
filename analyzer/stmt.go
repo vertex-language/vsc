@@ -156,11 +156,16 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 				}
 
 				for _, item := range cs.Items {
-					if item.Where != nil {
-						c.checkExpr(item.Where.Cond, types.Typ[types.Bool], caseScope)
-					}
+					// The pattern first: its bindings are what the
+					// where clause is written about. `case let k
+					// where k < 0` read the condition before k
+					// existed, and reported the name it had just been
+					// about to declare.
 					if item.Pat != nil {
 						c.declareCasePattern(item.Pat, subjectType, caseScope)
+					}
+					if item.Where != nil {
+						c.checkExpr(item.Where.Cond, types.Typ[types.Bool], caseScope)
 					}
 					if isEnum && item.Where == nil {
 						c.collectMatchedCases(item.Pat, matchedCases, &hasDefault)
@@ -204,7 +209,21 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 		if p.X == nil {
 			return
 		}
+		// A range pattern matches everything between its bounds, so
+		// its bounds are what the subject's type belongs to: `case
+		// 1...5` over an Int32 is a range of Int32. The bounds are
+		// checked in the subject's own type, which is what stops the
+		// literals defaulting to Int and answering a range of the
+		// wrong element.
+		//
+		// Swift spells the match `~=` over a RangeExpression, whose
+		// Bound is the subject's type -- so what has to agree is the
+		// element, and comparing the range itself made every range
+		// pattern an error, at every subject type.
 		t := c.checkExpr(p.X, subjectType, scope)
+		if rng, isRange := t.(*types.Range); isRange {
+			t = rng.Element
+		}
 		if subjectType != nil && t != nil &&
 			!types.Identical(t, subjectType) &&
 			!isInvalid(t) && !isInvalid(subjectType) {

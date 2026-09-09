@@ -534,6 +534,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if expected != nil && sharesOperandType(opName) {
 			operandCtx = expected
 		}
+		// A range's operands are its bounds, so what they take from
+		// the context is the element rather than the range. In a
+		// pattern the context is the subject's own type -- `case
+		// 1...5` over an Int32 matches Int32s -- and in an ordinary
+		// expression it is the range being asked for, whose element
+		// is the same answer one level in.
+		if opName == "..." || opName == "..<" {
+			operandCtx = rangeElement(expected)
+		}
 		lhs := c.checkExpr(e.X, operandCtx, scope)
 		rhs := c.checkExpr(e.Y, operandCtx, scope)
 		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs, scope)
@@ -1138,6 +1147,15 @@ func (c *checker) foldSign(e *ast.PrefixExpr, op string) {
 // sharesOperandType reports whether an operator's result is the same
 // type as the values it was applied to, which is what makes it
 // transparent to an annotation.
+// rangeElement is the type a range's bounds are asked for, given the
+// type the range itself was asked for.
+func rangeElement(expected types.Type) types.Type {
+	if r, ok := expected.(*types.Range); ok {
+		return r.Element
+	}
+	return expected
+}
+
 func sharesOperandType(op string) bool {
 	switch op {
 	case "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>":

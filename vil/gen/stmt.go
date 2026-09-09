@@ -853,6 +853,14 @@ func (g *gen) switchOnValue(s *ast.SwitchStmt, subject *vil.Value, t types.Type,
 				g.refuse(item.Pat, "this pattern in a switch")
 				return false
 			}
+			// `case 1...5` matches everything between its bounds, so
+			// it is two comparisons rather than one equality.
+			if eq := g.rangeMatch(pat, subject, t); eq != nil {
+				next := g.fn.Block()
+				g.blk.CondBr(eq, bodies[i], nil, next, nil)
+				g.blk = next
+				continue
+			}
 			n := len(g.diags)
 			want := g.rvalue(pat.X)
 			if want == nil {
@@ -874,6 +882,42 @@ func (g *gen) switchOnValue(s *ast.SwitchStmt, subject *vil.Value, t types.Type,
 	}
 	g.blk.Br(fallback)
 	return true
+}
+
+// rangeMatch is the test a range pattern makes: the subject is at
+// least the low bound, and at most the high one -- or below it, for a
+// half-open range. Nil where the pattern is not a range, which leaves
+// the equality the caller would have made.
+//
+// The bounds are values of the subject's own type: the analyzer gives
+// a range's operands the element's context, so `case 1...5` over an
+// Int32 compares Int32s.
+func (g *gen) rangeMatch(pat *ast.ExprPattern, subject *vil.Value, t types.Type) *vil.Value {
+	bin, ok := g.fold(pat.X).(*ast.BinaryExpr)
+	if !ok || bin.Op == nil {
+		return nil
+	}
+	upper := ""
+	switch g.text(bin.Op) {
+	case "...":
+		upper = "<="
+	case "..<":
+		upper = "<"
+	default:
+		return nil
+	}
+	lo, hi := g.rvalue(bin.X), g.rvalue(bin.Y)
+	if lo == nil || hi == nil {
+		return nil
+	}
+	atLeast := g.compare("<=", lo, subject, t)
+	atMost := g.compare(upper, subject, hi, t)
+	if atLeast == nil || atMost == nil {
+		g.refuse(pat, "a range pattern over "+t.String())
+		return nil
+	}
+	// Both, without a branch: neither side has an effect to skip.
+	return g.blk.Builtin("and_Int1", vil.Object(vil.BuiltinInt1), atLeast, atMost)
 }
 
 // equals is the bit that says whether two values of the same type are
