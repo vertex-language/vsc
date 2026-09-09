@@ -275,6 +275,13 @@ type Field struct {
 	// one is a function to call, and saying it needs a global is
 	// saying the wrong thing about it.
 	IsComputed bool
+
+	// HasObservers says the property was declared with willSet or
+	// didSet. It is stored all the same -- an observer watches
+	// storage rather than replacing it -- but a write to it is not
+	// only a write, and something that treats it as one runs neither
+	// observer.
+	HasObservers bool
 }
 
 // Method is a function declared in a type, or promised by a

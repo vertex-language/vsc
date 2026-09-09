@@ -723,3 +723,55 @@ func pairKind(_ p: (int32, int32)) -> int32 {
 		}
 	}
 }
+
+// TestObservedPropertyWriteRefused: willSet and didSet were parsed
+// and dropped, so a write to an observed property stored the value
+// and ran neither observer -- a program that compiled, ran, and did
+// half of what its source says. swiftc answers 11 for the log below;
+// this answered 0.
+func TestObservedPropertyWriteRefused(t *testing.T) {
+	const src = `
+struct S {
+    var log: int32 = 0
+    var n: int32 = 0 {
+        willSet { log = log + 1 }
+        didSet { log = log + 10 }
+    }
+}
+
+func use() -> int32 {
+    var s = S()
+    s.n = 5
+    return s.log
+}
+`
+	_, diags := compile(t, src, vsc.Options{})
+	if !vsc.Errors(diags) {
+		t.Fatal("a write to an observed property ran neither observer and said nothing")
+	}
+	if !strings.Contains(diags[0].Message, "willSet or didSet") {
+		t.Errorf("diagnostic does not name the problem: %s", diags[0])
+	}
+}
+
+// TestUnobservedPropertyStillWrites is the other half: an ordinary
+// stored property is unaffected.
+func TestUnobservedPropertyStillWrites(t *testing.T) {
+	const src = `
+struct S {
+    var n: int32 = 0
+}
+
+func use() -> int32 {
+    var s = S()
+    s.n = 5
+    s.n += 2
+    return s.n
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

@@ -678,3 +678,38 @@ func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Fie
 	ref := g.blk.FunctionRef(callee)
 	g.blk.Apply(ref, vil.Object(types.Typ[types.Void]), v, self)
 }
+
+// observedField is the stored property of this type with this name,
+// where it was declared with willSet or didSet.
+//
+// Such a property is stored, so it is read straight out of the value
+// -- but a write to it runs the observers, and a write that does not
+// is a write that lost half of what was written. They are not lowered
+// yet, so one is refused rather than silently skipped.
+func observedField(t types.Type, name string) (*types.Field, bool) {
+	fields, _, _, _, _, _ := storedSinks(t)
+	for _, f := range fields {
+		if f != nil && f.Name == name && f.HasObservers {
+			return f, true
+		}
+	}
+	return nil, false
+}
+
+// storedSinks is a type's stored properties, seen through whatever
+// name it was declared under.
+func storedSinks(t types.Type) ([]*types.Field, []*types.Field, []*types.Field, []*types.Field, []*types.Field, []*types.Field) {
+	if t == nil {
+		return nil, nil, nil, nil, nil, nil
+	}
+	if inst, ok := t.(*types.GenericInstance); ok {
+		t = inst.Base
+	}
+	switch n := t.Underlying().(type) {
+	case *types.Struct:
+		return n.Fields, nil, nil, nil, nil, nil
+	case *types.Class:
+		return n.Fields, nil, nil, nil, nil, nil
+	}
+	return nil, nil, nil, nil, nil, nil
+}

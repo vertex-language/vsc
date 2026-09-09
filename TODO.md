@@ -18,6 +18,11 @@ then do something other than what the source says — the failure the
 compiler's own rule exists to prevent — so it is the one to keep
 empty.
 
+Two have been found and both are gone: a getter emitted from the
+setter's body, and property observers that never ran. Both compiled,
+linked and answered wrongly with nothing said, which is why the
+section is worth keeping in front of the rest.
+
 ## Accepted where Swift refuses
 
 The compiler is quiet about a program Swift would reject, so the first
@@ -43,6 +48,8 @@ already correct; only the feature is missing.
 | top-level code | `top-level code is not supported` |
 | a static computed property's setter | not emitted; static storage first |
 | `defer` | `cannot lower a defer` |
+| a write to a property with `willSet`/`didSet` | `whose observers this does not run` |
+| a closure that captures | `cannot lower a closure that captures 'k'` |
 | a tuple pattern in a `switch` | `cannot lower this pattern in a switch` |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
@@ -90,6 +97,14 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **Property observers were parsed and dropped.** A write to a
+  property with `willSet` or `didSet` stored the value and ran
+  neither, so the program compiled, ran and did half of what its
+  source says — `s.n = 5` where both observers touch a log left the
+  log at 0 where swiftc leaves 11. Refused now rather than silently
+  skipped. Running them is the next step: a write becomes willSet,
+  the store, then didSet, which is the setter path with a store in
+  the middle.
 - **A memberwise initializer could not leave a property to its
   default.** `S()` where `S` declares `var n: int32 = 5` was refused —
   as ordinary as Swift gets. The default is an expression on the

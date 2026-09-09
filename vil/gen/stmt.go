@@ -177,6 +177,11 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 	// accessor, which this does not have.
 	if mem, ok := e.X.(*ast.MemberExpr); ok && mem.Name != nil {
 		recv := g.typeOf(mem.X)
+		if _, observed := observedField(recv, g.text(mem.Name)); observed {
+			g.refuse(mem, "a write to a property with willSet or didSet, whose "+
+				"observers this does not run")
+			return
+		}
 		if f, isComputed := computedField(recv, g.text(mem.Name)); isComputed {
 			cur := g.getterCall(mem, recv, f, func() *vil.Value { return g.expr(mem.X) })
 			rhs := g.expr(e.Y)
@@ -227,6 +232,15 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 		recv := g.typeOf(mem.X)
 		if f, isComputed := computedField(recv, g.text(mem.Name)); isComputed {
 			g.setterCall(mem, recv, f, e.Y)
+			return
+		}
+		// A property with willSet or didSet is stored, so this would
+		// store into it -- and run neither observer. That compiled
+		// and ran and did half of what the source says, which is
+		// worse than not building.
+		if _, observed := observedField(recv, g.text(mem.Name)); observed {
+			g.refuse(mem, "a write to a property with willSet or didSet, whose "+
+				"observers this does not run")
 			return
 		}
 	}

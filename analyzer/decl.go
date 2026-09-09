@@ -541,10 +541,11 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 		return nil
 	}
 	f := &types.Field{
-		Name:       idPat.Name.Text(c.file),
-		Type:       fieldType,
-		IsConst:    isConst,
-		HasDefault: b.Value != nil,
+		Name:         idPat.Name.Text(c.file),
+		Type:         fieldType,
+		IsConst:      isConst,
+		HasDefault:   b.Value != nil,
+		HasObservers: c.hasObservers(b),
 	}
 	// What the default is, and not only that there is one. A
 	// memberwise initializer that leaves the property out is asking
@@ -578,6 +579,26 @@ func (c *checker) isComputed(b *ast.PatternBinding) bool {
 		}
 		switch a.Keyword.Text(c.file) {
 		case "get", "set", "_read", "_modify", "unsafeAddress", "unsafeMutableAddress":
+			return true
+		}
+	}
+	return false
+}
+
+// hasObservers reports whether a binding was declared with willSet or
+// didSet. Such a property is stored -- an observer watches storage
+// rather than replacing it -- but writing to it runs them, so a write
+// that does not is a write that lost half of what was written.
+func (c *checker) hasObservers(b *ast.PatternBinding) bool {
+	if b == nil || b.Accessors == nil {
+		return false
+	}
+	for _, a := range b.Accessors.Accessors {
+		if a == nil || a.Keyword == nil {
+			continue
+		}
+		switch a.Keyword.Text(c.file) {
+		case "willSet", "didSet":
 			return true
 		}
 	}
