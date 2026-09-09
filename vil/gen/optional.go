@@ -75,8 +75,8 @@ func (g *gen) optionalFor(at ast.Node, v *vil.Value, from, to types.Type) *vil.V
 	return g.blk.Enum(lowerType(to), optionalSome, v)
 }
 
-// ifLet lowers an `if` whose condition binds an optional, and reports
-// whether the condition was one.
+// bindCondition lowers a binding condition -- the `let x = v` in an
+// `if`, a `while` or a `guard` -- and reports whether it could.
 //
 // SILGen writes it as a switch on the case rather than a test of a
 // bit, which is what it is: `if let x = v` asks which case v holds
@@ -88,117 +88,61 @@ func (g *gen) optionalFor(at ast.Node, v *vil.Value, from, to types.Type) *vil.V
 // The payload arrives as the block's argument, which is where the
 // binding gets its value -- so `x` is a block argument and not a
 // load, and nothing has to hold the optional open across the arm.
-func (g *gen) ifLet(s *ast.IfStmt) bool {
-	if len(s.Conds) != 1 {
-		return false
-	}
-	b, ok := s.Conds[0].(*ast.OptionalBinding)
-	if !ok {
-		return false
-	}
+//
+// The arm where it holds nothing is the caller's `fail` block, which
+// is what lets the three statements share this: an `if`'s fail is its
+// else, a `while`'s is the block after the loop, and a `guard`'s is
+// the else that must leave. On success g.blk is left at the some arm,
+// so whatever the caller lowers next is inside the binding.
+//
+// The name binds into the scope that is open, and which one that is
+// belongs to the caller -- `if` and `while` push one that closes with
+// the statement, `guard` does not, because a name it binds goes on to
+// the rest of the function.
+func (g *gen) bindCondition(b *ast.OptionalBinding, fail func() *vil.Block) bool {
 	subject := b.Value
 	if subject == nil {
 		// `if let x` with nothing after it rebinds the name it
 		// shadows, which needs the outer binding rather than an
 		// expression to lower.
 		g.refuse(b, "a binding condition with no value")
-		return true
+		return false
 	}
 	o, isOpt := optionalOf(g.typeOf(subject))
 	if !isOpt {
 		g.refuse(b, "a binding condition on something that is not an optional")
-		return true
+		return false
 	}
-	// The payload has to fit in one block argument. A wider one --
-	// `Pair?`, which is two registers -- would arrive as several, and
-	// what a block argument is here is one register.
 	// A payload that owns something is a payload whose lifetime the
 	// arm has to account for: the binding holds it, the optional it
 	// came out of still holds it, and one of them has to let go. That
 	// is what the ownership pass is for and this does not arrange it
 	// yet, so it is refused rather than left to the verifier -- which
 	// is where it surfaced, as a value consumed on some paths.
-	if !lowerType(o.Wrapped).Trivial() {
+	wrapped := lowerType(o.Wrapped)
+	if !wrapped.Trivial() {
 		g.refuse(b, "a binding condition on an optional of "+o.Wrapped.String()+
 			", which owns what it holds")
-		return true
+		return false
 	}
-
 
 	v := g.rvalue(subject)
 	if v == nil {
-		return true
+		return false
 	}
 
+	// The arm that holds something is made before the one that does
+	// not, so that the function prints in the order it runs in.
 	some := g.fn.Block()
-	none := g.fn.Block()
-	payload := some.Arg(lowerType(o.Wrapped), vil.Unowned)
+	payload := some.Arg(wrapped, vil.Unowned)
+	none := fail()
 	g.blk.SwitchEnum(v,
 		vil.Case{Member: optionalSome, Dest: some},
 		vil.Case{Member: optionalNone, Dest: none})
 
-	// The arm where it holds something, with the name bound to it.
 	g.blk = some
-	g.push()
 	if _, sym := g.binding(&ast.PatternBinding{Pat: b.Pat}); sym != nil {
-		g.locals[sym] = &local{value: payload, typ: lowerType(o.Wrapped)}
-	}
-	g.block(s.Body)
-	g.pop()
-	someOpen := g.blk != nil && g.blk.Term() == nil
-	someEnd := g.blk
-
-	g.blk = none
-	if s.Else != nil {
-		g.stmt(s.Else)
-	}
-	noneOpen := g.blk != nil && g.blk.Term() == nil
-	noneEnd := g.blk
-
-	switch {
-	case !someOpen && !noneOpen:
-		g.blk = noneEnd
-	default:
-		join := g.fn.Block()
-		if someOpen {
-			someEnd.Br(join)
-		}
-		if noneOpen {
-			noneEnd.Br(join)
-		}
-		g.blk = join
-	}
-	return true
-}
-
-// oneRegister reports whether a value of this type is held in a
-// single register, which is what a block argument may be.
-//
-// A struct of several fields is several, and the arm of an `if let`
-// would have to take them all -- which is a shape this does not build
-// yet. Everything else here is one: a scalar, a reference, a function
-// value, a struct that wraps one of those.
-func oneRegister(t types.Type) bool {
-	if t == nil {
-		return false
-	}
-	switch n := t.Underlying().(type) {
-	case *types.Struct:
-		stored := 0
-		var only types.Type
-		for _, f := range n.Fields {
-			if f == nil {
-				continue
-			}
-			stored++
-			only = f.Type
-		}
-		if stored == 0 {
-			return false
-		}
-		return stored == 1 && oneRegister(only)
-	case *types.Tuple:
-		return false
+		g.locals[sym] = &local{value: payload, typ: wrapped}
 	}
 	return true
 }
@@ -240,7 +184,6 @@ func (g *gen) nilCoalescing(e *ast.BinaryExpr) *vil.Value {
 			", which owns what it holds")
 		return nil
 	}
-
 
 	v := g.rvalue(e.X)
 	if v == nil {
@@ -300,7 +243,6 @@ func (g *gen) forceUnwrap(e *ast.ForceExpr) *vil.Value {
 			", which owns what it holds")
 		return nil
 	}
-
 
 	v := g.rvalue(e.X)
 	if v == nil {

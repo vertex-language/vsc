@@ -28,12 +28,7 @@ func (g *gen) block(b *ast.CodeBlock) {
 			break // the rest of the block is unreachable
 		}
 	}
-	if g.blk != nil && g.blk.Term() == nil {
-		g.pop()
-		return
-	}
-	// The block ended in a return, which already unwound.
-	g.scopes = g.scopes[:len(g.scopes)-1]
+	g.popReachable()
 }
 
 // stmt lowers one statement inside a formal scope of its own, so
@@ -41,13 +36,7 @@ func (g *gen) block(b *ast.CodeBlock) {
 func (g *gen) stmt(s ast.Stmt) {
 	g.pushFormal()
 	g.stmtBody(s)
-	if g.blk != nil && g.blk.Term() == nil {
-		g.pop()
-		return
-	}
-	// The statement left the block — a return has already unwound
-	// every scope, this one included.
-	g.scopes = g.scopes[:len(g.scopes)-1]
+	g.popReachable()
 }
 
 func (g *gen) stmtBody(s ast.Stmt) {
@@ -554,23 +543,27 @@ func (g *gen) ret(s *ast.ReturnStmt) {
 // the function, unless both of them returned, in which case there is
 // nothing to join.
 func (g *gen) ifStmt(s *ast.IfStmt) {
-	// `if let x = v` is a switch on which case the optional holds
-	// rather than a test of a bit, and the arm that runs gets the
-	// payload as a block argument. See optional.go.
-	if g.ifLet(s) {
+	// A name a condition binds is in scope for the body and no
+	// further, so the scope opens before the conditions -- the second
+	// condition reads what the first bound -- and closes after the
+	// body.
+	scoped := bindsAName(s.Conds)
+	if scoped {
+		g.push()
+	}
+	miss := g.laterBlock()
+	if !g.conditionChain(s.Conds, miss) {
+		if scoped {
+			g.pop()
+		}
 		return
 	}
-	cond := g.condition(s.Conds)
-	if cond == nil {
-		return
-	}
+	elseBlk := miss()
 
-	thenBlk := g.fn.Block()
-	elseBlk := g.fn.Block()
-	g.blk.CondBr(cond, thenBlk, nil, elseBlk, nil)
-
-	g.blk = thenBlk
 	g.block(s.Body)
+	if scoped {
+		g.popReachable()
+	}
 	thenOpen := g.blk != nil && g.blk.Term() == nil
 	thenEnd := g.blk
 
@@ -597,34 +590,88 @@ func (g *gen) ifStmt(s *ast.IfStmt) {
 	}
 }
 
-// condition lowers an if's condition list to the bit a branch tests.
+// conditionChain lowers a condition list to a branch on whether every
+// condition in it held, and reports whether it could.
 //
-// A Bool is a struct around a Builtin.Int1 and cond_br takes the bit,
-// so the condition is reached through exactly as an operand of an
-// operator is.
+// Swift's conditions are a list rather than one expression because a
+// condition may bind a name the next one reads -- `if let x = o, x >
+// 0` -- so they cannot be folded together with `&&`. They chain
+// instead, which is what SILGen writes too: each condition goes to
+// the next one where it holds and to fail where it does not.
 //
-// Only a plain boolean expression is lowered so far; a binding
-// condition needs optionals, which need a library.
-func (g *gen) condition(conds []ast.Node) *vil.Value {
-	for _, c := range conds {
-		e, ok := c.(ast.Expr)
-		if !ok {
-			// A binding condition, an availability check, a `case`
-			// pattern. Each is a condition this package does not
-			// lower, and each has to say so: a condition that
-			// silently produced nothing took its whole statement with
-			// it, body and all.
-			g.refuse(c, conditionKind(c))
-			return nil
-		}
-		v := g.expr(e)
-		if v == nil {
-			return nil
-		}
-		return g.machine(v, g.typeOf(e))
+// The two kinds differ only in what holding means. A boolean
+// expression is a bit, and a Bool is a struct around a Builtin.Int1
+// that cond_br takes directly. A binding condition is a switch on
+// which case the optional holds, and the arm where it holds something
+// takes the payload as its argument.
+//
+// Names bind into the current scope, and whether that scope outlives
+// the statement is the caller's to decide -- `if` and `while` push
+// one, and `guard` deliberately does not, because a name a guard
+// binds goes on to the rest of the function.
+//
+// On failure g.blk is left where it was: the diagnostic has stopped
+// the compilation, and branching anyway would only decide which way
+// an untestable condition went.
+func (g *gen) conditionChain(conds []ast.Node, fail func() *vil.Block) bool {
+	if len(conds) == 0 {
+		g.refuse(nil, "an empty condition")
+		return false
 	}
-	g.refuse(nil, "an empty condition")
-	return nil
+	for _, c := range conds {
+		switch c := c.(type) {
+		case *ast.OptionalBinding:
+			if !g.bindCondition(c, fail) {
+				return false
+			}
+		case ast.Expr:
+			v := g.expr(c)
+			if v == nil {
+				return false
+			}
+			// The block the condition falls through to is made
+			// before the one it misses to, so that the function
+			// prints in the order it runs in.
+			next := g.fn.Block()
+			g.blk.CondBr(g.machine(v, g.typeOf(c)), next, nil, fail(), nil)
+			g.blk = next
+		default:
+			// An availability check or a `case` pattern: a condition
+			// this package does not lower, which has to say so. A
+			// condition that silently produced nothing took its whole
+			// statement with it, body and all.
+			g.refuse(c, conditionKind(c))
+			return false
+		}
+	}
+	return true
+}
+
+// laterBlock hands back the same block every time it is called, and
+// makes it the first time. It is how a block that is only reached
+// when a condition misses comes to be created after the blocks the
+// conditions fall through to: nothing depends on the order, but a
+// function whose blocks are numbered in the order control reaches
+// them is the one SILGen prints, and the one a person can read.
+func (g *gen) laterBlock() func() *vil.Block {
+	var b *vil.Block
+	return func() *vil.Block {
+		if b == nil {
+			b = g.fn.Block()
+		}
+		return b
+	}
+}
+
+// bindsAName reports whether any condition in the list binds one,
+// which is what decides whether a scope is worth pushing.
+func bindsAName(conds []ast.Node) bool {
+	for _, c := range conds {
+		if _, ok := c.(*ast.OptionalBinding); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // conditionKind names a condition the way a person would say it.
@@ -650,15 +697,16 @@ func conditionKind(c ast.Node) string {
 //	exit: ...
 //
 // The condition is emitted into the header rather than before it,
-// because it is tested once per iteration and not once.
+// because it is tested once per iteration and not once. That is also
+// what makes `while let` rebind on every pass: the switch over the
+// case is in the header, so each iteration asks again and the arm's
+// block argument is that pass's payload.
 //
-// A borrow opened by the condition would want ending on each pass
-// through the header, and this does not arrange that — the formal
-// scope around the statement closes after the loop, which is the
-// wrong place. It is not reachable yet: the only conditions that
-// lower are comparisons of trivial types, which own nothing and leave
-// nothing to close. A condition that owns something needs the scope
-// handling before it needs anything else here.
+// A name the condition binds therefore lives for one pass, not for
+// the loop, so its scope is emitted at every way out of a pass --
+// round the back edge, out through the exit, and at a break or a
+// continue, which is why the loop records the depth from before the
+// push.
 func (g *gen) whileStmt(s *ast.WhileStmt) {
 	header := g.fn.Block()
 	body := g.fn.Block()
@@ -669,24 +717,35 @@ func (g *gen) whileStmt(s *ast.WhileStmt) {
 	g.blk.Br(header)
 
 	g.blk = header
-	cond := g.condition(s.Conds)
-	if cond == nil {
-		// Reported. The block is left open and the compilation stops
-		// on the diagnostic; inventing a branch here would only
-		// decide which way an untestable condition went.
+	outer := len(g.scopes)
+	scoped := bindsAName(s.Conds)
+	if scoped {
+		g.push()
+	}
+	if !g.conditionChain(s.Conds, func() *vil.Block { return exit }) {
+		if scoped {
+			g.popReachable()
+		}
 		return
 	}
-	g.blk.CondBr(cond, body, nil, exit, nil)
+	g.blk.Br(body)
 
 	g.blk = body
-	g.loops = append(g.loops, loop{header: header, exit: exit, depth: len(g.scopes), label: label})
+	g.loops = append(g.loops, loop{header: header, exit: exit, depth: outer, label: label})
 	g.block(s.Body)
 	g.loops = g.loops[:len(g.loops)-1]
 	if g.blk != nil && g.blk.Term() == nil {
+		if scoped {
+			// The pass ends here, and so does what it bound.
+			g.emitCleanups(g.scopes[outer])
+		}
 		g.blk.Br(header)
 	}
 
 	g.blk = exit
+	if scoped {
+		g.pop()
+	}
 }
 
 // switchStmt lowers a switch.
@@ -1130,13 +1189,16 @@ func (g *gen) repeatStmt(s *ast.RepeatWhileStmt) {
 // held, and that assumption is only sound because the else cannot
 // reach it.
 func (g *gen) guardStmt(s *ast.GuardStmt) {
-	cond := g.condition(s.Conds)
-	if cond == nil {
+	// No scope is pushed. A name a guard binds is in scope for the
+	// rest of the enclosing block -- that is the whole point of
+	// `guard let` over `if let` -- so it binds where the guard is
+	// written rather than in a scope that closes with the statement.
+	miss := g.laterBlock()
+	if !g.conditionChain(s.Conds, miss) {
 		return
 	}
-	elseBlk := g.fn.Block()
-	cont := g.fn.Block()
-	g.blk.CondBr(cond, cont, nil, elseBlk, nil)
+	elseBlk := miss()
+	cont := g.blk
 
 	g.blk = elseBlk
 	g.block(s.Body)

@@ -769,6 +769,18 @@ func (g *gen) pop() {
 	g.scopes = g.scopes[:len(g.scopes)-1]
 }
 
+// popReachable is pop where control still arrives at the end of the
+// scope, and a plain leave where it does not. A body that returned
+// has already unwound every open scope, this one included, and there
+// is no block left to emit into.
+func (g *gen) popReachable() {
+	if g.blk != nil && g.blk.Term() == nil {
+		g.pop()
+		return
+	}
+	g.scopes = g.scopes[:len(g.scopes)-1]
+}
+
 // unwind emits every open scope's cleanups without leaving them,
 // which is what a return does: the scopes are still there for the
 // code after the branch that did not return.
