@@ -106,6 +106,21 @@ var vertexTypes = map[string]Type{
 	"any":     &Existential{},
 }
 
+// VertexAliases is every lowercase spelling and the type it denotes.
+//
+// It is exported so the checker can put them in the universe scope
+// beside Swift's own names. A name that resolves through
+// LookupUniverse but has no symbol is a type in type position and
+// nothing in expression position -- which is what made `int32(x)` a
+// constructor call nobody could lower while `Int32(x)` worked.
+func VertexAliases() map[string]Type {
+	out := make(map[string]Type, len(vertexTypes))
+	for name, t := range vertexTypes {
+		out[name] = t
+	}
+	return out
+}
+
 // LookupUniverse returns the built-in type corresponding to name, or
 // nil if there is none. Swift's names are looked up first: a program
 // that writes only those is reading the same universe swiftc does.

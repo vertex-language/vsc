@@ -37,8 +37,7 @@ already correct; only the feature is missing.
 | Swift | What happens now |
 | --- | --- |
 | `throw`, `do`/`catch` | `cannot lower a throw yet`, `cannot lower a do block yet` |
-| `int32(x)` conversions | `cannot lower a constructor call yet` |
-| `a ?? b` | `cannot lower this expression yet` |
+| a float-to-integer conversion | `what Swift traps on is a bound in the source's own arithmetic` |
 | a global `let` or `var` | `cannot lower this expression yet`, where it is read |
 | top-level code | `top-level code is not supported` |
 
@@ -78,6 +77,18 @@ feature and the shape is worth remembering.
   the compiler in its own words.
 - **`mutating` was accepted on a class method**, where Swift rejects
   it outright.
+- **A lowercase primitive could not be called.** `int32(x)` reached
+  lowering as a constructor call with no type behind it while
+  `Int32(x)` was a conversion, because the aliases lived only in
+  `LookupUniverse` and had no symbol — a type in type position and
+  nothing in expression position. They are in the universe scope now,
+  which is what the spec's "the two are one type" requires.
+- **`??` was not lowered.** It is the conditional operator's shape
+  asked of the case rather than of a bit: `switch_enum` says which
+  case the optional holds, the some arm hands its payload to the
+  join, and the none arm evaluates the right operand — so only the
+  arm that runs evaluates, which is what the `@autoclosure` on
+  Swift's right operand promises.
 - **No `mutating` method could write to its receiver.** `self` crossed
   the call by value and never `@inout`, so there was nothing to write
   through: an assignment was refused rather than lowered, and an

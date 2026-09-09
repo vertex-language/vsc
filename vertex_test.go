@@ -30,6 +30,29 @@ func widen(_ a: int32, _ b: Int32) -> int64 {
 	}
 }
 
+// TestLowercaseSpellingsConstruct: a lowercase name has to work
+// where its capitalised counterpart does, in expression position as
+// well as in type position. The aliases lived only in
+// LookupUniverse and had no symbol, so `int32(x)` reached lowering as
+// a constructor call with no type behind it while `Int32(x)` was a
+// conversion.
+func TestLowercaseSpellingsConstruct(t *testing.T) {
+	const src = `
+func use() -> int32 {
+    let a: int64 = 3
+    return int32(a) + int32(int8(4)) + int32(uint16(6)) + int32(int(9))
+}
+
+func widen(_ n: int32) -> double { return double(n) }
+func narrowFloat(_ n: int32) -> float { return float(n) }
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}
+
 // TestOptionalLabels is both directions: a label left off where the
 // declaration asks for one, and a label written where it says `_`.
 func TestOptionalLabels(t *testing.T) {

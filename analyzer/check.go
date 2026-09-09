@@ -124,6 +124,18 @@ func CheckImporting(files []*ast.File, imports []Import) (*Info, []token.Diagnos
 		}
 		_ = name
 	}
+	// Vertex's lowercase spellings, under their own names and denoting
+	// the same types. They belong in the scope rather than only in
+	// LookupUniverse: a name with no symbol is a type in type position
+	// and nothing in expression position, so `int32(x)` was a
+	// constructor call with no type behind it while `Int32(x)` was a
+	// conversion. Insert keeps the first of a name, so a Swift name
+	// this happens to share stays Swift's.
+	for name, typ := range types.VertexAliases() {
+		if typ != nil {
+			universeScope.Insert(NewTypeName(name, typ, token.NoPos))
+		}
+	}
 
 	// 2. The built-in module, between the universe and the program.
 	//

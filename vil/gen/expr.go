@@ -1420,6 +1420,12 @@ func (g *gen) binary(e *ast.BinaryExpr) *vil.Value {
 		if v, handled := g.enumEquality(e, g.text(e.Op)); handled {
 			return v
 		}
+		// `??` has no declaration either: the checker types it
+		// directly, so there is no symbol to resolve and it is
+		// lowered here. See optional.go.
+		if g.text(e.Op) == "??" {
+			return g.nilCoalescing(e)
+		}
 		g.expr(e.X)
 		g.expr(e.Y)
 		g.unsupported(e)

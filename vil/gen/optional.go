@@ -205,3 +205,79 @@ func oneRegister(t types.Type) bool {
 	}
 	return true
 }
+
+// nilCoalescing lowers `a ?? b`: what a holds where it holds
+// something, and b where it does not.
+//
+// The conditional operator's shape, asked of the case rather than of
+// a bit. switch_enum says which case the optional holds; the some arm
+// carries the payload as its block argument and hands it to the join;
+// the none arm evaluates the right operand and hands over that. Only
+// the arm that runs evaluates, which is what the @autoclosure on
+// Swift's right operand promises -- `a ?? expensive()` does not call
+// it where a holds something.
+//
+// core declares no operator for `??`, so nothing resolves it and the
+// checker gives the expression its type directly. That is why this is
+// reached from the branch where there is no symbol rather than
+// through operate.
+func (g *gen) nilCoalescing(e *ast.BinaryExpr) *vil.Value {
+	o, isOpt := optionalOf(g.typeOf(e.X))
+	if !isOpt {
+		g.refuse(e, "'??' on something that is not an optional")
+		return nil
+	}
+	// `a ?? b` where b is optional too answers an optional, which is
+	// Swift's other overload and a different shape: the some arm
+	// would have to wrap its payload again rather than hand it over.
+	if _, rhsOptional := optionalOf(g.typeOf(e.Y)); rhsOptional {
+		g.refuse(e, "'??' with an optional on the right, which answers an optional")
+		return nil
+	}
+	// The same two limits a binding condition has, for the same
+	// reasons: the payload arrives as one block argument, and one
+	// that owns what it holds needs a lifetime this does not arrange.
+	wrapped := lowerType(o.Wrapped)
+	if !wrapped.Trivial() {
+		g.refuse(e, "'??' on an optional of "+o.Wrapped.String()+
+			", which owns what it holds")
+		return nil
+	}
+	if !oneRegister(o.Wrapped) {
+		g.refuse(e, "'??' on an optional of "+o.Wrapped.String()+
+			", whose payload is more than one register")
+		return nil
+	}
+
+	v := g.rvalue(e.X)
+	if v == nil {
+		return nil
+	}
+	result := lowerType(g.typeOf(e))
+
+	some := g.fn.Block()
+	none := g.fn.Block()
+	join := g.fn.Block()
+	payload := some.Arg(wrapped, vil.Unowned)
+	answer := join.Arg(result, joinOwnership(result))
+
+	g.blk.SwitchEnum(v,
+		vil.Case{Member: optionalSome, Dest: some},
+		vil.Case{Member: optionalNone, Dest: none})
+
+	g.blk = some
+	g.blk.Br(join, payload)
+
+	g.blk = none
+	fallback := g.rvalue(e.Y)
+	if fallback == nil {
+		return nil
+	}
+	g.blk.Br(join, fallback)
+
+	g.blk = join
+	// Exactly one arm ran, so the join owns one value and destroys it
+	// once, where the scope holding it ends.
+	g.destroyLater(answer)
+	return answer
+}
