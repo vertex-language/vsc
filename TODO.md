@@ -38,7 +38,16 @@ already correct; only the feature is missing.
 | --- | --- |
 | `throw`, `do`/`catch` | `cannot lower a throw yet`, `cannot lower a do block yet` |
 | a global `let` or `var` | `cannot lower this expression yet`, where it is read |
+| a payload enum crossing a call | `an enum whose cases carry values … cannot cross a call` |
 | top-level code | `top-level code is not supported` |
+
+**A payload enum cannot be a parameter or a result.** One is usable
+inside a function — built, switched over, its payload bound — and has
+no machine type at a call boundary, because the payload beside the tag
+is a layout the backend does not compute yet. `tests/compiler/152`
+passes because it keeps them local. The refusal now says which of the
+two it is rather than naming the type and stopping.
+
 
 **Top-level code is refused, not run.** Swift runs statements at file
 scope; here they are reported rather than discarded, which is the

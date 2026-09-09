@@ -215,6 +215,11 @@ func whyNoRegister(t vil.Type) string {
 				"to spare, and this knows which one only for a reference"
 		}
 	}
+	if _, ok := payloadEnumOf(t); ok {
+		return t.String() + ": an enum whose cases carry values, which is the " +
+			"payload beside the tag -- a layout this package does not compute " +
+			"yet, so one is usable inside a function and cannot cross a call"
+	}
 	if st, ok := structOf(t); ok && len(st.Fields) > 1 {
 		return t.String() + ": a struct wider than " + itoa(maxDirectWords*8) +
 			" bytes, which Swift passes by address and this package does not lay out yet"
