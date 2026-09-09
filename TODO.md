@@ -25,6 +25,24 @@ section is worth keeping in front of the rest.
 
 ## Accepted where Swift refuses
 
+### `r?.value!` binds the `!` to the chain rather than the member
+
+```swift
+struct Reading { var value: Int32 }
+func forced(_ r: Reading?) -> Int32 { return r?.value! }
+```
+
+swiftc reads that as `r?.(value!)` and refuses it — `value` is an
+`Int32` and there is nothing to unwrap. This reads it as
+`(r?.value)!` and accepts it. Both agree on the parenthesised form,
+so the difference is only where a postfix `!` binds after a chained
+member.
+
+Found by writing it in a corpus program and having swiftc reject the
+program rather than the compiler.
+
+
+
 
 
 
@@ -53,7 +71,7 @@ already correct; only the feature is missing.
 | a static computed property's setter | not emitted; static storage first |
 | `defer` | `cannot lower a defer` |
 | a closure that captures | `cannot lower a closure that captures 'k'` |
-| an optional chain | `cannot lower this expression yet` |
+| a chain whose payload is more than a register, or owns what it holds | `a chain through an optional of B` |
 | a failable initializer | `cannot lower a failable initializer` |
 | a user-declared operator | `cannot lower this expression yet` |
 | a String `rawValue` | `whose cases are not all numbers` |
@@ -113,6 +131,13 @@ feature and the shape is worth remembering.
   `LookupUniverse` and had no symbol — a type in type position and
   nothing in expression position. They are in the universe scope now,
   which is what the spec's "the two are one type" requires.
+- **An optional chain was not lowered.** Its type was fixed earlier;
+  the lowering is a switch with the member read inside the some arm,
+  which is what makes a chain a chain — the read only happens where
+  there is something to read from, and both arms hand the join an
+  optional. Limited to a payload that fits a register and owns
+  nothing, which is the same limit a binding condition has: a class
+  payload owns its reference, and a struct of two fields is memory.
 - **`o!` and `o == nil` were not lowered.** A force unwrap had no
   case in lowering at all, and a comparison against nil none either:
   nil is not a value of a type core declares an operator over. Both

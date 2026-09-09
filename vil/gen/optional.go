@@ -396,3 +396,70 @@ func isNilLiteral(e ast.Expr) bool {
 	lit, ok := e.(*ast.BasicLit)
 	return ok && lit.Kind == token.NIL
 }
+
+// optionalChain lowers `p?.x`: the member where p holds something,
+// and nothing where it does not.
+//
+// The same switch as everything else about an optional, with the
+// member read inside the some arm -- which is what makes the chain a
+// chain: the read only happens where there is something to read it
+// from. Both arms hand the join an optional, because that is what a
+// chain answers whatever the member is.
+func (g *gen) optionalChain(e *ast.MemberExpr, opt *ast.OptionalExpr) *vil.Value {
+	o, isOptional := optionalOf(g.typeOf(opt.X))
+	if !isOptional {
+		return nil
+	}
+	result := g.typeOf(e)
+	if _, answersOptional := optionalOf(result); !answersOptional {
+		return nil
+	}
+	wrapped := lowerType(o.Wrapped)
+	if !wrapped.Trivial() || !oneRegister(o.Wrapped) {
+		g.refuse(e, "a chain through an optional of "+o.Wrapped.String()+
+			", whose payload is more than a register or owns what it holds")
+		return nil
+	}
+	field, isStored := storedField(o.Wrapped, g.text(e.Name))
+	if !isStored {
+		// A computed property through a chain is a call that only
+		// happens on one arm, which is more than this arranges.
+		g.refuse(e, "a chain to '"+g.text(e.Name)+"', which is not a stored property")
+		return nil
+	}
+
+	v := g.rvalue(opt.X)
+	if v == nil {
+		return nil
+	}
+	rt := lowerType(result)
+	some := g.fn.Block()
+	none := g.fn.Block()
+	join := g.fn.Block()
+	payload := some.Arg(wrapped, vil.Unowned)
+	answer := join.Arg(rt, joinOwnership(rt))
+	g.blk.SwitchEnum(v,
+		vil.Case{Member: optionalSome, Dest: some},
+		vil.Case{Member: optionalNone, Dest: none})
+
+	g.blk = some
+	member := memberName(o.Wrapped, field.Name)
+	ft := lowerType(field.Type)
+	var read *vil.Value
+	if isClass(o.Wrapped) {
+		addr := g.blk.RefElementAddr(payload, member, ft)
+		access := g.blk.BeginAccess(addr, "read", "dynamic")
+		read = g.loaded(g.blk.Load(access, loadQualifier(ft)), ft)
+		g.blk.EndAccess(access)
+	} else {
+		read = g.blk.StructExtract(payload, member, ft)
+	}
+	g.blk.Br(join, g.blk.Enum(rt, optionalSome, read))
+
+	g.blk = none
+	g.blk.Br(join, g.blk.Enum(rt, optionalNone, nil))
+
+	g.blk = join
+	g.destroyLater(answer)
+	return answer
+}

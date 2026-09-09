@@ -1000,3 +1000,21 @@ func present(_ o: int32?) -> int32 {
 		}
 	}
 }
+
+// TestOptionalChainLowers: the chain is a switch with the member read
+// inside one arm, which is what makes it a chain -- the read only
+// happens where there is something to read from.
+func TestOptionalChainLowers(t *testing.T) {
+	const src = `
+struct Reading { var value: int32 }
+
+func read(_ r: Reading?) -> int32 { return r?.value ?? -1 }
+func present(_ r: Reading?) -> int32 { return r?.value != nil ? 1 : 0 }
+func forced(_ r: Reading?) -> int32 { return (r?.value)! }
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

@@ -532,6 +532,11 @@ func (g *gen) member(e *ast.MemberExpr) *vil.Value {
 			"other than a function through a module")
 		return nil
 	}
+	// `p?.x` reads the member only where p holds something, so it is
+	// a switch with the read inside one arm. See optional.go.
+	if opt, chained := e.X.(*ast.OptionalExpr); chained {
+		return g.optionalChain(e, opt)
+	}
 	// `c.rawValue` on an enum declared with a raw type. The value is
 	// not the case's tag -- `case bad = 7` is the second case and
 	// carries a 7 -- so it is a switch over the case, each arm
