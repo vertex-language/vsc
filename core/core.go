@@ -103,6 +103,18 @@ type Extern struct {
 	Owned bool
 }
 
+// Wrapping reports whether an operator is one of the three that keep
+// the low bits of an overflow instead of trapping on it. It is the
+// same machine instruction as the checked one; the difference is the
+// operand that says whether to report, which is the caller's to pass.
+func Wrapping(op string) bool {
+	switch op {
+	case "&+", "&-", "&*":
+		return true
+	}
+	return false
+}
+
 // LowerExtern says which standard-library function implements an
 // operator on a type, or reports that none does.
 //
@@ -220,6 +232,19 @@ func intBuiltin(op, machine string, unsigned bool) (Builtin, bool) {
 	if unsigned {
 		s = "u"
 	}
+	// `&+`, `&-` and `&*` are the same instruction as the checked
+	// operators. Swift's builtin takes a third operand saying whether
+	// to report the overflow, and the masking operators pass a
+	// nothing rather than a different instruction -- so what differs
+	// is at the call, in vil/gen, and not here. Wrapping says so.
+	switch op {
+	case "&+":
+		op = "+"
+	case "&-":
+		op = "-"
+	case "&*":
+		op = "*"
+	}
 	switch op {
 	case "+":
 		return Builtin{s + "add_with_overflow_" + machine, true, machine}, true
@@ -237,13 +262,11 @@ func intBuiltin(op, machine string, unsigned bool) (Builtin, bool) {
 		return Builtin{"or_" + machine, false, machine}, true
 	case "^":
 		return Builtin{"xor_" + machine, false, machine}, true
-	case "<<":
-		return Builtin{"shl_" + machine, false, machine}, true
-	case ">>":
-		if unsigned {
-			return Builtin{"lshr_" + machine, false, machine}, true
-		}
-		return Builtin{"ashr_" + machine, false, machine}, true
+	// `<<` and `>>` are deliberately absent. Swift's are not the
+	// machine's shift: they answer for a count of the width or more,
+	// and for a negative one, where `shl` and `ashr` say nothing.
+	// They are branches rather than an instruction, so they are
+	// built in vil/gen's shift.go and there is nothing to name here.
 	case "==":
 		return Builtin{"cmp_eq_" + machine, false, "Int1"}, true
 	case "!=":

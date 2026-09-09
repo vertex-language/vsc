@@ -1533,6 +1533,13 @@ func (g *gen) operate(at ast.Node, op string, operand, results types.Type, lhs, 
 	if ex, ok := core.LowerExtern(op, operand); ok {
 		return g.externOperator(at, op, operand, results, ex, lhs, rhs)
 	}
+	// A shift is not one instruction. Swift's `<<` and `>>` answer
+	// for every count there is, including the ones the machine's
+	// shift says nothing about, and `&<<` and `&>>` mask the count
+	// first. See shift.go.
+	if isShift(op) {
+		return g.shift(at, op, operand, results, lhs, rhs)
+	}
 	bi, ok := core.Lower(op, operand)
 	if !ok {
 		return nil
@@ -1547,14 +1554,24 @@ func (g *gen) operate(at ast.Node, op string, operand, results types.Type, lhs, 
 	}
 
 	// A checked operator asks for the trap it wants: -1 is all bits
-	// set, which is how Swift says "report the overflow".
-	want := g.blk.IntegerLiteral(vil.Object(vil.BuiltinInt1), -1)
+	// set, which is how Swift says "report the overflow". `&+`, `&-`
+	// and `&*` are the same instruction saying no -- they keep the
+	// low bits and the program carries on, which is what makes them
+	// the operators to reach for where wrapping is the intent.
+	report := int64(-1)
+	if core.Wrapping(op) {
+		report = 0
+	}
+	want := g.blk.IntegerLiteral(vil.Object(vil.BuiltinInt1), report)
 	pair := vil.Object(&types.Tuple{Elements: []*types.TupleElement{
 		{Type: builtinNamed(bi.Result)},
 		{Type: vil.BuiltinInt1},
 	}})
 	both := g.blk.Builtin(bi.Name, pair, a, b, want)
 	value := g.blk.TupleExtract(both, 0, vil.Object(builtinNamed(bi.Result)))
+	if core.Wrapping(op) {
+		return g.blk.Struct(result, value)
+	}
 	flag := g.blk.TupleExtract(both, 1, vil.Object(vil.BuiltinInt1))
 	g.blk.CondFail(flag, "arithmetic overflow")
 	return g.blk.Struct(result, value)

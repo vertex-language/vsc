@@ -86,8 +86,9 @@ func TestLower(t *testing.T) {
 		{"<=", types.Typ[types.Double], "fcmp_ole_FPIEEE64", false, "Int1"},
 		{"&&", types.Typ[types.Bool], "and_Int1", false, "Int1"},
 		{"!=", types.Typ[types.Bool], "xor_Int1", false, "Int1"},
-		{"<<", types.Typ[types.Int32], "shl_Int32", false, "Int32"},
-		{">>", types.Typ[types.Int32], "ashr_Int32", false, "Int32"},
+		{"&", types.Typ[types.Int32], "and_Int32", false, "Int32"},
+		{"|", types.Typ[types.Int32], "or_Int32", false, "Int32"},
+		{"^", types.Typ[types.Int32], "xor_Int32", false, "Int32"},
 	}
 	for _, c := range cases {
 		got, ok := Lower(c.op, c.typ)
@@ -104,6 +105,16 @@ func TestLower(t *testing.T) {
 	// An operator with no machine instruction behind it says so.
 	if _, ok := Lower("+", types.Typ[types.String]); ok {
 		t.Error("String concatenation is not one instruction")
+	}
+	// A shift is not one either. Swift's answers for a count of the
+	// width or more and for a negative one, which `shl` and `ashr`
+	// do not, so it is branches built in vil/gen rather than an
+	// entry here -- and an entry here would be the wrong answer for
+	// every count outside the range.
+	for _, op := range []string{"<<", ">>", "&<<", "&>>"} {
+		if _, ok := Lower(op, types.Typ[types.Int32]); ok {
+			t.Errorf("%q resolved to one instruction; a shift is not one", op)
+		}
 	}
 	if _, ok := Lower("???", types.Typ[types.Int]); ok {
 		t.Error("an operator nothing implements should not resolve")
