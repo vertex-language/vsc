@@ -7,7 +7,9 @@ this compiler gets wrong, refuses, or has not reached.
 
 Ordered by how it fails rather than by size, because the compiler's own
 rule is that where it does not know, it says nothing and never invents
-an answer. The first section is where that rule is broken.
+an answer. The first two sections are where that rule is broken: one
+by acting on code it discarded, the other by naming a fix that is
+already in place.
 
 ## Silently wrong
 
@@ -123,6 +125,31 @@ The fix is for `recordModule` to fill each module's own scope from
 that module's declarations rather than from the shared scope's
 leftovers.
 
+## Rejected with the wrong reason
+
+### `mutating` is not seen for an implicit-`self` assignment
+
+```swift
+struct vec2 {
+    var x: int32
+    mutating func scale(_ k: int32) { x = x * k }
+}
+```
+
+```
+error: cannot assign to 'x': the receiver is a value, and a method
+that changes one has to be declared 'mutating'
+```
+
+The method *is* declared `mutating`. Reading a bare `x` in the same
+body works, and writing `self.x` instead gets past the checker -- so
+what is missed is the connection between an implicit-`self` assignment
+and the receiver's mutability, not the modifier itself.
+
+Worse than a refusal, because the message names the fix and the fix is
+already applied. Anyone who hits this will re-read their own correct
+code looking for the mistake.
+
 ## Refused honestly
 
 Unimplemented, and they say so at the point of use. Nothing here is
@@ -133,6 +160,7 @@ missing.
 | --- | --- |
 | `throw`, `do`/`catch` | `cannot lower a throw yet`, `cannot lower a do block yet` |
 | `int32(x)` conversions | `cannot lower a constructor call yet` |
+| `self.x = …` in a method | `cannot lower an assignment to this expression yet` |
 
 Both typecheck first and refuse at lowering, which is the right shape:
 the front end understands the program, and the back end admits what it

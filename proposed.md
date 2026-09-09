@@ -12,8 +12,9 @@ Additions only. Swift the compiler does not do yet is `TODO.md`.
 | `kernel` / `graph` | **done** | `parser/decl.go`, refused in `vil/gen` |
 | Optional argument labels | **done** | `analyzer/call.go` |
 | Packages and folder imports | **done** | `vsc.go` importer, driver in `internal/cli` |
+| Receiver methods | not built | `parser`, desugaring to an extension |
 
-All four are implemented. What follows is the design and the reasoning
+The first four are implemented. What follows is the design and the reasoning
 behind it, kept because the reasoning is what the next change to any
 of them has to agree with; where the built behaviour is narrower than
 the design, the section says so.
@@ -493,3 +494,130 @@ the left is either syntax or bookkeeping about where files came from.
   subdirectories are the same module, not submodules. Matching that is
   free and avoids inventing submodules, which Swift still does not
   have.
+
+## 5. Receiver methods
+
+Methods written outside the type's body, with the receiver named:
+
+```swift
+struct vec2 {
+    var x: float32
+    var y: float32
+}
+
+func (v: borrowing vec2) length() -> float32 {
+    return (v.x * v.x + v.y * v.y).squareRoot()
+}
+
+func (v: inout vec2) scale(k: float32) {
+    v.x *= k
+    v.y *= k
+}
+```
+
+### What they are in Swift
+
+An extension member. That is the whole of it, and saying so is what
+keeps the feature from growing a second method model beside the one
+Swift has:
+
+```swift
+extension vec2 {
+    func length() -> float32 { ... }
+    mutating func scale(k: float32) { ... }
+}
+```
+
+The receiver's ownership is what Swift spells on the method:
+
+| Receiver | Swift |
+| --- | --- |
+| `borrowing` | an ordinary method — `self` is borrowed, which is the default |
+| `inout` | `mutating func` |
+| `consuming` | `consuming func` |
+
+Everything else follows from being an extension member, and none of it
+is a choice this language gets to make differently:
+
+- **Statically dispatched.** A method in a Swift extension is not in
+  the type's table and cannot be overridden. That is a live
+  distinction here rather than a theoretical one -- this compiler
+  models vtables, and an override through a base reference already
+  dispatches dynamically -- so a receiver method has to be kept *out*
+  of the table on purpose.
+- **No stored properties.** An extension may add methods, computed
+  properties and initializers, and may not add storage. A receiver
+  method is a method, so the question does not arise, but the rule is
+  what stops the syntax from being read as "a second place to declare
+  a field".
+- **Any type, including an imported one.** Extensions reach types from
+  other modules, so receiver methods do too. What they cannot do is
+  change the type's layout or its table, which is the same sentence
+  as the first two points.
+- **May satisfy a conformance.** Swift lets an extension's method
+  fulfil a protocol requirement, and there is no reason for this to
+  differ.
+
+### The one thing Swift does not have
+
+The name. Swift's receiver is always `self`; here it is whatever the
+declaration calls it, and `self` should keep working beside it for a
+file that mixes the two forms.
+
+So the desugaring is: an extension member whose body has one extra
+name in scope, bound to the receiver. That is a scope entry, not a
+parameter -- the method already receives `self`, and `v` is another
+way to say it rather than a second thing to pass.
+
+### Where the compiler already is
+
+Most of it, which is why this is small:
+
+- `resolveExtensions` in `analyzer/decl.go` resolves an extension's
+  type and hands its members to `readMembers` with the type's own
+  sinks, so an extension member is already an ordinary method of the
+  type.
+- `vil/gen` already lowers a method as a function with the receiver as
+  a parameter, called through a `function_ref`.
+- `mangle` already spells a method as a member of its type.
+
+The work is the parser -- a receiver clause between `func` and the
+name -- plus building the `ExtensionDecl` the rest of the pipeline
+already understands, and binding the receiver's name in the body's
+scope.
+
+### What is in the way
+
+Two gaps that a receiver method with an `inout` receiver would hit
+immediately, and that `mutating` already hits today. Both belong in
+`TODO.md` rather than here, and both should be fixed first, because a
+receiver method built on top of them would look broken for reasons
+that are not its own:
+
+- Assignment to an implicit-`self` property in a `mutating` method is
+  rejected: `mutating func scale(_ k: int32) { x = x * k }` reports
+  that the method has to be declared `mutating`, which it is. Reading
+  a bare `x` works; assigning to one does not.
+- Assignment through explicit `self` is not lowered: `self.x = self.x
+  * k` typechecks and then reports `cannot lower an assignment to
+  this expression yet`.
+
+### Still open
+
+- **Where may one be written?** Swift lets an extension sit anywhere
+  in the module. Matching that is simplest. Requiring the same file as
+  the type would be a smaller feature but a different one, and would
+  not match the "flatter source layout in large packages" this is for.
+- **`self` as well as the name?** Allowing both is one scope entry
+  more and keeps a mixed file readable. Allowing only the name is
+  stricter and makes a receiver method impossible to move into a type
+  body unedited.
+- **Generic receivers.** `func (s: borrowing Stack<T>) peek() -> T`
+  needs the generic parameters bound, which is what
+  `extension Stack { ... }` does implicitly. Worth settling with the
+  syntax rather than after it.
+- **Does the receiver clause admit a label?** `func (v: borrowing
+  vec2)` reads as a parameter and is not one. Keeping it label-free --
+  a name, a colon, an ownership word and a type -- is the narrower
+  grammar and the one that cannot be confused with the parameter list
+  that follows.
