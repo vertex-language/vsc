@@ -549,3 +549,41 @@ func use() -> int32 {
 		}
 	}
 }
+
+// TestCompoundAssignToComputed: `c.d += n` is a read and a write
+// around an operator, so it is a call, the operator, and a call. The
+// plain assignment path could not do it, and it was refused.
+func TestCompoundAssignToComputed(t *testing.T) {
+	const src = `
+struct T {
+    var raw: int32
+    var d: int32 {
+        get { return raw * 2 }
+        set { raw = newValue / 2 }
+    }
+}
+
+class B {
+    var n: int32 = 4
+    var d: int32 {
+        get { return n * 2 }
+        set { n = newValue / 2 }
+    }
+}
+
+func use() -> int32 {
+    var t = T(raw: 5)
+    t.d += 10
+    t.d -= 4
+    t.d *= 2
+    let b = B()
+    b.d += 8
+    return t.raw + b.n
+}
+`
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+	}
+}

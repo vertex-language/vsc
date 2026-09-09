@@ -41,7 +41,6 @@ already correct; only the feature is missing.
 | a *stored* static property | `it needs storage of its own and the one-time initializer` |
 | binding an optional of a wide payload | `whose payload is more than one register` |
 | top-level code | `top-level code is not supported` |
-| compound assignment to a computed property | `a call to its setter and not a write to storage` |
 | a static computed property's setter | not emitted; static storage first |
 | a subscript | `cannot lower a subscript of 'T'` |
 | `super.method()` | `cannot lower this expression yet` |
@@ -96,7 +95,9 @@ feature and the shape is worth remembering.
   calls one: the new value first and self last, `@inout` on a value
   type so the write is the caller's, and the reference itself on a
   class. `mangle.Setter` is the one accessor kind the mangler was
-  missing.
+  missing. A compound assignment is the getter, the operator and the
+  setter — the base evaluated twice, which is what every other
+  destination already does here.
 - **A getter could be emitted from the setter's body.** Which
   accessor a block is was decided by which came first rather than by
   its keyword, so a property writing `set` before `get` had its setter

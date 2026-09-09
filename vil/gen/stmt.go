@@ -170,6 +170,29 @@ func compoundOf(op string) (string, bool) {
 // through a modify accessor, which is what this becomes the day a
 // subscript or a computed property can be written to.
 func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
+	// A computed property is read and written through its accessors,
+	// so `c.d += n` is a call, an operator and a call. The base is
+	// evaluated twice, which is what the note above says about every
+	// other destination -- Swift reads it once through a modify
+	// accessor, which this does not have.
+	if mem, ok := e.X.(*ast.MemberExpr); ok && mem.Name != nil {
+		recv := g.typeOf(mem.X)
+		if f, isComputed := computedField(recv, g.text(mem.Name)); isComputed {
+			cur := g.getterCall(mem, recv, f, func() *vil.Value { return g.expr(mem.X) })
+			rhs := g.expr(e.Y)
+			if cur == nil || rhs == nil {
+				return
+			}
+			t := g.typeOf(e.X)
+			v := g.operate(e, op, t, t, cur, rhs)
+			if v == nil {
+				g.unsupported(e)
+				return
+			}
+			g.setterCallValue(mem, recv, f, g.consume(v))
+			return
+		}
+	}
 	said := len(g.diags)
 	addr := g.lvalue(e.X)
 	if addr == nil {

@@ -52,5 +52,12 @@ func main() -> Int32 {
     let box = Box()
     box.doubled = 14          // n = 7
 
-    return read + a + b + c + box.n
+    // A compound assignment is a read and a write around an
+    // operator, so it is a call, the operator, and a call.
+    var u = Temp(raw: 5)
+    u.doubled += 10           // doubled 10 -> 20, raw = 10
+    u.doubled -= 4            // doubled 20 -> 16, raw = 8
+    let d = u.raw
+
+    return read + a + b + c + box.n + d
 }

@@ -620,6 +620,22 @@ func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, v
 			"reached through the table the instance carries")
 		return
 	}
+	v := g.rvalue(value)
+	if v == nil {
+		return
+	}
+	g.setterCallValue(mem, recv, f, v)
+}
+
+// setterCallValue is setterCall over a value already lowered, which
+// is what a compound assignment has: it read the property, applied
+// the operator, and has the answer in hand.
+func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Field, v *vil.Value) {
+	if cl, ok := receiverClass(recv); ok && g.poly[cl] {
+		g.refuse(mem, "a computed property of a class with a subclass, whose setter is "+
+			"reached through the table the instance carries")
+		return
+	}
 	d := mangle.Decl{
 		Module:    g.moduleOfType(recv),
 		Context:   nominalChain(recv),
@@ -630,10 +646,6 @@ func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, v
 	name, err := mangle.Setter(d)
 	if err != nil {
 		g.errorAt(mem, "cannot name the setter of '"+f.Name+"': "+err.Error())
-		return
-	}
-	v := g.rvalue(value)
-	if v == nil {
 		return
 	}
 	var self *vil.Value
