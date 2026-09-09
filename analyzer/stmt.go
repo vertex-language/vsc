@@ -429,6 +429,36 @@ func (c *checker) checkReceiverMethod(d *ast.FuncDecl, scope *Scope) {
 	c.checkFuncBody(d, typeScope)
 }
 
+// checkMutatingPlacement rejects `mutating` where Swift does.
+//
+// A class is a reference type: a method that changes a property
+// changes the object, and the receiver needs no mutability of its
+// own. Swift refuses the modifier outright rather than ignoring it,
+// and so does this -- a modifier that is silently allowed to mean
+// nothing is a modifier a reader will trust.
+func (c *checker) checkMutatingPlacement(d *ast.FuncDecl, self types.Type) {
+	if self == nil {
+		return
+	}
+	cl, isClass := self.Underlying().(*types.Class)
+	if !isClass {
+		return
+	}
+	kind := "class"
+	if cl.IsActor {
+		kind = "actor"
+	}
+	for _, m := range d.Mods {
+		if m.Name == nil || m.Name.Text(c.file) != "mutating" {
+			continue
+		}
+		// swiftc's own wording, because tests/check compares against
+		// it: "'mutating' is not valid on instance methods in
+		// classes".
+		c.errorf(m.Pos(), "'mutating' is not valid on instance methods in %ses", kind)
+	}
+}
+
 // declaredType is the type a nominal declaration's name denotes.
 func (c *checker) declaredType(name *ast.Ident, scope *Scope) types.Type {
 	if name == nil {
@@ -471,6 +501,7 @@ func (c *checker) checkMembers(d ast.Decl, body *ast.MemberBlock, self types.Typ
 func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 	switch m := mem.(type) {
 	case *ast.FuncDecl:
+		c.checkMutatingPlacement(m, self)
 		c.checkFuncBody(m, typeScope)
 
 	case *ast.InitDecl:

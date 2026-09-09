@@ -29,12 +29,38 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 	poly := polymorphic(files, info)
 
 	var diags []token.Diagnostic
+	sawEntry := false
 	for _, f := range files {
 		g := &gen{m: m, info: info, file: f.Unit, module: name, poly: poly}
+		reportedTopLevel := false
 		for _, stmt := range f.Stmts {
 			decl, ok := stmt.(*ast.DeclStmt)
 			if !ok {
+				// A statement at file scope is checked like any
+				// other and then has nowhere to go: this compiler
+				// emits functions, and nothing runs before main. It
+				// used to be dropped here without a word, so the only
+				// sign was an undefined _main at the link. One
+				// diagnostic per file, because a script's worth of
+				// statements is one mistake.
+				if _, isConfig := stmt.(*ast.IfConfigStmt); isConfig {
+					continue
+				}
+				if _, isEmpty := stmt.(*ast.EmptyStmt); isEmpty {
+					continue
+				}
+				if !reportedTopLevel {
+					reportedTopLevel = true
+					g.errorAt(stmt, "top-level code is not supported: "+
+						"put these statements in a function, and the program's in 'func main() -> Int32'")
+					diags = append(diags, g.diags...)
+					g.diags = nil
+				}
 				continue
+			}
+			if fn, isFunc := decl.D.(*ast.FuncDecl); isFunc && fn.Recv == nil &&
+				fn.Name != nil && name == EntryModule && fn.Name.Text(f.Unit) == EntryName {
+				sawEntry = true
 			}
 			switch d := decl.D.(type) {
 			case *ast.FuncDecl:
@@ -80,6 +106,20 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*vil.Module, []
 	tg.vtables(files)
 	tg.witnessTables(files)
 	diags = append(diags, tg.diags...)
+
+	// A program with no entry point is the compiler's to report, in
+	// its own words. Left to the linker it arrives as an undefined
+	// _main, which names the symbol rather than the mistake.
+	if name == EntryModule && !sawEntry && len(files) > 0 {
+		diags = append(diags, token.Diagnostic{
+			Pos:      files[0].Pos(),
+			End:      files[0].Pos(),
+			Severity: token.Error,
+			File:     files[0].Unit,
+			Message: "no entry point: module '" + EntryModule +
+				"' has no 'func " + EntryName + "()'. A library is built with -module",
+		})
+	}
 	return m, diags
 }
 

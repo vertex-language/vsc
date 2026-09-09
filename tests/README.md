@@ -93,10 +93,10 @@ refusing outside `-enable-library-evolution`; and the two interfaces
 are the same text apart from the header. So the interface does not say
 which ABI the library was built for -- its `// swift-module-flags:`
 line does, and a library built with library evolution is resilient:
-its non-@frozen types have no layout the client may rely on, and this
-compiler reads them as if they did. Linking against one is a bus
-error, not a diagnostic. That is the reason to read the flags line,
-and it is not read yet.
+its non-@frozen types have no layout a client may rely on. That is why
+the flags line is read: `vsc.go` refuses such a library by name rather
+than compiling against a layout that is not there, which would link
+and then die on the first field read.
 
 A program returns 42 when it is satisfied and the number of the check
 that failed otherwise. There is no oracle to compare against here --

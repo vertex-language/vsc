@@ -564,11 +564,29 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			return types.Typ[types.Bool]
 
 		case "??":
-			// Nil coalescing: T? ?? T -> T
+			// Nil coalescing. Swift has two forms and this answers
+			// both: `T? ?? T` is a T, and `T? ?? T?` is a T?.
 			if opt, ok := lhs.(*types.Optional); ok {
-				if types.AssignableTo(rhs, opt.Wrapped) {
-					return opt.Wrapped
+				// The right operand is read again in the wrapped
+				// type's context, so an untyped literal adopts it.
+				// Without this, `a ?? 0` against an `int32?` left the
+				// literal at its default of Int, failed the
+				// assignability test below, and fell out of the case
+				// still optional -- a wrong type rather than a
+				// diagnostic.
+				if t, adopted := c.adoptTree(e.Y, opt.Wrapped, scope); adopted {
+					rhs = t
 				}
+				switch {
+				case types.AssignableTo(rhs, opt.Wrapped):
+					return opt.Wrapped
+				case types.AssignableTo(rhs, lhs):
+					return lhs
+				}
+				c.typeErrorf(e.Op.Pos(),
+					"binary operator '??' cannot be applied to operands of type '%s' and '%s'",
+					lhs, rhs)
+				return opt.Wrapped
 			}
 			return lhs
 
