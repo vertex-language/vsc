@@ -724,33 +724,47 @@ func pairKind(_ p: (int32, int32)) -> int32 {
 	}
 }
 
-// TestObservedPropertyWriteRefused: willSet and didSet were parsed
-// and dropped, so a write to an observed property stored the value
-// and ran neither observer -- a program that compiled, ran, and did
-// half of what its source says. swiftc answers 11 for the log below;
-// this answered 0.
-func TestObservedPropertyWriteRefused(t *testing.T) {
+// TestObservedPropertyWrite: willSet and didSet were parsed and
+// dropped, so a write stored the value and ran neither observer -- a
+// program that compiled, ran, and did half of what its source says.
+// A write is the store with the observers around it now.
+func TestObservedPropertyWrite(t *testing.T) {
 	const src = `
 struct S {
     var log: int32 = 0
-    var n: int32 = 0 {
-        willSet { log = log + 1 }
-        didSet { log = log + 10 }
+    var both: int32 = 0 {
+        willSet { log = log * 10 + 1 }
+        didSet { log = log * 10 + 2 }
     }
+    var onlyWill: int32 = 0 { willSet { log = newValue } }
+    var onlyDid: int32 = 0 { didSet { log = oldValue } }
+    var named: int32 = 0 {
+        willSet(nv) { log = nv }
+        didSet(ov) { log = ov }
+    }
+}
+
+class C {
+    var log: int32 = 0
+    var n: int32 = 0 { didSet { log = oldValue + 7 } }
 }
 
 func use() -> int32 {
     var s = S()
-    s.n = 5
-    return s.log
+    s.both = 1
+    s.onlyWill = 2
+    s.onlyDid = 3
+    s.named = 4
+    s.both += 5
+    let c = C()
+    c.n = 3
+    return s.log + c.log
 }
 `
-	_, diags := compile(t, src, vsc.Options{})
-	if !vsc.Errors(diags) {
-		t.Fatal("a write to an observed property ran neither observer and said nothing")
-	}
-	if !strings.Contains(diags[0].Message, "willSet or didSet") {
-		t.Errorf("diagnostic does not name the problem: %s", diags[0])
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
 	}
 }
 

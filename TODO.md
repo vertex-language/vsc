@@ -48,7 +48,6 @@ already correct; only the feature is missing.
 | top-level code | `top-level code is not supported` |
 | a static computed property's setter | not emitted; static storage first |
 | `defer` | `cannot lower a defer` |
-| a write to a property with `willSet`/`didSet` | `whose observers this does not run` |
 | a closure that captures | `cannot lower a closure that captures 'k'` |
 | a tuple pattern in a `switch` | `cannot lower this pattern in a switch` |
 | a subscript | `cannot lower a subscript of 'T'` |
@@ -101,10 +100,10 @@ feature and the shape is worth remembering.
   property with `willSet` or `didSet` stored the value and ran
   neither, so the program compiled, ran and did half of what its
   source says — `s.n = 5` where both observers touch a log left the
-  log at 0 where swiftc leaves 11. Refused now rather than silently
-  skipped. Running them is the next step: a write becomes willSet,
-  the store, then didSet, which is the setter path with a store in
-  the middle.
+  log at 0 where swiftc leaves 11. A write is the store with the
+  observers around it now: the old value read first, `willSet`, the
+  store, `didSet`. The old value is read before the store because
+  after it there is nothing left to read.
 - **A memberwise initializer could not leave a property to its
   default.** `S()` where `S` declares `var n: int32 = 5` was refused —
   as ordinary as Swift gets. The default is an expression on the

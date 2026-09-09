@@ -177,13 +177,14 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 	// accessor, which this does not have.
 	if mem, ok := e.X.(*ast.MemberExpr); ok && mem.Name != nil {
 		recv := g.typeOf(mem.X)
-		if _, observed := observedField(recv, g.text(mem.Name)); observed {
-			g.refuse(mem, "a write to a property with willSet or didSet, whose "+
-				"observers this does not run")
-			return
-		}
-		if f, isComputed := computedField(recv, g.text(mem.Name)); isComputed {
-			cur := g.getterCall(mem, recv, f, func() *vil.Value { return g.expr(mem.X) })
+		if f, viaSetter := setterField(recv, g.text(mem.Name)); viaSetter {
+			// Read as the property is read: a computed one through
+			// its getter, and one with observers straight out of the
+			// storage it has. Only the write differs for the second.
+			cur := g.expr(e.X)
+			if _, isComputed := computedField(recv, g.text(mem.Name)); isComputed {
+				cur = g.getterCall(mem, recv, f, func() *vil.Value { return g.expr(mem.X) })
+			}
 			rhs := g.expr(e.Y)
 			if cur == nil || rhs == nil {
 				return
@@ -225,22 +226,14 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 // rather than `store`: whether the destination already held something
 // is what definite initialization decides, and it has not run yet.
 func (g *gen) assign(e *ast.BinaryExpr) {
-	// A computed property is written by calling its setter. There is
-	// no storage to store into: `c.doubled = 20` is a call, and
-	// taking an address would name a field the type does not have.
+	// Some properties are written by calling a setter rather than by
+	// storing. A computed one has no storage to store into; one with
+	// willSet or didSet has storage and the observers around it, and
+	// a plain store would run neither.
 	if mem, ok := e.X.(*ast.MemberExpr); ok && mem.Name != nil {
 		recv := g.typeOf(mem.X)
-		if f, isComputed := computedField(recv, g.text(mem.Name)); isComputed {
+		if f, viaSetter := setterField(recv, g.text(mem.Name)); viaSetter {
 			g.setterCall(mem, recv, f, e.Y)
-			return
-		}
-		// A property with willSet or didSet is stored, so this would
-		// store into it -- and run neither observer. That compiled
-		// and ran and did half of what the source says, which is
-		// worse than not building.
-		if _, observed := observedField(recv, g.text(mem.Name)); observed {
-			g.refuse(mem, "a write to a property with willSet or didSet, whose "+
-				"observers this does not run")
 			return
 		}
 	}

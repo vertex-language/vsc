@@ -140,12 +140,21 @@ func (g *gen) emitGetters(body *ast.MemberBlock, recv types.Type) {
 		}
 		static := isStaticDecl(m.Mods)
 		for _, b := range m.Bindings {
-			block := g.getterBody(b)
-			if block == nil {
-				continue
-			}
 			name, ftype := g.computedName(b), g.bindingType(b, recv)
 			if name == "" || ftype == nil {
+				continue
+			}
+			// A property with willSet or didSet is stored and has no
+			// getter, so it needs the other half only: the store with
+			// its observers around it.
+			if !static {
+				if f, observed := observedField(recv, name); observed && f != nil {
+					g.emitObservedSetter(recv, name, ftype, b)
+					continue
+				}
+			}
+			block := g.getterBody(b)
+			if block == nil {
 				continue
 			}
 			g.emitGetter(recv, name, ftype, block, static)
@@ -228,6 +237,11 @@ func (g *gen) bindingType(b *ast.PatternBinding, recv types.Type) types.Type {
 		if f != nil && f.Name == name && f.IsComputed {
 			return f.Type
 		}
+	}
+	// And a stored property with observers, which is stored and so is
+	// among the fields rather than among the computed ones.
+	if f, ok := observedField(recv, name); ok {
+		return f.Type
 	}
 	return nil
 }
@@ -590,9 +604,17 @@ func (g *gen) accessorValue(a *ast.Accessor) analyzer.Symbol {
 	if scope == nil {
 		return nil
 	}
-	name := "newValue"
 	if a.Name != nil {
-		name = g.text(a.Name)
+		return scope.Lookup(g.text(a.Name))
+	}
+	// The implicit name, which is the accessor's own: a setter and a
+	// willSet are handed the value going in, and a didSet the one
+	// that was there. Defaulting every accessor to newValue left a
+	// didSet looking up a name the analyzer had not declared, and
+	// oldValue reached lowering as a name with nothing behind it.
+	name := "newValue"
+	if a.Keyword != nil && g.text(a.Keyword) == "didSet" {
+		name = "oldValue"
 	}
 	return scope.Lookup(name)
 }
@@ -712,4 +734,132 @@ func storedSinks(t types.Type) ([]*types.Field, []*types.Field, []*types.Field, 
 		return n.Fields, nil, nil, nil, nil, nil
 	}
 	return nil, nil, nil, nil, nil, nil
+}
+
+// accessorNamed is the accessor of a binding with this keyword.
+func (g *gen) accessorNamed(b *ast.PatternBinding, want string) *ast.Accessor {
+	if b == nil || b.Accessors == nil {
+		return nil
+	}
+	for _, a := range b.Accessors.Accessors {
+		if a != nil && a.Keyword != nil && a.Body != nil && g.text(a.Keyword) == want {
+			return a
+		}
+	}
+	return nil
+}
+
+// emitObservedSetter lowers the setter a property with willSet or
+// didSet needs.
+//
+// The property is stored, so this is not a getter's counterpart --
+// it is the store with the observers around it, which is what Swift
+// synthesizes and what makes a write to such a property more than a
+// write:
+//
+//	old = self.n     // only where didSet wants it
+//	willSet(new)
+//	self.n = new
+//	didSet(old)
+//
+// The old value is read before the store, because after it there is
+// nothing left to read.
+func (g *gen) emitObservedSetter(recv types.Type, name string, t types.Type, b *ast.PatternBinding) {
+	will, did := g.accessorNamed(b, "willSet"), g.accessorNamed(b, "didSet")
+	if will == nil && did == nil {
+		return
+	}
+	d := mangle.Decl{
+		Module:    g.moduleOfType(recv),
+		Context:   nominalChain(recv),
+		Name:      name,
+		Signature: &types.Signature{Results: t},
+		ModuleOf:  g.moduleOfType,
+	}
+	symbol, err := mangle.Setter(d)
+	if err != nil {
+		g.errorAt(b, "cannot name the setter of '"+name+"': "+err.Error())
+		return
+	}
+
+	f := g.m.Func(symbol).SetSourceName(name).
+		SetLinkage(vil.Hidden).SetAttr("ossa")
+	g.fn = f
+	g.recv = recv
+	g.entry = false
+	f.Type().Params = nil
+	g.locals = map[analyzer.Symbol]*local{}
+	g.scopes = nil
+	g.loops, g.pending = nil, ""
+	g.self = nil
+	g.push()
+	g.blk = f.Entry()
+
+	vt := lowerType(t)
+	value := f.Param(vt, paramConvention(&types.Param{Type: t}, vt))
+
+	st := lowerType(recv)
+	var selfValue *vil.Value
+	if isClass(recv) {
+		selfValue = f.Param(st, selfConvention(st))
+	} else {
+		selfValue = f.Param(st.Address(), vil.ParamInout)
+		g.self = &local{addr: selfValue, typ: st}
+	}
+	f.Type().Convention = vil.Method
+
+	member := memberName(recv, name)
+	addr := func() *vil.Value {
+		if isClass(recv) {
+			return g.blk.RefElementAddr(selfValue, member, vt)
+		}
+		return g.blk.StructElementAddr(g.self.addr, member, vt.Address())
+	}
+
+	// The old value, before the store replaces it.
+	var old *vil.Value
+	if did != nil {
+		a := addr()
+		access := g.blk.BeginAccess(a, "read", "unknown")
+		old = g.loaded(g.blk.Load(access, loadQualifier(vt)), vt)
+		g.blk.EndAccess(access)
+	}
+
+	if will != nil {
+		if sym := g.accessorValue(will); sym != nil {
+			g.locals[sym] = &local{value: value, typ: vt}
+		}
+		g.block(will.Body)
+	}
+
+	if g.blk != nil && g.blk.Term() == nil {
+		a := addr()
+		access := g.blk.BeginAccess(a, "modify", "unknown")
+		g.blk.Assign(value, access)
+		g.blk.EndAccess(access)
+	}
+
+	if did != nil && g.blk != nil && g.blk.Term() == nil {
+		if sym := g.accessorValue(did); sym != nil {
+			g.locals[sym] = &local{value: old, typ: vt}
+		}
+		g.block(did.Body)
+	}
+
+	if g.blk != nil && g.blk.Term() == nil {
+		g.unwind()
+		g.blk.Return(g.void())
+	}
+	g.pop()
+	g.fn, g.blk, g.recv, g.self = nil, nil, nil, nil
+}
+
+// setterField is the property a write goes through a setter for:
+// a computed one, whose storage does not exist, or a stored one with
+// observers, whose write is more than a store.
+func setterField(t types.Type, name string) (*types.Field, bool) {
+	if f, ok := computedField(t, name); ok {
+		return f, true
+	}
+	return observedField(t, name)
 }
