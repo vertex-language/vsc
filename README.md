@@ -11,8 +11,8 @@ For interop with Swift's ecosystem, see [Compatibility](#compatibility).
 ## The language
 
 A program is functions. `main` returning `int32` is the entry point,
-and what it returns is the process exit status — there is no
-top-level code.
+and what it returns is the process exit status. There is no top-level
+code yet — see `TODO.md`.
 
 ```swift
 func fib(_ n: int32) -> int32 {
