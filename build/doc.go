@@ -19,26 +19,48 @@
 //
 // Neither step shells out. The instruction selector is ir/lower, the
 // object writer is the architecture's obj package, and the linker is
-// macho/link — vertex-language repositories, shared with vcc, each of
-// which takes bytes and returns bytes. A machine with no cc, no as
-// and no ld builds and runs a program with this package, which is the
-// claim the compiler makes and is what build/link_test.go holds it
-// to.
+// the container's — vertex-language repositories, shared with vcc,
+// each of which takes bytes and returns bytes. A machine with no cc,
+// no as, no ld and no link.exe builds and runs a program with this
+// package, which is the claim the compiler makes and is what
+// build/link_test.go holds it to on every target.
 //
-// What the platform still supplies is its own libraries. A hosted
-// program links against libSystem, whose stub lives in the macOS SDK,
-// and SDK() is the lookup for it. A freestanding link takes none of
-// that and undertakes to define everything it names.
+// What the platform still supplies is its own libraries, and build/
+// sysroot is where they are found. A hosted macOS program links
+// against libSystem, whose stub lives in the SDK; a hosted Windows
+// program links against the static MSVC runtime, which is two
+// installations found by a walk rather than one path. A freestanding
+// link takes neither and undertakes to define everything it names.
+//
+// # The targets
+//
+// Two: aarch64 Mach-O and x86-64 PE. Each is a case in the switch
+// that dispatches on the target's use path, in Object and again in
+// Executable, and the two switches are the whole of what a target
+// costs here — the backend, the writer and the linker are all
+// somebody else's package.
+//
+// A backend and a writer exist for more than these two. What a third
+// row would need is the same three lines and a way to link what comes
+// out; a row that compiles but cannot be linked is a promise this
+// package does not keep, which is why vsc/target.go has no such row.
 //
 // # What is not here
 //
-// One target: aarch64 Mach-O. A backend and a writer exist for more,
-// and each is a case in the switch that dispatches on the target;
-// what is missing is the target table that names them, not the code
-// they would call.
+// Not every program builds for every target, and the one difference
+// today is not the backend's. `print`, and the array and Any
+// machinery under it, lower to calls into libswiftCore, which is part
+// of the system on macOS and does not exist on Windows. Such a
+// program is refused for x86_64-windows, and is refused in lowering
+// rather than in the link: the Microsoft convention returns one
+// value, and the two-word return those calls want is an sret the
+// amd64 backend has not written yet. Either half alone would be
+// enough to stop it.
 //
-// A runtime, too. Nothing calls vertex_retain or vertex_release yet
-// because nothing lowers a class, and when something does, the two
-// functions are a VIR module this compiler emits for itself rather
-// than C somebody has to compile first.
+// The Vertex runtime is not in that position. vertex_alloc,
+// vertex_retain and vertex_release are a VIR module this compiler
+// emits for itself — see Runtime — so they go through the same
+// instruction selection and the same object writer as the program
+// that calls them, and a target that can compile a program can build
+// the runtime for it by construction.
 package build

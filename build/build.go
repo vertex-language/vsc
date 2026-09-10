@@ -7,8 +7,10 @@ import (
 	"runtime"
 
 	"github.com/vertex-language/ir"
+	amd64lower "github.com/vertex-language/ir/lower/amd64"
 	arm64lower "github.com/vertex-language/ir/lower/arm64"
 
+	amd64pe "github.com/vertex-language/amd64/obj/pe"
 	arm64macho "github.com/vertex-language/arm64/obj/macho"
 	machocore "github.com/vertex-language/macho"
 )
@@ -31,6 +33,8 @@ func Object(m *ir.Module, opts Options) ([]byte, error) {
 	switch m.Use() {
 	case "aarch64/macos":
 		return aarch64MachO(m, opts)
+	case "x86_64/windows":
+		return amd64PE(m, opts)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrTarget, m.Use())
 }
@@ -66,6 +70,29 @@ func aarch64MachO(m *ir.Module, opts Options) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// amd64PE lowers for x86-64 and writes a COFF object.
+//
+// Nothing is prefixed: COFF spells a C symbol the way the source did,
+// which is why the module arrives with its names already final and
+// why the libcalls the backend invents -- a memcpy, a soft-float
+// helper -- are named plainly. The Microsoft argument convention is
+// not asked for either; it is in the module's layout, which says
+// abi "ms", and the backend reads it there.
+func amd64PE(m *ir.Module, opts Options) ([]byte, error) {
+	o, err := amd64lower.Lower(m, amd64lower.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
+	var buf bytes.Buffer
+	// The .file symbol a debugger and a map file want. Platform and
+	// MinOS are Mach-O's and say nothing here, which is what their
+	// documentation on Options already promises.
+	if err := amd64pe.Write(&buf, o, amd64pe.Options{File: m.Name()}); err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // Host is the target this machine runs, or the zero Target where this
 // package has no backend for it.
 //
@@ -75,6 +102,8 @@ func Host() (ir.Target, bool) {
 	switch {
 	case runtime.GOARCH == "arm64" && runtime.GOOS == "darwin":
 		return ir.AArch64MacOS, true
+	case runtime.GOARCH == "amd64" && runtime.GOOS == "windows":
+		return ir.X86_64Windows, true
 	}
 	return ir.Target{}, false
 }

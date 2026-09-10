@@ -3,6 +3,7 @@ package build_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -43,10 +44,17 @@ func compileAgainst(t *testing.T, dir string) []vsc.Diagnostic {
 
 // TestAnInterfaceIsFoundWhereOneIsShipped: the three layouts.
 func TestAnInterfaceIsFoundWhereOneIsShipped(t *testing.T) {
+	// A built module holds one interface per target, named for it,
+	// and the compiler reads the one for the machine it is running
+	// on. So the case is written for that machine rather than for a
+	// particular one: the layout is what is being tested, and a file
+	// called arm64e-apple-macos.swiftinterface tests it only where
+	// arm64 is what the host answers.
+	built := "Geometry.swiftmodule/" + hostArch() + "-apple-macos.swiftinterface"
 	for _, c := range []struct{ name, path string }{
 		{"written by this compiler", "Geometry.vertexinterface"},
 		{"written by swiftc, by path", "Geometry.swiftinterface"},
-		{"inside a built module", "Geometry.swiftmodule/arm64e-apple-macos.swiftinterface"},
+		{"inside a built module", built},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -62,6 +70,16 @@ func TestAnInterfaceIsFoundWhereOneIsShipped(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hostArch is the architecture spelling a built module's interfaces
+// are named with, for this machine: Swift's, which is Go's with
+// amd64 spelled the way everyone else spells it.
+func hostArch() string {
+	if runtime.GOARCH == "amd64" {
+		return "x86_64"
+	}
+	return runtime.GOARCH
 }
 
 // TestAModuleThatIsNotThereSaysWhereItLooked.

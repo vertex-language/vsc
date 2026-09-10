@@ -155,7 +155,9 @@ func TestBuildNamesTheOutput(t *testing.T) {
 	if code, _, stderr := run(t, "build", "hello.vs"); code != 0 {
 		t.Fatalf("exit = %d; stderr:\n%s", code, stderr)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "hello")); err != nil {
+	target, _ := vsc.HostTarget()
+	name := vsc.ImageName(target, "hello")
+	if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 		t.Errorf("no artifact named for the input: %v", err)
 	}
 }
@@ -177,7 +179,7 @@ func TestEmit(t *testing.T) {
 	path := write(t, "fib.vs", program)
 	for _, c := range []struct{ mode, want string }{
 		{"vil", "sil_stage lowered"},
-		{"vir", `use "aarch64/macos"`},
+		{"vir", `use "` + hostUse() + `"`},
 	} {
 		t.Run(c.mode, func(t *testing.T) {
 			code, stdout, stderr := run(t, "build", "--emit", c.mode, "-o", "-", path)
@@ -192,7 +194,7 @@ func TestEmit(t *testing.T) {
 }
 
 // TestEmitObject writes an object rather than a program: the bytes
-// are Mach-O, and they are not an executable.
+// are the target's container, and they are not an executable.
 func TestEmitObject(t *testing.T) {
 	hosted(t)
 	src := write(t, "fib.vs", program)
@@ -204,8 +206,21 @@ func TestEmitObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(b) < 4 || b[0] != 0xcf || b[1] != 0xfa {
-		t.Errorf("not a 64-bit Mach-O: % x", b[:min(8, len(b))])
+	// The first two bytes say which container. Mach-O opens with
+	// its 64-bit magic, little-endian; a COFF object opens with the
+	// machine, and 0x8664 is AMD64.
+	var magic [2]byte
+	var what string
+	switch vsc.HostName() {
+	case "aarch64-macos":
+		magic, what = [2]byte{0xcf, 0xfa}, "a 64-bit Mach-O"
+	case "x86_64-windows":
+		magic, what = [2]byte{0x64, 0x86}, "an AMD64 COFF object"
+	default:
+		t.Skipf("no container magic written down for %s", vsc.HostName())
+	}
+	if len(b) < 2 || b[0] != magic[0] || b[1] != magic[1] {
+		t.Errorf("not %s: % x", what, b[:min(8, len(b))])
 	}
 }
 
@@ -299,9 +314,23 @@ func TestEnv(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	for _, want := range []string{"target\t", "entry\t_main", "sdk\t"} {
+	for _, want := range []string{"target\t", "entry\t" + hostEntry(), "libdirs\t"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("missing %q in:\n%s", want, stdout)
 		}
 	}
+}
+
+// hostUse and hostEntry are what this machine's target answers, for
+// the tests that check a message naming one. Asked rather than
+// spelled out: a test that writes one target's answer down is a test
+// that only runs on that target.
+func hostUse() string {
+	t, _ := vsc.HostTarget()
+	return t.Use()
+}
+
+func hostEntry() string {
+	t, _ := vsc.HostTarget()
+	return vsc.EntrySymbol(t)
 }

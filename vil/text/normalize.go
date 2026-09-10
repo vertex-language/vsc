@@ -51,7 +51,13 @@ func Normalize(text string) string {
 	symbols := map[string]string{}
 	values := map[string]string{}
 
-	for _, line := range strings.Split(text, "\n") {
+	// Line endings are not one of the three things, and they are not
+	// something either compiler decided: the SIL in testdata was
+	// written by swiftc with newlines and reaches a Windows checkout
+	// with carriage returns, so a comparison that kept them reported
+	// two identical texts as different and printed them side by side
+	// looking the same.
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
 		line = reComment.ReplaceAllString(line, "")
 		if strings.TrimSpace(line) == "" {
 			continue

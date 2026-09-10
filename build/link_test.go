@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/vertex-language/vsc"
@@ -16,18 +15,22 @@ import (
 // Every other program in this package is handed to clang to link,
 // which proves the object is right and leaves the claim this compiler
 // actually makes untested: that it needs no host toolchain. These
-// tests link with vertex-language's own Mach-O linker and run what
-// comes out. A machine with no clang passes them; a machine with no
-// SDK does not, and cannot, since the SDK is where libSystem's stub
-// is.
+// tests link with vertex-language's own linker and run what comes
+// out. A machine with no clang passes them; a machine with no
+// platform libraries does not, and cannot, since that is where the
+// startup and malloc are.
+//
+// They run wherever this package has a backend, which is the only
+// condition they have: no clang, no swiftc, no oracle of any kind.
+// That makes them the tests that follow a new target — the check that
+// a machine which can compile can also link and run is the whole of
+// what "supports a target" means here, and it is the same check on
+// every one.
 
 // linkProgram compiles src as a program and links it into an
 // executable, returning the path it was written to.
 func linkProgram(t *testing.T, src string, opts build.LinkOptions) string {
 	t.Helper()
-	if runtime.GOARCH != "arm64" || runtime.GOOS != "darwin" {
-		t.Skip("not on Apple Silicon; skipping the link-and-run check")
-	}
 	target, ok := build.Host()
 	if !ok {
 		t.Skip("no backend for this machine")
@@ -46,7 +49,10 @@ func linkProgram(t *testing.T, src string, opts build.LinkOptions) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "prog")
+	// The extension the platform gives a program, because this one is
+	// started and not merely written: Windows resolves an
+	// extensionless path through %PATHEXT% and finds nothing there.
+	path := vsc.ImageName(target, filepath.Join(t.TempDir(), "prog"))
 	if err := os.WriteFile(path, exe, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +87,16 @@ func TestExecutableExitsZero(t *testing.T) {
 	}
 }
 
-// TestExecutableIsSigned: an arm64 executable macOS will not run is
-// not an executable. The linker signs ad hoc, and the test that it
-// did is that the process started at all — an unsigned one is killed
-// before main.
-func TestExecutableIsSigned(t *testing.T) {
+// TestExecutableStarts: an image the loader refuses is not an
+// executable, and the test that it is one is that the process ran at
+// all rather than being killed before main.
+//
+// It is macOS this catches. An arm64 binary that is not signed will
+// not execute there, the linker signs ad hoc for that reason, and a
+// regression in the signature shows up here and nowhere else. The
+// same assertion on Windows costs nothing and says the CRT startup
+// reached main.
+func TestExecutableStarts(t *testing.T) {
 	path := linkProgram(t, `func main() -> Int32 { return 7 }`, build.LinkOptions{})
 	cmd := exec.Command(path)
 	err := cmd.Run()

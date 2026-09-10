@@ -13,4 +13,6 @@ package build
 
 import (
 	_ "github.com/vertex-language/macho/arm64"
+
+	_ "github.com/vertex-language/pe/x64"
 )

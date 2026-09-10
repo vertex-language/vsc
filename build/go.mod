@@ -3,10 +3,12 @@ module github.com/vertex-language/vsc/build
 go 1.23
 
 require (
+	github.com/vertex-language/amd64 v0.0.0
 	github.com/vertex-language/arm64 v0.0.0
 	github.com/vertex-language/ir v0.0.0
 	github.com/vertex-language/ir/lower v0.0.0
 	github.com/vertex-language/macho v0.0.0
+	github.com/vertex-language/pe v0.0.0
 	github.com/vertex-language/vsc v0.0.0-00010101000000-000000000000
 )
 

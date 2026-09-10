@@ -1,9 +1,9 @@
 # vsc
 
 The Vertex Source Compiler. It takes Vertex source and produces a native
-Mach-O executable — no assembler, no linker, no `cc`, nothing from a
-platform toolchain. The instruction selector, the object writer and
-the linker are all libraries in this project's family, so a machine
+executable — no assembler, no linker, no `cc`, no `cl.exe`, nothing
+from a platform toolchain. The instruction selector, the object writer
+and the linker are all libraries in this project's family, so a machine
 with none of that installed still builds and runs a program.
 
 For interop with Swift's ecosystem, see [Compatibility](#compatibility).
@@ -12,7 +12,7 @@ For interop with Swift's ecosystem, see [Compatibility](#compatibility).
 
 A program is functions. `main` returning `int32` is the entry point,
 and what it returns is the process exit status. There is no top-level
-code yet — see `TODO.md`.
+code yet — see `docs/TODO.md`.
 
 ```swift
 func fib(_ n: int32) -> int32 {
@@ -102,7 +102,32 @@ body reaches members by the receiver's name or by implicit `self`.
 
 ## Status
 
-One target: `aarch64-macos`. Apple silicon, macOS.
+Two targets:
+
+| Target | Machine | Container |
+| --- | --- | --- |
+| `aarch64-macos` | Apple silicon, macOS | Mach-O |
+| `x86_64-windows` | x86-64, Windows | PE/COFF |
+
+A bare `vsc build` picks the one this machine runs; `-target` names
+the other. Both are held to the same claim — a program compiles,
+links and runs with nothing from a platform toolchain installed — and
+`build/link_test.go` is where that is checked, on each of them.
+
+What the platform still supplies is its own libraries. On macOS that
+is libSystem, whose stub lives in the SDK. On Windows it is the MSVC
+toolset and the Windows SDK, which `vsc` finds itself rather than
+requiring a Developer Command Prompt: `vsc env` prints what it found.
+`-freestanding` takes neither and undertakes to define everything the
+program names.
+
+One thing is macOS-only and is not a matter of the backend: `print`,
+and the array and `Any` machinery under it, call into libswiftCore,
+which is part of the system there and is not on Windows. A program
+that says `print` builds for `aarch64-macos` and is refused for
+`x86_64-windows`. `docs/libswiftCore.md` says what that library is,
+what this compiler reaches into it for, and what a standard library of
+Vertex's own would have to write to stop needing it.
 
 What the language can express today is defined by `tests/compiler/` —
 194 whole programs the compiler builds and runs. A program goes in
@@ -136,8 +161,13 @@ parent/
   vsc/     this repository
   ir/      the machine IR, and lower/ inside it
   arm64/   the AArch64 assembler, with asm/ beside it
+  amd64/   the x86-64 assembler, with asm/ beside it
   macho/   the Mach-O reader, writer and linker
+  pe/      the PE/COFF reader, writer and linker
 ```
+
+Only the halves a target needs are read, but all four are named in
+`go.mod`, so a checkout missing one will not build.
 
 Then build the command (Go 1.23 or later), and put it on your `PATH`:
 
@@ -233,7 +263,7 @@ interop-related tasks of Swift's ecosystem, when possible.
 the source of truth: what either accepts is valid, what neither
 accepts is not. Anything else is a bug rather than a design decision —
 a program that should build and does not, one that should not and
-does, or one the two read differently. `TODO.md` holds the known ones.
+does, or one the two read differently. `docs/TODO.md` holds the known ones.
 
 ### Grammar
 
@@ -395,9 +425,16 @@ go test ./...              # front end and CLI; ~20s
 cd build && go test ./...  # the corpora; ~3 minutes
 ```
 
-The `build` suite needs an Apple-silicon Mac, plus `swiftc` and
-`clang` on the `PATH` for its half of every comparison. Without them
-it skips rather than fails — there is no oracle to compare against.
+Most of the `build` suite compares against the ecosystem, and so
+needs an Apple-silicon Mac with `swiftc` and `clang` on the `PATH`.
+Without them it skips rather than fails — there is no oracle to
+compare against.
+
+What does not need an oracle runs everywhere the compiler does:
+`link_test.go`, which links and runs a program with nothing installed,
+`xmod_test.go`, which does the same across two modules, and
+`build/sysroot`, which drives the toolchain walk as machines the one
+running it is not. Those are the tests a new target has to pass.
 
 ## License
 

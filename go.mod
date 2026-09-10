@@ -8,10 +8,12 @@ require (
 )
 
 require (
+	github.com/vertex-language/amd64 v0.0.0 // indirect
 	github.com/vertex-language/arm64 v0.0.0 // indirect
 	github.com/vertex-language/asm v0.0.0 // indirect
 	github.com/vertex-language/ir/lower v0.0.0 // indirect
 	github.com/vertex-language/macho v0.0.0 // indirect
+	github.com/vertex-language/pe v0.0.0 // indirect
 )
 
 replace (

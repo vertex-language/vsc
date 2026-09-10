@@ -77,7 +77,7 @@ Vertex is an independent compiler targeting the Swift language specification plu
 
 * **Platform & Binary Format Support (Cross-Platform Targets):**
 * Linux support using the custom `elf` package.
-* Windows support using the custom `pe` package.
+* `print` on Windows: it lowers to libswiftCore calls, which do not exist there, and the two-word return they want is an sret the `amd64` backend has not written for the Microsoft convention. A Vertex standard library of its own would settle both.
 
 
 
@@ -86,6 +86,9 @@ Vertex is an independent compiler targeting the Swift language specification plu
 ---
 
 **Fixed Issues**
+
+* **Platform Support:**
+* Windows support using the custom `pe` and `amd64` packages: `x86_64-windows` builds, links and runs with no Visual Studio environment — the MSVC toolset and Windows SDK are found the way the platform's own tools find them, and `vsc env` prints what it found.
 
 * **Runtime & Code Generation Fixes:**
 * Bitshifts (`<<`, `>>`) for counts exceeding operand width or negative values now match Swift semantics instead of emitting undefined CPU instructions.

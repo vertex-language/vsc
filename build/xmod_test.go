@@ -115,37 +115,42 @@ func main() -> Int32 {
 		t.Fatalf("app lower: %v", err)
 	}
 
-	dir := t.TempDir()
-	write := func(name string, mod *ir.Module) string {
-		obj, err := build.Object(mod, build.Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, obj, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	appObj := write("app.o", appVIR)
-	libObj := write("lib.o", lib.VIR)
-	rt, err := build.Runtime(target)
+	// Linked by this project rather than by clang. The two objects
+	// are what the test made and the runtime is what Executable adds,
+	// so the link needs nothing installed and the test runs wherever
+	// the compiler does.
+	runProgram(t, target, []build.Input{
+		{Name: "app.o", Data: object(t, appVIR)},
+		{Name: "lib.o", Data: object(t, lib.VIR)},
+	}, 42)
+}
+
+// object lowers one module and returns the object file's bytes.
+func object(t *testing.T, m *ir.Module) []byte {
+	t.Helper()
+	obj, err := build.Object(m, build.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rtObj := filepath.Join(dir, "rt.o")
-	if err := os.WriteFile(rtObj, rt.Data, 0o644); err != nil {
+	return obj
+}
+
+// runProgram links objects into an executable, runs it, and checks
+// the exit status.
+func runProgram(t *testing.T, target ir.Target, objs []build.Input, want int) {
+	t.Helper()
+	exe, err := build.Executable(objs, build.LinkOptions{Target: target})
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	bin := filepath.Join(dir, "prog")
-	if out, err := exec.Command("clang", "-o", bin, appObj, libObj, rtObj).CombinedOutput(); err != nil {
-		t.Fatalf("link: %v\n%s", err, out)
+	bin := vsc.ImageName(target, filepath.Join(t.TempDir(), "prog"))
+	if err := os.WriteFile(bin, exe, 0o755); err != nil {
+		t.Fatal(err)
 	}
 	cmd := exec.Command(bin)
 	_ = cmd.Run()
-	if got := cmd.ProcessState.ExitCode(); got != 42 {
-		t.Errorf("exit status = %d, want 42", got)
+	if got := cmd.ProcessState.ExitCode(); got != want {
+		t.Errorf("exit status = %d, want %d", got, want)
 	}
 }
 
@@ -208,36 +213,10 @@ func main() -> Int32 {
 			t.Fatalf("app: %v", d)
 		}
 
-		objDir := t.TempDir()
-		write := func(name string, mod *ir.Module) string {
-			obj, err := build.Object(mod, build.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			p := filepath.Join(objDir, name)
-			if err := os.WriteFile(p, obj, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			return p
-		}
-		rt, err := build.Runtime(target)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rtPath := filepath.Join(objDir, "rt.o")
-		if err := os.WriteFile(rtPath, rt.Data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		bin := filepath.Join(objDir, "prog")
-		if out, err := exec.Command("clang", "-o", bin,
-			write("app.o", app.VIR), write("lib.o", lib.VIR), rtPath).CombinedOutput(); err != nil {
-			t.Fatalf("link: %v\n%s", err, out)
-		}
-		cmd := exec.Command(bin)
-		_ = cmd.Run()
-		if got := cmd.ProcessState.ExitCode(); got != 42 {
-			t.Errorf("exit status = %d, want 42", got)
-		}
+		runProgram(t, target, []build.Input{
+			{Name: "app.o", Data: object(t, app.VIR)},
+			{Name: "lib.o", Data: object(t, lib.VIR)},
+		}, 42)
 	})
 
 	t.Run("a module that is not there", func(t *testing.T) {

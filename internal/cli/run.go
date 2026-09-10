@@ -48,7 +48,16 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	}
 	defer os.RemoveAll(dir)
 
-	bf.output = filepath.Join(dir, "prog")
+	// The name carries the platform's extension, since this one is
+	// started rather than merely written: on Windows exec.Command
+	// resolves a path with no extension through %PATHEXT% and finds
+	// nothing.
+	target, err := bf.resolve()
+	if err != nil {
+		fmt.Fprintln(stderr, "vsc:", err)
+		return exitUsage
+	}
+	bf.output = vsc.ImageName(target, filepath.Join(dir, "prog"))
 	if _, code := doBuild(&bf, fs.Args(), stdout, stderr); code != exitOK {
 		return code
 	}

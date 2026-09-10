@@ -1,6 +1,7 @@
 package vsc
 
 import (
+	"path/filepath"
 	"runtime"
 	"sort"
 
@@ -27,14 +28,17 @@ type target struct {
 	name   string
 	ir     ir.Target
 	prefix string // "_" on Mach-O, empty on ELF and COFF
+	suffix string // ".exe" on PE, empty elsewhere
 }
 
 // The table. One row per target the whole toolchain can carry a
-// program through, which today is one — a row is cheap and a row that
-// compiles but cannot be linked is a promise this compiler does not
-// keep.
+// program through — a row is cheap and a row that compiles but cannot
+// be linked is a promise this compiler does not keep. Both rows here
+// are held to that: each has a backend in ir/lower, an object writer
+// in its architecture's obj package, and a linker in its container's.
 var targets = []target{
 	{name: "aarch64-macos", ir: ir.AArch64MacOS, prefix: "_"},
+	{name: "x86_64-windows", ir: ir.X86_64Windows, prefix: "", suffix: ".exe"},
 }
 
 // LookupTarget is the target of that name.
@@ -68,6 +72,8 @@ func HostName() string {
 	switch {
 	case runtime.GOARCH == "arm64" && runtime.GOOS == "darwin":
 		return "aarch64-macos"
+	case runtime.GOARCH == "amd64" && runtime.GOOS == "windows":
+		return "x86_64-windows"
 	}
 	return ""
 }
@@ -98,6 +104,37 @@ func SymbolPrefix(t ir.Target) string {
 		}
 	}
 	return ""
+}
+
+// ImageName is what a program built for t is called on disk: path,
+// with the extension the platform gives an executable if it has none
+// already.
+//
+// On Windows a program is called .exe. Not because the loader cares --
+// it reads the header and will run a file called anything -- but
+// because everything around it does: cmd will not start an
+// extensionless file, Explorer will not either, and Go's own
+// exec.Command resolves a path with no extension by trying the ones in
+// %PATHEXT% and nothing else. A build that wrote "hello" would produce
+// something the machine that built it cannot run.
+//
+// A name that already carries an extension is left alone: -o hello.bin
+// means hello.bin, on every target.
+//
+// It is exported for the same reason SymbolPrefix is. A caller that
+// runs or installs what this compiler produced has to name the file,
+// and deriving the suffix a second time is how a build system ends up
+// looking for something nothing wrote.
+func ImageName(t ir.Target, path string) string {
+	if filepath.Ext(path) != "" {
+		return path
+	}
+	for _, row := range targets {
+		if row.ir.Use() == t.Use() {
+			return path + row.suffix
+		}
+	}
+	return path
 }
 
 // EntryModule is the module whose main is the program's entry point.

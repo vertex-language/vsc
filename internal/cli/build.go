@@ -115,6 +115,13 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 	if out == "" {
 		out = outputName(srcs, mode.ext)
 	}
+	// A program gets the extension its platform gives one, whether
+	// the name came from -o or from the first source. On Windows that
+	// is .exe, and without it the build writes something the machine
+	// that built it declines to start. See vsc.ImageName.
+	if mode.name == "exe" {
+		out = vsc.ImageName(target, out)
+	}
 
 	switch mode.name {
 	case "interface":
@@ -161,10 +168,13 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 		fmt.Fprintln(stderr, "vsc:", err)
 		return "", exitUsage
 	}
-	entry := bf.entry
-	if entry == "" {
-		entry = vsc.EntrySymbol(target)
-	}
+	// The entry is left to build where the flag said nothing. What
+	// the image starts at is the platform's business and not the same
+	// symbol everywhere -- on Mach-O it is the program's main, on PE
+	// it is the CRT startup that calls it -- and naming one of them
+	// here would be this layer deciding something it does not know.
+	// See build.LinkOptions.Entry.
+	//
 	// The program's object, then one per folder it imported. The
 	// compiler produces one module at a time by design, so building a
 	// program of several is this loop rather than anything inside it:
@@ -182,7 +192,7 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 	exe, err := build.Executable(inputs,
 		build.LinkOptions{
 			Target:       target,
-			Entry:        entry,
+			Entry:        bf.entry,
 			Freestanding: bf.freestanding,
 		})
 	if err != nil {
