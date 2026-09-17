@@ -640,8 +640,16 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 			return g.staticCall(e, ref, ref.Recv)
 		}
 		return g.methodCall(e, ref, func() *sil.Value {
-			if mutatingRef(ref) && g.self != nil && g.self.addr != nil {
-				return g.self.addr
+			if g.self != nil && g.self.addr != nil {
+				if mutatingRef(ref) {
+					return g.self.addr
+				}
+				// Inside a mutating method self is an address, and a
+				// method that does not mutate takes its value: a copy,
+				// as `self.f()` reads it.
+				if !isClass(g.recv) {
+					return g.loaded(g.blk.Load(g.self.addr, loadQualifier(g.self.typ)), g.self.typ)
+				}
 			}
 			return g.selfValue()
 		})
@@ -1305,7 +1313,22 @@ func receiverClass(t types.Type) (*types.Class, bool) {
 // implicitMethod is the receiver's method a bare name refers to, for a
 // call written inside one of its own methods.
 func (g *gen) implicitMethod(id *ast.IdentExpr) (*analyzer.MethodRef, bool) {
-	if g.recv == nil || id.Name == nil {
+	if id.Name == nil {
+		return nil, false
+	}
+	// A static property's initializer names its type's static methods
+	// without the type: `static let rounds = defaultRounds()`.
+	if g.recv == nil && g.staticRecv != nil {
+		prev := g.recv
+		g.recv = g.staticRecv
+		ref, ok := g.implicitMethod(id)
+		g.recv = prev
+		if ok && ref.Method.IsStatic {
+			return ref, true
+		}
+		return nil, false
+	}
+	if g.recv == nil {
 		return nil, false
 	}
 	// A name the checker resolved to something else -- a type, a local, a

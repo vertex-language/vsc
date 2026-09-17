@@ -780,8 +780,15 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 		c.currFuncName = prevName
 
 	case *ast.VarDecl:
+		// A lazy one runs when first read, when there is a self.
+		static := c.hasModifier(m.Mods, "static") || c.hasModifier(m.Mods, "class") ||
+			c.hasModifier(m.Mods, "lazy")
 		for _, b := range m.Bindings {
+			// A stored property's initializer runs before self exists.
+			prev := c.inPropertyInit
+			c.inPropertyInit = !static && b.Body == nil && b.Accessors == nil && b.Value != nil
 			c.checkBinding(b, typeScope)
+			c.inPropertyInit = prev
 		}
 
 	case *ast.EnumCaseDecl:

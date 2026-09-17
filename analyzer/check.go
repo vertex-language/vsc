@@ -21,6 +21,9 @@ type checker struct {
 	// currFuncName is what #function says where it is written: the
 	// declaration being checked, spelled as Swift names it.
 	currFuncName string
+	// inPropertyInit is whether a stored property's initializer is being
+	// checked, where there is no self yet to reach an instance member through.
+	inPropertyInit bool
 	currType     types.Type // the type whose members are being checked
 	negated      map[ast.Expr]bool
 

@@ -486,6 +486,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 		}
 		sym := c.lookupValue(scope, name)
+		if c.inPropertyInit && c.instanceMember(scope, name) {
+			c.errorf(e.Name.Pos(), "cannot use instance member '%s' within property initializer; "+
+				"property initializers run before 'self' is available", name)
+			return types.Typ[types.Invalid]
+		}
 		if sym == nil {
 			// A builtin type's name: it is in no scope, and in
 			// expression position it denotes its own metatype.
@@ -1685,6 +1690,27 @@ func (c *checker) initializesOwnProperty(sym Symbol, name string) bool {
 }
 
 // lookupValue looks up a name in scope, falling back to superclass properties.
+// instanceMember reports whether name, looked up from scope, is an instance
+// method or property of the type whose members are in scope -- found there
+// before anything outside the type.
+func (c *checker) instanceMember(scope *Scope, name string) bool {
+	found, sym := scope.LookupParent(name)
+	if found == nil || !found.members {
+		return false
+	}
+	switch s := sym.(type) {
+	case *FuncSymbol:
+		if d, ok := s.decl.(*ast.FuncDecl); ok {
+			return !c.hasModifier(d.Mods, "static") && !c.hasModifier(d.Mods, "class")
+		}
+	case *VarSymbol:
+		if d, ok := s.decl.(*ast.VarDecl); ok {
+			return !c.hasModifier(d.Mods, "static") && !c.hasModifier(d.Mods, "class")
+		}
+	}
+	return false
+}
+
 func (c *checker) lookupValue(scope *Scope, name string) Symbol {
 	if scope != nil {
 		if sym := scope.Lookup(name); sym != nil {

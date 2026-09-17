@@ -797,7 +797,22 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 	if body == nil || typeScope == nil {
 		return
 	}
+	// Every other member is declared before a property's initializer is
+	// read, as swiftc declares them all first: `static let start = origin()`
+	// names a method written after it. Properties keep their own order,
+	// which is their layout.
+	members := make([]ast.Node, 0, len(body.Members))
 	for _, mem := range body.Members {
+		if _, isVar := mem.(*ast.VarDecl); !isVar {
+			members = append(members, mem)
+		}
+	}
+	for _, mem := range body.Members {
+		if _, isVar := mem.(*ast.VarDecl); isVar {
+			members = append(members, mem)
+		}
+	}
+	for _, mem := range members {
 		switch m := mem.(type) {
 		case *ast.VarDecl:
 			isConst := m.Kind == token.LET
