@@ -377,6 +377,9 @@ func (g *gen) forInArray(s *ast.ForInStmt, arr *types.Array) {
 			}
 		}
 		g.destroyAddrLater(value)
+	} else if s.Case.IsValid() {
+		// Matched against the pattern as the body begins. See forInBody.
+		g.loopCase = &loopElement{value: g.consume(value), typ: arr.Elem}
 	} else {
 		g.bindLoopVar(s.Pat, g.consume(value), lowerType(arr.Elem))
 	}

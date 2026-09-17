@@ -89,7 +89,7 @@ func (l *lowerer) define(f *sil.Func) error {
 	if err := c.allocSlots(); err != nil {
 		return err
 	}
-	for _, b := range f.Blocks() {
+	for _, b := range emissionOrder(f) {
 		c.b = c.blocks[b]
 		for _, in := range b.Insts() {
 			if err := c.inst(in); err != nil {
@@ -756,6 +756,40 @@ func (c *fn) trapBlock() *ir.Block {
 		c.trap.Trap()
 	}
 	return c.trap
+}
+
+// emissionOrder is the order a body's blocks are lowered in: reverse
+// postorder, so that a block is lowered after every block that dominates
+// it and a value is defined before any block using it is reached, however
+// the blocks were created; then any block nothing reaches.
+func emissionOrder(f *sil.Func) []*sil.Block {
+	var post []*sil.Block
+	seen := map[*sil.Block]bool{}
+	var walk func(b *sil.Block)
+	walk = func(b *sil.Block) {
+		if b == nil || seen[b] {
+			return
+		}
+		seen[b] = true
+		if t := b.Term(); t != nil {
+			succs := t.Successors()
+			for i := len(succs) - 1; i >= 0; i-- {
+				walk(succs[i])
+			}
+		}
+		post = append(post, b)
+	}
+	walk(f.Entry())
+	order := make([]*sil.Block, 0, len(f.Blocks()))
+	for i := len(post) - 1; i >= 0; i-- {
+		order = append(order, post[i])
+	}
+	for _, b := range f.Blocks() {
+		if !seen[b] {
+			order = append(order, b)
+		}
+	}
+	return order
 }
 
 func needsTrap(f *sil.Func) bool {

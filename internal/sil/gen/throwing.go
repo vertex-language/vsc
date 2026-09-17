@@ -197,7 +197,10 @@ func (g *gen) tryApply(e *ast.CallExpr, callee *sil.Value, args []*sil.Value,
 
 	g.blk = failed
 	if bang {
-		g.blk.DestroyValue(box)
+		// The runtime says what was raised, as Swift's does, and traps.
+		g.runtimeResult(stdlib.TryFailed,
+			[]sil.Param{{Type: errorBoxType(), Convention: sil.ParamOwned}},
+			lowerType(types.Typ[types.Void]), box)
 		g.blk.Unreachable()
 	} else {
 		g.raise(e, box)

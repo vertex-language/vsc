@@ -36,6 +36,8 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		return g.dictionaryLiteral(n)
 	case *ast.BasicLit:
 		return g.literal(n)
+	case *ast.MagicLit:
+		return g.magicLiteral(n)
 
 	case *ast.IdentExpr:
 		return g.ident(n)
@@ -89,7 +91,11 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 			}
 			elems = append(elems, v)
 		}
-		return g.blk.Tuple(lowerType(g.typeOf(n)), elems...)
+		// The tuple owns its elements now, and is let go of as any
+		// temporary is, unless something takes it.
+		tuple := g.blk.Tuple(lowerType(g.typeOf(n)), elems...)
+		g.destroyLater(tuple)
+		return tuple
 
 	// `.red` implicit member shorthand.
 	case *ast.ImplicitMemberExpr:

@@ -438,10 +438,12 @@ func (g *gen) chainRoot(e ast.Expr) *sil.Value {
 	g.chainActive[e] = true
 	g.chainNone = append(g.chainNone, none)
 	g.push()
+	g.chainDepth = append(g.chainDepth, len(g.scopes)-1)
 	v := g.expr(e)
 	inner := g.typeOf(e)
 	delete(g.chainActive, e)
 	g.chainNone = g.chainNone[:len(g.chainNone)-1]
+	g.chainDepth = g.chainDepth[:len(g.chainDepth)-1]
 	if v == nil {
 		g.pop()
 		return nil
@@ -488,6 +490,9 @@ func (g *gen) chainStep(e *ast.OptionalExpr) *sil.Value {
 		sil.Case{Member: optionalSome, Dest: some},
 		sil.Case{Member: optionalNone, Dest: empty})
 	g.blk = empty
+	// What the chain has made so far -- an earlier step's payload -- is
+	// let go of on the way out, as it would be at the chain's end.
+	g.unwindTo(g.chainDepth[len(g.chainDepth)-1])
 	g.blk.Br(g.chainNone[len(g.chainNone)-1])
 	g.blk = some
 	if own == sil.Owned {

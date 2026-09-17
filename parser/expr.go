@@ -193,7 +193,9 @@ func (p *parser) parsePrefixExpr(fl exprFlags) ast.Expr {
 }
 
 // atPackRef settles `each` the pack element reference operator from `each`
-// an ordinary identifier. The operand is an expression starting on the same line.
+// an ordinary identifier. As swiftc's parser has it, the operand is a
+// name or self on the same line: `each { }` and `each(x)` call something
+// called each.
 func (p *parser) atPackRef() bool {
 	if !p.atWord("each") {
 		return false
@@ -202,7 +204,7 @@ func (p *parser) atPackRef() bool {
 	if t.Flags.Has(token.FlagNLBefore) {
 		return false
 	}
-	return p.atExprStartAt(1)
+	return t.Kind == token.IDENT || t.Kind == token.SELF
 }
 
 // atOwnership settles the ownership operators from the ordinary names
@@ -499,7 +501,10 @@ func (p *parser) parsePrimaryExpr(fl exprFlags) ast.Expr {
 		return &ast.BadExpr{Span: p.span(lo)}
 
 	// Explicit existential or opaque type in expression position (`any P`, `some P`).
-	case (p.atWord("any") || p.atWord("some")) && p.atTypeStartAt(1):
+	// As swiftc's parser has it, only before a name on the same line:
+	// `any(x)` calls something called any.
+	case (p.atWord("any") || p.atWord("some")) && p.peek(1) == token.IDENT &&
+		!p.peekTok(1).Flags.Has(token.FlagNLBefore):
 		return &ast.TypeExpr{Span: p.span(lo), Type: p.parseType()}
 
 	case k == token.IDENT:

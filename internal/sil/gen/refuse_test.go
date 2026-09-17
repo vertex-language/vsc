@@ -232,13 +232,12 @@ func main() -> Int32 { return fib(10) }`)
 // the node knows its extent.
 func TestRefusalsCoverTheirSpan(t *testing.T) {
 	src := `
-enum E { case a(Int), b }
+struct Box { var n: Int }
+final class Holder { var box: Box? = Box(n: 1) }
 func main() -> Int32 {
-    let e = E.a(2)
-    switch e {
-    case .a(let v) where v > 1: return 1
-    default: return 0
-    }
+    let h = Holder()
+    h.box?.n = 4
+    return 0
 }`
 	_, diags := generate(t, "main", src)
 	if len(diags) == 0 {

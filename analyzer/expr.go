@@ -140,6 +140,9 @@ func (c *checker) isLiteralTree(e ast.Expr) bool {
 	switch n := e.(type) {
 	case *ast.BasicLit:
 		return n.Kind == token.INT_LIT || n.Kind == token.FLOAT_LIT
+	// #line and #column are integer literals too.
+	case *ast.MagicLit:
+		return n.Kind == token.POUND_LINE || n.Kind == token.POUND_COLUMN
 	case *ast.ParenExpr:
 		return c.isLiteralTree(n.X)
 	case *ast.PrefixExpr:
@@ -445,13 +448,30 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 
 	case *ast.MagicLit:
 		switch e.Kind {
-		case token.POUND_FILE, token.POUND_FUNCTION, token.POUND_FILEPATH:
-			return types.Typ[types.String]
 		case token.POUND_LINE, token.POUND_COLUMN:
+			// The place the literal is written, known here; as an integer
+			// literal it takes the integer type the context wants.
+			p := c.file.Position(e.Pos())
+			n := p.Line
+			if e.Kind == token.POUND_COLUMN {
+				n = p.Column
+			}
+			c.info.Values[e] = Value{Kind: IntValue, Int: uint64(n)}
+			if adopts(expected, types.Typ[types.UntypedInt]) {
+				return expected
+			}
 			return types.Typ[types.Int]
-		default:
-			return types.Typ[types.String]
+		case token.POUND_DSOHANDLE:
+			return types.Typ[types.Invalid]
 		}
+		// The file forms are spelled by lowering, which knows the module.
+		if e.Kind == token.POUND_FUNCTION {
+			c.info.Values[e] = Value{Kind: StringValue, Str: c.currFuncName}
+		}
+		if adopts(expected, types.Typ[types.UntypedString]) {
+			return expected
+		}
+		return types.Typ[types.String]
 
 	case *ast.IdentExpr:
 		name := e.Name.Text(c.file)
@@ -597,6 +617,13 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				}
 			}
 
+			// `a.next?.v = 5` assigns inside the chain: the value is
+			// what the last step is, not the optional the chain makes.
+			if c.info.ChainRoots[e.X] {
+				if inner, ok := c.info.ChainInner[e.X]; ok && inner != nil {
+					lhs = inner
+				}
+			}
 			rhs := c.checkExpr(e.Y, lhs, scope)
 			if t, ok := c.adopt(e.Y, lhs); ok {
 				rhs = t

@@ -18,8 +18,11 @@ type checker struct {
 	info        *Info
 	resolved    map[ast.Type]types.Type
 	currFuncRet types.Type
-	currType    types.Type // the type whose members are being checked
-	negated     map[ast.Expr]bool
+	// currFuncName is what #function says where it is written: the
+	// declaration being checked, spelled as Swift names it.
+	currFuncName string
+	currType     types.Type // the type whose members are being checked
+	negated      map[ast.Expr]bool
 
 	// stored is the bindings already declared, so that a module-scope
 	// variable declared ahead of the bodies is not declared again when

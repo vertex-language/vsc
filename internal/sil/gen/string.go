@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"path/filepath"
 	"unicode/utf8"
 
 	"github.com/vertex-language/vsc/analyzer"
@@ -8,6 +9,7 @@ import (
 	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/stdlib"
+	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 )
 
@@ -36,6 +38,43 @@ func (g *gen) stringLiteral(e *ast.StringLit) *sil.Value {
 				g.destroyLater(wrapped)
 				return wrapped
 			}
+		}
+	}
+	return s
+}
+
+// magicLiteral is what #line, #column, #function and the #file forms say
+// where they are written: numbers and the function's name the checker
+// worked out, and the file spelled here, where the module is known --
+// #fileID is module/file, and #file and #filePath the path as given.
+func (g *gen) magicLiteral(e *ast.MagicLit) *sil.Value {
+	switch e.Kind {
+	case token.POUND_LINE, token.POUND_COLUMN:
+		return g.constant(e)
+	case token.POUND_FUNCTION:
+		v := g.info.Values[e]
+		return g.stringValue(e, v.Str)
+	case token.POUND_FILEID:
+		return g.stringValue(e, g.module+"/"+filepath.Base(g.file.Name()))
+	case token.POUND_FILE, token.POUND_FILEPATH:
+		return g.stringValue(e, g.file.Name())
+	}
+	g.unsupported(e)
+	return nil
+}
+
+// stringValue is text as a String, or a String? where e wants one.
+func (g *gen) stringValue(e ast.Expr, text string) *sil.Value {
+	s := g.makeString(text)
+	if s == nil {
+		return nil
+	}
+	if t := g.typeOf(e); t != nil {
+		if _, isOpt := optionalOf(t); isOpt {
+			g.forget(s)
+			wrapped := g.blk.Enum(lowerType(t), optionalSome, s)
+			g.destroyLater(wrapped)
+			return wrapped
 		}
 	}
 	return s

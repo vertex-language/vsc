@@ -124,6 +124,37 @@ func (g *gen) exprStmt(e ast.Expr) {
 	}
 }
 
+// chainedDestination lowers an assignment whose destination is an optional
+// chain -- `a.next?.v = 5` -- as Swift does: the whole assignment is the
+// chain, so where a step finds nothing, nothing is assigned and the value
+// is not evaluated. It reports whether the destination was one; lower is
+// the assignment, run inside the chain.
+func (g *gen) chainedDestination(e *ast.BinaryExpr, lower func()) bool {
+	if !g.info.ChainRoots[e.X] || g.chainActive[e.X] {
+		return false
+	}
+	none, join := g.fn.Block(), g.fn.Block()
+	if g.chainActive == nil {
+		g.chainActive = map[ast.Expr]bool{}
+	}
+	g.chainActive[e.X] = true
+	g.chainNone = append(g.chainNone, none)
+	g.push()
+	g.chainDepth = append(g.chainDepth, len(g.scopes)-1)
+	lower()
+	g.popReachable()
+	g.chainNone = g.chainNone[:len(g.chainNone)-1]
+	g.chainDepth = g.chainDepth[:len(g.chainDepth)-1]
+	delete(g.chainActive, e.X)
+	if g.blk != nil && g.blk.Term() == nil {
+		g.blk.Br(join)
+	}
+	g.blk = none
+	g.blk.Br(join)
+	g.blk = join
+	return true
+}
+
 // compoundOf returns the base binary operator and true for compound assignments.
 func compoundOf(op string) (string, bool) {
 	switch op {
@@ -144,6 +175,9 @@ func compoundOf(op string) (string, bool) {
 // through a modify accessor, which is what this becomes the day a
 // subscript or a computed property can be written to.
 func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
+	if g.chainedDestination(e, func() { g.compoundAssign(e, op) }) {
+		return
+	}
 	// A computed property is read and written through its accessors,
 	// so `c.d += n` is a call, an operator and a call. The base is
 	// evaluated twice, which is what the note above says about every
@@ -227,6 +261,9 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 
 // assign lowers a store to a variable.
 func (g *gen) assign(e *ast.BinaryExpr) {
+	if g.chainedDestination(e, func() { g.assign(e) }) {
+		return
+	}
 	if mem, ok := e.X.(*ast.MemberExpr); ok && mem.Name != nil {
 		recv := g.typeOf(mem.X)
 		if f, viaSetter := g.setterField(recv, g.text(mem.Name)); viaSetter {
@@ -860,6 +897,7 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 	}
 
 	subjectType := g.typeOf(s.Subject)
+	valueScope := false
 	if o, isOpt := optionalOf(subjectType); isOpt && g.optionalCasesOnly(clauses) {
 		if !g.switchOnOptional(s, subject, o, clauses, bodies, cont) {
 			return
@@ -868,8 +906,24 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 		if !g.switchOnEnum(s, subject, subjectType, clauses, bodies, cont) {
 			return
 		}
-	} else if !g.switchOnValue(s, subject, subjectType, clauses, bodies, cont) {
-		return
+	} else {
+		// A value switched on is matched, not consumed: it lives through
+		// the switch in a scope of its own, and is let go of once, where
+		// the arms join or wherever one leaves.
+		g.push()
+		valueScope = true
+		g.destroyLater(subject)
+		// The patterns read it borrowed -- a tuple's elements, a name
+		// bound to it -- and the borrow ends before it is let go of.
+		if subject.Ownership() == sil.Owned {
+			borrowed := g.blk.BeginBorrow(subject)
+			g.endBorrowLater(borrowed)
+			subject = borrowed
+		}
+		if !g.switchOnValue(s, subject, subjectType, clauses, bodies, cont) {
+			g.scopes = g.scopes[:len(g.scopes)-1]
+			return
+		}
 	}
 
 	header := (*sil.Block)(nil)
@@ -897,25 +951,34 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 		}
 	}
 	g.blk = contBlk
+	if valueScope {
+		if contBlk != nil {
+			g.pop()
+		} else {
+			g.scopes = g.scopes[:len(g.scopes)-1]
+		}
+	}
 }
 
 // switchOnEnum emits the branch for an enum subject and reports success.
+//
+// Cases are tried in order, and a case with a where clause that does not
+// hold goes on to the ones after it, as swiftc has it. One switch_enum
+// cannot do that -- it names each case once and never comes back -- so the
+// cases are split after each one with a where clause. Each part switches
+// over the subject, keeping a copy for the next part to switch over if
+// nothing in this one matched; whichever part matches lets the copy go.
 func (g *gen) switchOnEnum(s *ast.SwitchStmt, subject *sil.Value, t types.Type,
 	clauses []*ast.CaseClause, bodies []*sil.Block, cont func() *sil.Block) bool {
 
-	var cases []sil.Case
-	seenDefault := false
+	var items []enumItem
+	defaultClause := -1
 	for i, cs := range clauses {
 		if cs.Kind == token.DEFAULT {
-			cases = append(cases, sil.Case{Dest: bodies[i]})
-			seenDefault = true
+			defaultClause = i
 			continue
 		}
 		for _, item := range cs.Items {
-			if item.Where != nil {
-				g.refuse(s, "a switch with a `where` clause")
-				return false
-			}
 			itemPat := item.Pat
 			if bind, isBind := itemPat.(*ast.ValueBindingPattern); isBind {
 				itemPat = bind.Pat
@@ -925,47 +988,176 @@ func (g *gen) switchOnEnum(s *ast.SwitchStmt, subject *sil.Value, t types.Type,
 				g.refuse(item.Pat, "this pattern in a switch over an enum")
 				return false
 			}
-			// A clause of several patterns -- `case .resized(_),
-			// .moved(_):` -- has one body and a payload of a different
-			// type from each case. Each case goes through an arm of its
-			// own that takes what it carries, lets go of it, and joins the
-			// body, which takes nothing.
-			if len(cs.Items) > 1 && pat.Args != nil {
-				if patternBindsNames(pat.Args) {
-					g.refuse(item.Pat, "a case of several patterns that binds names")
-					return false
-				}
-				arm := g.fn.Block()
-				if k := g.caseOf(t, g.text(pat.Name)); k != nil && k.AssociatedType != nil {
-					lt := lowerType(sil.CaseStorage(k))
-					own := sil.Unowned
-					if !lt.Trivial() {
-						own = sil.Owned
-					}
-					payload := arm.Arg(lt, own)
-					if own == sil.Owned {
-						arm.DestroyValue(payload)
-					}
-				}
-				arm.Br(bodies[i])
-				cases = append(cases, sil.Case{Member: memberName(t, g.text(pat.Name)), Dest: arm})
-				continue
+			if len(cs.Items) > 1 && pat.Args != nil && patternBindsNames(pat.Args) {
+				g.refuse(item.Pat, "a case of several patterns that binds names")
+				return false
 			}
-			if pat.Args != nil {
-				if !g.bindCasePayload(t, pat, bodies[i]) {
-					return false
-				}
+			if len(cs.Items) > 1 && item.Where != nil {
+				g.refuse(item.Where.Cond, "a where clause on a case of several patterns")
+				return false
 			}
-			cases = append(cases, sil.Case{
-				Member: memberName(t, g.text(pat.Name)),
-				Dest:   bodies[i],
-			})
+			items = append(items, enumItem{clause: i, several: len(cs.Items) > 1, item: item, pat: pat})
 		}
 	}
-	if !seenDefault {
-		cases = append(cases, sil.Case{Dest: cont()})
+
+	trivial := lowerType(t).Trivial()
+	cur := subject
+	for start := 0; ; {
+		end := len(items)
+		for j := start; j < len(items); j++ {
+			if items[j].item.Where != nil {
+				end = j + 1
+				break
+			}
+		}
+		final := end == len(items) && (end == start || items[end-1].item.Where == nil)
+
+		part := enumPart{final: final}
+		if !final {
+			part.next = g.fn.Block()
+			part.keep = cur
+			if !trivial {
+				part.keep = g.blk.CopyValue(cur)
+			}
+			part.dropKeep = !trivial
+		}
+		var cases []sil.Case
+		named := map[string]bool{}
+		for _, it := range items[start:end] {
+			member := memberName(t, g.text(it.pat.Name))
+			if named[member] {
+				continue // a case an earlier pattern already took
+			}
+			named[member] = true
+			dest, ok := g.enumItemArm(t, it, bodies[it.clause], part)
+			if !ok {
+				return false
+			}
+			cases = append(cases, sil.Case{Member: member, Dest: dest})
+		}
+		switch {
+		case !final:
+			cases = append(cases, sil.Case{Dest: part.next})
+		case defaultClause >= 0:
+			cases = append(cases, sil.Case{Dest: bodies[defaultClause]})
+		default:
+			// The checker has held the cases to covering every one, so, as
+			// in swiftc's SIL, nothing gets past them; lowering wants an
+			// edge, and this one leads nowhere.
+			cases = append(cases, sil.Case{Dest: g.neverBlock()})
+		}
+		g.blk.SwitchEnum(cur, cases...)
+		if final {
+			return true
+		}
+		g.blk, cur, start = part.next, part.keep, end
 	}
-	g.blk.SwitchEnum(subject, cases...)
+}
+
+// An enumItem is one pattern of a switch over an enum, in the clause it is in.
+type enumItem struct {
+	clause  int
+	several bool // the clause has more than this one pattern
+	item    *ast.CaseItem
+	pat     *ast.EnumCasePattern
+}
+
+// An enumPart is one switch_enum of a switch split at its where clauses:
+// unless it is the last, what to switch over next and where to do it.
+type enumPart struct {
+	final    bool
+	keep     *sil.Value // the subject for the next part
+	dropKeep bool       // keep is a copy, let go of when this part matches
+	next     *sil.Block
+}
+
+// enumItemArm is the block a case's edge goes to: the body itself where
+// nothing stands between them, or an arm that binds the payload, tests the
+// where clause, lets go of the kept subject, and joins the body.
+func (g *gen) enumItemArm(t types.Type, it enumItem, body *sil.Block, part enumPart) (*sil.Block, bool) {
+	pat := it.pat
+	// A clause of several patterns -- `case .resized(_), .moved(_):` --
+	// has one body and a payload of a different type from each case. Each
+	// case goes through an arm of its own that takes what it carries, lets
+	// go of it, and joins the body, which takes nothing.
+	if it.several && pat.Args != nil {
+		arm := g.fn.Block()
+		if k := g.caseOf(t, g.text(pat.Name)); k != nil && k.AssociatedType != nil {
+			lt := lowerType(sil.CaseStorage(k))
+			own := sil.Unowned
+			if !lt.Trivial() {
+				own = sil.Owned
+			}
+			payload := arm.Arg(lt, own)
+			if own == sil.Owned {
+				arm.DestroyValue(payload)
+			}
+		}
+		if part.dropKeep {
+			arm.DestroyValue(part.keep)
+		}
+		arm.Br(body)
+		return arm, true
+	}
+	if part.final {
+		if pat.Args != nil && !g.bindCasePayload(t, pat, body) {
+			return nil, false
+		}
+		return body, true
+	}
+
+	arm := g.fn.Block()
+	if pat.Args != nil && !g.bindCasePayload(t, pat, arm) {
+		return nil, false
+	}
+	owned := g.armOwned[arm]
+	delete(g.armOwned, arm)
+	if !g.joinArm(arm, body, owned, it.item.Where, part) {
+		return nil, false
+	}
+	return arm, true
+}
+
+// joinArm ends an arm of a split switch that has bound owned: it tests the
+// where clause, if there is one, going on to the next part without what
+// was bound when it does not hold; lets go of the subject kept for the next
+// part; and joins the body, which owns what was bound from then on.
+func (g *gen) joinArm(arm, body *sil.Block, owned []*sil.Value, where *ast.WhereClause, part enumPart) bool {
+	prev := g.blk
+	defer func() { g.blk = prev }()
+	g.blk = arm
+	if where != nil {
+		g.push()
+		cond := g.rvalue(where.Cond)
+		if cond == nil {
+			return false
+		}
+		bit := g.machine(cond, types.Typ[types.Bool])
+		if bit == nil {
+			g.refuse(where.Cond, "a where clause of "+g.typeOf(where.Cond).String())
+			return false
+		}
+		g.pop()
+		holds, fails := g.fn.Block(), g.fn.Block()
+		g.blk.CondBr(bit, holds, nil, fails, nil)
+		// Not this case after all: what it bound is let go, and the
+		// cases after it are tried.
+		for _, v := range owned {
+			fails.DestroyValue(v)
+		}
+		fails.Br(part.next)
+		g.blk = holds
+	}
+	if part.dropKeep {
+		g.blk.DestroyValue(part.keep)
+	}
+	g.blk.Br(body)
+	if len(owned) > 0 {
+		if g.armOwned == nil {
+			g.armOwned = map[*sil.Block][]*sil.Value{}
+		}
+		g.armOwned[body] = append(g.armOwned[body], owned...)
+	}
 	return true
 }
 
@@ -1022,7 +1214,7 @@ func (g *gen) optionalCaseOf(pat ast.Pattern) (optionalCase, bool) {
 func (g *gen) optionalCasesOnly(clauses []*ast.CaseClause) bool {
 	for _, cs := range clauses {
 		for _, item := range cs.Items {
-			if _, ok := g.optionalCaseOf(item.Pat); !ok || item.Where != nil {
+			if _, ok := g.optionalCaseOf(item.Pat); !ok {
 				return false
 			}
 		}
@@ -1040,79 +1232,141 @@ func (g *gen) switchOnOptional(s *ast.SwitchStmt, subject *sil.Value, o *types.O
 	if !wrapped.Trivial() {
 		own = sil.Owned
 	}
-	var cases []sil.Case
-	seen := map[string]bool{}
-	var fallback *sil.Block
+	type optItem struct {
+		clause int
+		item   *ast.CaseItem
+		c      optionalCase
+		binds  bool
+	}
+	var items []optItem
+	defaultClause := -1
 	for i, cs := range clauses {
 		if cs.Kind == token.DEFAULT {
-			if !seen[""] {
-				fallback = bodies[i]
+			if defaultClause < 0 {
+				defaultClause = i
 			}
-			seen[""] = true
 			continue
 		}
 		for _, item := range cs.Items {
 			c, _ := g.optionalCaseOf(item.Pat)
-			if seen[c.member] || seen[""] {
-				continue
-			}
-			seen[c.member] = true
-			if c.member == "" {
-				fallback = bodies[i]
-				continue
-			}
-			if c.member == optionalNone {
-				cases = append(cases, sil.Case{Member: optionalNone, Dest: bodies[i]})
-				continue
-			}
 			binds := c.inner != nil && patternBindsNames(&ast.TuplePattern{Elems: []*ast.TuplePatternElem{{Pat: c.inner}}})
-			if binds && len(cs.Items) == 1 {
-				payload := bodies[i].Arg(wrapped, own)
-				if own == sil.Owned {
-					if g.armOwned == nil {
-						g.armOwned = map[*sil.Block][]*sil.Value{}
-					}
-					g.armOwned[bodies[i]] = append(g.armOwned[bodies[i]], payload)
-				}
-				if !g.bindPatternTo(c.inner, payload, o.Wrapped) {
-					return false
-				}
-				cases = append(cases, sil.Case{Member: optionalSome, Dest: bodies[i]})
-				continue
-			}
-			if binds {
+			if binds && len(cs.Items) > 1 {
 				g.refuse(item.Pat, "a case of several patterns that binds names")
 				return false
 			}
-			// Nothing is kept of what it holds.
+			if item.Where != nil && (len(cs.Items) > 1 || c.member == "") {
+				g.refuse(item.Where.Cond, "a where clause on this pattern")
+				return false
+			}
+			items = append(items, optItem{clause: i, item: item, c: c, binds: binds})
+		}
+	}
+
+	// As a switch over an enum is split at its where clauses; see
+	// switchOnEnum.
+	trivial := lowerType(o).Trivial()
+	cur := subject
+	for start := 0; ; {
+		end := len(items)
+		for j := start; j < len(items); j++ {
+			if items[j].item.Where != nil {
+				end = j + 1
+				break
+			}
+		}
+		final := end == len(items) && (end == start || items[end-1].item.Where == nil)
+		part := enumPart{final: final}
+		if !final {
+			part.next = g.fn.Block()
+			part.keep = cur
+			if !trivial {
+				part.keep = g.blk.CopyValue(cur)
+			}
+			part.dropKeep = !trivial
+		}
+
+		var cases []sil.Case
+		seen := map[string]bool{}
+		var fallback *sil.Block
+		for _, it := range items[start:end] {
+			member := it.c.member
+			if seen[member] || seen[""] {
+				continue
+			}
+			seen[member] = true
+			body := bodies[it.clause]
+			arm := g.fn.Block()
+			var owned []*sil.Value
+			if member == optionalSome {
+				payload := arm.Arg(wrapped, own)
+				if it.binds {
+					if own == sil.Owned {
+						owned = append(owned, payload)
+					}
+					if !g.bindPatternTo(it.c.inner, payload, o.Wrapped) {
+						return false
+					}
+				} else if own == sil.Owned {
+					// Nothing is kept of what it holds.
+					arm.DestroyValue(payload)
+				}
+			}
+			if !g.joinArm(arm, body, owned, it.item.Where, part) {
+				return false
+			}
+			if member == "" {
+				fallback = arm
+				continue
+			}
+			cases = append(cases, sil.Case{Member: member, Dest: arm})
+		}
+		// Lowering wants both cases named: whichever no pattern took goes
+		// to the default, or on to the next part, or nowhere -- the checker
+		// has held the cases to covering both.
+		if fallback == nil {
+			switch {
+			case !final:
+				fallback = part.next
+			case defaultClause >= 0:
+				fallback = bodies[defaultClause]
+			case !(seen[optionalSome] && seen[optionalNone]):
+				fallback = g.neverBlock()
+			}
+		}
+		if !seen[optionalSome] && !seen[""] {
 			arm := g.fn.Block()
 			payload := arm.Arg(wrapped, own)
 			if own == sil.Owned {
 				arm.DestroyValue(payload)
 			}
-			arm.Br(bodies[i])
+			arm.Br(fallback)
 			cases = append(cases, sil.Case{Member: optionalSome, Dest: arm})
 		}
-	}
-	// Lowering wants both cases named: whichever no pattern took goes to
-	// the default, or past the switch.
-	if fallback == nil && !(seen[optionalSome] && seen[optionalNone]) {
-		fallback = cont()
-	}
-	if !seen[optionalSome] {
-		arm := g.fn.Block()
-		payload := arm.Arg(wrapped, own)
-		if own == sil.Owned {
-			arm.DestroyValue(payload)
+		if !seen[optionalNone] && !seen[""] {
+			cases = append(cases, sil.Case{Member: optionalNone, Dest: fallback})
 		}
-		arm.Br(fallback)
-		cases = append(cases, sil.Case{Member: optionalSome, Dest: arm})
+		if seen[""] {
+			// `_` takes whichever case is left, what it holds let go of
+			// on the way.
+			if !seen[optionalSome] {
+				arm := g.fn.Block()
+				payload := arm.Arg(wrapped, own)
+				if own == sil.Owned {
+					arm.DestroyValue(payload)
+				}
+				arm.Br(fallback)
+				cases = append(cases, sil.Case{Member: optionalSome, Dest: arm})
+			}
+			if !seen[optionalNone] {
+				cases = append(cases, sil.Case{Member: optionalNone, Dest: fallback})
+			}
+		}
+		g.blk.SwitchEnum(cur, cases...)
+		if final {
+			return true
+		}
+		g.blk, cur, start = part.next, part.keep, end
 	}
-	if !seen[optionalNone] {
-		cases = append(cases, sil.Case{Member: optionalNone, Dest: fallback})
-	}
-	g.blk.SwitchEnum(subject, cases...)
-	return true
 }
 
 // switchOnValue emits the comparison chain for a non-enum subject.
@@ -1145,19 +1399,20 @@ func (g *gen) switchOnValue(s *ast.SwitchStmt, subject *sil.Value, t types.Type,
 		}
 	}
 	if fallback == nil {
-		fallback = cont()
+		// Exhaustive, as the checker holds it: no value gets this far.
+		g.blk.Unreachable()
+		return true
 	}
 	g.blk.Br(fallback)
 	return true
 }
 
-// caseTest is the bit that decides whether one case item matches, or
-// nil where it always does. It binds whatever the pattern names
-// first, because a where clause is written about those names.
-func (g *gen) caseTest(item *ast.CaseItem, subject *sil.Value, t types.Type) (*sil.Value, bool) {
+// patternTest is the bit that decides whether a value matches a pattern,
+// or nil where it always does, binding whatever the pattern names.
+func (g *gen) patternTest(p ast.Pattern, subject *sil.Value, t types.Type) (*sil.Value, bool) {
 	var test *sil.Value
 
-	switch pat := item.Pat.(type) {
+	switch pat := p.(type) {
 	case *ast.ExprPattern:
 		// `case 1...5` matches everything between its bounds, so it
 		// is two comparisons rather than one equality.
@@ -1166,23 +1421,46 @@ func (g *gen) caseTest(item *ast.CaseItem, subject *sil.Value, t types.Type) (*s
 			break
 		}
 		n := len(g.diags)
-		want := g.rvalue(pat.X)
+		// Compared, not kept: it ends with the test's scope.
+		want := g.expr(pat.X)
 		if want == nil {
 			// Whatever stopped it said so, unless nothing did.
 			if len(g.diags) == n {
-				g.refuse(item.Pat, "this pattern in a switch")
+				g.refuse(p, "this pattern in a switch")
 			}
 			return nil, false
 		}
 		test = g.equals(subject, want, t)
 		if test == nil {
-			g.refuse(item.Pat, "a switch over "+t.String())
+			g.refuse(p, "a switch over "+t.String())
+			return nil, false
+		}
+
+	// `case let (a, 1)`: the let reaches each element's pattern.
+	case *ast.ValueBindingPattern:
+		if tp, isTuple := pat.Pat.(*ast.TuplePattern); isTuple {
+			elems := make([]*ast.TuplePatternElem, len(tp.Elems))
+			for i, el := range tp.Elems {
+				inner := *el
+				inner.Pat = &ast.ValueBindingPattern{Span: pat.Span, Kind: pat.Kind, Pat: el.Pat}
+				elems[i] = &inner
+			}
+			return g.patternTest(&ast.TuplePattern{Span: tp.Span, Elems: elems}, subject, t)
+		}
+		// Under a let, a name is bound; anything else -- the "x" of
+		// `let (n, "x")` -- is still matched.
+		if ep, isExpr := pat.Pat.(*ast.ExprPattern); isExpr {
+			if _, isName := ep.X.(*ast.IdentExpr); !isName {
+				return g.patternTest(ep, subject, t)
+			}
+		}
+		if !g.bindPatternTo(p, subject, t) {
 			return nil, false
 		}
 
 	// Value binding patterns: case let k.
-	case *ast.ValueBindingPattern, *ast.IdentPattern, *ast.WildcardPattern:
-		if !g.bindPatternTo(item.Pat, subject, t) {
+	case *ast.IdentPattern, *ast.WildcardPattern:
+		if !g.bindPatternTo(p, subject, t) {
 			return nil, false
 		}
 
@@ -1190,7 +1468,7 @@ func (g *gen) caseTest(item *ast.CaseItem, subject *sil.Value, t types.Type) (*s
 	case *ast.EnumCasePattern:
 		recv := g.info.PatternTypes[pat]
 		if recv == nil || pat.Name == nil || pat.Args != nil {
-			g.refuse(item.Pat, "this pattern in a switch")
+			g.refuse(p, "this pattern in a switch")
 			return nil, false
 		}
 		name := g.text(pat.Name)
@@ -1201,7 +1479,7 @@ func (g *gen) caseTest(item *ast.CaseItem, subject *sil.Value, t types.Type) (*s
 			}
 		}
 		if field == nil {
-			g.refuse(item.Pat, "a pattern naming something other than a static property")
+			g.refuse(p, "a pattern naming something other than a static property")
 			return nil, false
 		}
 		want := g.staticRead(&ast.MemberExpr{Name: pat.Name}, recv, field)
@@ -1210,17 +1488,62 @@ func (g *gen) caseTest(item *ast.CaseItem, subject *sil.Value, t types.Type) (*s
 		}
 		test = g.equals(subject, want, t)
 		if test == nil {
-			g.refuse(item.Pat, "a switch over "+t.String())
+			g.refuse(p, "a switch over "+t.String())
 			return nil, false
 		}
 
+	// `case (1, let s)` matches each element against its own pattern,
+	// and the tuple where all of them match.
 	case *ast.TuplePattern:
-		g.refuse(item.Pat, "a tuple pattern over "+t.String()+
-			", which is held in memory rather than in a register")
-		return nil, false
+		tu, isTuple := t.Underlying().(*types.Tuple)
+		if !isTuple || len(tu.Elements) != len(pat.Elems) {
+			g.refuse(p, "a tuple pattern over "+t.String())
+			return nil, false
+		}
+		for i, el := range pat.Elems {
+			et := tu.Elements[i].Type
+			part := g.blk.TupleExtract(subject, i, lowerType(et))
+			elTest, ok := g.patternTest(el.Pat, part, et)
+			if !ok {
+				return nil, false
+			}
+			switch {
+			case elTest == nil:
+			case test == nil:
+				test = elTest
+			default:
+				test = g.blk.Builtin("and_Int1", sil.Object(sil.BuiltinInt1), test, elTest)
+			}
+		}
 
 	default:
-		g.refuse(item.Pat, "this pattern in a switch")
+		g.refuse(p, "this pattern in a switch")
+		return nil, false
+	}
+
+	return test, true
+}
+
+// caseTest is the bit that decides whether one case item matches, or
+// nil where it always does. It binds whatever the pattern names
+// first, because a where clause is written about those names.
+func (g *gen) caseTest(item *ast.CaseItem, subject *sil.Value, t types.Type) (*sil.Value, bool) {
+	// What the test makes -- the literal compared with -- ends with it,
+	// before the branch.
+	g.push()
+	test, ok := g.caseItemTest(item, subject, t)
+	if !ok {
+		g.scopes = g.scopes[:len(g.scopes)-1]
+		return nil, false
+	}
+	g.pop()
+	return test, true
+}
+
+// caseItemTest is caseTest inside the scope its temporaries end with.
+func (g *gen) caseItemTest(item *ast.CaseItem, subject *sil.Value, t types.Type) (*sil.Value, bool) {
+	test, ok := g.patternTest(item.Pat, subject, t)
+	if !ok {
 		return nil, false
 	}
 
@@ -1458,6 +1781,11 @@ func (g *gen) label(id *ast.Ident) string {
 // forInBody lowers a for-in's body, which a `where` clause skips for an
 // element it is false of, as `continue` would.
 func (g *gen) forInBody(s *ast.ForInStmt) {
+	if elem := g.loopCase; elem != nil {
+		g.loopCase = nil
+		g.forCaseBody(s, elem)
+		return
+	}
 	if s.Where == nil {
 		g.block(s.Body)
 		return
@@ -1474,6 +1802,121 @@ func (g *gen) forInBody(s *ast.ForInStmt) {
 	g.blk = skip
 }
 
+// A loopElement is an element a `for case` loop has taken, owned, and not
+// yet matched.
+type loopElement struct {
+	value *sil.Value
+	typ   types.Type
+}
+
+// forCaseBody lowers the body of `for case P in s where W`: the element is
+// matched against P, and one that does not match -- or whose W is false --
+// is skipped, as `continue` would. What P binds lives for the one element.
+func (g *gen) forCaseBody(s *ast.ForInStmt, elem *loopElement) {
+	skip := g.fn.Block()
+	g.push()
+	if !g.matchElement(s.Pat, elem, skip) {
+		g.scopes = g.scopes[:len(g.scopes)-1]
+		return
+	}
+	if s.Where != nil {
+		g.push()
+		cond := g.rvalue(s.Where.Cond)
+		if cond == nil {
+			g.scopes = g.scopes[:len(g.scopes)-2]
+			return
+		}
+		bit := g.machine(cond, types.Typ[types.Bool])
+		g.pop()
+		body, miss := g.fn.Block(), g.fn.Block()
+		g.blk.CondBr(bit, body, nil, miss, nil)
+		g.blk = miss
+		g.emitCleanups(g.top())
+		g.blk.Br(skip)
+		g.blk = body
+	}
+	g.block(s.Body)
+	g.popReachable()
+	if g.blk != nil && g.blk.Term() == nil {
+		g.blk.Br(skip)
+	}
+	g.blk = skip
+}
+
+// matchElement matches an owned element against a for-case pattern: an
+// optional's `let x?`, `.some(let x)`, `nil` or `.none`, or one case of an
+// enum. Where it matches, what it binds is bound for the current scope and
+// the lowering goes on; everything else goes to miss.
+func (g *gen) matchElement(pat ast.Pattern, elem *loopElement, miss *sil.Block) bool {
+	t := elem.typ
+	lt := lowerType(t)
+	next := g.fn.Block()
+	if o, isOpt := optionalOf(t); isOpt {
+		c, ok := g.optionalCaseOf(pat)
+		if !ok || c.member == "" {
+			g.refuse(pat, "this pattern in a for-in")
+			return false
+		}
+		wrapped := lowerType(o.Wrapped)
+		own := sil.Unowned
+		if !wrapped.Trivial() {
+			own = sil.Owned
+		}
+		// Lowering wants both of an optional's cases named: the one the
+		// pattern is not goes to miss, letting go of what it holds.
+		if c.member == optionalNone {
+			drop := g.fn.Block()
+			payload := drop.Arg(wrapped, own)
+			if own == sil.Owned {
+				drop.DestroyValue(payload)
+			}
+			drop.Br(miss)
+			g.blk.SwitchEnum(elem.value,
+				sil.Case{Member: optionalSome, Dest: drop},
+				sil.Case{Member: optionalNone, Dest: next})
+			g.blk = next
+			return true
+		}
+		payload := next.Arg(wrapped, own)
+		g.blk.SwitchEnum(elem.value,
+			sil.Case{Member: optionalSome, Dest: next},
+			sil.Case{Member: optionalNone, Dest: miss})
+		g.blk = next
+		if own == sil.Owned {
+			g.destroyLater(payload)
+		}
+		if c.inner != nil && !g.bindPatternTo(c.inner, payload, o.Wrapped) {
+			return false
+		}
+		return true
+	}
+	// Whatever does not match hands the element back, to be let go of.
+	other := miss
+	if !lt.Trivial() {
+		other = g.fn.Block()
+		other.DestroyValue(other.Arg(lt, sil.Owned))
+		other.Br(miss)
+	}
+	inner := pat
+	if bind, ok := inner.(*ast.ValueBindingPattern); ok {
+		inner = bind.Pat
+	}
+	ep, ok := inner.(*ast.EnumCasePattern)
+	if _, isEnum := underlyingEnum(t); !ok || !isEnum || ep.Name == nil {
+		g.refuse(pat, "this pattern in a for-in")
+		return false
+	}
+	if ep.Args != nil && !g.bindCasePayload(t, ep, next) {
+		return false
+	}
+	g.blk.SwitchEnum(elem.value,
+		sil.Case{Member: memberName(t, g.text(ep.Name)), Dest: next},
+		sil.Case{Dest: other})
+	g.blk = next
+	g.destroyArmOwned(next)
+	return true
+}
+
 // forInStmt lowers for-in loops over ranges and collections as counted loops.
 func (g *gen) forInStmt(s *ast.ForInStmt) {
 	switch {
@@ -1484,8 +1927,10 @@ func (g *gen) forInStmt(s *ast.ForInStmt) {
 		g.refuse(s, "a throwing for-in")
 		return
 	case s.Case.IsValid():
-		g.refuse(s, "a for-in with a `case` pattern")
-		return
+		if _, isArray := g.typeOf(s.Seq).Underlying().(*types.Array); !isArray {
+			g.refuse(s, "a for-in with a `case` pattern over something other than an array")
+			return
+		}
 	}
 
 	switch u := g.typeOf(s.Seq).Underlying().(type) {
@@ -1826,4 +2271,11 @@ func (g *gen) caseOf(subject types.Type, name string) *types.EnumCase {
 		}
 	}
 	return nil
+}
+
+// neverBlock is a block no path reaches, for an edge lowering needs.
+func (g *gen) neverBlock() *sil.Block {
+	b := g.fn.Block()
+	b.Unreachable()
+	return b
 }

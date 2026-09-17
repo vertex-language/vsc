@@ -32,6 +32,30 @@ static void destroyErrorBox(HeapObject* obj) {
 
 static const HeapMetadata errorBoxMetadata = {destroyErrorBox, nullptr};
 
+void* errorValue(HeapObject* obj);
+
+// fatalError ends the program over the error in a box: what was printed is
+// flushed, and the reason is written, then the error as String(reflecting:)
+// writes it.
+[[noreturn]] inline void fatalError(HeapObject* obj, const char* reason) {
+  auto* e = reinterpret_cast<ErrorExistential*>(obj + 1);
+  Text t;
+  textInit(t);
+  textString(t, reason);
+  debugDescribe(t, errorValue(obj), e->type);
+  textByte(t, 0);
+  fatal(reinterpret_cast<const char*>(t.bytes));
+}
+
+// errorValue is where a box's error value is. See vertex_error_project.
+inline void* errorValue(HeapObject* obj) {
+  auto* e = reinterpret_cast<ErrorExistential*>(obj + 1);
+  const ValueWitnessTable* vw = witnesses(e->type);
+  if (vw->flags & vwIsNonInline)
+    return reinterpret_cast<u8*>(e->buffer[0]) + boxValueOffset(vw->flags);
+  return reinterpret_cast<void*>(e->buffer);
+}
+
 } // namespace vertex
 
 using namespace vertex;
@@ -70,6 +94,19 @@ void* vertex_error_project(HeapObject* obj) {
   if (vw->flags & vwIsNonInline)
     return reinterpret_cast<u8*>(e->buffer[0]) + boxValueOffset(vw->flags);
   return reinterpret_cast<void*>(e->buffer);
+}
+
+// vertex_error_in_main is where an error a throwing main let out goes:
+// what was printed is flushed, the error is written as String(reflecting:)
+// writes it, and the program traps -- Swift's "Error raised at top level".
+[[noreturn]] void vertex_error_in_main(HeapObject* obj) {
+  fatalError(obj, "Error raised at top level: ");
+}
+
+// vertex_try_failed is where an error a `try!` did not expect goes: it is
+// reported as Swift reports it, and the program traps.
+[[noreturn]] void vertex_try_failed(HeapObject* obj) {
+  fatalError(obj, "'try!' expression unexpectedly raised an error: ");
 }
 
 // vertex_existential_is is 1 when the existential at `at` holds a value of

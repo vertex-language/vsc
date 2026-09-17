@@ -3,6 +3,7 @@ package gen
 import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/stdlib"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 )
@@ -32,8 +33,8 @@ func (g *gen) checkEntry(sym *analyzer.FuncSymbol, sig *types.Signature) bool {
 		why = "is generic"
 	case len(sig.Params) > 0:
 		why = "takes parameters"
-	case sig.Throws:
-		why = "throws"
+	case sig.Throws && sig.Async:
+		why = "is async and throws"
 	case sig.Results != nil && !isVoid(sig.Results) && !isEntryResult(sig.Results):
 		why = "returns " + sig.Results.String()
 	default:
@@ -73,4 +74,43 @@ func (g *gen) result() *sil.Value {
 		return g.entryStatus()
 	}
 	return g.void()
+}
+
+// throwingEntryName is the symbol a throwing main's body is given, the
+// name main being the entry that calls it.
+const throwingEntryName = "$vsc_throwing_main"
+
+// throwingEntry emits the program's entry for a main that throws: it calls
+// body, exits with what body returns (or 0), and hands an error body throws
+// to the runtime, which reports it and traps -- what Swift does with an
+// error raised at top level.
+func (g *gen) throwingEntry(name string, body *sil.Func) {
+	f := g.m.Func(name).SetSourceName(EntryName).SetLinkage(sil.Public).SetAttr("ossa")
+	entrySignature(f)
+
+	prevFn, prevBlk, prevScopes := g.fn, g.blk, g.scopes
+	defer func() { g.fn, g.blk, g.scopes = prevFn, prevBlk, prevScopes }()
+	g.fn, g.blk, g.scopes = f, f.Entry(), nil
+	g.push()
+
+	normal, failed := f.Block(), f.Block()
+	var status *sil.Value
+	if len(body.Type().Results) == 1 {
+		status = normal.Arg(lowerType(entryResult()), sil.Owned)
+	}
+	box := failed.Arg(errorBoxType(), sil.Owned)
+	g.blk.TryApply(g.blk.FunctionRef(body), normal, failed)
+
+	g.blk = failed
+	g.runtimeResult(stdlib.ErrorInMain,
+		[]sil.Param{{Type: errorBoxType(), Convention: sil.ParamOwned}},
+		lowerType(types.Typ[types.Void]), box)
+	g.blk.Unreachable()
+
+	g.blk = normal
+	g.unwind()
+	if status == nil {
+		status = g.entryStatus()
+	}
+	g.blk.Return(status)
 }

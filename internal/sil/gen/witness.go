@@ -618,7 +618,14 @@ func (g *gen) boxArg(a ast.Expr, v *sil.Value, want []types.Type, i int) *sil.Va
 		}
 	}
 	v = g.optionalFor(a, v, from, want[i])
-	return g.existentialFor(a, v, from, want[i])
+	out := g.existentialFor(a, v, from, want[i])
+	// The call borrows an existential argument (@in_guaranteed), so the
+	// temporary made for it is the caller's, and ends after the call --
+	// as swiftc's SILGen destroys it.
+	if _, isEx := existentialOf(want[i]); isEx && out != nil && out.Type().IsAddress() && !g.storage[out] {
+		g.destroyAddrLater(out)
+	}
+	return out
 }
 
 // existentialParams is the parameter types a call's arguments are

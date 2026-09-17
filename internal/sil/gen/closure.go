@@ -4,6 +4,7 @@ import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 )
 
@@ -163,7 +164,7 @@ func (g *gen) closureCaptures(e ast.Node) ([]closureCapture, string) {
 // closureBody emits the closure's statements as a private SIL function.
 func (g *gen) closureBody(e *ast.ClosureExpr, sig *types.Signature, caps []closureCapture) *sil.Func {
 	x, implicit := implicitResult(e, sig)
-	return g.captureBody(sig, caps, g.closureParams(e, sig), e.Stmts, x, implicit)
+	return g.captureBody(sig, caps, g.closureParams(e, sig), e.Stmts, x, implicit, e.Lbrace, e.Rbrace, "closure")
 }
 
 // captureBody emits a function that runs stmts with its parameters bound
@@ -171,7 +172,7 @@ func (g *gen) closureBody(e *ast.ClosureExpr, sig *types.Signature, caps []closu
 // nested function's. Where implicit, the body is the one expression x and
 // returns it.
 func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []analyzer.Symbol,
-	stmts []ast.Stmt, x ast.Expr, implicit bool) *sil.Func {
+	stmts []ast.Stmt, x ast.Expr, implicit bool, start, end token.Pos, kind string) *sil.Func {
 	f := g.m.Func(g.closureSymbol()).SetLinkage(sil.Private).SetAttr("ossa")
 
 	outer := struct {
@@ -274,7 +275,7 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 	if g.blk != nil && g.blk.Term() == nil {
 		g.unwind()
 		if sig.Results != nil && !isVoid(sig.Results) {
-			g.blk.Unreachable()
+			g.missingReturn(start, end, kind, sig.Results)
 		} else {
 			g.blk.Return(g.void())
 		}
@@ -393,7 +394,10 @@ func (g *gen) nestedFunc(d *ast.FuncDecl) {
 		g.throws, g.catches, g.tryBang, g.tryCall = outer.throws, outer.catches, outer.tryBang, outer.tryCall
 	}()
 
+	prevLocal := g.localFunc
+	g.localFunc = true
 	g.function(d, nil)
+	g.localFunc = prevLocal
 }
 
 // capturingNestedFunc lowers a nested function that uses names from the
@@ -431,7 +435,7 @@ func (g *gen) capturingNestedFunc(d *ast.FuncDecl) {
 			x, implicit = st.X, true
 		}
 	}
-	f := g.captureBody(sig, caps, syms, d.Body.Stmts, x, implicit)
+	f := g.captureBody(sig, caps, syms, d.Body.Stmts, x, implicit, d.Body.Lbrace, d.Body.Rbrace, "local function")
 	if f == nil {
 		return
 	}

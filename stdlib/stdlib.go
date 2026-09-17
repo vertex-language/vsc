@@ -31,6 +31,8 @@ const (
 	ErrorContents   = "vertex_error_contents"
 	ErrorMatches    = "vertex_error_matches"
 	ErrorProject    = "vertex_error_project"
+	ErrorInMain     = "vertex_error_in_main"
+	TryFailed       = "vertex_try_failed"
 	AsyncMain       = "vertex_async_main"
 	AsyncMainStatus = "vertex_async_main_status"
 	TaskSpawn       = "vertex_task_spawn"

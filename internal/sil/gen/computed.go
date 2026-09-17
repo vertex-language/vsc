@@ -309,7 +309,7 @@ func (g *gen) emitGetterNamed(symbol string, recv types.Type, name string, t typ
 	g.block(body)
 	if g.blk != nil && g.blk.Term() == nil {
 		g.unwind()
-		g.blk.Unreachable()
+		g.missingReturn(body.Lbrace, body.Rbrace, "getter", t)
 	}
 	g.pop()
 	g.recv = nil

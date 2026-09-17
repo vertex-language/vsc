@@ -395,6 +395,7 @@ type gen struct {
 	recv        types.Type                  // receiver type for method being lowered, or nil
 	closures    int                         // count of emitted closures (for unique names)
 	armOwned    map[*sil.Block][]*sil.Value // payloads a case arm owns, let go when its scope ends
+	loopCase    *loopElement                // the element a `for case` body matches, before it runs
 	poly        map[*types.Class]bool
 	nested      map[analyzer.Symbol]string
 	stated      map[*sil.Func]bool
@@ -416,6 +417,7 @@ type gen struct {
 	vars        map[analyzer.Symbol]*moduleVar    // module-level variables, shared by every file
 	getters     map[analyzer.Symbol]*moduleGetter // computed module-level variables, shared by every file
 	staticRecv  types.Type                        // the type whose static initializer is being lowered
+	localFunc   bool                              // lowering a function declared inside another
 	tryOptional bool
 	tryTrap     bool
 	publicTypes map[string]bool // nominal types this module exports
@@ -430,6 +432,7 @@ type gen struct {
 	// chain being lowered, innermost last; chainActive is the roots whose
 	// steps are being lowered, which are typed as their unwrapped result.
 	chainNone   []*sil.Block
+	chainDepth  []int // the scope each chain in chainNone opened, let go of on its way there
 	chainActive map[ast.Expr]bool
 
 	diags []token.Diagnostic
@@ -907,7 +910,10 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	// An async main is an ordinary function run as the first task; the
 	// program's entry is a function of its own that starts it.
 	asyncEntry := g.entry && sig.Async
-	if asyncEntry {
+	// A throwing main is an ordinary throwing function; the entry calls
+	// it, and an error it throws ends the program.
+	throwingEntry := g.entry && sig.Throws
+	if asyncEntry || throwingEntry {
 		g.entry = false
 	}
 
@@ -918,6 +924,9 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	entryName := name
 	if asyncEntry {
 		name = asyncEntryName
+	}
+	if throwingEntry {
+		name = throwingEntryName
 	}
 	static := isStaticDecl(d.Mods)
 	if recv != nil && symbol == "" {
@@ -1038,7 +1047,16 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	if g.blk != nil && g.blk.Term() == nil {
 		g.unwind()
 		if !g.entry && sig.Results != nil && !isVoid(sig.Results) {
-			g.blk.Unreachable()
+			kind := "global function"
+			switch {
+			case g.localFunc:
+				kind = "local function"
+			case recv != nil && static:
+				kind = "static method"
+			case recv != nil:
+				kind = "instance method"
+			}
+			g.missingReturn(d.Body.Lbrace, d.Body.Rbrace, kind, sig.Results)
 		} else {
 			g.blk.Return(g.result())
 		}
@@ -1048,6 +1066,9 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	g.recv = nil
 	if asyncEntry {
 		g.asyncEntry(entryName, f)
+	}
+	if throwingEntry {
+		g.throwingEntry(entryName, f)
 	}
 
 	// C entry point @_cdecl thunk if requested.

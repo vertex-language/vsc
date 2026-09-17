@@ -125,7 +125,12 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		}
 		loopScope := NewScope(scope, s.Pos(), s.End())
 		c.info.Scopes[s] = loopScope
-		c.declarePattern(s.Pat, elemType, true, loopScope)
+		if s.Case.IsValid() {
+			// `for case P in s` matches each element against P.
+			c.declareCasePattern(s.Pat, elemType, loopScope)
+		} else {
+			c.declarePattern(s.Pat, elemType, true, loopScope)
+		}
 		if s.Where != nil {
 			if t := c.checkExpr(s.Where.Cond, types.Typ[types.Bool], loopScope); t != nil && !isInvalid(t) &&
 				!types.Identical(t, types.Typ[types.Bool]) {
@@ -136,13 +141,9 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 
 	case *ast.SwitchStmt:
 		subjectType := c.checkExpr(s.Subject, nil, scope)
-		var matchedCases map[string]bool
+		matchedCases := make(map[string]bool)
 		var hasDefault bool
 		var caseInits [][]*VarSymbol
-		en, isEnum := subjectType.Underlying().(*types.Enum)
-		if isEnum {
-			matchedCases = make(map[string]bool)
-		}
 
 		for _, caseStmt := range s.Cases {
 			if cs, ok := caseStmt.(*ast.CaseClause); ok {
@@ -161,7 +162,7 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 					if item.Where != nil {
 						c.checkExpr(item.Where.Cond, types.Typ[types.Bool], caseScope)
 					}
-					if isEnum && item.Where == nil {
+					if item.Where == nil {
 						c.collectMatchedCases(item.Pat, matchedCases, &hasDefault)
 					}
 				}
@@ -174,15 +175,31 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		}
 		c.joinBranches(caseInits)
 
-		if isEnum && !hasDefault {
-			var missing []string
-			for _, ec := range en.Cases {
-				if !matchedCases[ec.Name] {
-					missing = append(missing, "."+ec.Name)
+		if !hasDefault && subjectType != nil && !isInvalid(subjectType) {
+			switch u := subjectType.Underlying().(type) {
+			case *types.Enum:
+				var missing []string
+				for _, ec := range u.Cases {
+					if !matchedCases[ec.Name] {
+						missing = append(missing, "."+ec.Name)
+					}
 				}
-			}
-			if len(missing) > 0 {
-				c.errorf(s.Switch, "switch must be exhaustive (missing: %s)", strings.Join(missing, ", "))
+				if len(missing) > 0 {
+					c.errorf(s.Switch, "switch must be exhaustive (missing: %s)", strings.Join(missing, ", "))
+				}
+			case *types.Optional:
+				if !matchedCases["some"] || !matchedCases["none"] {
+					c.errorf(s.Switch, "switch must be exhaustive")
+				}
+			case *types.Basic:
+				if u.Kind() != types.Bool || !matchedCases["true"] || !matchedCases["false"] {
+					c.errorf(s.Switch, "switch must be exhaustive")
+				}
+			case *types.Tuple:
+				// Not modelled: a tuple's space is the product of its
+				// elements', and a switch over one is refused later.
+			default:
+				c.errorf(s.Switch, "switch must be exhaustive")
 			}
 		}
 
@@ -325,6 +342,24 @@ func (c *checker) collectMatchedCases(pat ast.Pattern, matched map[string]bool, 
 			matched[mem.Name.Text(c.file)] = true
 		} else if id, ok := p.X.(*ast.IdentExpr); ok {
 			matched[id.Name.Text(c.file)] = true
+		} else if lit, ok := p.X.(*ast.BasicLit); ok {
+			switch lit.Kind {
+			case token.TRUE:
+				matched["true"] = true
+			case token.FALSE:
+				matched["false"] = true
+			case token.NIL:
+				matched["none"] = true
+			}
+		}
+	case *ast.OptionalPattern:
+		// `let x?` is .some of whatever x matches, all of it only where
+		// x matches everything.
+		inner := map[string]bool{}
+		all := false
+		c.collectMatchedCases(p.Pat, inner, &all)
+		if all {
+			matched["some"] = true
 		}
 	case *ast.ValueBindingPattern:
 		if _, ok := p.Pat.(*ast.IdentPattern); ok {
@@ -718,13 +753,19 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 		if m.Question.IsValid() || m.Exclaim.IsValid() {
 			result = &types.Optional{Wrapped: types.Typ[types.Void]}
 		}
-		prevInit := c.inInit
+		prevInit, prevName := c.inInit, c.currFuncName
 		c.inInit = true
+		if m.Sig != nil {
+			c.currFuncName = c.declName("init", m.Sig.Params, false)
+		}
 		c.checkBodyWithParams(m, m.Sig, m.Body, typeScope, result)
-		c.inInit = prevInit
+		c.inInit, c.currFuncName = prevInit, prevName
 
 	case *ast.DeinitDecl:
+		prevName := c.currFuncName
+		c.currFuncName = "deinit"
 		c.checkBodyWithParams(m, nil, m.Body, typeScope, nil)
+		c.currFuncName = prevName
 
 	case *ast.SubscriptDecl:
 		sig := &ast.FuncSig{Lparen: m.Lparen, Params: m.Params, Rparen: m.Rparen, Result: m.Result}
@@ -732,8 +773,11 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 		if m.Result != nil {
 			result = c.resolveType(m.Result.Type, typeScope)
 		}
+		prevName := c.currFuncName
+		c.currFuncName = c.declName("subscript", m.Params, true)
 		scope := c.checkBodyWithParams(m, sig, m.Body, typeScope, result)
 		c.checkAccessors(m.Accessors, scope, result)
+		c.currFuncName = prevName
 
 	case *ast.VarDecl:
 		for _, b := range m.Bindings {
@@ -787,10 +831,50 @@ func (c *checker) checkBinding(b *ast.PatternBinding, scope *Scope) {
 			c.typeErrorf(b.Value.Pos(), "cannot convert value of type '%s' to specified type '%s'", valueType, declared)
 		}
 	}
+	if b.Body != nil || b.Accessors != nil {
+		prevName := c.currFuncName
+		if name := bindingIdent(b.Pat); name != nil {
+			c.currFuncName = name.Text(c.file)
+		}
+		defer func() { c.currFuncName = prevName }()
+	}
 	if b.Body != nil {
 		c.checkReturningBlock(b.Body, scope, declared)
 	}
 	c.checkAccessors(b.Accessors, scope, declared)
+}
+
+// bindingIdent is the name a property binding declares, or nil.
+func bindingIdent(p ast.Pattern) *ast.Ident {
+	if tp, ok := p.(*ast.TypedPattern); ok {
+		p = tp.Pat
+	}
+	if id, ok := p.(*ast.IdentPattern); ok {
+		return id.Name
+	}
+	return nil
+}
+
+// declName spells a declaration the way #function does: its base name and
+// each parameter's argument label, `_` for none -- `m(_:b:)`. A subscript's
+// parameters have no label unless one is written.
+func (c *checker) declName(base string, params []*ast.Param, subscript bool) string {
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteByte('(')
+	for _, p := range params {
+		switch {
+		case p.Label != nil:
+			b.WriteString(p.Label.Text(c.file))
+		case p.Name != nil && !subscript:
+			b.WriteString(p.Name.Text(c.file))
+		default:
+			b.WriteString("_")
+		}
+		b.WriteByte(':')
+	}
+	b.WriteByte(')')
+	return b.String()
 }
 
 // checkAccessors checks accessor blocks (get, set, willSet, didSet).
@@ -867,8 +951,23 @@ func (c *checker) checkBodyWithParams(d ast.Node, sig *ast.FuncSig, body *ast.Co
 	return inner
 }
 
+// implicitReturn turns a body that is a single expression into a return of
+// that expression, where the body produces a value: `func f() -> Int { 1 }`
+// is `{ return 1 }`, as Swift reads it (SE-0255).
+func implicitReturn(body *ast.CodeBlock, result types.Type) {
+	if body == nil || len(body.Stmts) != 1 || result == nil || isVoidType(result) {
+		return
+	}
+	st, ok := body.Stmts[0].(*ast.ExprStmt)
+	if !ok || st.X == nil {
+		return
+	}
+	body.Stmts[0] = &ast.ReturnStmt{Span: st.Span, X: st.X}
+}
+
 // checkReturningBlock checks a block whose returns produce result.
 func (c *checker) checkReturningBlock(body *ast.CodeBlock, scope *Scope, result types.Type) {
+	implicitReturn(body, result)
 	prev := c.currFuncRet
 	c.currFuncRet = result
 	defer func() { c.currFuncRet = prev }()
@@ -898,11 +997,15 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 		fnScope.Insert(sym)
 	}
 
-	prevRet, prevAsync := c.currFuncRet, c.currAsync
+	prevRet, prevAsync, prevName := c.currFuncRet, c.currAsync, c.currFuncName
 	c.currFuncRet, c.currAsync = sig.Results, sig.Async
-	defer func() { c.currFuncRet, c.currAsync = prevRet, prevAsync }()
+	if d.Name != nil && d.Sig != nil {
+		c.currFuncName = c.declName(d.Name.Text(c.file), d.Sig.Params, false)
+	}
+	defer func() { c.currFuncRet, c.currAsync, c.currFuncName = prevRet, prevAsync, prevName }()
 
 	if d.Body != nil {
+		implicitReturn(d.Body, sig.Results)
 		bodyScope := NewScope(fnScope, d.Body.Pos(), d.Body.End())
 		c.info.Scopes[d.Body] = bodyScope
 		c.declareFunctions(declsOf(d.Body.Stmts), bodyScope)
@@ -1020,6 +1123,14 @@ func (c *checker) declareBoundPattern(pat ast.Pattern, t types.Type, isConst boo
 			wrapped = o.Wrapped
 		}
 		c.declareBoundPattern(p.Pat, wrapped, isConst, scope)
+	// Under a let, a name is bound; any other expression -- the "x" of
+	// `let (n, "x")` -- is still a value matched against.
+	case *ast.ExprPattern:
+		if _, isName := p.X.(*ast.IdentExpr); !isName {
+			c.checkExpr(p.X, t, scope)
+			return
+		}
+		c.declarePattern(pat, t, isConst, scope)
 	default:
 		c.declarePattern(pat, t, isConst, scope)
 	}
@@ -1032,4 +1143,16 @@ func (c *checker) extensionType(d *ast.ExtensionDecl, scope *Scope) types.Type {
 		return t
 	}
 	return c.resolveType(d.Type, scope)
+}
+
+// isVoidType reports whether t is Void, the empty tuple, or Never: a body
+// of one of those types has no value for a lone expression to return.
+func isVoidType(t types.Type) bool {
+	switch u := t.Underlying().(type) {
+	case *types.Basic:
+		return u.Kind() == types.Void || u.Kind() == types.Never
+	case *types.Tuple:
+		return len(u.Elements) == 0
+	}
+	return false
 }
