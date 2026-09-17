@@ -1,0 +1,10 @@
+sil hidden [ossa] @$s1a8consumesyAA3BoxCADnF : $@convention(thin) (@owned Box) -> @owned Box {
+// %0 "b"                                         // users: %5, %2, %1
+bb0(%0 : @owned $Box):
+  debug_value %0, let, name "b", argno 1          // id: %1
+  %2 = begin_borrow %0                            // users: %4, %3
+  %3 = copy_value %2                              // user: %6
+  end_borrow %2                                   // id: %4
+  destroy_value %0                                // id: %5
+  return %3                                       // id: %6
+} // end sil function '$s1a8consumesyAA3BoxCADnF'

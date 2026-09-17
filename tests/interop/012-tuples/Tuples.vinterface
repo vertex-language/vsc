@@ -1,0 +1,19 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.3.1 effective-5.10 (swiftlang-6.3.1.1.2 clang-2100.0.123.102)
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Tuples
+// swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.3.1
+import Swift
+import _Concurrency
+import _StringProcessing
+import _SwiftConcurrencyShims
+public struct Vec {
+  public var x: Swift.Int32
+  public var y: Swift.Int32
+  public init(x: Swift.Int32, y: Swift.Int32)
+}
+public func pairOf(_ n: Swift.Int32) -> (Swift.Int32, Swift.Int32)
+public func sumTuple(_ t: (Swift.Int32, Swift.Int32)) -> Swift.Int32
+public func labelled() -> (lo: Swift.Int32, hi: Swift.Int32)
+public func after(_ t: (Swift.Int32, Swift.Int32), _ n: Swift.Int32) -> Swift.Int32
+public func before(_ n: Swift.Int32, _ t: (Swift.Int32, Swift.Int32)) -> Swift.Int32
+public func vecSum(_ v: Tuples.Vec) -> Swift.Int32

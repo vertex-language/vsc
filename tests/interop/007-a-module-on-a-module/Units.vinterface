@@ -1,0 +1,14 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.3.1 effective-5.10 (swiftlang-6.3.1.1.2 clang-2100.0.123.102)
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Units
+// swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.3.1
+import Swift
+import _Concurrency
+import _StringProcessing
+import _SwiftConcurrencyShims
+public struct Metric {
+  public var raw: Swift.Int32
+  public init(raw: Swift.Int32)
+  public func doubled() -> Swift.Int32
+}
+public func rawOf(_ n: Swift.Int32) -> Swift.Int32

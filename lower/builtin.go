@@ -1,0 +1,246 @@
+package lower
+
+import (
+	"strings"
+
+	"github.com/vertex-language/ir"
+	"github.com/vertex-language/vsc/stdlib"
+)
+
+// builtin translates a Builtin.* instruction into VIR operations.
+func (c *fn) builtin(name string, args []ir.Value) ([]ir.Value, error) {
+	// A conversion names two types rather than one -- the source in
+	// the verb and the destination after it -- so it cannot be read
+	// by the "verb plus width" split below.
+	if out, ok, err := c.convertBuiltin(name, args); ok {
+		return out, err
+	}
+	verb, width, ok := splitBuiltin(name)
+	if !ok {
+		return nil, c.fail(ErrBuiltin, "builtin", name)
+	}
+	r, ok := builtinRepr(width)
+	if !ok {
+		return nil, c.fail(ErrBuiltin, "builtin", name)
+	}
+	switch r.reg {
+	case ir.TypeI1:
+		return c.boolBuiltin(name, verb, args)
+	case ir.TypeI32, ir.TypeI64:
+		return c.intBuiltin(name, verb, r, args)
+	case ir.TypeF32, ir.TypeF64:
+		return c.floatBuiltin(name, verb, r, args)
+	case ir.TypePtr:
+		return c.ptrBuiltin(name, verb, args)
+	}
+	return nil, c.fail(ErrBuiltin, "builtin", name)
+}
+
+// ptrBuiltin translates address equality comparisons.
+func (c *fn) ptrBuiltin(name, verb string, args []ir.Value) ([]ir.Value, error) {
+	// Where an array keeps its elements, past the storage's header: see
+	// stdlib/ABI.md. The empty array's storage has that place too.
+	if verb == "vertexArrayElements" {
+		storage, ok := args[0].(ir.Ptr)
+		if len(args) != 1 || !ok {
+			return nil, c.fail(ErrBuiltin, "builtin", name+": operand is not an array's storage")
+		}
+		return []ir.Value{c.b.Ptr.Add(storage, c.b.I64.Const(stdlib.ArrayElements))}, nil
+	}
+	if len(args) < 2 {
+		return nil, c.fail(ErrBuiltin, "builtin", name+": too few operands")
+	}
+	a, aok := args[0].(ir.Ptr)
+	b, bok := args[1].(ir.Ptr)
+	if !aok || !bok {
+		return nil, c.fail(ErrBuiltin, "builtin", name+": operand is not an address")
+	}
+	switch verb {
+	case "cmp_eq":
+		return []ir.Value{c.b.Ptr.Eq(a, b)}, nil
+	case "cmp_ne":
+		return []ir.Value{c.b.Ptr.Ne(a, b)}, nil
+	}
+	return nil, c.fail(ErrBuiltin, "builtin", name)
+}
+
+// splitBuiltin separates a builtin's verb from the type it names. The
+// type is the last underscore-separated word, and every builtin this
+// compiler emits carries one.
+func splitBuiltin(name string) (verb, width string, ok bool) {
+	i := strings.LastIndexByte(name, '_')
+	if i < 0 {
+		return "", "", false
+	}
+	return name[:i], name[i+1:], true
+}
+
+func (c *fn) boolBuiltin(name, verb string, args []ir.Value) ([]ir.Value, error) {
+	ns := c.b.I1
+	a, aok := args[0].(ir.I1)
+	if !aok {
+		return nil, c.fail(ErrBuiltin, "builtin", name+": operand is not an i1")
+	}
+	if verb == "int_not" || verb == "not" {
+		return []ir.Value{ns.Not(a)}, nil
+	}
+	b, bok := args[1].(ir.I1)
+	if !bok {
+		return nil, c.fail(ErrBuiltin, "builtin", name+": operand is not an i1")
+	}
+	switch verb {
+	case "and":
+		return []ir.Value{ns.And(a, b)}, nil
+	case "or":
+		return []ir.Value{ns.Or(a, b)}, nil
+	case "xor":
+		return []ir.Value{ns.Xor(a, b)}, nil
+	case "cmp_eq":
+		return []ir.Value{ns.Xor(ns.Xor(a, b), ns.Const(true))}, nil
+	case "cmp_ne":
+		return []ir.Value{ns.Xor(a, b)}, nil
+	}
+	return nil, c.fail(ErrBuiltin, "builtin", name)
+}
+
+// convertBuiltin translates width conversion builtins (sext, zext, trunc, fp/int conversions).
+func (c *fn) convertBuiltin(name string, args []ir.Value) ([]ir.Value, bool, error) {
+	verb, src, dst, ok := splitConvert(name)
+	if !ok {
+		return nil, false, nil
+	}
+	if len(args) != 1 {
+		return nil, true, c.fail(ErrBuiltin, "builtin", name+": a conversion takes one operand")
+	}
+	from, fok := builtinRepr(src)
+	to, tok := builtinRepr(dst)
+	if !fok || !tok {
+		return nil, true, c.fail(ErrBuiltin, "builtin", name)
+	}
+
+	// Float/integer representation conversion.
+	if out, ok, err := c.floatConvertBuiltin(verb, from, to, args[0]); ok {
+		return out, true, err
+	}
+
+	switch {
+	case from.reg == to.reg:
+		// Same register class: Int8, Int16 and Int32 share one, and
+		// the value already fits.
+		return []ir.Value{args[0]}, true, nil
+
+	case from.reg == ir.TypeI64 && to.reg == ir.TypeI32:
+		a, ok := args[0].(ir.I64)
+		if !ok {
+			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an i64")
+		}
+		return []ir.Value{c.b.I32.WrapI64(a)}, true, nil
+
+	case from.reg == ir.TypeI32 && to.reg == ir.TypeI64:
+		a, ok := args[0].(ir.I32)
+		if !ok {
+			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an i32")
+		}
+		if verb == "zextOrBitCast" {
+			return []ir.Value{c.b.I64.ZExtI32(a)}, true, nil
+		}
+		return []ir.Value{c.b.I64.SExtI32(a)}, true, nil
+	}
+	return nil, true, c.fail(ErrBuiltin, "builtin", name)
+}
+
+// splitConvert reads a conversion's verb and its two types.
+func splitConvert(name string) (verb, src, dst string, ok bool) {
+	for _, v := range [...]string{
+		"truncOrBitCast_", "sextOrBitCast_", "zextOrBitCast_",
+		"sitofp_", "uitofp_", "fptosi_", "fptoui_",
+		"fpext_", "fptrunc_", "bitcast_",
+	} {
+		if !strings.HasPrefix(name, v) {
+			continue
+		}
+		rest := name[len(v):]
+		i := strings.LastIndexByte(rest, '_')
+		if i < 0 {
+			return "", "", "", false
+		}
+		return strings.TrimSuffix(v, "_"), rest[:i], rest[i+1:], true
+	}
+	return "", "", "", false
+}
+
+// floatConvertBuiltin translates float-to-int and int-to-float conversions.
+func (c *fn) floatConvertBuiltin(verb string, from, to repr, a ir.Value) ([]ir.Value, bool, error) {
+	fail := func() ([]ir.Value, bool, error) {
+		return nil, true, c.fail(ErrBuiltin, "builtin", verb+": operand of the wrong class")
+	}
+	switch verb {
+	case "sitofp", "uitofp":
+		n, ok := a.(ir.I64)
+		if !ok {
+			return fail()
+		}
+		signed := verb == "sitofp"
+		switch to.reg {
+		case ir.TypeF64:
+			if signed {
+				return []ir.Value{c.b.F64.SCvtI64(n)}, true, nil
+			}
+			return []ir.Value{c.b.F64.UCvtI64(n)}, true, nil
+		case ir.TypeF32:
+			if signed {
+				return []ir.Value{c.b.F32.SCvtI64(n)}, true, nil
+			}
+			return []ir.Value{c.b.F32.UCvtI64(n)}, true, nil
+		}
+		return fail()
+
+	case "fpext":
+		f, ok := a.(ir.F32)
+		if !ok || to.reg != ir.TypeF64 {
+			return fail()
+		}
+		return []ir.Value{c.b.F64.FCvtF32(f)}, true, nil
+
+	case "fptrunc":
+		f, ok := a.(ir.F64)
+		if !ok || to.reg != ir.TypeF32 {
+			return fail()
+		}
+		return []ir.Value{c.b.F32.FCvtF64(f)}, true, nil
+
+	case "fptosi", "fptoui":
+		// Truncation toward zero into destination integer register.
+		signed := verb == "fptosi"
+		switch f := a.(type) {
+		case ir.F64:
+			switch to.reg {
+			case ir.TypeI64:
+				if signed {
+					return []ir.Value{c.b.I64.SCvtF64(f)}, true, nil
+				}
+				return []ir.Value{c.b.I64.UCvtF64(f)}, true, nil
+			case ir.TypeI32:
+				if signed {
+					return []ir.Value{c.b.I32.SCvtF64(f)}, true, nil
+				}
+				return []ir.Value{c.b.I32.UCvtF64(f)}, true, nil
+			}
+		case ir.F32:
+			switch to.reg {
+			case ir.TypeI64:
+				if signed {
+					return []ir.Value{c.b.I64.SCvtF32(f)}, true, nil
+				}
+				return []ir.Value{c.b.I64.UCvtF32(f)}, true, nil
+			case ir.TypeI32:
+				if signed {
+					return []ir.Value{c.b.I32.SCvtF32(f)}, true, nil
+				}
+				return []ir.Value{c.b.I32.UCvtF32(f)}, true, nil
+			}
+		}
+		return fail()
+	}
+	return nil, false, nil
+}

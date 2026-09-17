@@ -1,0 +1,18 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.3.1 effective-5.10 (swiftlang-6.3.1.1.2 clang-2100.0.123.102)
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Options
+// swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.3.1
+import Swift
+import _Concurrency
+import _StringProcessing
+import _SwiftConcurrencyShims
+public struct Pair {
+  public var a: Swift.Int32
+  public var b: Swift.Int32
+  public init(a: Swift.Int32, b: Swift.Int32)
+}
+public func orElse(_ v: Swift.Int32?, _ d: Swift.Int32) -> Swift.Int32
+public func widthOf(_ v: Swift.Int64?, _ d: Swift.Int32) -> Swift.Int32
+public func sumOr(_ v: Options.Pair?, _ d: Swift.Int32) -> Swift.Int32
+public func pick(_ v: Swift.Int32?, _ n: Swift.Int32) -> Swift.Int32
+public func maybe(_ n: Swift.Int32) -> Swift.Int32?

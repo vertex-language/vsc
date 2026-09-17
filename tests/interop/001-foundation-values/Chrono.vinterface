@@ -1,0 +1,8 @@
+// vertex-interface-format-version: 1.0
+// vertex-module-name: Chrono
+
+public func epochYearUTC() -> Int32
+
+public func daysBetweenUTC(_ from: Int32, _ to: Int32) -> Int32
+
+public func uuidIsStable() -> Int32

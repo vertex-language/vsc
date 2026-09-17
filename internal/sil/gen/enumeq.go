@@ -1,0 +1,157 @@
+package gen
+
+import (
+	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/types"
+)
+
+// enumEquality lowers `a == b` and `a != b` over enums, and reports
+// whether the operands were a pair it could compare.
+func (g *gen) enumEquality(e *ast.BinaryExpr, op string) (*sil.Value, bool) {
+	if op != "==" && op != "!=" {
+		return nil, false
+	}
+	lt, rt := g.typeOf(e.X), g.typeOf(e.Y)
+	le, ok := enumFor(lt)
+	if !ok {
+		return nil, false
+	}
+	re, ok := enumFor(rt)
+	if !ok || le != re {
+		return nil, false
+	}
+	for _, c := range le.Cases {
+		if c != nil && c.AssociatedType != nil {
+			g.refuse(e, "a comparison of an enum that carries a value")
+			return nil, true
+		}
+	}
+
+	a, b := g.expr(e.X), g.expr(e.Y)
+	if a == nil || b == nil {
+		return nil, true
+	}
+	verb := "cmp_eq_"
+	if op == "!=" {
+		verb = "cmp_ne_"
+	}
+	raw := g.blk.Builtin(verb+enumMachine(le), sil.Object(sil.BuiltinInt1), a, b)
+	return g.blk.Struct(lowerType(g.typeOf(e)), raw), true
+}
+
+// enumFor is the enum a type is.
+func enumFor(t types.Type) (*types.Enum, bool) {
+	if t == nil {
+		return nil, false
+	}
+	e, ok := t.Underlying().(*types.Enum)
+	return e, ok
+}
+
+// enumMachine is the integer a tag is held in, named the way a
+// builtin names it. It has to agree with lower's own answer for the
+// same enum, which is why both read it from the number of cases.
+func enumMachine(e *types.Enum) string {
+	switch size := types.Sizeof(e, types.DefaultTarget64); {
+	case size <= 1:
+		return "Int8"
+	case size <= 2:
+		return "Int16"
+	case size <= 4:
+		return "Int32"
+	}
+	return "Int64"
+}
+
+// rawValueRead reports whether a member read is `rawValue` on an enum
+// that declares a raw type.
+func rawValueRead(t types.Type, name string) (*types.Enum, bool) {
+	if name != "rawValue" || t == nil {
+		return nil, false
+	}
+	en, ok := t.Underlying().(*types.Enum)
+	if !ok || en.RawType == nil {
+		return nil, false
+	}
+	return en, true
+}
+
+// rawValue lowers `c.rawValue` by switching over enum cases and returning the declared raw integer.
+func (g *gen) rawValue(e *ast.MemberExpr, en *types.Enum) *sil.Value {
+	for _, k := range en.Cases {
+		if k == nil || !k.HasRawInt {
+			// A string raw value needs a string constant to answer
+			// with, and there is no making one yet. Refused rather
+			// than answered with something else.
+			g.refuse(e, "rawValue of '"+en.Name+"', whose cases are not all numbers")
+			return nil
+		}
+	}
+	subject := g.rvalue(e.X)
+	if subject == nil {
+		return nil
+	}
+	raw := lowerType(en.RawType)
+	join := g.fn.Block()
+	answer := join.Arg(raw, joinOwnership(raw))
+
+	cases := make([]sil.Case, 0, len(en.Cases))
+	arms := make([]*sil.Block, 0, len(en.Cases))
+	for _, k := range en.Cases {
+		arm := g.fn.Block()
+		arms = append(arms, arm)
+		cases = append(cases, sil.Case{Member: memberName(en, k.Name), Dest: arm})
+	}
+	// Unreachable default block for exhaustive enum switch.
+	fallthroughBlk := g.fn.Block()
+	cases = append(cases, sil.Case{Dest: fallthroughBlk})
+	g.blk.SwitchEnum(subject, cases...)
+	g.blk = fallthroughBlk
+	g.blk.Unreachable()
+
+	for i, k := range en.Cases {
+		g.blk = arms[i]
+		v := g.blk.Struct(raw, g.blk.IntegerLiteral(sil.Object(builtinFor(en.RawType)), k.RawInt))
+		g.blk.Br(join, v)
+	}
+	g.blk = join
+	return answer
+}
+
+// rawInit lowers `E(rawValue: x)`: a comparison against each case's raw
+// value in turn, the first that matches answering with that case, and nil
+// when none does.
+func (g *gen) rawInit(e *ast.CallExpr, en *types.Enum) *sil.Value {
+	for _, k := range en.Cases {
+		if k == nil || !k.HasRawInt {
+			g.refuse(e, "init(rawValue:) of '"+en.Name+"', whose cases are not all numbers")
+			return nil
+		}
+	}
+	x := g.expr(e.Args.Args[0].X)
+	if x == nil {
+		return nil
+	}
+	enumT := g.typeOf(e).Underlying().(*types.Optional).Wrapped
+	optT := lowerType(g.typeOf(e))
+	word := g.machine(x, en.RawType)
+	builtin := builtinFor(en.RawType)
+	verb := "cmp_eq_" + builtin.String()[len("Builtin."):]
+
+	join := g.fn.Block()
+	answer := join.Arg(optT, sil.None)
+	for _, k := range en.Cases {
+		lit := g.blk.IntegerLiteral(sil.Object(builtin), k.RawInt)
+		same := g.blk.Builtin(verb, sil.Object(sil.BuiltinInt1), word, lit)
+		hit, miss := g.fn.Block(), g.fn.Block()
+		g.blk.CondBr(same, hit, nil, miss, nil)
+		g.blk = hit
+		c := g.blk.Enum(lowerType(enumT), memberName(en, k.Name), nil)
+		g.blk.Br(join, g.blk.Enum(optT, optionalSome, c))
+		g.blk = miss
+	}
+	g.blk.Br(join, g.blk.Enum(optT, optionalNone, nil))
+	g.blk = join
+	return answer
+}

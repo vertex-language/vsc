@@ -1,0 +1,17 @@
+public func p0(_ a: Int) {}
+public func p1(_ a: Int8) {}
+public func p2(_ a: Int16) {}
+public func p3(_ a: Int32) {}
+public func p4(_ a: Int64) {}
+public func p5(_ a: UInt) {}
+public func p6(_ a: UInt8) {}
+public func p7(_ a: UInt16) {}
+public func p8(_ a: UInt32) {}
+public func p9(_ a: UInt64) {}
+public func q0(_ a: Bool) {}
+public func q1(_ a: Float) {}
+public func q2(_ a: Double) {}
+public func q3(_ a: String) {}
+public func q4(_ a: Character) {}
+public func q5(_ a: Void) {}
+public func q6(_ a: Never) {}

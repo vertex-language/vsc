@@ -1,0 +1,8 @@
+// vertex-interface-format-version: 1.0
+// vertex-module-name: Json
+
+public func serializationRoundTrip() -> Int32
+
+public func codableRoundTrip(_ value: Int32) -> Int32
+
+public func parseFailureIsReported() -> Int32

@@ -1,0 +1,28 @@
+// swift-interface-format-version: 1.0
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Shapes
+import Swift
+public protocol Shape {
+  func sides() -> Swift.Int32
+  func scaled(_ k: Swift.Int32) -> Swift.Int32
+  func between(_ low: Swift.Int32, _ high: Swift.Int32) -> Swift.Int32
+}
+public struct Square : Shapes.Shape {
+  public var side: Swift.Int32
+  public init(side: Swift.Int32)
+  public func sides() -> Swift.Int32
+  public func scaled(_ k: Swift.Int32) -> Swift.Int32
+  public func between(_ low: Swift.Int32, _ high: Swift.Int32) -> Swift.Int32
+}
+public struct Frame : Shapes.Shape {
+  public var a: Swift.Int64
+  public var b: Swift.Int64
+  public var c: Swift.Int64
+  public var d: Swift.Int64
+  public var e: Swift.Int64
+  public init(a: Swift.Int64)
+  public func sides() -> Swift.Int32
+  public func scaled(_ k: Swift.Int32) -> Swift.Int32
+  public func between(_ low: Swift.Int32, _ high: Swift.Int32) -> Swift.Int32
+}
+public func aSquare(_ side: Swift.Int32) -> any Shapes.Shape
+public func aFrame(_ a: Swift.Int64) -> any Shapes.Shape

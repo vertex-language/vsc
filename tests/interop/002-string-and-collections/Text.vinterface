@@ -1,0 +1,12 @@
+// vertex-interface-format-version: 1.0
+// vertex-module-name: Text
+
+public func repeatedLength(_ times: Int32) -> Int32
+
+public func wordCount(_ which: Int32) -> Int32
+
+public func sumTo(_ n: Int32) -> Int32
+
+public func sortedMiddle() -> Int32
+
+public func dictionaryLookup(_ key: Int32) -> Int32

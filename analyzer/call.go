@@ -1,0 +1,718 @@
+package analyzer
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/token"
+	"github.com/vertex-language/vsc/types"
+)
+
+// resolveOverload selects the matching overload among multiple candidates.
+// Returns nil if resolution fails or is unambiguous without selection.
+func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scope) *types.Signature {
+	// A function named alone, or through its module: `tcp.Listen`.
+	var name *ast.Ident
+	switch f := fun.(type) {
+	case *ast.IdentExpr:
+		name = f.Name
+	case *ast.MemberExpr:
+		name = f.Name
+	}
+	if name == nil {
+		return nil
+	}
+	sym, ok := c.info.Uses[name].(*FuncSymbol)
+	if !ok {
+		return nil
+	}
+	candidates := sym.Overloads()
+	if len(candidates) < 2 {
+		return nil
+	}
+
+	quiet := len(c.info.Diagnostics)
+	argTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		argTypes[i] = c.checkExpr(arg.X, nil, scope)
+	}
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+
+	// Try strict label matching first, falling back to lax matching if needed.
+	// Labels decide first. Only where none fits by its labels are they
+	// relaxed: relaxing them where several fit let `Sleep(until:)` in
+	// beside `Sleep(_:)` and its async twin, and then nothing was chosen.
+	fits := c.candidatesFitting(candidates, args, argTypes, c.labelFits)
+	if len(fits) == 0 {
+		lax := c.candidatesFitting(candidates, args, argTypes, c.labelFitsLax)
+		if len(lax) > 1 {
+			c.errorf(fun.Pos(), "ambiguous use of '%s': %s",
+				name.Text(c.file), candidateLabels(lax))
+			return nil
+		}
+		fits = lax
+	}
+	fits = c.byContext(fits)
+	if len(fits) != 1 {
+		return nil
+	}
+	c.info.Uses[name] = fits[0]
+	return fits[0].Signature()
+}
+
+// checkAsyncCall holds a call to an async function to Swift's two rules: it
+// is written under `await`, and it is made from somewhere that can suspend.
+func (c *checker) checkAsyncCall(call *ast.CallExpr, sig *types.Signature) {
+	if sig == nil || !sig.Async {
+		return
+	}
+	switch {
+	case !c.currAsync:
+		c.errorf(call.Pos(), "'async' call in a function that does not support concurrency")
+	case !c.inAwait:
+		c.errorf(call.Pos(), "expression is 'async' but is not marked with 'await'")
+	}
+}
+
+// byContext narrows overloads that fit equally to the ones that suit the
+// context by async. Swift allows `func load()` beside `func load() async`
+// and picks the async one in an async function -- where the call then
+// needs `await` -- and the other everywhere else, so a function that could
+// suspend never silently blocks instead.
+func (c *checker) byContext(fits []*FuncSymbol) []*FuncSymbol {
+	if len(fits) < 2 {
+		return fits
+	}
+	var suited []*FuncSymbol
+	for _, f := range fits {
+		if sig := f.Signature(); sig != nil && sig.Async == c.currAsync {
+			suited = append(suited, f)
+		}
+	}
+	if len(suited) == 0 {
+		return fits
+	}
+	return suited
+}
+
+// awaitsIn reports whether statements await, outside any closure nested
+// in them, which is what makes a closure with no signature async.
+func awaitsIn(stmts []ast.Stmt) bool {
+	found := false
+	for _, s := range stmts {
+		ast.Inspect(s, func(n ast.Node) bool {
+			switch n.(type) {
+			case *ast.AwaitExpr:
+				found = true
+			case *ast.ClosureExpr:
+				return false
+			}
+			return !found
+		})
+	}
+	return found
+}
+
+// candidatesFitting returns candidate functions matching argument counts and types.
+func (c *checker) candidatesFitting(candidates []*FuncSymbol, args []*ast.CallArg,
+	argTypes []types.Type, fitsLabel func(*ast.CallArg, *types.Param) bool) []*FuncSymbol {
+	var fits []*FuncSymbol
+	for _, cand := range candidates {
+		if c.sigFits(cand.Signature(), args, argTypes, fitsLabel) {
+			fits = append(fits, cand)
+		}
+	}
+	return fits
+}
+
+// sigFits reports whether arguments fit a signature: in order, each by
+// label and type, leaving out a parameter with a default when nothing is
+// written for it. An argument whose type could not be found alone -- an
+// implicit member, which needs the parameter's type -- fits by its label.
+func (c *checker) sigFits(sig *types.Signature, args []*ast.CallArg, argTypes []types.Type,
+	fitsLabel func(*ast.CallArg, *types.Param) bool) bool {
+	if sig == nil || len(args) > len(sig.Params) {
+		return false
+	}
+	next := 0
+	for _, p := range sig.Params {
+		if next < len(args) && fitsLabel(args[next], p) && c.argFitsParam(args[next], argTypes[next], p) {
+			next++
+			continue
+		}
+		if !p.HasDefault {
+			return false
+		}
+	}
+	return next == len(args)
+}
+
+// argFitsParam reports whether one argument's type fits a parameter.
+func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) bool {
+	if t == nil || isInvalid(t) || types.AssignableTo(t, p.Type) {
+		return true
+	}
+	// Untyped numeric literal arguments fit any numeric parameter.
+	return c.isLiteralTree(arg.X) && isNumericType(p.Type)
+}
+
+// resolveMethodOverload picks, among the methods a member call could name
+// -- bind(_:) and bind(host:port:) -- the one its arguments fit, and
+// records it for what lowers the call.
+func (c *checker) resolveMethodOverload(mem *ast.MemberExpr, args []*ast.CallArg, scope *Scope) *types.Signature {
+	if mem.Name == nil {
+		return nil
+	}
+	base := c.info.Types[mem.X]
+	if base == nil {
+		return nil
+	}
+	recv, methods := methodsNamed(base, mem.Name.Text(c.file))
+	if len(methods) == 0 {
+		recv, methods = c.builtinMethods(base, mem.Name.Text(c.file))
+	}
+	if len(methods) < 2 {
+		return nil
+	}
+	m := c.methodByArguments(methods, args, scope)
+	if m == nil {
+		return nil
+	}
+	c.info.Methods[mem] = &MethodRef{Recv: recv, Method: m}
+	c.info.Types[mem] = m.Sig
+	return m.Sig
+}
+
+// methodByArguments is the one method of several the arguments fit, by
+// label and type, and by async where that is all that differs; or nil.
+func (c *checker) methodByArguments(methods []*types.Method, args []*ast.CallArg, scope *Scope) *types.Method {
+	quiet := len(c.info.Diagnostics)
+	argTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		argTypes[i] = c.checkExpr(arg.X, nil, scope)
+	}
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	pick := func(fitsLabel func(*ast.CallArg, *types.Param) bool) []*types.Method {
+		var out []*types.Method
+		for _, m := range methods {
+			if c.sigFits(m.Sig, args, argTypes, fitsLabel) {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	fits := pick(c.labelFits)
+	if len(fits) == 0 {
+		fits = pick(c.labelFitsLax)
+	}
+	// Methods that differ only in async are chosen by context too; see byContext.
+	if len(fits) > 1 {
+		var suited []*types.Method
+		for _, m := range fits {
+			if m.Sig != nil && m.Sig.Async == c.currAsync {
+				suited = append(suited, m)
+			}
+		}
+		if len(suited) > 0 {
+			fits = suited
+		}
+	}
+	if len(fits) != 1 {
+		return nil
+	}
+	return fits[0]
+}
+
+// methodsNamed is every method named name a member of t could call, and
+// the type declaring them.
+func methodsNamed(t types.Type, name string) (types.Type, []*types.Method) {
+	onType := false
+	if meta, ok := t.(*types.Metatype); ok {
+		onType = true
+		t = meta.Instance
+	}
+	if inst, ok := t.(*types.GenericInstance); ok {
+		t = inst.Base
+	}
+	var methods []*types.Method
+	switch b := t.Underlying().(type) {
+	case *types.Struct:
+		methods = b.Methods
+	case *types.Class:
+		methods = b.Methods
+	case *types.Enum:
+		methods = b.Methods
+	}
+	var out []*types.Method
+	for _, m := range methods {
+		if m != nil && m.Name == name && m.IsStatic == onType {
+			out = append(out, m)
+		}
+	}
+	return t, out
+}
+
+// candidateLabels formats candidate parameter labels for ambiguity error diagnostics.
+func candidateLabels(fits []*FuncSymbol) string {
+	var sb strings.Builder
+	for i, f := range fits {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("'")
+		sig := f.Signature()
+		if sig == nil {
+			sb.WriteString("?")
+		} else {
+			for _, p := range sig.Params {
+				sb.WriteString(paramName(p))
+				sb.WriteString(":")
+			}
+		}
+		sb.WriteString("'")
+	}
+	return sb.String()
+}
+
+// labelFits reports whether an argument's label matches a parameter's expected label.
+func (c *checker) labelFits(arg *ast.CallArg, param *types.Param) bool {
+	want := param.Label
+	if want == "" {
+		want = param.Name
+	}
+	if arg.Label == nil {
+		return want == "" || want == "_"
+	}
+	return arg.Label.Text(c.file) == want
+}
+
+// labelFitsLax checks label compatibility allowing omitted labels or matching internal names.
+func (c *checker) labelFitsLax(arg *ast.CallArg, param *types.Param) bool {
+	if arg.Label == nil {
+		return true
+	}
+	written := arg.Label.Text(c.file)
+	return written == param.Label || written == param.Name
+}
+
+// inferInstance infers specialized generic types from memberwise initializer arguments.
+func (c *checker) inferInstance(instance types.Type, call *ast.CallExpr, scope *Scope) types.Type {
+	if call.Args == nil {
+		return instance
+	}
+	fields := storedFieldsOf(instance)
+	params := typeParamsOf(instance)
+
+	subst := make(map[*types.TypeParam]types.Type, len(params))
+	for i, arg := range call.Args.Args {
+		field := fieldFor(fields, arg, c.file, i)
+		var want types.Type
+		if field != nil && len(params) == 0 {
+			want = field.Type
+		}
+		argType := c.checkExpr(arg.X, want, scope)
+		if field != nil {
+			types.Unify(field.Type, argType, subst)
+		}
+	}
+	if len(params) == 0 || len(fields) == 0 {
+		return instance
+	}
+
+	args := make([]types.Type, len(params))
+	for i, p := range params {
+		bound, ok := subst[p]
+		if !ok {
+			return instance
+		}
+		args[i] = bound
+	}
+	return &types.GenericInstance{Base: instance, Args: args}
+}
+
+// fieldFor matches an initializer argument to a stored property by label or position.
+func fieldFor(fields []*types.Field, arg *ast.CallArg, f *token.File, i int) *types.Field {
+	if arg.Label != nil {
+		name := arg.Label.Text(f)
+		for _, field := range fields {
+			if field.Name == name {
+				return field
+			}
+		}
+		return nil
+	}
+	if i < len(fields) {
+		return fields[i]
+	}
+	return nil
+}
+
+// typeParamsOf returns the generic type parameters of a nominal type.
+func typeParamsOf(t types.Type) []*types.TypeParam {
+	switch n := t.(type) {
+	case *types.Struct:
+		return n.TypeParams
+	case *types.Class:
+		return n.TypeParams
+	case *types.Enum:
+		return n.TypeParams
+	}
+	return nil
+}
+
+// storedFieldsOf returns the stored fields of a struct or class.
+func storedFieldsOf(t types.Type) []*types.Field {
+	switch n := t.(type) {
+	case *types.Struct:
+		return n.Fields
+	case *types.Class:
+		return n.Fields
+	}
+	return nil
+}
+
+// checkCallArguments checks argument types and labels against a signature.
+func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, args []*ast.CallArg, scope *Scope) *types.Signature {
+	c.checkAsyncCall(call, sig)
+	sig = c.inferGenericCall(call, sig, args, scope)
+	if sig.Params == nil {
+		return sig
+	}
+	vi, isVariadic := variadicIndex(sig)
+	least := sig.Minimum()
+	if isVariadic && least > 0 {
+		least--
+	}
+
+	if len(args) < least || (!isVariadic && len(args) > len(sig.Params)) {
+		c.errorf(call.Pos(), "incorrect argument count: expected %s, got %d",
+			arity(least, len(sig.Params), isVariadic), len(args))
+		return sig
+	}
+
+	params := sig.Params
+	switch {
+	case isVariadic:
+		params = variadicParams(sig, vi, args, c.file)
+	case len(args) != len(params):
+		params = c.matchByLabel(call, sig.Params, args)
+	}
+
+	for i, arg := range args {
+		var param *types.Param
+		if i < len(params) {
+			param = params[i]
+		}
+		if param == nil {
+			break
+		}
+
+		if arg.Label != nil && !c.labelFitsLax(arg, param) {
+			c.errorf(arg.Pos(), "incorrect argument label (have '%s:', expected '%s:')",
+				arg.Label.Text(c.file), paramName(param))
+		}
+
+		argType := c.checkExpr(arg.X, param.Type, scope)
+		if !types.AssignableTo(argType, param.Type) {
+			if isString(argType) && cStringParam(param.Type) {
+				c.info.CStrings[arg.X] = param.Type
+				continue
+			}
+			c.typeErrorf(arg.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", argType, param.Type)
+		}
+	}
+	return sig
+}
+
+// isString reports whether t is String.
+func isString(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Kind() == types.String
+}
+
+// cStringParam reports whether a parameter of type t takes a String as a C
+// string: an immutable pointer to CChar, Int8 or UInt8, or an immutable raw
+// pointer, optional or not. Swift's rule, which is what lets
+// `strlen("hello")` and every C API taking `const char *` be called with a
+// String.
+func cStringParam(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if o, ok := t.Underlying().(*types.Optional); ok {
+		t = o.Wrapped
+	}
+	p, ok := t.Underlying().(*types.Pointer)
+	if !ok || p.Mutable || p.Opaque {
+		return false
+	}
+	if p.Elem == nil {
+		return true
+	}
+	b, ok := p.Elem.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch b.Kind() {
+	case types.Int8, types.UInt8:
+		return true
+	}
+	return false
+}
+
+// matchByLabel pairs arguments with parameters by label, skipping defaulted parameters.
+func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args []*ast.CallArg) []*types.Param {
+	out := make([]*types.Param, 0, len(args))
+	pi := 0
+	for _, arg := range args {
+		label := ""
+		if arg.Label != nil {
+			label = arg.Label.Text(c.file)
+		}
+		// Skip defaulted parameters that this argument does not match.
+		for pi < len(params) && !labels(params[pi], label) && params[pi].HasDefault {
+			pi++
+		}
+		if pi >= len(params) {
+			break
+		}
+		if !labels(params[pi], label) {
+			c.errorf(call.Pos(), "missing argument for parameter '%s'", paramName(params[pi]))
+			return out
+		}
+		out = append(out, params[pi])
+		pi++
+	}
+	for ; pi < len(params); pi++ {
+		if !params[pi].HasDefault {
+			c.errorf(call.Pos(), "missing argument for parameter '%s'", paramName(params[pi]))
+		}
+	}
+	return out
+}
+
+// labels reports whether a parameter matches an argument label.
+func labels(p *types.Param, label string) bool {
+	if p.Label == "" || p.Label == "_" {
+		return label == ""
+	}
+	return p.Label == label
+}
+
+// paramName returns the display name of a parameter for diagnostics.
+func paramName(p *types.Param) string {
+	if p.Label != "" && p.Label != "_" {
+		return p.Label
+	}
+	if p.Name != "" {
+		return p.Name
+	}
+	return "_"
+}
+
+// arity returns a descriptive string for expected argument counts.
+func arity(least, most int, variadic bool) string {
+	switch {
+	case variadic:
+		return fmt.Sprintf("at least %d", least)
+	case least == most:
+		return strconv.Itoa(most)
+	default:
+		return fmt.Sprintf("%d to %d", least, most)
+	}
+}
+
+// inferGenericCall infers type parameters from argument types and returns the specialized signature.
+func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args []*ast.CallArg, scope *Scope) *types.Signature {
+	if len(sig.TypeParams) == 0 || len(args) == 0 {
+		return sig
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(sig.TypeParams))
+	quiet := len(c.info.Diagnostics)
+	var closures []int
+	for i, arg := range args {
+		if i >= len(sig.Params) {
+			break
+		}
+		if _, isClosure := arg.X.(*ast.ClosureExpr); isClosure {
+			closures = append(closures, i)
+			continue
+		}
+		types.Unify(sig.Params[i].Type, c.checkExpr(arg.X, nil, scope), subst)
+	}
+	// A closure is read after the other arguments, against the function
+	// type it is passed as with what they have said already in place: its
+	// parameters then have types, and what its body returns can say what
+	// the rest of the call's parameters are. One whose type still names a
+	// parameter says nothing about it.
+	for _, i := range closures {
+		want := types.Substitute(sig.Params[i].Type, subst)
+		got := c.checkExpr(args[i].X, want, scope)
+		if !mentionsTypeParam(got) {
+			types.Unify(sig.Params[i].Type, got, subst)
+		}
+	}
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	if len(subst) == 0 {
+		return sig
+	}
+	c.checkConstraints(e, sig.TypeParams, subst)
+
+	// Record type specialization arguments for code generation.
+	if e != nil {
+		spec := Specialization{Params: sig.TypeParams}
+		for _, p := range sig.TypeParams {
+			spec.Args = append(spec.Args, subst[p])
+		}
+		c.info.Specializations[e] = spec
+	}
+	if out, ok := types.Substitute(sig, subst).(*types.Signature); ok {
+		return out
+	}
+	return sig
+}
+
+// isNumericType reports whether t is a numeric basic type.
+func isNumericType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsNumeric != 0
+}
+
+// checkConstraints checks that type arguments satisfy parameter protocol constraints.
+func (c *checker) checkConstraints(e *ast.CallExpr, params []*types.TypeParam, subst map[*types.TypeParam]types.Type) {
+	if e == nil {
+		return
+	}
+	for _, p := range params {
+		arg, ok := subst[p]
+		if !ok || arg == nil {
+			continue
+		}
+		for _, con := range p.Constraints {
+			proto, ok := protocolOf(con)
+			if !ok {
+				continue
+			}
+			if c.conformsTo(arg, proto) {
+				continue
+			}
+			c.typeErrorf(e.Pos(), "%s requires that '%s' conform to '%s'",
+				calleeDescription(e, c), arg, proto.Name)
+		}
+	}
+}
+
+// protocolOf returns the protocol referenced by t, if any.
+func protocolOf(t types.Type) (*types.Protocol, bool) {
+	if t == nil {
+		return nil, false
+	}
+	if p, ok := t.(*types.Protocol); ok {
+		return p, true
+	}
+	p, ok := t.Underlying().(*types.Protocol)
+	return p, ok
+}
+
+// calleeDescription names the function a call is to, for a message about its constraints.
+func calleeDescription(e *ast.CallExpr, c *checker) string {
+	if id, ok := e.Fun.(*ast.IdentExpr); ok && id.Name != nil {
+		return "global function '" + id.Name.Text(c.file) + "'"
+	}
+	return "this call"
+}
+
+// variadicIndex returns the index of the variadic parameter, if present.
+func variadicIndex(sig *types.Signature) (int, bool) {
+	for i, p := range sig.Params {
+		if p != nil && p.Variadic {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// variadicParams maps call arguments to parameters for a variadic signature.
+func variadicParams(sig *types.Signature, vi int, args []*ast.CallArg,
+	file *token.File) []*types.Param {
+	out := make([]*types.Param, len(args))
+	next := 0
+	for i := 0; i < vi && next < len(args); i++ {
+		out[next] = sig.Params[i]
+		next++
+	}
+	list := sig.Params[vi]
+	for ; next < len(args); next++ {
+		if !argLabelFits(args[next], list, file) {
+			break
+		}
+		out[next] = list
+	}
+	for i := vi + 1; i < len(sig.Params) && next < len(args); i++ {
+		if !argLabelFits(args[next], sig.Params[i], file) {
+			continue
+		}
+		out[next] = sig.Params[i]
+		next++
+	}
+	return out
+}
+
+// argLabelFits reports whether an argument label matches the parameter label.
+func argLabelFits(a *ast.CallArg, p *types.Param, file *token.File) bool {
+	label := p.Label
+	if label == "_" {
+		label = ""
+	}
+	if a.Label == nil {
+		return label == ""
+	}
+	return a.Label.Text(file) == label
+}
+
+// mentionsTypeParam reports whether a type still has a generic parameter
+// in it: one no call has given an argument for yet.
+func mentionsTypeParam(t types.Type) bool {
+	switch x := t.(type) {
+	case nil:
+		return false
+	case *types.TypeParam:
+		return true
+	case *types.Optional:
+		return mentionsTypeParam(x.Wrapped)
+	case *types.Array:
+		return mentionsTypeParam(x.Elem)
+	case *types.Set:
+		return mentionsTypeParam(x.Elem)
+	case *types.Dictionary:
+		return mentionsTypeParam(x.Key) || mentionsTypeParam(x.Value)
+	case *types.Tuple:
+		for _, e := range x.Elements {
+			if e != nil && mentionsTypeParam(e.Type) {
+				return true
+			}
+		}
+	case *types.Signature:
+		for _, p := range x.Params {
+			if p != nil && mentionsTypeParam(p.Type) {
+				return true
+			}
+		}
+		return mentionsTypeParam(x.Results)
+	case *types.GenericInstance:
+		for _, a := range x.Args {
+			if mentionsTypeParam(a) {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -1,0 +1,26 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.3.1 effective-5.10 (swiftlang-6.3.1.1.2 clang-2100.0.123.102)
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Shapes
+// swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.3.1
+import Swift
+import _Concurrency
+import _StringProcessing
+import _SwiftConcurrencyShims
+final public class Counter {
+  final public var n: Swift.Int32
+  public init(n: Swift.Int32)
+  final public func plus(_ k: Swift.Int32) -> Swift.Int32
+  final public func scaled(by k: Swift.Int32) -> Swift.Int32
+  @objc deinit
+}
+public func makeCounter(_ n: Swift.Int32) -> Shapes.Counter
+public struct Big {
+  public var a: Swift.Int
+  public var b: Swift.Int
+  public var c: Swift.Int
+  public var d: Swift.Int
+  public var e: Swift.Int
+  public init(a: Swift.Int, b: Swift.Int, c: Swift.Int, d: Swift.Int, e: Swift.Int)
+}
+public func makeBig(_ n: Swift.Int) -> Shapes.Big
+public func sumBig(_ w: Shapes.Big) -> Swift.Int

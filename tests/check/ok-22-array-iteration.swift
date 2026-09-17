@@ -1,0 +1,8 @@
+func use() -> Int {
+    let xs = [1, 2, 3]
+    var total = 0
+    for x in xs {
+        total += x
+    }
+    return total
+}
