@@ -184,7 +184,7 @@ func (c *fn) storageWalk(yield func(k storageKind, v *sil.Value, size, align int
 				continue
 			}
 			switch in.Op() {
-			case sil.Struct, sil.Apply, sil.TryApply:
+			case sil.Struct, sil.Tuple, sil.Apply, sil.TryApply:
 			case sil.Enum:
 				// A payload enum too wide for registers is built where
 				// it is kept, a word at a time.

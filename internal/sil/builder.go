@@ -69,6 +69,12 @@ func (b *Block) AllocBox(elem Type, name string, attrs ...string) *Value {
 		boxed).Result()
 }
 
+// AllocBoxOf allocates a heap box of the box type boxed.
+func (b *Block) AllocBoxOf(boxed Type, name string, attrs ...string) *Value {
+	return b.add(AllocBox, Aux{Type: boxed, Name: name, Attrs: attrs}, nil,
+		boxed).Result()
+}
+
 // ProjectBox yields the address of what a box holds.
 func (b *Block) ProjectBox(box *Value, field int, t Type) *Value {
 	return b.add(ProjectBox, Aux{Int: int64(field)}, []*Value{box}, t.Address()).Result()

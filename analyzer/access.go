@@ -34,6 +34,16 @@ func (a Access) String() string {
 }
 
 // accessOf parses declaration access modifiers, defaulting to Internal.
+// hasModifier reports whether mods include the modifier named name.
+func (c *checker) hasModifier(mods []*ast.Modifier, name string) bool {
+	for _, m := range mods {
+		if m.Name != nil && m.Name.Text(c.file) == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *checker) accessOf(mods []*ast.Modifier) Access {
 	for _, m := range mods {
 		if m.Name == nil {

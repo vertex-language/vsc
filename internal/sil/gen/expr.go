@@ -1075,6 +1075,16 @@ func (g *gen) payloadCase(e *ast.CallExpr, ec *analyzer.EnumCaseSymbol) *sil.Val
 		g.refuse(e, "a case that carries nothing, called as though it did")
 		return nil
 	}
+	t := g.typeOf(e)
+	if t == nil {
+		t = ec.Type()
+	}
+	// The case of the enum as used, whose payload has its generic
+	// parameters filled in.
+	k := g.caseOf(t, ec.Name())
+	if k != nil && k.AssociatedType != nil {
+		assoc = k.AssociatedType
+	}
 	var args []*ast.CallArg
 	if e.Args != nil {
 		args = e.Args.Args
@@ -1097,9 +1107,12 @@ func (g *gen) payloadCase(e *ast.CallExpr, ec *analyzer.EnumCaseSymbol) *sil.Val
 	if payload == nil {
 		return nil
 	}
-	t := g.typeOf(e)
-	if t == nil {
-		t = ec.Type()
+	// An indirect case carries its payload in a box of its own.
+	if k != nil && k.Indirect {
+		lt := lowerType(assoc)
+		box := g.blk.AllocBoxOf(lowerType(sil.CaseStorage(k)), "", "var")
+		g.blk.Store(payload, g.blk.ProjectBox(box, 0, lt), storeQualifier(lt))
+		payload = box
 	}
 	v := g.blk.Enum(lowerType(t), memberName(ec.Type(), ec.Name()), payload)
 	g.destroyLater(v)

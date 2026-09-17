@@ -954,10 +954,10 @@ func enumOwnsOnlyReferences(t types.Type) bool {
 		return false
 	}
 	for _, k := range e.Cases {
-		if k == nil || k.AssociatedType == nil || lowerType(k.AssociatedType).Trivial() {
+		if k == nil || k.AssociatedType == nil || lowerType(sil.CaseStorage(k)).Trivial() {
 			continue
 		}
-		if !payloadOwnsOnlyReferences(k.AssociatedType) {
+		if !payloadOwnsOnlyReferences(sil.CaseStorage(k)) {
 			return false
 		}
 	}
@@ -969,7 +969,7 @@ func payloadOwnsOnlyReferences(t types.Type) bool {
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
 		return u.Kind() == types.String || lowerType(t).Trivial()
-	case *types.Array, *types.Dictionary, *types.Set, *types.Class:
+	case *types.Array, *types.Dictionary, *types.Set, *types.Class, *sil.BoxType:
 		return true
 	case *types.Struct:
 		return lowerType(t).Trivial() || ownsOnlyReferences(t)

@@ -2,6 +2,7 @@ package sil
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/vertex-language/vsc/types"
 )
@@ -86,7 +87,7 @@ func trivial(t types.Type) bool {
 		return true
 	case *types.Enum:
 		for _, c := range n.Cases {
-			if !trivial(c.AssociatedType) {
+			if c.Indirect || !trivial(c.AssociatedType) {
 				return false
 			}
 		}
@@ -96,6 +97,31 @@ func trivial(t types.Type) bool {
 	}
 	return false
 }
+
+// CaseStorage is what an enum holds for a case: what the case carries,
+// or, for an indirect case, the box that carries it. The box is made
+// once per case, so the storage of a case is always the same type.
+func CaseStorage(c *types.EnumCase) types.Type {
+	if c == nil || !c.Indirect || c.AssociatedType == nil {
+		if c == nil {
+			return nil
+		}
+		return c.AssociatedType
+	}
+	caseBoxesMu.Lock()
+	defer caseBoxesMu.Unlock()
+	if b, ok := caseBoxes[c]; ok && b.elem == c.AssociatedType {
+		return b
+	}
+	b := &BoxType{elem: c.AssociatedType}
+	caseBoxes[c] = b
+	return b
+}
+
+var (
+	caseBoxesMu sync.Mutex
+	caseBoxes   = map[*types.EnumCase]*BoxType{}
+)
 
 // A BoxType represents a heap box holding a mutable variable ({ var T }).
 type BoxType struct{ elem types.Type }

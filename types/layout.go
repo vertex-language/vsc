@@ -78,6 +78,12 @@ func Alignof(t Type, target *Target) int64 {
 	case *Enum:
 		var maxAlign int64 = 1
 		for _, c := range tt.Cases {
+			if c.Indirect && c.AssociatedType != nil {
+				if target.WordSize > maxAlign {
+					maxAlign = target.WordSize
+				}
+				continue
+			}
 			if a := Alignof(c.AssociatedType, target); a > maxAlign {
 				maxAlign = a
 			}
@@ -157,7 +163,13 @@ func Sizeof(t Type, target *Target) int64 {
 	case *Enum:
 		var maxPayload int64
 		for _, c := range tt.Cases {
-			if s := Sizeof(c.AssociatedType, target); s > maxPayload {
+			var s int64
+			if c.Indirect && c.AssociatedType != nil {
+				s = target.WordSize
+			} else {
+				s = Sizeof(c.AssociatedType, target)
+			}
+			if s > maxPayload {
 				maxPayload = s
 			}
 		}

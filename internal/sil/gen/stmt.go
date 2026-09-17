@@ -936,8 +936,8 @@ func (g *gen) switchOnEnum(s *ast.SwitchStmt, subject *sil.Value, t types.Type,
 					return false
 				}
 				arm := g.fn.Block()
-				if assoc := g.caseAssociated(t, g.text(pat.Name)); assoc != nil {
-					lt := lowerType(assoc)
+				if k := g.caseOf(t, g.text(pat.Name)); k != nil && k.AssociatedType != nil {
+					lt := lowerType(sil.CaseStorage(k))
 					own := sil.Unowned
 					if !lt.Trivial() {
 						own = sil.Owned
@@ -1677,17 +1677,27 @@ func (g *gen) bindCasePayload(subject types.Type, pat *ast.EnumCasePattern, arm 
 		g.refuse(pat, "a pattern binding a value on a case that carries none")
 		return false
 	}
+	if g.armOwned == nil {
+		g.armOwned = map[*sil.Block][]*sil.Value{}
+	}
 	// What a case carries leaves the enum the switch consumed, so an arm
 	// owns a counted payload and lets it go when its scope ends.
 	own := sil.Unowned
 	if !lowerType(assoc).Trivial() {
 		own = sil.Owned
 	}
-	payload := arm.Arg(lowerType(assoc), own)
+	var payload *sil.Value
+	if k := g.caseOf(subject, g.text(pat.Name)); k != nil && k.Indirect {
+		// An indirect case hands over its box: the arm owns the box, and
+		// a copy of what the box holds.
+		box := arm.Arg(lowerType(sil.CaseStorage(k)), sil.Owned)
+		g.armOwned[arm] = append(g.armOwned[arm], box)
+		addr := arm.ProjectBox(box, 0, lowerType(assoc))
+		payload = arm.Load(addr, loadQualifier(lowerType(assoc)))
+	} else {
+		payload = arm.Arg(lowerType(assoc), own)
+	}
 	if own == sil.Owned {
-		if g.armOwned == nil {
-			g.armOwned = map[*sil.Block][]*sil.Value{}
-		}
 		g.armOwned[arm] = append(g.armOwned[arm], payload)
 	}
 	names := pat.Args.Elems
@@ -1795,6 +1805,14 @@ func (g *gen) bindPatternTo(p ast.Pattern, v *sil.Value, t types.Type) bool {
 
 // caseAssociated returns the associated type for a named enum case.
 func (g *gen) caseAssociated(subject types.Type, name string) types.Type {
+	if c := g.caseOf(subject, name); c != nil {
+		return c.AssociatedType
+	}
+	return nil
+}
+
+// caseOf is the case of the enum subject named name, or nil.
+func (g *gen) caseOf(subject types.Type, name string) *types.EnumCase {
 	if meta, ok := subject.(*types.Metatype); ok {
 		subject = meta.Instance
 	}
@@ -1804,7 +1822,7 @@ func (g *gen) caseAssociated(subject types.Type, name string) types.Type {
 	}
 	for _, c := range e.Cases {
 		if c != nil && c.Name == name {
-			return c.AssociatedType
+			return c
 		}
 	}
 	return nil

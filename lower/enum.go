@@ -84,7 +84,7 @@ func payloadArea(e *types.Enum) int64 {
 		if c == nil || c.AssociatedType == nil {
 			continue
 		}
-		if s := types.Sizeof(c.AssociatedType, types.DefaultTarget64); s > max {
+		if s := types.Sizeof(sil.CaseStorage(c), types.DefaultTarget64); s > max {
 			max = s
 		}
 	}
@@ -143,7 +143,7 @@ func (c *fn) makePayloadEnum(in *sil.Inst, res *sil.Value, e *types.Enum) error 
 	var payload types.Type
 	for _, k := range e.Cases {
 		if k != nil && k.Name == name {
-			payload = k.AssociatedType
+			payload = sil.CaseStorage(k)
 		}
 	}
 	ls, ok := caseLeaves(payload)
@@ -373,7 +373,7 @@ func (c *fn) defaultTakes(in *sil.Inst) bool {
 func casePayload(e *types.Enum, name string) types.Type {
 	for _, k := range e.Cases {
 		if k != nil && k.Name == name {
-			return k.AssociatedType
+			return sil.CaseStorage(k)
 		}
 	}
 	return nil
@@ -397,7 +397,7 @@ func (c *fn) payloadArgs(in *sil.Inst, words []ir.Value, e *types.Enum, name str
 	var payload types.Type
 	for _, k := range e.Cases {
 		if k != nil && k.Name == name {
-			payload = k.AssociatedType
+			payload = sil.CaseStorage(k)
 		}
 	}
 	if payload == nil {

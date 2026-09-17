@@ -713,6 +713,16 @@ func ownedWords(st *types.Struct, base int64) ([]ownedWord, bool) {
 				return nil, false
 			}
 			out = append(out, inner...)
+		case *types.Tuple:
+			image, ok := tupleImage(u)
+			if !ok {
+				return nil, false
+			}
+			inner, ok := ownedWords(image, at)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, inner...)
 		case *types.Optional:
 			// What an optional owns is what it wraps, found where the
 			// wrapped value keeps it. None is words of zero, which a
@@ -772,11 +782,11 @@ func countOwned(f *ir.Func, b *ir.Block, value ir.Ptr, owned []ownedWord,
 			tag = b.I32.ULoad8(b.Ptr.Add(value, b.I64.Const(w.offset+payloadArea(e))))
 		}
 		for k, c := range e.Cases {
-			if c == nil || c.AssociatedType == nil || sil.Object(c.AssociatedType).Trivial() {
+			if c == nil || c.AssociatedType == nil || sil.Object(sil.CaseStorage(c)).Trivial() {
 				continue
 			}
 			t, _ := enumTagOf(e, c.Name)
-			inner, _ := caseOwned(c.AssociatedType)
+			inner, _ := caseOwned(sil.CaseStorage(c))
 			shifted := make([]ownedWord, len(inner))
 			for j, x := range inner {
 				x.offset += w.offset

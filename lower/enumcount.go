@@ -17,7 +17,7 @@ import (
 // counted.
 func enumCounted(e *types.Enum) bool {
 	for _, k := range e.Cases {
-		if k != nil && k.AssociatedType != nil && !sil.Object(k.AssociatedType).Trivial() {
+		if k != nil && k.AssociatedType != nil && !sil.Object(sil.CaseStorage(k)).Trivial() {
 			return true
 		}
 	}
@@ -137,7 +137,7 @@ func (c *fn) countEnumWords(in *sil.Inst, e *types.Enum, words []ir.Value, retai
 	n := itoa(c.conts)
 	done := c.out.Block("counted" + n)
 	for i, k := range e.Cases {
-		if k == nil || k.AssociatedType == nil || sil.Object(k.AssociatedType).Trivial() {
+		if k == nil || k.AssociatedType == nil || sil.Object(sil.CaseStorage(k)).Trivial() {
 			continue
 		}
 		t, ok := enumTagOf(e, k.Name)
@@ -148,7 +148,7 @@ func (c *fn) countEnumWords(in *sil.Inst, e *types.Enum, words []ir.Value, retai
 		next := c.out.Block("next" + n + "_" + itoa(i))
 		c.b.BrIf(c.b.I32.Eq(tag, c.b.I32.Const(t)), body.To(), next.To())
 		c.b = body
-		if err := c.countPayload(in, words, k.AssociatedType, retain); err != nil {
+		if err := c.countPayload(in, words, sil.CaseStorage(k), retain); err != nil {
 			return err
 		}
 		c.b.Br(done.To())
@@ -220,14 +220,14 @@ func (l *lowerer) enumValueWitnessTable(info sil.TypeMetadata, e *types.Enum, si
 	}
 	var cases []counted
 	for _, k := range e.Cases {
-		if k == nil || k.AssociatedType == nil || sil.Object(k.AssociatedType).Trivial() {
+		if k == nil || k.AssociatedType == nil || sil.Object(sil.CaseStorage(k)).Trivial() {
 			continue
 		}
 		tag, ok := enumTagOf(e, k.Name)
 		if !ok {
 			return nil, false
 		}
-		owned, ok := caseOwned(k.AssociatedType)
+		owned, ok := caseOwned(sil.CaseStorage(k))
 		if !ok {
 			return nil, false
 		}
@@ -323,10 +323,10 @@ func (l *lowerer) enumValueWitnessTable(info sil.TypeMetadata, e *types.Enum, si
 // word by word, so that the enum can be a field of something counted.
 func enumCountable(e *types.Enum) bool {
 	for _, k := range e.Cases {
-		if k == nil || k.AssociatedType == nil || sil.Object(k.AssociatedType).Trivial() {
+		if k == nil || k.AssociatedType == nil || sil.Object(sil.CaseStorage(k)).Trivial() {
 			continue
 		}
-		if _, ok := caseOwned(k.AssociatedType); !ok {
+		if _, ok := caseOwned(sil.CaseStorage(k)); !ok {
 			return false
 		}
 	}

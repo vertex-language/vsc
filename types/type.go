@@ -362,7 +362,11 @@ type EnumCase struct {
 	AssociatedType Type
 	// Label is a single associated value's label, as in `case bad(code: Int)`,
 	// whose AssociatedType is the Int itself.
-	Label     string
+	Label string
+	// Indirect is an `indirect case`, or a case of an `indirect enum`,
+	// that carries a value: the value lives in a heap box and the enum
+	// holds a reference to it, which is what lets an enum hold itself.
+	Indirect  bool
 	RawValue  string
 	RawInt    int64
 	HasRawInt bool
@@ -377,6 +381,7 @@ type Enum struct {
 	Methods      []*Method
 	Conformances []*Protocol
 	Copyable     bool
+	Indirect     bool            // `indirect enum`: every case that carries a value is indirect
 	Assoc        map[string]Type // associated type mappings
 	In           Type            // enclosing type if nested
 	Computed     []*Field        // computed properties

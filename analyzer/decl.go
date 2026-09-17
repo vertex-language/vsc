@@ -449,7 +449,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 
 		case *ast.EnumDecl:
 			name := d.Name.Text(c.file)
-			en := &types.Enum{Name: name}
+			en := &types.Enum{Name: name, Indirect: c.hasModifier(d.Mods, "indirect")}
 			sym := NewTypeName(name, en, d.Name.Pos())
 			sym.SetDecl(d)
 			if old := scope.Insert(sym); old != nil {
@@ -846,7 +846,8 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 				if len(el.Params) == 1 && el.Params[0].Label != nil {
 					label = el.Params[0].Label.Text(c.file)
 				}
-				en.Cases = append(en.Cases, &types.EnumCase{Name: name, AssociatedType: assoc, Label: label})
+				indirect := assoc != nil && (en.Indirect || m.Indirect.IsValid())
+				en.Cases = append(en.Cases, &types.EnumCase{Name: name, AssociatedType: assoc, Label: label, Indirect: indirect})
 				sym := NewEnumCase(name, en, assoc, el.Name.Pos())
 				sym.label = label
 				typeScope.Insert(sym)
