@@ -132,8 +132,24 @@ int kevent(int kq, const KEvent* changes, int nchanges, KEvent* events, int neve
 
 // A kqueue per executor. EVFILT_USER (-10) with NOTE_TRIGGER is how
 // another thread ends a wait on it.
+//
+// A registration is not a syscall of its own. It waits in `pending` and
+// goes to the kernel as the changelist of the next kevent that waits for
+// events -- the one call that could report it firing anyway. A server
+// parks a task on its socket once per request, so this is one kevent per
+// request saved. The registrations stay one-shot: a descriptor closed and
+// its number reused needs nothing from here, which a registration kept
+// for the descriptor's life (EV_CLEAR) would.
+//
+// pending is the owning executor's alone: only that thread registers,
+// unregisters and waits. vertex_pal_io_wake, from other threads, uses kq
+// directly and never touches it.
+inline constexpr int ioPendingMax = 64;
+
 struct IoQueue {
   int kq;
+  int npending;
+  KEvent pending[ioPendingMax];
 };
 
 inline constexpr vertex::i16 evfiltUser = -10;
@@ -147,6 +163,7 @@ void* vertex_pal_io_open(void) {
   if (q == nullptr)
     return nullptr;
   q->kq = kq;
+  q->npending = 0;
   // The wake event, added once: EV_ADD | EV_CLEAR, so that a trigger is
   // delivered once and the event stays.
   KEvent change{};
@@ -163,7 +180,11 @@ vertex::i32 vertex_pal_io_descriptor(void* queue) {
   return q == nullptr ? -1 : q->kq;
 }
 
-// EVFILT_READ or EVFILT_WRITE, once: EV_ADD | EV_ONESHOT.
+// EVFILT_READ or EVFILT_WRITE, once: EV_ADD | EV_ONESHOT, queued for the
+// next wait (see IoQueue). Only when the queue is full is it a kevent of
+// its own. A registration the kernel refuses comes back from that wait as
+// an EV_ERROR event for the token, which wakes the task to find the error
+// itself.
 int vertex_pal_io_register(void* queue, vertex::i32 fd, vertex::i32 events, void* token) {
   auto* q = static_cast<IoQueue*>(queue);
   if (q == nullptr)
@@ -173,6 +194,10 @@ int vertex_pal_io_register(void* queue, vertex::i32 fd, vertex::i32 events, void
   change.filter = events == 2 ? -2 : -1;
   change.flags = 0x1 | 0x10;
   change.udata = token;
+  if (q->npending < ioPendingMax) {
+    q->pending[q->npending++] = change;
+    return 0;
+  }
   return kevent(q->kq, &change, 1, nullptr, 0, nullptr) < 0 ? -1 : 0;
 }
 
@@ -183,9 +208,17 @@ void vertex_pal_io_unregister(void* queue, vertex::i32 fd, vertex::i32 events) {
   auto* q = static_cast<IoQueue*>(queue);
   if (q == nullptr)
     return;
+  vertex::i16 filter = events == 2 ? -2 : -1;
+  // Still queued: the kernel never heard of it.
+  for (int i = 0; i < q->npending; i++) {
+    if (q->pending[i].ident == static_cast<vertex::usize>(fd) && q->pending[i].filter == filter) {
+      q->pending[i] = q->pending[--q->npending];
+      return;
+    }
+  }
   KEvent change{};
   change.ident = static_cast<vertex::usize>(fd);
-  change.filter = events == 2 ? -2 : -1;
+  change.filter = filter;
   change.flags = 0x2;  // EV_DELETE
   kevent(q->kq, &change, 1, nullptr, 0, nullptr);
 }
@@ -239,7 +272,11 @@ int vertex_pal_io_wait(void* queue, vertex::i64 timeout, void** tokens, int max)
     wait.tv_nsec = static_cast<long>(timeout % 1000000000);
     until = &wait;
   }
-  int n = kevent(q->kq, nullptr, 0, ready, max, until);
+  // The queued registrations go in with the wait. However it ends they
+  // have been applied (kevent(2): an interrupted call has still applied
+  // its changelist), so the queue starts again empty.
+  int n = kevent(q->kq, q->pending, q->npending, ready, max, until);
+  q->npending = 0;
   if (n < 0)
     return 0;
   for (int i = 0; i < n; i++)
