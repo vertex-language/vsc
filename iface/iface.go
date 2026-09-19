@@ -86,6 +86,9 @@ type printer struct {
 	m    Module
 	file *token.File
 	err  error
+	// isolated is whether the type whose members are being written is
+	// @MainActor, which its members then are unless they say otherwise.
+	isolated bool
 }
 
 func (p *printer) line(format string, args ...any) {
@@ -110,7 +113,11 @@ func (p *printer) decl(d ast.Decl) {
 		if sym == nil {
 			return
 		}
-		p.line("%s", p.function(access(p.text(n.Mods)), sym.Name(), sym.Signature()))
+		acc := access(p.text(n.Mods))
+		if sym.Signature().Isolated {
+			acc = "@MainActor " + acc
+		}
+		p.line("%s", p.function(acc, sym.Name(), sym.Signature()))
 		p.line("")
 
 	case *ast.StructDecl:
@@ -162,6 +169,15 @@ func (p *printer) nominal(keyword string, name *ast.Ident, mods []*ast.Modifier)
 	super := inheritText(inherits)
 
 	acc := access(p.text(mods))
+	// A @MainActor type says so, and its members that are not
+	// (`nonisolated`) say so each; see isolation.
+	isolated := p.m.Info.MainActor[sym.Type().Underlying()]
+	if isolated {
+		acc = "@MainActor " + acc
+	}
+	prevIsolated := p.isolated
+	p.isolated = isolated
+	defer func() { p.isolated = prevIsolated }()
 	p.line("%s %s %s%s {", acc, keyword, p.ident(name), super)
 	for _, f := range fields {
 		p.property(f, false)
@@ -182,7 +198,7 @@ func (p *printer) nominal(keyword string, name *ast.Ident, mods []*ast.Modifier)
 		if sig == nil || !sig.Exported {
 			continue
 		}
-		p.line("  %s", p.initializer(sig))
+		p.line("  %s%s", p.isolation(sig.Isolated), p.initializer(sig))
 	}
 	p.methods(methods)
 	p.subscripts(subscripts)
@@ -240,7 +256,7 @@ func (p *printer) methods(methods []*types.Method) {
 		} else if m.IsMutating {
 			acc = "public mutating"
 		}
-		p.line("  %s", p.function(acc, m.Name, m.Sig))
+		p.line("  %s", p.function(p.isolation(m.Sig.Isolated)+acc, m.Name, m.Sig))
 	}
 }
 
@@ -268,9 +284,9 @@ func (p *printer) property(f *types.Field, static bool) {
 		}
 		access = "internal"
 	}
-	prefix := "  " + access + " "
+	prefix := "  " + p.isolation(f.Isolated) + access + " "
 	if static {
-		prefix = "  " + access + " static "
+		prefix = "  " + p.isolation(f.Isolated) + access + " static "
 	}
 	if !f.IsComputed {
 		p.line("%s%s %s: %s", prefix, kw, escape(f.Name), typeText(f.Type))
@@ -284,6 +300,19 @@ func (p *printer) property(f *types.Field, static bool) {
 	p.line("%svar %s: %s %s", prefix, escape(f.Name), typeText(f.Type), accessors)
 }
 
+// isolation is what a member of a type writes before its access where
+// its isolation differs from the type's: @MainActor on one the type
+// does not make so, nonisolated on one that opts out.
+func (p *printer) isolation(isolated bool) string {
+	switch {
+	case isolated && !p.isolated:
+		return "@MainActor "
+	case !isolated && p.isolated:
+		return "nonisolated "
+	}
+	return ""
+}
+
 // enum writes enum cases and methods in declaration order.
 func (p *printer) enum(n *ast.EnumDecl) {
 	sym, _ := p.m.Info.Defs[n.Name].(*analyzer.TypeNameSymbol)
@@ -294,7 +323,15 @@ func (p *printer) enum(n *ast.EnumDecl) {
 	if !ok {
 		return
 	}
-	p.line("%s enum %s%s {", access(p.text(n.Mods)), p.ident(n.Name), inheritText(protocolNames(e.Conformances)))
+	acc := access(p.text(n.Mods))
+	isolated := p.m.Info.MainActor[e]
+	if isolated {
+		acc = "@MainActor " + acc
+	}
+	prevIsolated := p.isolated
+	p.isolated = isolated
+	defer func() { p.isolated = prevIsolated }()
+	p.line("%s enum %s%s {", acc, p.ident(n.Name), inheritText(protocolNames(e.Conformances)))
 	for _, c := range e.Cases {
 		if c == nil {
 			continue

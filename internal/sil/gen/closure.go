@@ -214,6 +214,7 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 	// async function whether or not anything in it awaits, and running
 	// it as an ordinary one would call it with the wrong convention.
 	f.Type().Async = sig.Async
+	f.Type().Isolated = sig.Isolated
 	g.push()
 	g.blk = f.Entry()
 
@@ -254,6 +255,11 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 		f.SetResult(lowerType(sig.Results), resultConvention(lowerType(sig.Results)))
 	}
 
+	body := stmts
+	if implicit {
+		body = []ast.Stmt{&ast.ExprStmt{X: x}}
+	}
+	g.prologueHop(body)
 	// Single-expression closures return their value implicitly.
 	if implicit {
 		v := g.rvalue(x)

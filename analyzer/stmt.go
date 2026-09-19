@@ -446,6 +446,7 @@ func (c *checker) declareModuleVars(decls []ast.Decl, scope *Scope) {
 			}
 			c.checkStored(b, d.Kind == token.LET, scope)
 		}
+		c.markIsolatedVars(d)
 	}
 }
 
@@ -480,6 +481,7 @@ func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
 			}
 			c.checkStored(b, isConst, scope)
 		}
+		c.markIsolatedVars(d)
 
 	case *ast.FuncDecl:
 		if d.Recv != nil {
@@ -600,14 +602,15 @@ func (c *checker) checkMembers(d ast.Decl, body *ast.MemberBlock, self types.Typ
 		return
 	}
 
-	prevType, prevActor := c.currType, c.currActor
+	prevType, prevActor, prevMember := c.currType, c.currActor, c.memberIsolated
 	c.currType = self
 	if cl, ok := self.(*types.Class); ok && cl.IsActor {
 		c.currActor = cl
 	} else {
 		c.currActor = nil
 	}
-	defer func() { c.currType, c.currActor = prevType, prevActor }()
+	c.memberIsolated = c.info.MainActor[self.Underlying()]
+	defer func() { c.currType, c.currActor, c.memberIsolated = prevType, prevActor, prevMember }()
 
 	// An extension's where clause holds inside it: `extension Box where T:
 	// Equatable` may compare its Ts. The type's parameters are the type's
@@ -688,6 +691,20 @@ func copyPromised(m map[string][]types.Type) map[string][]types.Type {
 
 // checkMember checks one member of a type.
 func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
+	// A member's body runs where the member is isolated to: a function's
+	// is set by checkFuncBody, the others here.
+	prevIsolated := c.currIsolated
+	defer func() { c.currIsolated = prevIsolated }()
+	switch m := mem.(type) {
+	case *ast.VarDecl:
+		c.currIsolated = c.declIsolated(m.Attrs, m.Mods)
+	case *ast.InitDecl:
+		c.currIsolated = c.declIsolated(m.Attrs, m.Mods)
+	case *ast.SubscriptDecl:
+		c.currIsolated = c.declIsolated(m.Attrs, m.Mods)
+	case *ast.DeinitDecl:
+		c.currIsolated = c.declIsolated(m.Attrs, m.Mods)
+	}
 	switch m := mem.(type) {
 	case *ast.FuncDecl:
 		c.checkMutatingPlacement(m, self)
@@ -1002,12 +1019,21 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 		fnScope.Insert(sym)
 	}
 
-	prevRet, prevAsync, prevName := c.currFuncRet, c.currAsync, c.currFuncName
+	prevRet, prevAsync, prevName, prevIsolated := c.currFuncRet, c.currAsync, c.currFuncName, c.currIsolated
 	c.currFuncRet, c.currAsync = sig.Results, sig.Async
+	// Its body runs where the declaration says it does; see funcIsolated.
+	c.currIsolated = c.declIsolated(d.Attrs, d.Mods)
+	if d.Name != nil {
+		if sym, ok := c.info.Defs[d.Name].(*FuncSymbol); ok && sym.Signature() != nil {
+			c.currIsolated = sym.Signature().Isolated
+		}
+	}
 	if d.Name != nil && d.Sig != nil {
 		c.currFuncName = c.declName(d.Name.Text(c.file), d.Sig.Params, false)
 	}
-	defer func() { c.currFuncRet, c.currAsync, c.currFuncName = prevRet, prevAsync, prevName }()
+	defer func() {
+		c.currFuncRet, c.currAsync, c.currFuncName, c.currIsolated = prevRet, prevAsync, prevName, prevIsolated
+	}()
 
 	if d.Body != nil {
 		implicitReturn(d.Body, sig.Results)

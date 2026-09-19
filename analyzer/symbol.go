@@ -30,7 +30,13 @@ type VarSymbol struct {
 	// deferred is a let declared with no value, which each path through
 	// the code after it gives one: an assignment to it is its initializer.
 	deferred bool
+	// isolated is @MainActor on a module-scope variable: read and
+	// written on the main thread only.
+	isolated bool
 }
+
+// Isolated reports whether the variable is @MainActor.
+func (v *VarSymbol) Isolated() bool { return v.isolated }
 
 func NewVar(name string, typ types.Type, pos token.Pos, isConst bool, ownership types.OwnershipKind) *VarSymbol {
 	return &VarSymbol{

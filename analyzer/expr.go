@@ -507,6 +507,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if v.IsConsumed() {
 				c.errorf(e.Name.Pos(), "'%s' used after consume", name)
 			}
+			if v.isolated {
+				c.checkIsolatedAccess(e, "var", name, false)
+			}
 		}
 		c.info.Uses[e.Name] = sym
 		c.checkAccess(e.Name.Pos(), e.Name.Text(c.file), sym)
@@ -567,6 +570,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					c.info.Uses[id.Name] = sym
 					lhs = sym.Type()
 					if v, ok := sym.(*VarSymbol); ok {
+						if v.isolated {
+							c.checkIsolatedAccess(id, "var", name, true)
+						}
 						if v.IsConst() {
 							if v.IsInitialized() && !c.initializesOwnProperty(sym, name) {
 								c.errorf(e.Op.Pos(), "cannot assign to value: '%s' is a 'let' constant", name)
@@ -588,9 +594,14 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				}
 				c.info.Types[id] = lhs
 			} else if mem, ok := e.X.(*ast.MemberExpr); ok {
+				c.assigning = mem
 				lhs = c.checkExpr(mem, nil, scope)
+				c.assigning = nil
 				baseType := c.info.Types[mem.X]
 				propName := mem.Name.Text(c.file)
+				if IsolatedField(baseType, propName) {
+					c.checkIsolatedAccess(mem, "property", propName, true)
+				}
 				// `self.x = …` in an initializer is how a `let` property
 				// gets its value.
 				ownInit := c.inInit && string(c.file.Slice(mem.X.Pos(), mem.X.End())) == "self"
@@ -870,6 +881,32 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	case *ast.CallExpr:
 		if t, ok := c.optionalSome(e, expected, scope); ok {
 			return t
+		}
+		// `Task.detached { … }` is a Task of what its operation returns,
+		// as `Task { … }` is; see the initializer below.
+		if mem, ok := e.Fun.(*ast.MemberExpr); ok && mem.Name != nil && mem.Name.Text(c.file) == "detached" &&
+			e.Args != nil && len(e.Args.Args) == 1 {
+			if meta, isMeta := c.checkExpr(mem.X, nil, scope).(*types.Metatype); isMeta && c.isCoreTask(meta.Instance) {
+				want := &types.Signature{Results: nil, Async: true}
+				// Detached from where it is made: the operation runs on
+				// the pool, not on the main thread.
+				prevIsolated := c.currIsolated
+				c.currIsolated = false
+				sig, isFunc := c.checkExpr(e.Args.Args[0].X, want, scope).(*types.Signature)
+				c.currIsolated = prevIsolated
+				base := meta.Instance
+				if gi, isInst := base.(*types.GenericInstance); isInst {
+					base = gi.Base
+				}
+				if _, m := c.findMethod(meta, "detached"); m != nil {
+					c.info.Methods[mem] = &MethodRef{Recv: base, Method: m}
+					c.info.Types[mem] = m.Sig
+				}
+				if isFunc && len(sig.Params) == 0 {
+					return taskOf(base, sig.Results)
+				}
+				return base
+			}
 		}
 		if mem, ok := e.Fun.(*ast.MemberExpr); ok && !c.namesModule(mem.X, scope) {
 			baseType := c.checkExpr(mem.X, nil, scope)
@@ -1227,6 +1264,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if t := c.lookupMemberFor(e, baseType, memberName); t != nil {
 			c.checkImportedMember(e, baseType, memberName)
 			c.checkMemberConditions(e, baseType, memberName)
+			if c.assigning != e && IsolatedField(baseType, memberName) {
+				c.checkIsolatedAccess(e, "property", memberName, false)
+			}
 			if chained {
 				if _, already := t.(*types.Optional); !already {
 					return &types.Optional{Wrapped: t}
@@ -1521,6 +1561,14 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		c.currAsync = (e.Sig != nil && e.Sig.Async.IsValid()) || awaitsIn(e.Stmts)
 		c.inAwait = false
 		defer func() { c.currFuncRet, c.currAsync, c.inAwait = prevRet, prevAsync, prevAwait }()
+		// A closure runs where it is made -- on the main thread inside
+		// @MainActor code, as Swift's closures inherit their context's
+		// isolation -- or where its attribute or the function type it is
+		// given says. Task.detached takes its operation out of that;
+		// see the initializer above.
+		prevIsolated := c.currIsolated
+		c.currIsolated = c.currIsolated || c.hasAttr(e.Attrs, mainActorAttr) || (expSig != nil && expSig.Isolated)
+		defer func() { c.currIsolated = prevIsolated }()
 
 		if len(e.Stmts) == 1 {
 			if exprStmt, ok := e.Stmts[0].(*ast.ExprStmt); ok {
@@ -1557,7 +1605,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if expSig != nil && expSig.Async {
 			async = true
 		}
-		return &types.Signature{Params: params, Results: retType, Throws: throws, Async: async}
+		return &types.Signature{Params: params, Results: retType, Throws: throws, Async: async, Isolated: c.currIsolated}
 
 	default:
 		return types.Typ[types.Invalid]

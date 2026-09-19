@@ -126,41 +126,76 @@ struct KEvent {
 int kqueue(void);
 int kevent(int kq, const KEvent* changes, int nchanges, KEvent* events, int nevents, const timespec* timeout);
 
-static int ioQueue = -1;
+// A kqueue per executor. EVFILT_USER (-10) with NOTE_TRIGGER is how
+// another thread ends a wait on it.
+struct IoQueue {
+  int kq;
+};
+
+inline constexpr vertex::i16 evfiltUser = -10;
+inline constexpr vertex::usize wakeIdent = 1;
+
+void* vertex_pal_io_open(void) {
+  int kq = kqueue();
+  if (kq < 0)
+    return nullptr;
+  auto* q = static_cast<IoQueue*>(malloc(sizeof(IoQueue)));
+  if (q == nullptr)
+    return nullptr;
+  q->kq = kq;
+  // The wake event, added once: EV_ADD | EV_CLEAR, so that a trigger is
+  // delivered once and the event stays.
+  KEvent change{};
+  change.ident = wakeIdent;
+  change.filter = evfiltUser;
+  change.flags = 0x1 | 0x20;
+  kevent(kq, &change, 1, nullptr, 0, nullptr);
+  return q;
+}
 
 // A kqueue is itself a descriptor, readable while it holds an event.
-vertex::i32 vertex_pal_io_descriptor(void) {
-  if (ioQueue < 0)
-    ioQueue = kqueue();
-  return ioQueue;
+vertex::i32 vertex_pal_io_descriptor(void* queue) {
+  auto* q = static_cast<IoQueue*>(queue);
+  return q == nullptr ? -1 : q->kq;
 }
 
 // EVFILT_READ or EVFILT_WRITE, once: EV_ADD | EV_ONESHOT.
-int vertex_pal_io_register(vertex::i32 fd, vertex::i32 events, void* token) {
-  if (ioQueue < 0) {
-    ioQueue = kqueue();
-    if (ioQueue < 0)
-      return -1;
-  }
+int vertex_pal_io_register(void* queue, vertex::i32 fd, vertex::i32 events, void* token) {
+  auto* q = static_cast<IoQueue*>(queue);
+  if (q == nullptr)
+    return -1;
   KEvent change{};
   change.ident = static_cast<vertex::usize>(fd);
   change.filter = events == 2 ? -2 : -1;
   change.flags = 0x1 | 0x10;
   change.udata = token;
-  return kevent(ioQueue, &change, 1, nullptr, 0, nullptr) < 0 ? -1 : 0;
+  return kevent(q->kq, &change, 1, nullptr, 0, nullptr) < 0 ? -1 : 0;
 }
 
 // EV_DELETE for whichever filter was registered. A registration that has
 // already fired is gone, and kevent says so; there is nothing to do about
 // it either way.
-void vertex_pal_io_unregister(vertex::i32 fd, vertex::i32 events) {
-  if (ioQueue < 0)
+void vertex_pal_io_unregister(void* queue, vertex::i32 fd, vertex::i32 events) {
+  auto* q = static_cast<IoQueue*>(queue);
+  if (q == nullptr)
     return;
   KEvent change{};
   change.ident = static_cast<vertex::usize>(fd);
   change.filter = events == 2 ? -2 : -1;
   change.flags = 0x2;  // EV_DELETE
-  kevent(ioQueue, &change, 1, nullptr, 0, nullptr);
+  kevent(q->kq, &change, 1, nullptr, 0, nullptr);
+}
+
+// NOTE_TRIGGER (0x01000000) on the user event.
+void vertex_pal_io_wake(void* queue) {
+  auto* q = static_cast<IoQueue*>(queue);
+  if (q == nullptr)
+    return;
+  KEvent change{};
+  change.ident = wakeIdent;
+  change.filter = evfiltUser;
+  change.fflags = 0x01000000;
+  kevent(q->kq, &change, 1, nullptr, 0, nullptr);
 }
 
 struct PollFd {
@@ -186,8 +221,9 @@ int vertex_pal_io_wait_one(vertex::i32 fd, vertex::i32 events, vertex::i64 timeo
   return n > 0 ? 1 : 0;
 }
 
-int vertex_pal_io_wait(vertex::i64 timeout, void** tokens, int max) {
-  if (ioQueue < 0)
+int vertex_pal_io_wait(void* queue, vertex::i64 timeout, void** tokens, int max) {
+  auto* q = static_cast<IoQueue*>(queue);
+  if (q == nullptr)
     return 0;
   KEvent ready[64];
   if (max > 64)
@@ -199,11 +235,77 @@ int vertex_pal_io_wait(vertex::i64 timeout, void** tokens, int max) {
     wait.tv_nsec = static_cast<long>(timeout % 1000000000);
     until = &wait;
   }
-  int n = kevent(ioQueue, nullptr, 0, ready, max, until);
+  int n = kevent(q->kq, nullptr, 0, ready, max, until);
   if (n < 0)
     return 0;
   for (int i = 0; i < n; i++)
-    tokens[i] = ready[i].udata;
+    tokens[i] = ready[i].filter == evfiltUser ? nullptr : ready[i].udata;
   return n;
 }
+
+// Threads: pthreads, declared here as the rest of libSystem is. A
+// pthread_t is a pointer and a key an unsigned long on Darwin.
+typedef void* PThread;
+typedef unsigned long PThreadKey;
+int pthread_create(PThread* thread, const void* attr, void* (*start)(void*), void* arg);
+int pthread_detach(PThread thread);
+int pthread_key_create(PThreadKey* key, void (*destructor)(void*));
+int pthread_setspecific(PThreadKey key, const void* value);
+void* pthread_getspecific(PThreadKey key);
+long sysconf(int name);
+char* getenv(const char* name);
+
+struct ThreadStart {
+  void (*body)(void*);
+  void* arg;
+};
+
+static void* threadMain(void* p) {
+  auto* s = static_cast<ThreadStart*>(p);
+  void (*body)(void*) = s->body;
+  void* arg = s->arg;
+  free(s);
+  body(arg);
+  return nullptr;
+}
+
+bool vertex_pal_thread_start(void (*body)(void*), void* arg) {
+  auto* s = static_cast<ThreadStart*>(malloc(sizeof(ThreadStart)));
+  if (s == nullptr)
+    return false;
+  s->body = body;
+  s->arg = arg;
+  PThread t = nullptr;
+  if (pthread_create(&t, nullptr, threadMain, s) != 0) {
+    free(s);
+    return false;
+  }
+  pthread_detach(t);
+  return true;
+}
+
+// _SC_NPROCESSORS_ONLN is 58 on Darwin.
+int vertex_pal_cpus(void) {
+  long n = sysconf(58);
+  return n < 1 ? 1 : static_cast<int>(n);
+}
+
+static PThreadKey threadSlot;
+static bool threadSlotMade;
+
+void vertex_pal_thread_set(void* value) {
+  if (!threadSlotMade) {
+    pthread_key_create(&threadSlot, nullptr);
+    threadSlotMade = true;
+  }
+  pthread_setspecific(threadSlot, value);
+}
+
+void* vertex_pal_thread_get(void) {
+  if (!threadSlotMade)
+    return nullptr;
+  return pthread_getspecific(threadSlot);
+}
+
+const char* vertex_pal_getenv(const char* name) { return getenv(name); }
 }

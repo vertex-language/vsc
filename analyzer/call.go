@@ -144,6 +144,10 @@ func (c *checker) byContext(fits []*FuncSymbol) []*FuncSymbol {
 
 // awaitsIn reports whether statements await, outside any closure nested
 // in them, which is what makes a closure with no signature async.
+// Awaits reports whether the statements suspend anywhere: an `await`
+// outside any closure of their own.
+func Awaits(stmts []ast.Stmt) bool { return awaitsIn(stmts) }
+
 func awaitsIn(stmts []ast.Stmt) bool {
 	found := false
 	for _, s := range stmts {
@@ -509,6 +513,8 @@ func storedFieldsOf(t types.Type) []*types.Field {
 // checkCallArguments checks argument types and labels against a signature.
 func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, args []*ast.CallArg, scope *Scope) *types.Signature {
 	c.checkAsyncCall(call, sig)
+	what, name := c.calleeWords(call, sig)
+	c.checkIsolatedCall(call, sig, what, name)
 	sig = c.inferGenericCall(call, sig, args, scope)
 	if sig.Params == nil {
 		return sig

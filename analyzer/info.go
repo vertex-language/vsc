@@ -158,6 +158,11 @@ type Info struct {
 	// SwiftModules tracks imported swiftc interface module names.
 	SwiftModules map[string]bool
 
+	// MainActor is the nominal types declared @MainActor, by their
+	// underlying type: every member of one is isolated to the main
+	// thread, in the declaration and in its extensions.
+	MainActor map[types.Type]bool
+
 	// Diagnostics holds all warnings and errors produced during analysis.
 	Diagnostics []token.Diagnostic
 }
@@ -197,6 +202,7 @@ func NewInfo() *Info {
 		Operators:        make(map[ast.Expr]Symbol),
 		PatternTypes:     make(map[ast.Pattern]types.Type),
 		CoreTypes:        make(map[types.Type]bool),
+		MainActor:        make(map[types.Type]bool),
 		Values:           make(map[ast.Node]Value),
 		Methods:          make(map[*ast.MemberExpr]*MethodRef),
 		Extensions:       make(map[*ast.ExtensionDecl]types.Type),

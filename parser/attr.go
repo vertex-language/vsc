@@ -59,7 +59,7 @@ func (p *parser) parseAttrName() ast.Type {
 var bareAttrs = map[string]bool{
 	"autoclosure": true, "concurrent": true, "escaping": true,
 	"noescape": true, "preconcurrency": true, "retroactive": true,
-	"Sendable": true, "unchecked": true,
+	"MainActor": true, "Sendable": true, "unchecked": true,
 }
 
 // attrName is an attribute's spelling, or "" if it is qualified.

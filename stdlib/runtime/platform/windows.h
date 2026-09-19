@@ -102,10 +102,22 @@ vertex::u64 vertex_pal_now(void) {
 // No readiness registration yet, so a task's wait falls back to
 // vertex_pal_io_wait_one and stops the thread, as a wait outside a task
 // does. That is slower than the executor's, never wrong.
-int vertex_pal_io_register(vertex::i32, vertex::i32, void*) { return -1; }
-int vertex_pal_io_wait(vertex::i64, void**, int) { return 0; }
-void vertex_pal_io_unregister(vertex::i32, vertex::i32) {}
-vertex::i32 vertex_pal_io_descriptor(void) { return -1; }
+void* vertex_pal_io_open(void) { return nullptr; }
+int vertex_pal_io_register(void*, vertex::i32, vertex::i32, void*) { return -1; }
+int vertex_pal_io_wait(void*, vertex::i64, void**, int) { return 0; }
+void vertex_pal_io_unregister(void*, vertex::i32, vertex::i32) {}
+vertex::i32 vertex_pal_io_descriptor(void*) { return -1; }
+void vertex_pal_io_wake(void*) {}
+
+// No worker threads yet: the executor asks for none, and everything runs
+// on the main thread as it did. The thread slot is then one global.
+bool vertex_pal_thread_start(void (*)(void*), void*) { return false; }
+int  vertex_pal_cpus(void) { return 1; }
+static void* threadSlot;
+void  vertex_pal_thread_set(void* value) { threadSlot = value; }
+void* vertex_pal_thread_get(void) { return threadSlot; }
+char* getenv(const char* name);
+const char* vertex_pal_getenv(const char* name) { return getenv(name); }
 
 struct WSAPollFd {
   vertex::usize fd;

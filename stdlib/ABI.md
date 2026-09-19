@@ -41,6 +41,11 @@ runtime spell each one once.
 | `vertex_task_cell_typed` | `(const Metadata* type) -> HeapObject*` | a counted box for a value of that type, zeroed, whose end destroys the value |
 | `vertex_task_cell_typed_contents` | `(HeapObject* cell) -> void*` | where a typed cell's value is |
 | `vertex_task_wait_fd` | `(i32 fd, i32 events, i64 timeout) -> i32` | waits until the descriptor can be read (1) or written (2), or until timeout nanoseconds pass (negative: no deadline); 1 ready, 0 timed out. In a task the task waits and the executor runs everything else; outside one, or with no readiness registration, the thread waits |
+| `vertex_task_start_detached` | `(void (*)(), void* context) -> HeapObject*` | starts a task as `vertex_task_start` does, on a worker of the pool: `Task.detached` |
+| `vertex_task_hop` | `(u64 where) -> void` | suspends the task and resumes it on another executor, once its frames have unwound: 0 the main executor, 1 the pool, 2 the task's home (where it was started); on that executor already, a yield |
+| `vertex_task_needs_hop` | `(u64 where) -> u64` | 1 when a hop there would move the task, 0 when it is there already or there is no task: what the compiler asks before each hop it emits |
+| `vertex_task_on_main` | `() -> bool` | whether this thread is the main executor's |
+| `vertex_task_assume_main` | `() -> void` | ends the program unless this thread is the main executor's: `MainActor.assumeIsolated` |
 | `vertex_async_main` | `(void (*)(), void* context) -> void` | runs an async `main` as the first task |
 | `vertex_async_main_status` | `(i32 (*)(), void* context) -> i32` | runs an async `main() -> Int32` as the first task, and is its status |
 | `vertex_task_switch` | `(void** save, void* next) -> void` | assembly in the runtime's object: saves the callee-saved registers and SP into `*save`, restores them from `next` |
@@ -98,6 +103,36 @@ same way. The Microsoft x64 convention returns one register and a
 result of more than one register that way on `x86_64-windows`, its own
 functions' included, so a call into the runtime and a call between
 Vertex functions look alike.
+
+## Executors
+
+Tasks run on executors, one per thread. The main executor is the main
+thread's: it runs the main task, everything marked `@MainActor`, and
+whatever the window system needs the main thread for. The others are a
+pool of workers, one thread each, as many as `VERTEX_WORKERS` says or one
+per processor but the main thread's; `VERTEX_WORKERS=0` is no pool, and
+every task is the main executor's. The pool starts when something first
+needs it.
+
+A task belongs to one executor at a time, which is the only one that
+runs it, and calls one *home*: the executor it was started on, or the
+worker `Task.detached` gave it. Code that is not `@MainActor` runs at
+home; `@MainActor` code runs on the main executor. Crossing is a hop, a
+suspension the runtime completes only once the task's frames have
+unwound, by handing the task to the other executor's inbox -- a lock-free
+list the owner drains -- and waking it if it sleeps. The compiler asks
+`vertex_task_needs_hop` and hops only when the answer is yes: on entry
+to an async function that is `@MainActor` (to the main executor) or that
+suspends somewhere (home), after every `await` (back to wherever that
+function runs), and around a synchronous `@MainActor` call or property
+awaited from elsewhere (there and back). A task with no pool, or one
+whose home is the main executor, never moves, and every such question
+costs a call and a compare.
+
+Joining a task on another executor is safe: a handle's waiters are
+under a spinlock, and each is woken on its own executor. Conformance
+lookup, the heap and reference counts are shared between threads and
+locked or atomic; a task's async frames are its own and travel with it.
 
 ## Heap objects
 

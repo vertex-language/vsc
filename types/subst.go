@@ -152,6 +152,7 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 			Throws:     tt.Throws,
 			Thrown:     thrown,
 			Rethrows:   tt.Rethrows,
+			Isolated:   tt.Isolated,
 		}
 
 	// A nominal type's own parts. Substituting one is what makes

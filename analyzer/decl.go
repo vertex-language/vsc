@@ -161,6 +161,7 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			Throws:   throws,
 			Thrown:   thrown,
 			Rethrows: t.Throws != nil && t.Throws.Kind == token.RETHROWS,
+			Isolated: c.hasAttr(t.Attrs, mainActorAttr),
 		}
 
 	case *ast.AnyType:
@@ -424,6 +425,9 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 			}
 			c.info.Defs[d.Name] = sym
 			c.declaredHere(sym, c.accessOf(d.Mods))
+			if c.hasAttr(d.Attrs, mainActorAttr) {
+				c.info.MainActor[st] = true
+			}
 
 		case *ast.ClassDecl:
 			name := d.Name.Text(c.file)
@@ -435,6 +439,9 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 			}
 			c.info.Defs[d.Name] = sym
 			c.declaredHere(sym, c.accessOf(d.Mods))
+			if c.hasAttr(d.Attrs, mainActorAttr) {
+				c.info.MainActor[cl] = true
+			}
 
 		case *ast.ActorDecl:
 			name := d.Name.Text(c.file)
@@ -457,6 +464,9 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 			}
 			c.info.Defs[d.Name] = sym
 			c.declaredHere(sym, c.accessOf(d.Mods))
+			if c.hasAttr(d.Attrs, mainActorAttr) {
+				c.info.MainActor[en] = true
+			}
 
 		case *ast.ProtocolDecl:
 			c.declareProtocol(d, scope)
@@ -699,7 +709,9 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Struct)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
+				c.memberIsolated = c.info.MainActor[n]
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
+				c.memberIsolated = false
 			}
 
 		case *ast.ClassDecl:
@@ -707,7 +719,9 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Class)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, &n.Superclass)
+				c.memberIsolated = c.info.MainActor[n]
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
+				c.memberIsolated = false
 			}
 
 		case *ast.ActorDecl:
@@ -724,7 +738,9 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n.TypeParams = params
 				n.RawType = c.rawTypeOf(d.Inherit, scope)
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
+				c.memberIsolated = c.info.MainActor[n]
 				c.readMembers(d.Body, inner, nil, &n.Methods, n, nil, &n.Computed, &n.Statics, &n.Subscripts)
+				c.memberIsolated = false
 			}
 
 		case *ast.TypealiasDecl:
@@ -821,6 +837,7 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 				got := c.storedField(b, isConst, typeScope)
 				for _, f := range got {
 					f.Exported = exported(c.accessOf(m.Mods))
+					f.Isolated = c.declIsolated(m.Attrs, m.Mods)
 				}
 				switch {
 				case static:
@@ -875,6 +892,7 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			}
 			sig := c.buildFuncSig(m.Sig, typeScope)
 			sig.Exported = exported(c.accessOf(m.Mods))
+			sig.Isolated = c.declIsolated(m.Attrs, m.Mods)
 			*inits = append(*inits, sig)
 
 		case *ast.SubscriptDecl:
@@ -892,6 +910,7 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			// signature, beside the type's.
 			sig := c.buildGenericFuncSig(m, typeScope)
 			unlabelOperator(name, sig)
+			sig.Isolated = c.declIsolated(m.Attrs, m.Mods)
 			*methods = append(*methods, &types.Method{
 				Name: name, Sig: sig, IsStatic: isStatic(m.Mods),
 				IsMutating: c.isMutating(m.Mods),
@@ -952,6 +971,7 @@ func (c *checker) declareFunctions(decls []ast.Decl, scope *Scope) {
 			name := f.Name.Text(c.file)
 			sig := c.buildGenericFuncSig(f, scope)
 			unlabelOperator(name, sig)
+			sig.Isolated = c.funcIsolated(f, name, scope)
 			sym := NewFunc(name, sig, f.Name.Pos())
 			sym.SetDecl(f)
 			sym.SetAccess(c.accessOf(f.Mods))
@@ -1206,7 +1226,9 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		case *types.Enum:
 			subscripts = &u.Subscripts
 		}
+		c.memberIsolated = c.info.MainActor[extType.Underlying()]
 		c.readMembers(ext.Body, typeScope, fields, methods, en, inits, computed, statics, subscripts)
+		c.memberIsolated = false
 		if isBuiltin && builtin != nil && c.importing != "" {
 			if builtin.Modules == nil {
 				builtin.Modules = map[any]string{}
@@ -1426,6 +1448,9 @@ func (c *checker) resolveReceivers(decls []ast.Decl, scope *Scope) {
 		name := fn.Name.Text(c.file)
 		sig := c.buildFuncSig(fn.Sig, typeScope)
 		unlabelOperator(name, sig)
+		c.memberIsolated = c.info.MainActor[recv.Underlying()]
+		sig.Isolated = c.declIsolated(fn.Attrs, fn.Mods)
+		c.memberIsolated = false
 		*methods = append(*methods, &types.Method{
 			Name: name, Sig: sig, IsStatic: isStatic(fn.Mods),
 			IsMutating: c.ownershipOf(fn.Recv.Mods) == types.InOut,

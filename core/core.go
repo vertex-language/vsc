@@ -203,12 +203,26 @@ func LowerTask(name string) (string, bool) {
 	switch name {
 	case "init":
 		return stdlib.TaskStart, true
+	case "detached":
+		return stdlib.TaskDetached, true
 	case "value":
 		return stdlib.TaskJoin, true
 	case "sleep":
 		return stdlib.TaskSleep, true
 	case "yield":
 		return stdlib.TaskYield, true
+	}
+	return "", false
+}
+
+// LowerMainActor is the runtime function behind a static member of core's
+// MainActor: hop, which run and assumeIsolated are lowered around.
+func LowerMainActor(name string) (string, bool) {
+	switch name {
+	case "hop", "run":
+		return stdlib.TaskHop, true
+	case "assumeIsolated":
+		return stdlib.TaskAssumeMain, true
 	}
 	return "", false
 }

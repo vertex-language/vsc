@@ -141,8 +141,9 @@ inline const void* typeDescriptorOf(const Metadata* type) {
 }
 
 // A small cache of answers, misses included, keyed by type and protocol.
-// The runtime runs its tasks on one thread; a worker thread asking would
-// need this guarded.
+// Tasks run on several threads, so the cache is under a spinlock: an
+// entry is three words, and a reader must not see one thread's type
+// beside another's table.
 struct CachedConformance {
   const Metadata* type;
   const void* protocol;
@@ -151,11 +152,24 @@ struct CachedConformance {
 
 inline constexpr usize conformanceCacheSize = 64;
 
+static u32 conformanceLock;
+
+inline void lockConformances() {
+  while (__builtin_atomic_cas(&conformanceLock, 0u, 1u) != 0u) {
+  }
+}
+
+inline void unlockConformances() { __builtin_atomic_store(&conformanceLock, 0u); }
+
 inline CachedConformance& cachedConformance(const Metadata* type, const void* protocol) {
   static CachedConformance cache[conformanceCacheSize] = {};
   usize h = (reinterpret_cast<usize>(type) >> 3) ^ (reinterpret_cast<usize>(protocol) >> 5);
   return cache[h % conformanceCacheSize];
 }
+
+// warmConformances gathers the images' records before any worker thread
+// exists, so that the once-only gathering is never raced.
+inline void warmConformances() { records(); }
 
 }  // namespace vertex
 
@@ -170,9 +184,14 @@ const void* const* vertex_conformance(const vertex::Metadata* type, const void* 
   const void* want = typeDescriptorOf(type);
   if (want == nullptr)
     return nullptr;
+  lockConformances();
   CachedConformance& c = cachedConformance(type, protocol);
-  if (c.type == type && c.protocol == protocol)
-    return c.table;
+  if (c.type == type && c.protocol == protocol) {
+    const void* const* table = c.table;
+    unlockConformances();
+    return table;
+  }
+  unlockConformances();
   const void* const* found = nullptr;
   Records& r = records();
   for (u32 l = 0; l < r.count && found == nullptr; l++) {
@@ -184,7 +203,9 @@ const void* const* vertex_conformance(const vertex::Metadata* type, const void* 
       break;
     }
   }
+  lockConformances();
   c = CachedConformance{type, protocol, found};
+  unlockConformances();
   return found;
 }
 

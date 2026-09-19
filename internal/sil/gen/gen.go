@@ -1012,6 +1012,7 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	// part of the type and not a note on the declaration, because the
 	// calling convention differs. See docs/vertex_swift_async.md.
 	f.Type().Async = sig.Async
+	f.Type().Isolated = sig.Isolated
 	// Reset per-function self storage pointer.
 	g.self = nil
 	g.push()
@@ -1075,6 +1076,7 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 		f.SetResult(lowerType(sig.Results), resultConvention(lowerType(sig.Results)))
 	}
 
+	g.prologueHop(d.Body.Stmts)
 	g.block(d.Body)
 	// Handle fallthrough at end of function (unreachable or void return).
 	if g.blk != nil && g.blk.Term() == nil {

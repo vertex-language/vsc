@@ -24,8 +24,8 @@ type checker struct {
 	// inPropertyInit is whether a stored property's initializer is being
 	// checked, where there is no self yet to reach an instance member through.
 	inPropertyInit bool
-	currType     types.Type // the type whose members are being checked
-	negated      map[ast.Expr]bool
+	currType       types.Type // the type whose members are being checked
+	negated        map[ast.Expr]bool
 
 	// stored is the bindings already declared, so that a module-scope
 	// variable declared ahead of the bodies is not declared again when
@@ -45,6 +45,19 @@ type checker struct {
 	// currAsync is whether the function or closure being checked is
 	// async, which decides between overloads that differ only in that.
 	currAsync bool
+	// currIsolated is whether the code being checked runs on the main
+	// thread: a @MainActor function or type's member, a closure made
+	// there, or top-level code. See isolation.go.
+	currIsolated bool
+	// memberIsolated is whether the members being read belong to a
+	// @MainActor type, which makes each of them @MainActor.
+	memberIsolated bool
+	// assigning is the member being written by the assignment under
+	// check, whose read rules do not apply to it.
+	assigning ast.Expr
+	// pkgScope is the module's own scope: where a top-level function is
+	// declared, as against one local to a body.
+	pkgScope *Scope
 	// inInit indicates an initializer body is being checked.
 	inInit bool
 	// inChain is the steps of optional chains below their roots.
@@ -150,6 +163,7 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		declSites: make(map[Symbol]declSite),
 		modules:   map[string]*Scope{},
 	}
+	c.pkgScope = pkgScope
 	c.loadCore(coreScope)
 	c.modules["Swift"] = coreScope
 	c.loadAlgorithms(coreScope)
@@ -244,7 +258,9 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		c.declareModuleVars(declsOf(f.Stmts), pkgScope)
 	}
 
-	// Pass 5: Type-check all top-level statements and bodies
+	// Pass 5: Type-check all top-level statements and bodies. Top-level
+	// code runs on the main thread, as Swift's does.
+	c.currIsolated = true
 	for _, f := range files {
 		if f.Unit != nil {
 			c.file = f.Unit

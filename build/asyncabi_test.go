@@ -89,14 +89,19 @@ func runWithDriver(t *testing.T, target ir.Target, obj []byte, driver string) st
 		t.Skip("no cc to write the other end of the call with")
 	}
 	// The runtime's symbols a driven object may name, stood in for: where
-	// a failed overflow check goes, and Error's descriptor, which a
-	// conformance to it points at.
+	// a failed overflow check goes; Error's descriptor, which a
+	// conformance to it points at; and the executor question an async
+	// function asks on entry and after each await, answered as the
+	// runtime answers it outside a task -- nowhere to go -- so the hop
+	// it would make is named and never taken.
 	stubPath := filepath.Join(dir, "runtime_stubs.c")
 	const stubs = `
 #include <stdio.h>
 #include <stdlib.h>
 void vertex_fatal(const char *message) { fprintf(stderr, "Fatal error: %s\n", message); abort(); }
 const int vertex_error_protocol[6] __asm__("_$ss5ErrorMp") = {3, 0, 0, 0, 0, 0};
+unsigned long long vertex_task_needs_hop(unsigned long long where) { (void)where; return 0; }
+void vertex_task_hop(void) { abort(); }
 `
 	if err := os.WriteFile(stubPath, []byte(stubs), 0o644); err != nil {
 		t.Fatal(err)

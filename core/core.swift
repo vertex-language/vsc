@@ -399,11 +399,31 @@ struct Task {
     @_silgen_name("vertex_task_start")
     init(operation: @escaping () async -> Void)
 
+    // A task started on the worker pool whatever started it, as Swift's
+    // Task.detached is; `Task { }` starts where it is made.
+    @_silgen_name("vertex_task_start_detached")
+    static func detached(operation: @escaping () async -> Void) -> Task
+
     @_silgen_name("vertex_task_sleep")
     static func sleep(nanoseconds duration: UInt64) async throws
 
     @_silgen_name("vertex_task_yield")
     static func yield() async
+}
+
+// The main actor: Thread 0, which hosts the window system and runs what
+// is marked @MainActor. `await MainActor.run { … }` runs the closure there
+// and comes back; `MainActor.assumeIsolated { … }` runs it here, where the
+// caller knows it is already there (see also the @MainActor attribute).
+//
+// The hops are the runtime's: 0 is the main executor, 1 the pool, 2 the
+// executor the task calls home.
+enum MainActor {
+    @_silgen_name("vertex_task_hop")
+    static func hop(_ to: UInt64) async
+
+    static func run(_ body: @MainActor () async -> Void) async
+    static func assumeIsolated(_ body: @MainActor () -> Void)
 }
 
 // The names Swift gives C's types, which an interface imported from a C

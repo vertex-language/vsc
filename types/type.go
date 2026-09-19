@@ -157,12 +157,20 @@ type Signature struct {
 	// Exported is, for an initializer's signature, whether it was declared
 	// public or open: another module may call it only then.
 	Exported bool
+	// Isolated is @MainActor: the function runs on the main thread, as
+	// Swift's @MainActor functions run on the main actor. A synchronous
+	// one is called from there or under `await`; an async one gets
+	// itself there.
+	Isolated bool
 }
 
 func (s *Signature) Underlying() Type { return s }
 
 func (s *Signature) String() string {
 	var sb strings.Builder
+	if s.Isolated {
+		sb.WriteString("@MainActor ")
+	}
 	sb.WriteString("(")
 	for i, p := range s.Params {
 		if i > 0 {
@@ -241,6 +249,9 @@ type Field struct {
 	// HasSetter is whether a computed property may be written to, which a
 	// module interface states as `{ get set }` rather than `{ get }`.
 	HasSetter bool
+	// Isolated is @MainActor: the property is read and written on the
+	// main thread only. See Signature.Isolated.
+	Isolated bool
 	// Exported is whether the property was declared public or open.
 	// Another module reads or writes it only then -- though it lays out
 	// every stored property, and an interface lists each.

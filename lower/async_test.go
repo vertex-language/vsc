@@ -27,6 +27,23 @@ func planOf(t *testing.T, f *sil.Func) *asyncPlan {
 	return p
 }
 
+// awaits is a plan's suspensions that are the function's own awaits,
+// without the hops the generator puts around them: to where the
+// function runs on entry and after each await, which are suspensions
+// too, on the runtime's vertex_task_hop. The tests here are about what
+// an await keeps and frees, so they look past the hops.
+func awaits(p *asyncPlan) []*suspension {
+	var out []*suspension
+	for _, s := range p.suspends {
+		if args := s.at.Args(); len(args) > 0 && args[0] != nil && args[0].Inst() != nil &&
+			args[0].Inst().Aux().Name == stdlib.TaskHop {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // silOf lowers a source string to SIL, the way lowered() does for a file.
 func silOf(t *testing.T, src string) *sil.Module {
 	t.Helper()
@@ -96,7 +113,7 @@ func two(_ n: int) async -> int {
 		if p == nil {
 			t.Fatalf("%s: no plan for an async function", c.fn)
 		}
-		if got := len(p.suspends); got != c.want {
+		if got := len(awaits(p)); got != c.want {
 			t.Errorf("%s: %d suspensions, want %d", c.fn, got, c.want)
 		}
 		if p.hasSuspensions() != (c.want > 0) {
@@ -155,16 +172,16 @@ func twoCross(_ a: int, _ b: int) async -> int {
 		{"twoCross", 2},
 	} {
 		p := planOf(t, funcNamed(t, m, c.fn))
-		if len(p.suspends) != 1 {
-			t.Fatalf("%s: %d suspensions, want 1", c.fn, len(p.suspends))
+		if len(awaits(p)) != 1 {
+			t.Fatalf("%s: %d suspensions, want 1", c.fn, len(awaits(p)))
 		}
-		if got := len(p.suspends[0].live); got != c.want {
+		if got := len(awaits(p)[0].live); got != c.want {
 			t.Errorf("%s: %d values live across the await, want %d", c.fn, got, c.want)
 		}
 	}
 
 	p := planOf(t, funcNamed(t, m, "oneCrosses"))
-	live := p.suspends[0].live
+	live := awaits(p)[0].live
 	// Whatever the live set is, the frame has to be big enough to hold
 	// it past the header, and every live value must have a slot.
 	for _, v := range live {
@@ -198,12 +215,12 @@ func several(_ a: int, _ b: int, _ c: int) async -> int {
 }
 `)
 	p := planOf(t, funcNamed(t, m, "several"))
-	if len(p.suspends) != 1 {
-		t.Fatalf("%d suspensions, want 1", len(p.suspends))
+	if len(awaits(p)) != 1 {
+		t.Fatalf("%d suspensions, want 1", len(awaits(p)))
 	}
 	type span struct{ lo, hi int64 }
 	var spans []span
-	for _, v := range p.suspends[0].live {
+	for _, v := range awaits(p)[0].live {
 		off, ok := p.slot[v]
 		if !ok {
 			t.Fatalf("a live value has no slot")
@@ -241,11 +258,12 @@ func twice(_ n: int) async -> int {
 }
 `)
 	p := planOf(t, funcNamed(t, m, "twice"))
-	if len(p.suspends) != 2 {
-		t.Fatalf("%d suspensions, want 2", len(p.suspends))
+	calls := awaits(p)
+	if len(calls) != 2 {
+		t.Fatalf("%d suspensions, want 2", len(calls))
 	}
-	if p.suspends[0].calleeSlot == p.suspends[1].calleeSlot {
-		t.Errorf("two calls share one context slot at %d", p.suspends[0].calleeSlot)
+	if calls[0].calleeSlot == calls[1].calleeSlot {
+		t.Errorf("two calls share one context slot at %d", calls[0].calleeSlot)
 	}
 	for i, s := range p.suspends {
 		if s.index != i {
@@ -291,10 +309,10 @@ func outer(_ n: int) async throws -> int {
 }
 `)
 	p := planOf(t, funcNamed(t, m, "outer"))
-	if len(p.suspends) != 1 {
-		t.Fatalf("%d suspensions, want 1", len(p.suspends))
+	if len(awaits(p)) != 1 {
+		t.Fatalf("%d suspensions, want 1", len(awaits(p)))
 	}
-	s := p.suspends[0]
+	s := awaits(p)[0]
 	if !s.throws {
 		t.Error("a try await is not marked as a call that may fail")
 	}

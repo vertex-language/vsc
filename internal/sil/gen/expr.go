@@ -52,9 +52,7 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		return g.subscript(n)
 
 	case *ast.AwaitExpr:
-		// A task waits by calling into the runtime, which switches stacks
-		// and comes back: `await x` is x. See stdlib/runtime/task.cpp.
-		return g.expr(n.X)
+		return g.await(n)
 	case *ast.TryExpr:
 		return g.tryExpr(n)
 
@@ -1578,6 +1576,7 @@ func (g *gen) declareMethod(f *sil.Func, ref *analyzer.MethodRef) {
 	}
 	// As for a function: async is in the type. See declareSignature.
 	f.Type().Async = sig.Async
+	f.Type().Isolated = sig.Isolated
 }
 
 // selfParam returns the self parameter descriptor for a method.
@@ -1634,6 +1633,7 @@ func (g *gen) declareSignature(f *sil.Func, sig *types.Signature) {
 	// declaration that did not say so would be called as an ordinary
 	// function -- which links, and is wrong. See lower/async.go.
 	f.Type().Async = sig.Async
+	f.Type().Isolated = sig.Isolated
 }
 
 // binary lowers an operator expression.
@@ -1934,7 +1934,14 @@ func (g *gen) staticCall(e *ast.CallExpr, ref *analyzer.MethodRef, recv types.Ty
 		recv = meta.Instance
 	}
 	if symbol, ok := g.coreTask(recv, ref.Method.Name); ok {
+		// Task.detached makes a Task as Task's initializer does.
+		if ref.Method.Name == "detached" {
+			return g.startTask(e, g.typeOf(e), symbol, ref.Method.Sig)
+		}
 		return g.taskCall(e, symbol, ref.Method.Sig, nil)
+	}
+	if symbol, ok := g.coreMainActor(recv, ref.Method.Name); ok {
+		return g.mainActorCall(e, symbol, ref.Method.Sig)
 	}
 	// `T.make()` in a specialization is the concrete type's own.
 	if resolved, ok := g.witness(ref, recv); ok {

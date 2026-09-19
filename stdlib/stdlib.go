@@ -39,6 +39,11 @@ const (
 	TaskSleep       = "vertex_task_sleep"
 	TaskYield       = "vertex_task_yield"
 	TaskStart       = "vertex_task_start"
+	TaskDetached    = "vertex_task_start_detached"
+	TaskHop         = "vertex_task_hop"
+	TaskOnMain      = "vertex_task_on_main"
+	TaskAssumeMain  = "vertex_task_assume_main"
+	TaskNeedsHop    = "vertex_task_needs_hop"
 	TaskJoin        = "vertex_task_join"
 	TaskCell        = "vertex_task_cell"
 	TaskCellData    = "vertex_task_cell_contents"
@@ -205,13 +210,13 @@ const (
 
 	// The kinds of the records the compiler emits for types declared
 	// nowhere.
-	KindOptional   = 0x202
-	KindTuple      = 0x301
+	KindOptional = 0x202
+	KindTuple    = 0x301
 
 	// FieldIndirect is set in the low bit of an enum case's payload
 	// record where the case is indirect: the value is a box, and the
 	// payload is inside it past the header.
-	FieldIndirect = 1
+	FieldIndirect  = 1
 	KindArray      = 0x800
 	KindClass      = 0x801
 	KindDictionary = 0x802
@@ -310,6 +315,7 @@ var asyncEntries = []struct {
 	{"vertex_task_sleep", 1, true},
 	{"vertex_task_join", 1, true},
 	{"vertex_task_wait_fd", 3, true},
+	{"vertex_task_hop", 1, true},
 	{"vertex_task_done", 1, false},
 }
 

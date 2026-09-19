@@ -242,8 +242,13 @@ type FuncType struct {
 	Results    []Result
 	ErrorType  Type // set where the function throws
 	Async      bool
-	YieldOnce  bool
-	Yields     []Result
+	// Isolated is @MainActor: the function runs on the main thread. The
+	// generator hops there and back around it; the type says so for
+	// the same reason it says async, that a body needs to know where
+	// it is when it starts and after each await.
+	Isolated  bool
+	YieldOnce bool
+	Yields    []Result
 }
 
 func (f *FuncType) Underlying() types.Type { return f }

@@ -268,3 +268,155 @@ func (g *gen) taskCellContents(cell *sil.Value, cellT sil.Type, result types.Typ
 	return g.runtimeResult(symbol,
 		[]sil.Param{{Type: cellT, Convention: sil.ParamGuaranteed}}, rawPointerType(), cell)
 }
+
+// coreMainActor is the runtime function a member of core's MainActor
+// is, for a type that is core's MainActor and not a program's own.
+func (g *gen) coreMainActor(t types.Type, member string) (string, bool) {
+	if t == nil || !g.info.CoreTypes[t] {
+		return "", false
+	}
+	if en, ok := t.Underlying().(*types.Enum); !ok || en.Name != "MainActor" {
+		return "", false
+	}
+	return core.LowerMainActor(member)
+}
+
+// mainActorCall lowers a static member of MainActor. `hop(n)` is the
+// runtime's, as it is. `run { }` is its closure called: the closure is
+// @MainActor and async, so its own prologue gets the task to the main
+// thread, and the await it is written under brings the task back (see
+// await). `assumeIsolated { }` is the body called here, after the
+// runtime has checked that here is the main thread.
+func (g *gen) mainActorCall(e *ast.CallExpr, symbol string, sig *types.Signature) *sil.Value {
+	if e.Args == nil || len(e.Args.Args) != 1 {
+		g.refuse(e, "a member of MainActor without its argument")
+		return nil
+	}
+	body := e.Args.Args[0].X
+	if _, isClosure := g.typeOf(body).Underlying().(*types.Signature); !isClosure {
+		return g.taskCall(e, symbol, sig, nil)
+	}
+	if symbol == stdlib.TaskAssumeMain {
+		g.runtimeResult(symbol, nil, lowerType(types.Typ[types.Void]))
+	}
+	if v := g.applyValue(&ast.CallExpr{Span: e.Span, Fun: body}, body); v == nil {
+		return nil
+	}
+	return g.void()
+}
+
+// Where a hop goes, as the runtime numbers them.
+const (
+	hopMain = 0 // the main executor, Thread 0
+	hopPool = 1 // a worker of the pool
+	hopHome = 2 // the executor the task calls home
+)
+
+// isolated is whether the function being lowered is @MainActor.
+func (g *gen) isolated() bool {
+	return g.fn != nil && g.fn.Type().Isolated
+}
+
+// hop moves the task to another executor: a suspension the runtime
+// resumes on the thread it names, once the task's frames have unwound.
+func (g *gen) hop(where int64) {
+	word := sil.Object(sil.BuiltinInt64)
+	g.runtimeResult(stdlib.TaskHop,
+		[]sil.Param{{Type: word, Convention: sil.ParamUnowned}},
+		lowerType(types.Typ[types.Void]), g.blk.IntegerLiteral(word, where))
+}
+
+// ensure hops to an executor unless the task is there already, which
+// the runtime says without suspending. Nothing outside an async
+// function, which cannot suspend and so is where its caller was.
+func (g *gen) ensure(where int64) {
+	if g.fn == nil || !g.fn.Type().Async || g.blk == nil {
+		return
+	}
+	word := sil.Object(sil.BuiltinInt64)
+	needs := g.runtimeResult(stdlib.TaskNeedsHop,
+		[]sil.Param{{Type: word, Convention: sil.ParamUnowned}}, word,
+		g.blk.IntegerLiteral(word, where))
+	bit := g.blk.Builtin("cmp_ne_Int64", sil.Object(sil.BuiltinInt1), needs,
+		g.blk.IntegerLiteral(word, 0))
+	move, join := g.fn.Block(), g.fn.Block()
+	g.blk.CondBr(bit, move, nil, join, nil)
+	g.blk = move
+	g.hop(where)
+	g.blk.Br(join)
+	g.blk = join
+}
+
+// there is where the function being lowered runs: the main executor for
+// @MainActor code, the task's home for the rest, as Swift runs
+// nonisolated async code on the generic executor and not on whatever
+// actor called it.
+func (g *gen) there() int64 {
+	if g.isolated() {
+		return hopMain
+	}
+	return hopHome
+}
+
+// prologueHop starts an async function's body where it runs. A
+// nonisolated one that never suspends is left where its caller was:
+// nothing in it can tell, and the hop would give a function that needed
+// no frame one. The proposal calls this the one optimization on Swift's
+// rule that is safe to take first.
+func (g *gen) prologueHop(body []ast.Stmt) {
+	if !g.isolated() && !analyzer.Awaits(body) {
+		return
+	}
+	g.ensure(g.there())
+}
+
+// await lowers `await x`: x, and then the hop back to where this
+// function runs, since whatever x called may have left the task
+// elsewhere -- Swift's hop_to_executor after every suspension. A
+// synchronous @MainActor call or property awaited from nonisolated code
+// is the one case where the await itself is the hop: to the main thread
+// first, and back after.
+func (g *gen) await(n *ast.AwaitExpr) *sil.Value {
+	if !g.isolated() && g.awaitsIsolatedSync(n.X) {
+		g.ensure(hopMain)
+	}
+	v := g.expr(n.X)
+	g.ensure(g.there())
+	return v
+}
+
+// awaitsIsolatedSync reports whether an awaited expression is a call to
+// a synchronous @MainActor function, or a read of a @MainActor property:
+// what runs only on the main thread and cannot get there itself.
+func (g *gen) awaitsIsolatedSync(x ast.Expr) bool {
+	switch e := x.(type) {
+	case *ast.ParenExpr:
+		return g.awaitsIsolatedSync(e.X)
+	case *ast.TryExpr:
+		return g.awaitsIsolatedSync(e.X)
+	case *ast.CallExpr:
+		sig, _ := g.typeOf(e.Fun).Underlying().(*types.Signature)
+		if mem, ok := e.Fun.(*ast.MemberExpr); ok && sig == nil {
+			if ref := g.info.Methods[mem]; ref != nil && ref.Method != nil {
+				sig = ref.Method.Sig
+			}
+		}
+		if sig == nil {
+			if meta, ok := g.typeOf(e.Fun).(*types.Metatype); ok {
+				return g.info.MainActor[meta.Instance.Underlying()]
+			}
+			return false
+		}
+		return sig.Isolated && !sig.Async
+	case *ast.MemberExpr:
+		if e.Name == nil {
+			return false
+		}
+		return analyzer.IsolatedField(g.typeOf(e.X), g.text(e.Name))
+	case *ast.IdentExpr:
+		if v, ok := g.info.Uses[e.Name].(*analyzer.VarSymbol); ok {
+			return v.Isolated()
+		}
+	}
+	return false
+}
