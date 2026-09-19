@@ -797,9 +797,8 @@ func (g *gen) caseCondition(c *ast.CaseCond, fail func() *sil.Block) (*sil.Block
 	}
 	ep, ok := pat.(*ast.EnumCasePattern)
 	t := g.typeOf(c.Value)
-	if _, isEnum := underlyingEnum(t); !ok || !isEnum || ep.Name == nil {
-		g.refuse(c, "a case condition other than one enum case")
-		return nil, false
+	if _, isEnum := underlyingEnum(t); !ok || !isEnum || ep.Name == nil || !g.simpleCasePattern(c.Pat) {
+		return g.matchCondition(c, fail)
 	}
 	// A switch consumes what it switches on, so it is given a copy where
 	// the value is a name's own -- as a switch statement is. See switchable.
@@ -825,6 +824,56 @@ func (g *gen) caseCondition(c *ast.CaseCond, fail func() *sil.Block) (*sil.Block
 		sil.Case{Member: memberName(t, g.text(ep.Name)), Dest: next},
 		sil.Case{Dest: miss})
 	g.blk = next
+	return next, true
+}
+
+// matchCondition lowers `case P = v` in a condition list for any pattern:
+// v is matched against P, going on with what P binds where it matches
+// and failing otherwise. It is the block that goes on, which owns what
+// the match took apart.
+func (g *gen) matchCondition(c *ast.CaseCond, fail func() *sil.Block) (*sil.Block, bool) {
+	t := g.typeOf(c.Value)
+	// The value lives for the match: it is borrowed by the patterns,
+	// which copy whatever they keep, and let go of on both ways out.
+	depth := len(g.scopes)
+	g.push()
+	v := g.rvalue(c.Value)
+	if v == nil {
+		g.scopes = g.scopes[:depth]
+		return nil, false
+	}
+	if v.Ownership() == sil.Owned {
+		if !g.pendingDestroy(v) {
+			g.destroyLater(v)
+		}
+		borrowed := g.blk.BeginBorrow(v)
+		g.endBorrowLater(borrowed)
+		v = borrowed
+	}
+	miss := func() *sil.Block {
+		b := g.fn.Block()
+		prev := g.blk
+		g.blk = b
+		g.unwindTo(depth)
+		g.blk.Br(fail())
+		g.blk = prev
+		return b
+	}
+	m := &matcher{g: g, miss: miss}
+	if !m.match(c.Pat, v, t) {
+		g.scopes = g.scopes[:depth]
+		return nil, false
+	}
+	g.pop()
+	next := g.fn.Block()
+	g.blk.Br(next)
+	g.blk = next
+	if len(m.owned) > 0 {
+		if g.armOwned == nil {
+			g.armOwned = map[*sil.Block][]*sil.Value{}
+		}
+		g.armOwned[next] = m.owned
+	}
 	return next, true
 }
 
@@ -931,11 +980,20 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 
 	subjectType := g.typeOf(s.Subject)
 	valueScope := false
-	if o, isOpt := optionalOf(subjectType); isOpt && g.optionalCasesOnly(clauses) {
+	_, isEnum := underlyingEnum(subjectType)
+	simple := isEnum
+	for _, cs := range clauses {
+		for _, item := range cs.Items {
+			if !g.simpleCasePattern(item.Pat) {
+				simple = false
+			}
+		}
+	}
+	if o, isOpt := optionalOf(subjectType); isOpt && g.optionalCasesOnly(clauses) && g.simpleOptionalPatterns(clauses) {
 		if !g.switchOnOptional(s, subject, o, clauses, bodies, cont) {
 			return
 		}
-	} else if _, isEnum := underlyingEnum(subjectType); isEnum {
+	} else if simple {
 		if !g.switchOnEnum(s, subject, subjectType, clauses, bodies, cont) {
 			return
 		}
@@ -953,7 +1011,7 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 			g.endBorrowLater(borrowed)
 			subject = borrowed
 		}
-		if !g.switchOnValue(s, subject, subjectType, clauses, bodies, cont) {
+		if !g.switchOnPatterns(s, subject, subjectType, clauses, bodies) {
 			g.scopes = g.scopes[:len(g.scopes)-1]
 			return
 		}
@@ -1225,23 +1283,18 @@ func (g *gen) joinArm(arm, body *sil.Block, owned []*sil.Value, where *ast.Where
 	// What the payload is matched against, part by part: where one does
 	// not match, it is let go and the cases after are tried.
 	for _, pt := range tests {
-		g.push()
-		bit, ok := g.patternTest(pt.pat, pt.v, pt.t)
-		if !ok {
-			g.scopes = g.scopes[:len(g.scopes)-1]
+		m := &matcher{g: g, miss: func() *sil.Block {
+			fails := g.fn.Block()
+			for _, v := range owned {
+				fails.DestroyValue(v)
+			}
+			fails.Br(part.next)
+			return fails
+		}}
+		if !m.match(pt.pat, pt.v, pt.t) {
 			return false
 		}
-		g.pop()
-		if bit == nil {
-			continue
-		}
-		holds, fails := g.fn.Block(), g.fn.Block()
-		g.blk.CondBr(bit, holds, nil, fails, nil)
-		for _, v := range owned {
-			fails.DestroyValue(v)
-		}
-		fails.Br(part.next)
-		g.blk = holds
+		owned = append(owned, m.owned...)
 	}
 	if where != nil {
 		g.push()
@@ -1971,72 +2024,30 @@ func (g *gen) forCaseBody(s *ast.ForInStmt, elem *loopElement) {
 // enum. Where it matches, what it binds is bound for the current scope and
 // the lowering goes on; everything else goes to miss.
 func (g *gen) matchElement(pat ast.Pattern, elem *loopElement, miss *sil.Block) bool {
-	t := elem.typ
-	lt := lowerType(t)
-	next := g.fn.Block()
-	if o, isOpt := optionalOf(t); isOpt {
-		c, ok := g.optionalCaseOf(pat)
-		if !ok || c.member == "" {
-			g.refuse(pat, "this pattern in a for-in")
-			return false
-		}
-		wrapped := lowerType(o.Wrapped)
-		own := sil.Unowned
-		if !wrapped.Trivial() {
-			own = sil.Owned
-		}
-		// Lowering wants both of an optional's cases named: the one the
-		// pattern is not goes to miss, letting go of what it holds.
-		if c.member == optionalNone {
-			drop := g.fn.Block()
-			payload := drop.Arg(wrapped, own)
-			if own == sil.Owned {
-				drop.DestroyValue(payload)
-			}
-			drop.Br(miss)
-			g.blk.SwitchEnum(elem.value,
-				sil.Case{Member: optionalSome, Dest: drop},
-				sil.Case{Member: optionalNone, Dest: next})
-			g.blk = next
-			return true
-		}
-		payload := next.Arg(wrapped, own)
-		g.blk.SwitchEnum(elem.value,
-			sil.Case{Member: optionalSome, Dest: next},
-			sil.Case{Member: optionalNone, Dest: miss})
-		g.blk = next
-		if own == sil.Owned {
-			g.destroyLater(payload)
-		}
-		if c.inner != nil && !g.bindPatternTo(c.inner, payload, o.Wrapped) {
-			return false
-		}
-		return true
+	// The element lives for the one iteration: the pattern borrows it,
+	// copying whatever it keeps, and it is let go of on both ways out.
+	v := elem.value
+	if v.Ownership() == sil.Owned {
+		g.destroyLater(v)
+		borrowed := g.blk.BeginBorrow(v)
+		g.endBorrowLater(borrowed)
+		v = borrowed
 	}
-	// Whatever does not match hands the element back, to be let go of.
-	other := miss
-	if !lt.Trivial() {
-		other = g.fn.Block()
-		other.DestroyValue(other.Arg(lt, sil.Owned))
-		other.Br(miss)
-	}
-	inner := pat
-	if bind, ok := inner.(*ast.ValueBindingPattern); ok {
-		inner = bind.Pat
-	}
-	ep, ok := inner.(*ast.EnumCasePattern)
-	if _, isEnum := underlyingEnum(t); !ok || !isEnum || ep.Name == nil {
-		g.refuse(pat, "this pattern in a for-in")
+	m := &matcher{g: g, miss: func() *sil.Block {
+		b := g.fn.Block()
+		prev := g.blk
+		g.blk = b
+		g.emitCleanups(g.top())
+		g.blk.Br(miss)
+		g.blk = prev
+		return b
+	}}
+	if !m.match(pat, v, elem.typ) {
 		return false
 	}
-	if ep.Args != nil && !g.bindCasePayload(t, ep, next) {
-		return false
+	for _, o := range m.owned {
+		g.destroyLater(o)
 	}
-	g.blk.SwitchEnum(elem.value,
-		sil.Case{Member: memberName(t, g.text(ep.Name)), Dest: next},
-		sil.Case{Dest: other})
-	g.blk = next
-	g.destroyArmOwned(next)
 	return true
 }
 
@@ -2378,10 +2389,8 @@ func (g *gen) bindPatternTo(p ast.Pattern, v *sil.Value, t types.Type) bool {
 	if !ok || id.Name == nil {
 		// Matched rather than bound: tested where the arm joins its body.
 		if g.payloadTests != nil && g.refutable(p) {
-			if _, nested := p.(*ast.EnumCasePattern); !nested {
-				*g.payloadTests = append(*g.payloadTests, payloadTest{pat: p, v: v, t: t})
-				return true
-			}
+			*g.payloadTests = append(*g.payloadTests, payloadTest{pat: p, v: v, t: t})
+			return true
 		}
 		g.refuse(p, "this pattern inside a case")
 		return false

@@ -83,11 +83,16 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		if len(n.Elems) == 1 && n.Elems[0].Label == nil {
 			return g.expr(n.Elems[0].X)
 		}
+		tt, _ := g.typeOf(n).Underlying().(*types.Tuple)
 		elems := make([]*sil.Value, 0, len(n.Elems))
-		for _, el := range n.Elems {
+		for i, el := range n.Elems {
 			v := g.rvalue(el.X)
 			if v == nil {
 				return nil
+			}
+			// An element the tuple holds as an optional is wrapped.
+			if tt != nil && i < len(tt.Elements) {
+				v = g.optionalFor(el.X, v, g.typeOf(el.X), tt.Elements[i].Type)
 			}
 			elems = append(elems, v)
 		}
@@ -101,6 +106,9 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 	case *ast.ImplicitMemberExpr:
 		if n.Name == nil {
 			return nil
+		}
+		if t, ok := g.info.OptionalNones[n]; ok {
+			return g.blk.Enum(lowerType(g.substituted(t)), optionalNone, nil)
 		}
 		ec, ok := g.info.Uses[n.Name].(*analyzer.EnumCaseSymbol)
 		if !ok {
@@ -456,6 +464,10 @@ func (g *gen) member(e *ast.MemberExpr) *sil.Value {
 	if e.Name == nil {
 		return nil
 	}
+	// `Optional<T>.none`.
+	if t, ok := g.info.OptionalNones[e]; ok {
+		return g.blk.Enum(lowerType(g.substituted(t)), optionalNone, nil)
+	}
 	// A constant the checker worked out: `Int64.max`.
 	if v := g.constant(e); v != nil {
 		return v
@@ -553,6 +565,15 @@ func (g *gen) loaded(v *sil.Value, t sil.Type) *sil.Value {
 func (g *gen) call(e *ast.CallExpr) *sil.Value {
 	if t, ok := g.info.EmptyCollections[e]; ok {
 		return g.emptyCollection(e, t)
+	}
+	// `.some(x)`, `Optional(x)`: x, wrapped.
+	if t, ok := g.info.OptionalSomes[e]; ok {
+		from := e.Args.Args[0].X
+		v := g.rvalue(from)
+		if v == nil {
+			return nil
+		}
+		return g.optionalFor(from, v, g.typeOf(from), g.substituted(t))
 	}
 	// Array(xs) of an array is the array: a copy, as a value is.
 	if _, ok := g.info.ArrayCopies[e]; ok {
@@ -1141,16 +1162,25 @@ func (g *gen) payloadCase(e *ast.CallExpr, ec *analyzer.EnumCaseSymbol) *sil.Val
 	if e.Args != nil {
 		args = e.Args.Args
 	}
+	// A value given for an optional the case carries -- `.pair(a, 3)`
+	// where a is an Item and the case takes an Item? -- is wrapped.
 	var payload *sil.Value
 	switch {
 	case len(args) == 1:
 		payload = g.rvalue(args[0].X)
+		if payload != nil {
+			payload = g.optionalFor(args[0].X, payload, g.typeOf(args[0].X), assoc)
+		}
 	default:
+		tu, _ := assoc.Underlying().(*types.Tuple)
 		vals := make([]*sil.Value, 0, len(args))
-		for _, a := range args {
+		for i, a := range args {
 			v := g.rvalue(a.X)
 			if v == nil {
 				return nil
+			}
+			if tu != nil && i < len(tu.Elements) {
+				v = g.optionalFor(a.X, v, g.typeOf(a.X), tu.Elements[i].Type)
 			}
 			vals = append(vals, v)
 		}

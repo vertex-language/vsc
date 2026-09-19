@@ -2231,6 +2231,25 @@ func (c *fn) makeOptional(in *sil.Inst, res *sil.Value, o *types.Optional) error
 		}
 		return nil
 	}
+	if boolOptional(o) {
+		if !some {
+			c.def(res, c.b.I32.Const(2))
+			return nil
+		}
+		if len(in.Args()) != 1 {
+			return c.fail(ErrUnsupported, in.Op(), "a case with no value to carry")
+		}
+		got, err := c.operand(in, in.Args()[0])
+		if err != nil {
+			return err
+		}
+		bit, ok := got.(ir.I1)
+		if !ok {
+			return c.fail(ErrType, in.Op(), "a Bool that is not a bit")
+		}
+		c.def(res, c.b.I32.ZExtI1(bit))
+		return nil
+	}
 	if isFuncOptional(o) {
 		if !some {
 			c.multi[res] = []ir.Value{c.b.Ptr.Const(), c.b.Ptr.Const()}
@@ -2490,6 +2509,21 @@ func (c *fn) switchOptional(in *sil.Inst, o *types.Optional) error {
 			return c.fail(ErrType, in.Op(), "an optional enum whose tag is not an integer register")
 		}
 		c.b.BrIf(isSome, some.To(got), none.To())
+		return nil
+	}
+	// An optional Bool's empty case is the byte 2; the payload is the byte.
+	if boolOptional(o) {
+		got, err := c.operand(in, v)
+		if err != nil {
+			return err
+		}
+		tag, ok := got.(ir.I32)
+		if !ok {
+			return c.fail(ErrType, in.Op(), "an optional Bool that is not a register")
+		}
+		byte := c.b.I32.And(tag, c.b.I32.Const(255))
+		isSome := c.b.I32.Ne(byte, c.b.I32.Const(2))
+		c.b.BrIf(isSome, some.To(c.b.I32.Ne(byte, c.b.I32.Const(0))), none.To())
 		return nil
 	}
 	// An optional function's empty case is a null code pointer; the

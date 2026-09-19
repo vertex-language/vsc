@@ -94,6 +94,14 @@ type Info struct {
 	// ArrayCopies are the calls `Array(xs)` of an array: a copy of it.
 	ArrayCopies map[*ast.CallExpr]types.Type
 
+	// OptionalSomes are the calls that wrap a value -- `.some(x)`,
+	// `Optional(x)`, `Optional<T>(x)`, `Optional.some(x)` -- and
+	// OptionalNones the expressions that are an optional's empty case
+	// spelled by name -- `.none`, `Optional<T>.none` -- each mapped to
+	// the optional it makes.
+	OptionalSomes map[*ast.CallExpr]types.Type
+	OptionalNones map[ast.Expr]types.Type
+
 	// CastTargets is the type each `x is T` names.
 	CastTargets map[*ast.CastExpr]types.Type
 
@@ -171,6 +179,8 @@ func NewInfo() *Info {
 		DerivedOperators: make(map[ast.Expr]*DerivedOperator),
 		EmptyCollections: make(map[*ast.CallExpr]types.Type),
 		ArrayCopies:      make(map[*ast.CallExpr]types.Type),
+		OptionalSomes:    make(map[*ast.CallExpr]types.Type),
+		OptionalNones:    make(map[ast.Expr]types.Type),
 		CastTargets:      make(map[*ast.CastExpr]types.Type),
 		ChainRoots:       make(map[ast.Expr]bool),
 		ChainInner:       make(map[ast.Expr]types.Type),

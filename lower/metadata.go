@@ -746,6 +746,12 @@ func ownedWords(st *types.Struct, base int64) ([]ownedWord, bool) {
 				out = append(out, inner...)
 				continue
 			}
+			// One with a tag byte wrapping a payload enum holds what the
+			// enum's own tag says it does, and zeros where it is none.
+			if e, ok := taggedEnumOptional(u); ok {
+				out = append(out, ownedWord{offset: at, enum: e})
+				continue
+			}
 			word, owns, ok := optionalOwned(u)
 			if !ok {
 				return nil, false
@@ -1055,6 +1061,15 @@ func ownedLeaves(st *types.Struct, base int) ([]int, bool) {
 				at += n
 				continue
 			}
+			if _, ok := taggedEnumOptional(u); ok {
+				out = append(out, at)
+				n, ok := optionalLeafCount(u)
+				if !ok {
+					return nil, false
+				}
+				at += n
+				continue
+			}
 			// Its registers, as appendLeaves lays it out, and the one
 			// holding what it owns, if it owns anything.
 			word, owns, ok := optionalOwned(u)
@@ -1159,6 +1174,20 @@ func taggedAggregateOptional(o *types.Optional) (*types.Struct, bool) {
 		return tupleImage(u)
 	}
 	return nil, false
+}
+
+// taggedEnumOptional is the payload enum an optional with a tag byte
+// wraps, where the enum's cases carry counted things: what it owns is
+// what the enum's own tag says, read from the enum's words.
+func taggedEnumOptional(o *types.Optional) (*types.Enum, bool) {
+	if _, tagged := optionalImage(o); !tagged {
+		return nil, false
+	}
+	e, ok := o.Wrapped.Underlying().(*types.Enum)
+	if !ok || !hasPayload(e) || !enumCountable(e) || sil.Object(o.Wrapped).Trivial() {
+		return nil, false
+	}
+	return e, true
 }
 
 // optionalLeafCount is how many registers an optional field is held in:

@@ -100,8 +100,7 @@ func (p *parser) parsePatternAtom(mode patternMode) ast.Pattern {
 			}
 			if mode&patternInBinding == 0 {
 				// A name that binds nothing is a value to compare with.
-				x := p.parseExpr(exprBasic | exprNoAssign)
-				return &ast.ExprPattern{Span: p.span(lo), X: x}
+				return p.exprPattern(lo)
 			}
 		}
 		name := p.ident()
@@ -109,14 +108,35 @@ func (p *parser) parsePatternAtom(mode patternMode) ast.Pattern {
 	}
 
 	if mode&patternMatching != 0 && p.atExprStart() {
-		x := p.parseExpr(exprBasic | exprNoAssign)
-		return &ast.ExprPattern{Span: p.span(lo), X: x}
+		return p.exprPattern(lo)
 	}
 	p.errHere("expected a pattern")
 	if !p.at(token.EOF) && !p.nl() {
 		p.next()
 	}
 	return &ast.BadPattern{Span: p.span(lo)}
+}
+
+// exprPattern reads an expression to compare the value with. The `?`
+// the expression parser reads as a postfix -- `true?`, `k?` -- is the
+// optional pattern's, so the pattern is the expression under it, once
+// wrapped for each `?`.
+func (p *parser) exprPattern(lo token.Pos) ast.Pattern {
+	x := p.parseExpr(exprBasic | exprNoAssign)
+	var questions []token.Pos
+	for {
+		opt, ok := x.(*ast.OptionalExpr)
+		if !ok {
+			break
+		}
+		questions = append(questions, opt.Question)
+		x = opt.X
+	}
+	var pat ast.Pattern = &ast.ExprPattern{Span: ast.Span{Lo: lo, Hi: x.End()}, X: x}
+	for i := len(questions) - 1; i >= 0; i-- {
+		pat = &ast.OptionalPattern{Span: p.span(lo), Pat: pat, Question: questions[i]}
+	}
+	return pat
 }
 
 // tryEnumCasePattern reads Type . CaseName [TuplePattern], and

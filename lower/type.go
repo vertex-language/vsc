@@ -56,9 +56,12 @@ func machineOf(t types.Type) (repr, bool) {
 			return repr{reg: ir.TypeI32, width: 8}, true
 		}
 		// An optional of a plain enum is the enum's own tag, with nil one
-		// past the last case.
+		// past the last case; an optional Bool is its byte, with nil 2.
 		if _, ok := tagOptional(t); ok {
 			return machineOf(t.Wrapped)
+		}
+		if boolOptional(t) {
+			return repr{reg: ir.TypeI32, width: 8}, true
 		}
 		if r, ok := machineOf(t.Wrapped); ok && r.reg == ir.TypePtr {
 			return r, true
@@ -381,6 +384,17 @@ func tagOptional(o *types.Optional) (*types.Enum, bool) {
 		return nil, false
 	}
 	return e, true
+}
+
+// boolOptional reports whether an optional wraps a Bool, which has room
+// to spare in its byte: the optional is the byte, false 0, true 1 and nil
+// 2, as swiftc lays it out.
+func boolOptional(o *types.Optional) bool {
+	if o == nil || o.Wrapped == nil {
+		return false
+	}
+	b, ok := o.Wrapped.Underlying().(*types.Basic)
+	return ok && b.Kind() == types.Bool && types.Sizeof(o, types.DefaultTarget64) == 1
 }
 
 // emptyOptional reports whether an optional wraps a value of no bytes --

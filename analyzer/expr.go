@@ -846,6 +846,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return thenT
 
 	case *ast.CallExpr:
+		if t, ok := c.optionalSome(e, expected, scope); ok {
+			return t
+		}
 		if mem, ok := e.Fun.(*ast.MemberExpr); ok && !c.namesModule(mem.X, scope) {
 			baseType := c.checkExpr(mem.X, nil, scope)
 			if cl, ok := baseType.Underlying().(*types.Class); ok && cl.IsActor && c.currActor != cl && !c.inAwait {
@@ -1111,6 +1114,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			return types.Typ[types.Invalid]
 		}
 		name := e.Name.Text(c.file)
+		if t, ok := c.optionalNone(e, expected, name); ok {
+			return t
+		}
 		sym := c.enumCaseSymbol(expected, name)
 		// An optional wants what it wraps: `.success(v)` where a
 		// Result<T, E>? goes is a case of Result<T, E>.
@@ -1165,6 +1171,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	case *ast.MemberExpr:
 		if t, ok := c.moduleMemberValue(e, scope); ok {
 			return t
+		}
+		if opt, ok := c.optionalNamed(e.X, expected, scope); ok {
+			if t, ok := c.optionalNone(e, opt, e.Name.Text(c.file)); ok {
+				return t
+			}
 		}
 		baseType := c.checkExpr(e.X, nil, scope)
 		if t, ok := c.integerBound(e, baseType); ok {
@@ -1292,6 +1303,14 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				elemWant = want.Elements[i].Type
 			}
 			t := c.checkExpr(el.X, elemWant, scope)
+			// An element given where an optional of it is wanted --
+			// `(true, 1)` for a `(Bool?, Int)` -- is the tuple's as the
+			// optional, wrapped when the tuple is made.
+			if elemWant != nil && !isInvalid(t) && !types.Identical(t, elemWant) {
+				if _, isOpt := elemWant.(*types.Optional); isOpt && types.AssignableTo(t, elemWant) {
+					t = elemWant
+				}
+			}
 			elems[i] = &types.TupleElement{Name: label, Type: t}
 		}
 		return &types.Tuple{Elements: elems}
@@ -2021,4 +2040,81 @@ func (c *checker) markChain(root ast.Expr) {
 	for x := chainSpine(root); x != nil; x = chainSpine(x) {
 		c.inChain[x] = true
 	}
+}
+
+// optionalNamed is the optional `Optional` or `Optional<T>` names in
+// expression position, where nothing of the program's own has that name:
+// `Optional<Int>`, or the optional wanted for a bare `Optional`.
+func (c *checker) optionalNamed(e ast.Expr, expected types.Type, scope *Scope) (*types.Optional, bool) {
+	id, ok := e.(*ast.IdentExpr)
+	if !ok || id.Name == nil || id.Name.Text(c.file) != "Optional" ||
+		scope.LookupType("Optional") != nil || c.lookupValue(scope, "Optional") != nil {
+		return nil, false
+	}
+	if id.Args != nil {
+		if len(id.Args.Args) != 1 {
+			return nil, false
+		}
+		return &types.Optional{Wrapped: c.resolveType(id.Args.Args[0], scope)}, true
+	}
+	if o, ok := expected.(*types.Optional); ok {
+		return o, true
+	}
+	return &types.Optional{}, true
+}
+
+// optionalNone is `.none` of an optional, spelled as an implicit member
+// or on `Optional<T>`: the optional itself.
+func (c *checker) optionalNone(e ast.Expr, expected types.Type, name string) (types.Type, bool) {
+	o, ok := expected.(*types.Optional)
+	if !ok || name != "none" || o.Wrapped == nil {
+		return nil, false
+	}
+	c.info.OptionalNones[e] = o
+	return o, true
+}
+
+// optionalSome is a call that wraps its one argument in an optional --
+// `.some(x)`, `Optional(x)`, `Optional<T>(x)`, `Optional.some(x)` -- and
+// the optional it makes: of T where one is named, else of what the
+// argument is, or of what the context wants where that agrees.
+func (c *checker) optionalSome(e *ast.CallExpr, expected types.Type, scope *Scope) (types.Type, bool) {
+	if e.Args == nil || len(e.Args.Args) != 1 || e.Args.Args[0].Label != nil {
+		return nil, false
+	}
+	var opt *types.Optional
+	switch f := e.Fun.(type) {
+	case *ast.ImplicitMemberExpr:
+		o, ok := expected.(*types.Optional)
+		if !ok || f.Name == nil || f.Name.Text(c.file) != "some" || c.enumCaseSymbol(o.Wrapped, "some") != nil {
+			return nil, false
+		}
+		opt = o
+	case *ast.IdentExpr:
+		o, ok := c.optionalNamed(f, expected, scope)
+		if !ok {
+			return nil, false
+		}
+		opt = o
+	case *ast.MemberExpr:
+		o, ok := c.optionalNamed(f.X, expected, scope)
+		if !ok || f.Name == nil || f.Name.Text(c.file) != "some" {
+			return nil, false
+		}
+		opt = o
+	default:
+		return nil, false
+	}
+	arg := c.checkExpr(e.Args.Args[0].X, opt.Wrapped, scope)
+	if opt.Wrapped == nil || isInvalid(opt.Wrapped) {
+		opt = &types.Optional{Wrapped: arg}
+	} else if t, ok := c.adopt(e.Args.Args[0].X, opt.Wrapped); ok {
+		arg = t
+	}
+	if !isInvalid(arg) && !types.AssignableTo(arg, opt.Wrapped) {
+		c.typeErrorf(e.Args.Args[0].X.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", arg, opt.Wrapped)
+	}
+	c.info.Types[e.Fun] = &types.Metatype{Instance: opt}
+	c.info.OptionalSomes[e] = opt
+	return opt, true
 }
