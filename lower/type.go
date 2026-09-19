@@ -228,7 +228,11 @@ func spareStructOptional(o *types.Optional) (*types.Struct, int64, bool) {
 	if o == nil || o.Wrapped == nil {
 		return nil, 0, false
 	}
+	// A tuple is the struct its image is.
 	st, ok := o.Wrapped.Underlying().(*types.Struct)
+	if tu, isTuple := o.Wrapped.Underlying().(*types.Tuple); isTuple {
+		st, ok = tupleImage(tu)
+	}
 	if !ok || len(st.TypeParams) > 0 {
 		return nil, 0, false
 	}

@@ -405,7 +405,15 @@ func (c *checker) labelFits(arg *ast.CallArg, param *types.Param) bool {
 		want = param.Name
 	}
 	if arg.Label == nil {
-		return want == "" || want == "_"
+		if want == "" || want == "_" {
+			return true
+		}
+		if _, ok := unparen(arg.X).(*ast.ClosureExpr); ok && param.Type != nil {
+			if _, isFunc := param.Type.Underlying().(*types.Signature); isFunc {
+				return true
+			}
+		}
+		return false
 	}
 	return arg.Label.Text(c.file) == want
 }
@@ -426,6 +434,9 @@ func (c *checker) inferInstance(instance types.Type, call *ast.CallExpr, scope *
 	}
 	fields := storedFieldsOf(instance)
 	params := typeParamsOf(instance)
+	if len(params) == 0 || len(fields) == 0 {
+		return instance
+	}
 
 	subst := make(map[*types.TypeParam]types.Type, len(params))
 	for i, arg := range call.Args.Args {
@@ -592,18 +603,14 @@ func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args [
 	out := make([]*types.Param, 0, len(args))
 	pi := 0
 	for _, arg := range args {
-		label := ""
-		if arg.Label != nil {
-			label = arg.Label.Text(c.file)
-		}
 		// Skip defaulted parameters that this argument does not match.
-		for pi < len(params) && !labels(params[pi], label) && params[pi].HasDefault {
+		for pi < len(params) && !c.labelFits(arg, params[pi]) && params[pi].HasDefault {
 			pi++
 		}
 		if pi >= len(params) {
 			break
 		}
-		if !labels(params[pi], label) {
+		if !c.labelFits(arg, params[pi]) {
 			c.errorf(call.Pos(), "missing argument for parameter '%s'", paramName(params[pi]))
 			return out
 		}

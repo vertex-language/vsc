@@ -572,6 +572,10 @@ type TypeParam struct {
 	Constraints []Type
 	Bound       map[string]Type   // associated type equalities from where clauses
 	Promised    map[string][]Type // associated type conformances from where clauses
+	// Same is the one type the parameter is, inside an extension whose
+	// where clause says so -- `extension Array where Element == String`
+	// -- and nil everywhere else.
+	Same Type
 }
 
 func (tp *TypeParam) Underlying() Type { return tp }

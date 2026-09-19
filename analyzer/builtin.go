@@ -294,7 +294,27 @@ func (c *checker) implicitSelfMember(expr ast.Expr, scope *Scope) ast.Expr {
 	switch e := expr.(type) {
 	case *ast.IdentExpr:
 		name, ok := unbound(e)
-		if !ok || c.lookupMember(c.currType, name) == nil {
+		if !ok {
+			// A name bound to one of the type's methods, not called,
+			// beside a property of the same name -- `first` inside an
+			// extension of Array, where first(where:) is a method too --
+			// is the property, which is what a name alone reads.
+			if e.Name == nil || e.Args != nil {
+				return nil
+			}
+			name = e.Name.Text(c.file)
+			found, sym := scope.LookupParent(name)
+			if _, isFunc := sym.(*FuncSymbol); !isFunc || found == nil || !found.members {
+				return nil
+			}
+			if _, isProperty := core.LowerCollectionProperty(c.currType, name); !isProperty {
+				if _, isMember := core.LowerMember(c.currType, name); !isMember {
+					return nil
+				}
+			}
+			return selfAt(e)
+		}
+		if c.lookupMember(c.currType, name) == nil {
 			return nil
 		}
 		return selfAt(e)

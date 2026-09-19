@@ -1238,6 +1238,9 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 type memberCondition struct {
 	param *types.TypeParam
 	proto *types.Protocol
+	// same is the type the parameter has to be, for `Element == String`;
+	// proto is nil then.
+	same types.Type
 }
 
 // extensionConditions is what an extension's where clause asks of the
@@ -1248,27 +1251,37 @@ func (c *checker) extensionConditions(ext *ast.ExtensionDecl, extType types.Type
 	}
 	params := c.typeParamsOf(extType)
 	var out []memberCondition
-	for _, req := range ext.Where.Reqs {
-		r, ok := req.(*ast.ConformanceReq)
-		if !ok {
-			continue
-		}
-		id, ok := r.Left.(*ast.IdentType)
+	paramNamed := func(left ast.Type) *types.TypeParam {
+		id, ok := left.(*ast.IdentType)
 		if !ok || id.Name == nil {
-			continue
+			return nil
 		}
 		name := id.Name.Text(c.file)
-		var tp *types.TypeParam
 		for _, p := range params {
 			if p.Name == name {
-				tp = p
+				return p
 			}
 		}
-		if tp == nil {
-			continue
-		}
-		if p, ok := protocolOf(c.resolveType(r.Right, scope)); ok {
-			out = append(out, memberCondition{param: tp, proto: p})
+		return nil
+	}
+	for _, req := range ext.Where.Reqs {
+		switch r := req.(type) {
+		case *ast.ConformanceReq:
+			tp := paramNamed(r.Left)
+			if tp == nil {
+				continue
+			}
+			if p, ok := protocolOf(c.resolveType(r.Right, scope)); ok {
+				out = append(out, memberCondition{param: tp, proto: p})
+			}
+		case *ast.SameTypeReq:
+			tp := paramNamed(r.Left)
+			if tp == nil {
+				continue
+			}
+			if t := c.resolveType(r.Right, scope); t != nil && !isInvalid(t) {
+				out = append(out, memberCondition{param: tp, same: t})
+			}
 		}
 	}
 	return out
@@ -1326,7 +1339,14 @@ func (c *checker) checkMemberConditions(e *ast.MemberExpr, base types.Type, name
 		met := true
 		for _, cond := range c.info.conditions[m] {
 			arg := argOf(cond.param)
-			if arg == nil || c.conformsTo(arg, cond.proto) {
+			if arg == nil {
+				continue
+			}
+			if cond.same != nil {
+				if types.Identical(arg, cond.same) {
+					continue
+				}
+			} else if c.conformsTo(arg, cond.proto) {
 				continue
 			}
 			met = false
@@ -1340,7 +1360,10 @@ func (c *checker) checkMemberConditions(e *ast.MemberExpr, base types.Type, name
 			return
 		}
 	}
-	if unmet != nil {
+	if unmet != nil && unmet.same != nil {
+		c.typeErrorf(e.Name.Pos(), "referencing %s '%s' on '%s' requires the types '%s' and '%s' be equivalent",
+			kind, name, builtinName(inst.Base), unmetArg, unmet.same)
+	} else if unmet != nil {
 		c.typeErrorf(e.Name.Pos(), "referencing %s '%s' on '%s' requires that '%s' conform to '%s'",
 			kind, name, builtinName(inst.Base), unmetArg, unmet.proto.Name)
 	}
@@ -1510,6 +1533,15 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 			// An enum's cases compare without a `==` written for them.
 			if _, isEnum := conformer.Underlying().(*types.Enum); isEnum && req.Name == "==" {
 				satisfied = true
+			}
+			// A Sequence that is its own iterator has makeIterator() made
+			// for it, as Swift makes one for a type that is IteratorProtocol.
+			if req.Name == "makeIterator" && proto.Name == "Sequence" && c.info.CoreTypes[proto] {
+				for _, m := range methods {
+					if m.Name == "next" && m.Sig != nil && len(m.Sig.Params) == 0 {
+						satisfied = true
+					}
+				}
 			}
 		} else if req.Type != nil {
 			want := types.Substitute(req.Type, subst)

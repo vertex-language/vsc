@@ -72,6 +72,16 @@ func (g *gen) argumentValues(args []*ast.CallArg, sig *types.Signature) []*sil.V
 	return out
 }
 
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
 // argFits reports whether an argument was written for this parameter,
 // which is a question about the label and nothing else.
 func (g *gen) argFits(a *ast.CallArg, p *types.Param) bool {
@@ -84,7 +94,15 @@ func (g *gen) argFits(a *ast.CallArg, p *types.Param) bool {
 		label = ""
 	}
 	if a.Label == nil {
-		return label == ""
+		if label == "" {
+			return true
+		}
+		if _, ok := unparen(a.X).(*ast.ClosureExpr); ok && p.Type != nil {
+			if _, isFunc := p.Type.Underlying().(*types.Signature); isFunc {
+				return true
+			}
+		}
+		return false
 	}
 	return written == label
 }

@@ -168,6 +168,19 @@ func (c *checker) resolveAssociatedChoices(t types.Type, body *ast.MemberBlock, 
 				chosen[a.Name] = answer
 			}
 		}
+		// A Sequence's Element is what its iterator's next() answers, and
+		// its Iterator the type makeIterator() makes -- or the type
+		// itself, where it is its own iterator.
+		if p.Name == "Sequence" && c.info.CoreTypes[p] {
+			if it := c.iteration(t); it != nil {
+				if chosen["Element"] == nil {
+					chosen["Element"] = it.Element
+				}
+				if chosen["Iterator"] == nil {
+					chosen["Iterator"] = it.Iterator
+				}
+			}
+		}
 	}
 	if len(chosen) == 0 {
 		return
@@ -375,6 +388,15 @@ func (c *checker) applyWhere(w *ast.GenericWhereClause, scope *Scope) {
 	for _, req := range w.Reqs {
 		switch r := req.(type) {
 		case *ast.SameTypeReq:
+			// `Element == String`: the parameter itself is that type here.
+			if id, ok := r.Left.(*ast.IdentType); ok && id.Name != nil {
+				if tn, ok := scope.Lookup(id.Name.Text(c.file)).(*TypeNameSymbol); ok {
+					if tp, ok := tn.Type().(*types.TypeParam); ok {
+						tp.Same = c.resolveType(r.Right, scope)
+						continue
+					}
+				}
+			}
 			tp, name, ok := c.dependentOf(r.Left, scope)
 			if !ok {
 				continue

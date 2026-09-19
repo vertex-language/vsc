@@ -122,6 +122,13 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		case *types.Dictionary:
 			elemType = &types.Tuple{Elements: []*types.TupleElement{
 				{Name: "key", Type: seq.Key}, {Name: "value", Type: seq.Value}}}
+		default:
+			if it := c.iteration(seqType); it != nil {
+				c.info.Iterations[s] = it
+				elemType = it.Element
+			} else if !isInvalid(seqType) {
+				c.typeErrorf(s.Seq.Pos(), "for-in loop requires '%s' to conform to 'Sequence'", seqType)
+			}
 		}
 		loopScope := NewScope(scope, s.Pos(), s.End())
 		c.info.Scopes[s] = loopScope
@@ -827,6 +834,52 @@ func (c *checker) declName(base string, params []*ast.Param, subscript bool) str
 	}
 	b.WriteByte(')')
 	return b.String()
+}
+
+// iteration is how a for-in goes through a value of t, where t is a
+// type of the program's own: makeIterator() gives an iterator whose
+// next() answers an Element?, or t is its own iterator and next() is
+// its. Nil where it is neither.
+func (c *checker) iteration(t types.Type) *Iteration {
+	if t == nil || isInvalid(t) {
+		return nil
+	}
+	switch t.Underlying().(type) {
+	case *types.Struct, *types.Class, *types.Enum:
+	default:
+		return nil
+	}
+	nextOf := func(it types.Type) (*MethodRef, types.Type) {
+		recv, m := c.findMethod(it, "next")
+		if m == nil || m.IsStatic || len(m.Sig.Params) != 0 {
+			return nil, nil
+		}
+		sig, _ := c.lookupMember(it, "next").(*types.Signature)
+		if sig == nil {
+			sig = m.Sig
+		}
+		o, ok := sig.Results.(*types.Optional)
+		if !ok {
+			return nil, nil
+		}
+		return &MethodRef{Recv: recv, Method: m}, o.Wrapped
+	}
+	if recv, m := c.findMethod(t, "makeIterator"); m != nil && !m.IsStatic && len(m.Sig.Params) == 0 {
+		sig, _ := c.lookupMember(t, "makeIterator").(*types.Signature)
+		if sig == nil {
+			sig = m.Sig
+		}
+		next, elem := nextOf(sig.Results)
+		if next == nil {
+			return nil
+		}
+		return &Iteration{MakeIterator: &MethodRef{Recv: recv, Method: m}, Iterator: sig.Results, Next: next, Element: elem}
+	}
+	next, elem := nextOf(t)
+	if next == nil {
+		return nil
+	}
+	return &Iteration{Iterator: t, Next: next, Element: elem}
 }
 
 // checkAccessors checks accessor blocks (get, set, willSet, didSet).

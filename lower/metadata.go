@@ -440,7 +440,9 @@ func (l *lowerer) metadataAccessorName(info sil.TypeMetadata) *ir.Func {
 func (l *lowerer) metadataAccessorFor(name string, record *ir.Global) {
 	f, ok := l.witnessFns[l.sym(name)]
 	if !ok {
-		return
+		f = l.out.Func(l.sym(name))
+		f.Export()
+		l.rememberWitness(l.sym(name), f)
 	}
 	f.ParamI64("request")
 	b := f.Entry()
@@ -1474,7 +1476,7 @@ func optionalEmptyCase(o *types.Optional) (offset, bytes, none int64, ok bool) {
 		return 0, 0, 0, false
 	case *types.Class, *types.Array, *types.Dictionary, *types.Set:
 		return 0, 8, 0, true
-	case *types.Struct:
+	case *types.Struct, *types.Tuple:
 		// A struct that spares a representation: its never-zero word zero.
 		if _, at, ok := spareStructOptional(o); ok {
 			return at, 8, 0, true

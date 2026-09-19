@@ -85,6 +85,12 @@ func (c *checker) findMethod(t types.Type, name string) (types.Type, *types.Meth
 	}
 	// Method requirement on a type parameter constraint.
 	if tp, ok := t.(*types.TypeParam); ok {
+		if tp.Same != nil {
+			if onType {
+				return c.findMethod(&types.Metatype{Instance: tp.Same}, name)
+			}
+			return c.findMethod(tp.Same, name)
+		}
 		for _, con := range tp.Constraints {
 			if found, m := requirementOf(con, name); m != nil {
 				sig, _ := throughParam(con, tp, m.Sig).(*types.Signature)
@@ -166,6 +172,13 @@ func (c *checker) lookupMember(t types.Type, name string) types.Type {
 	// argument and is answered when there is one; what is needed here
 	// is the type, so that the expression around it can be checked.
 	if tp, ok := t.(*types.TypeParam); ok {
+		// One an extension's where clause fixes has that type's members.
+		if tp.Same != nil {
+			if onType {
+				return c.lookupMember(&types.Metatype{Instance: tp.Same}, name)
+			}
+			return c.lookupMember(tp.Same, name)
+		}
 		for _, con := range tp.Constraints {
 			if member := c.requirementType(con, name); member != nil {
 				return throughParam(con, tp, member)

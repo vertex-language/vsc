@@ -152,6 +152,7 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 	}
 	c.loadCore(coreScope)
 	c.modules["Swift"] = coreScope
+	c.loadAlgorithms(coreScope)
 	c.loadImports(imports, importScope)
 	// A module may name itself. Its own declarations are what the
 	// package scope holds, which is looked up under the name where

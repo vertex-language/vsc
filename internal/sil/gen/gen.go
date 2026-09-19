@@ -38,18 +38,38 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 	// A method of a generic type is lowered for each instance it is
 	// called on, from wherever the call is: these are where they were
 	// written.
-	methods := genericMethodDecls(files, info)
-	inits := genericInitDecls(files, info)
+	// The core's algorithms are read with the program's files: a method
+	// of Array's the program calls is lowered from there, as one the
+	// program's own extension declares is from here.
+	lookup := files
+	if info != nil && info.CoreAlgorithms != nil {
+		lookup = append(append([]*ast.File{}, files...), info.CoreAlgorithms)
+	}
+	methods := genericMethodDecls(lookup, info)
+	inits := genericInitDecls(lookup, info)
+	publicTypes := map[string]bool{}
 	for _, f := range files {
 		if f == script {
 			continue
 		}
-		pre := &gen{m: m, info: info, file: f.Unit, files: files, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits}
+		pre := &gen{m: m, info: info, file: f.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes}
 		pre.declareModuleVars(f)
+		for _, stmt := range f.Stmts {
+			if decl, ok := stmt.(*ast.DeclStmt); ok {
+				switch d := decl.D.(type) {
+				case *ast.StructDecl:
+					pre.publicMetadata(d.Name, d.Mods)
+				case *ast.ClassDecl:
+					pre.publicMetadata(d.Name, d.Mods)
+				case *ast.EnumDecl:
+					pre.publicMetadata(d.Name, d.Mods)
+				}
+			}
+		}
 		diags = append(diags, pre.diags...)
 	}
 	for _, f := range files {
-		g := &gen{m: m, info: info, file: f.Unit, files: files, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: script != nil}
+		g := &gen{m: m, info: info, file: f.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes, script: script != nil}
 		reportedTopLevel := false
 		for _, stmt := range f.Stmts {
 			decl, ok := stmt.(*ast.DeclStmt)
@@ -114,14 +134,14 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 	}
 
 	if script != nil {
-		g := &gen{m: m, info: info, file: script.Unit, files: files, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: true}
+		g := &gen{m: m, info: info, file: script.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: true}
 		g.topLevelMain(scriptStmts)
 		diags = append(diags, g.diags...)
 		sawEntry = true
 	}
 
 	// Emit vtables and witness tables after all function symbols exist.
-	tg := &gen{m: m, info: info, files: files, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: script != nil}
+	tg := &gen{m: m, info: info, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: script != nil}
 	if len(files) > 0 {
 		tg.file = files[0].Unit
 	}

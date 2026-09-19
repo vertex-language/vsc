@@ -102,6 +102,13 @@ type Info struct {
 	OptionalSomes map[*ast.CallExpr]types.Type
 	OptionalNones map[ast.Expr]types.Type
 
+	// CoreAlgorithms is the core's source with bodies, checked in this
+	// Info: what the program uses of it is lowered from here.
+	CoreAlgorithms *ast.File
+
+	// Iterations are the for-in loops over sequences of the program's own.
+	Iterations map[*ast.ForInStmt]*Iteration
+
 	// Subscripts are the uses of subscripts types declare: `grid[1, 2]`.
 	// SubscriptDecls is the subscript each declaration declares.
 	Subscripts     map[*ast.SubscriptExpr]*SubscriptRef
@@ -161,6 +168,17 @@ type MethodRef struct {
 	Method *types.Method
 }
 
+// An Iteration is how a for-in goes through a value of a type that is a
+// Sequence of the program's own: through the iterator makeIterator()
+// makes, or the value itself where it is its own iterator, by next().
+type Iteration struct {
+	// MakeIterator is nil where the sequence is its own iterator.
+	MakeIterator *MethodRef
+	Iterator     types.Type
+	Next         *MethodRef
+	Element      types.Type
+}
+
 // A SubscriptRef is a subscript a type declares, used on a value of it
 // -- or on the type itself, for a static one.
 type SubscriptRef struct {
@@ -199,6 +217,7 @@ func NewInfo() *Info {
 		ArrayCopies:      make(map[*ast.CallExpr]types.Type),
 		OptionalSomes:    make(map[*ast.CallExpr]types.Type),
 		OptionalNones:    make(map[ast.Expr]types.Type),
+		Iterations:       make(map[*ast.ForInStmt]*Iteration),
 		Subscripts:       make(map[*ast.SubscriptExpr]*SubscriptRef),
 		SubscriptDecls:   make(map[*ast.SubscriptDecl]*types.Subscript),
 		OptionalCompares: make(map[*ast.BinaryExpr]types.Type),

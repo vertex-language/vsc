@@ -35,6 +35,13 @@ func Identical(x, y Type) bool {
 	if x == nil || y == nil {
 		return false
 	}
+	// A parameter an extension's where clause fixes is that type.
+	if tp, ok := x.(*TypeParam); ok && tp.Same != nil {
+		return Identical(tp.Same, y)
+	}
+	if tp, ok := y.(*TypeParam); ok && tp.Same != nil {
+		return Identical(x, tp.Same)
+	}
 
 	// A typealias is another spelling of the type it names, not a new
 	// one, so it is looked through. A Named with nothing under it is
@@ -292,6 +299,12 @@ func AssignableTo(from, to Type) bool {
 	}
 	if Identical(from, to) {
 		return true
+	}
+	if tp, ok := from.(*TypeParam); ok && tp.Same != nil {
+		return AssignableTo(tp.Same, to)
+	}
+	if tp, ok := to.(*TypeParam); ok && tp.Same != nil {
+		return AssignableTo(from, tp.Same)
 	}
 	// Never is the bottom type, assignable to anything
 	if from == Typ[Never] {

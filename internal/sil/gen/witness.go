@@ -61,6 +61,11 @@ func (g *gen) witnessTables(files []*ast.File) {
 			if sym == nil {
 				continue
 			}
+			// A generic type's conformances are per instance, and none is
+			// lowered yet: its methods are, where they are called.
+			if len(nominalTypeParams(sym.Type())) > 0 {
+				continue
+			}
 			for _, p := range g.conformancesOf(sym.Type()) {
 				g.witnessTable(name, sym.Type(), p)
 			}
@@ -136,6 +141,14 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 			continue
 		}
 		found, m := g.methodOn(concrete, r.Name)
+		if m == nil && r.Name == "makeIterator" && p.Name == "Sequence" && g.info.CoreTypes[p] {
+			// A Sequence that is its own iterator: makeIterator() is a
+			// copy of self, as Swift's default makes it.
+			if _, next := g.methodOn(concrete, "next"); next != nil {
+				table.Entry(p.Name+"."+r.Name, g.selfIteratorThunk(concrete, p))
+				continue
+			}
+		}
 		if m == nil {
 			g.errorAt(at, "'"+typeNameOf(concrete)+"' does not provide '"+
 				r.Name+"', which '"+p.Name+"' requires")
@@ -239,6 +252,28 @@ func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *typ
 	out := g.blk.Apply(ref, lowerType(m.Sig.Results), args...)
 	endSelf()
 	g.blk.Return(out)
+	return name
+}
+
+// selfIteratorThunk is the makeIterator() row of a Sequence that is its
+// own iterator: the receiver, copied.
+func (g *gen) selfIteratorThunk(concrete types.Type, p *types.Protocol) string {
+	m := &types.Method{Name: "makeIterator", Sig: &types.Signature{Results: concrete}}
+	name := witnessThunkSymbol(concrete, p, m)
+	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
+		return name
+	}
+	f := g.m.Func(name).SetSourceName(m.Name).SetLinkage(sil.Hidden).SetAttr("ossa")
+	outerFn, outerEntry, outerBlk := g.fn, g.entry, g.blk
+	defer func() { g.fn, g.entry, g.blk = outerFn, outerEntry, outerBlk }()
+	g.fn, g.entry = f, false
+	f.Type().Params = nil
+	g.blk = f.Entry()
+	ct := lowerType(concrete)
+	selfAddr := f.Param(ct.Address(), sil.ParamInGuaranteed)
+	f.Type().Convention = sil.ConvWitness
+	f.SetResult(ct, resultConvention(ct))
+	g.blk.Return(g.blk.Load(selfAddr, loadQualifier(ct)))
 	return name
 }
 
@@ -707,7 +742,11 @@ func (g *gen) needMetadata(at ast.Node, t types.Type) bool {
 		return false
 	}
 	// Once is enough: a recursive enum's payload names the enum again.
-	if _, done := g.m.MetadataFor(typeNameOf(t)); done {
+	if meta, done := g.m.MetadataFor(typeNameOf(t)); done {
+		if g.publicTypes != nil && g.publicTypes[typeNameOf(t)] && !meta.Public {
+			meta.Public = true
+			g.m.Metadata(meta)
+		}
 		return true
 	}
 	// Named as the type's own module, which is the module being compiled

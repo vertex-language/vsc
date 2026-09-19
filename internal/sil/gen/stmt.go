@@ -2116,7 +2116,13 @@ func (g *gen) forInStmt(s *ast.ForInStmt) {
 	case s.Try.IsValid():
 		g.refuse(s, "a throwing for-in")
 		return
-	case s.Case.IsValid():
+	}
+	// A sequence of the program's own: through its iterator.
+	if it := g.info.Iterations[s]; it != nil {
+		g.forInIterator(s, it)
+		return
+	}
+	if s.Case.IsValid() {
 		if _, isArray := g.typeOf(s.Seq).Underlying().(*types.Array); !isArray {
 			g.refuse(s, "a for-in with a `case` pattern over something other than an array")
 			return

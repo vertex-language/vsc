@@ -431,8 +431,14 @@ protocol IteratorProtocol {
 // Something whose elements can be gone through in order. What it hands
 // out is its Element; a type that is its own iterator names it by its
 // next().
+//
+// makeIterator() makes the iterator; a type that is its own iterator --
+// declares next() -- has one made for it, as Swift's Sequence gives it
+// one, and its Element is what next() answers.
 protocol Sequence {
     associatedtype Element
+    associatedtype Iterator: IteratorProtocol
+    func makeIterator() -> Iterator
 }
 
 // A type whose values can be told equal or not. A struct or enum that

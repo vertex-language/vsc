@@ -138,3 +138,28 @@ func use() { _ = f(b: 3) }
 		t.Errorf("said %v, want it to name the missing parameter", msgs)
 	}
 }
+
+func TestTrailingClosureWithDefaultedParams(t *testing.T) {
+	msgs := check(t, `
+struct Config {
+	var port: Int = 8080
+}
+struct S {
+	var config: Config
+	var handler: (Int) -> Int
+	init(config: Config = Config(), handler: (Int) -> Int) {
+		self.config = config
+		self.handler = handler
+	}
+}
+func use() {
+	_ = S { req in
+		var x: Int = 1
+		return x
+	}
+}
+`)
+	if len(msgs) != 0 {
+		t.Fatalf("rejected trailing closure with defaulted params: %v", msgs)
+	}
+}

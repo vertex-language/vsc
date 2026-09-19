@@ -748,14 +748,16 @@ func (g *gen) callFuncTry(e *ast.CallExpr, sym *analyzer.FuncSymbol, optional bo
 			return nil
 		}
 	}
-	// Generic specialization or imported call.
+	// Generic specialization or imported call. A core function written
+	// as source -- zip, stride, min -- is specialized from that source,
+	// as the program's own generic functions are.
 	if len(sym.Signature().TypeParams) > 0 {
 		spec, ok := g.info.Specializations[e]
 		if !ok || spec.Empty() {
 			g.refuse(e, "a call whose type arguments could not be inferred")
 			return nil
 		}
-		if _, imported := g.info.Imported[sym]; imported {
+		if _, imported := g.info.Imported[sym]; imported && !hasBody(sym) {
 			return g.callImportedGeneric(e, sym, spec)
 		}
 		return g.callGeneric(e, sym, spec)
@@ -764,6 +766,7 @@ func (g *gen) callFuncTry(e *ast.CallExpr, sym *analyzer.FuncSymbol, optional bo
 	if g.needsType(callee) {
 		g.declare(callee, sym)
 	}
+	g.emitCoreBody(sym, callee)
 	ref := g.blk.FunctionRef(callee)
 
 	args, ok := g.arguments(e, sym.Signature())
@@ -792,6 +795,25 @@ func (g *gen) callFuncTry(e *ast.CallExpr, sym *analyzer.FuncSymbol, optional bo
 	v := g.blk.Apply(ref, result, args...)
 	g.destroyLater(v)
 	return v
+}
+
+// hasBody reports whether a function's declaration has a body: one the
+// core writes as source rather than declares for the runtime.
+func hasBody(sym *analyzer.FuncSymbol) bool {
+	decl, _ := sym.Decl().(*ast.FuncDecl)
+	return decl != nil && decl.Body != nil
+}
+
+// emitCoreBody lowers a core function written as source, once, where a
+// program calls it: the core is not compiled ahead, so a module holds
+// its own copy of what it uses.
+func (g *gen) emitCoreBody(sym *analyzer.FuncSymbol, callee *sil.Func) {
+	if g.info.Imported[sym] != "Swift" || !hasBody(sym) || !callee.IsDeclaration() {
+		return
+	}
+	if err := g.emitSpecialization(sym, callee.Name(), nil); err != nil {
+		g.errorAt(sym.Decl(), err.Error())
+	}
 }
 
 // funcValue converts a declared function into a thick function value.

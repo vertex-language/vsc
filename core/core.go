@@ -14,6 +14,9 @@ import (
 //go:embed core.swift
 var source string
 
+//go:embed algorithms.swift
+var algorithms string
+
 // Source is the built-in module's text.
 func Source() string { return source }
 
@@ -22,6 +25,11 @@ var (
 	file *ast.File
 	unit *token.File
 	errs []token.Diagnostic
+
+	algOnce sync.Once
+	algFile *ast.File
+	algUnit *token.File
+	algErrs []token.Diagnostic
 )
 
 // Files parses and returns the embedded built-in module, parsing it once and caching the result.
@@ -31,6 +39,19 @@ func Files() (*ast.File, *token.File, []token.Diagnostic) {
 		file, errs = parser.ParseFile(unit, 0)
 	})
 	return file, unit, errs
+}
+
+// Algorithms parses and returns the core's algorithms -- what the core
+// defines in source over what core.swift declares: Array's map and
+// filter, zip, stride and the rest -- once, the same tree for every
+// module compiled. A module lowers what it uses of them, specialized for
+// the types it uses them with.
+func Algorithms() (*ast.File, *token.File, []token.Diagnostic) {
+	algOnce.Do(func() {
+		algUnit = token.NewFile("algorithms.swift", []byte(algorithms))
+		algFile, algErrs = parser.ParseFile(algUnit, 0)
+	})
+	return algFile, algUnit, algErrs
 }
 
 // Layout returns the underlying primitive field name and machine type representation for t.

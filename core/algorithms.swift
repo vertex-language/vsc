@@ -280,6 +280,20 @@ extension Array where Element: Comparable {
     }
 }
 
+extension Array where Element == String {
+    // The strings one after another, separator between each pair.
+    func joined(separator: String = "") -> String {
+        var out = ""
+        var first = true
+        for s in self {
+            if !first { out += separator }
+            out += s
+            first = false
+        }
+        return out
+    }
+}
+
 // ---- free functions ----
 
 // The lesser of two values, the first where they are equal.
