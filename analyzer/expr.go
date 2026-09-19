@@ -1312,6 +1312,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			var elemWant types.Type
 			if want != nil && i < len(want.Elements) && want.Elements[i] != nil {
 				elemWant = want.Elements[i].Type
+				// `(1.5, 2)` where an `(x: Float, y: Float)` is wanted
+				// takes its labels.
+				if label == "" && len(want.Elements) == len(e.Elems) {
+					label = want.Elements[i].Name
+				}
 			}
 			t := c.checkExpr(el.X, elemWant, scope)
 			// An element given where an optional of it is wanted --

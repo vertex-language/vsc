@@ -179,7 +179,7 @@ func (g *gen) stdlibMetadata(at ast.Node, t types.Type) (*sil.Value, bool) {
 	// An Optional or an Array of something is declared nowhere, so every
 	// module that needs its metadata emits a record of its own.
 	switch t.Underlying().(type) {
-	case *types.Optional, *types.Array, *types.Dictionary, *types.Set:
+	case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple:
 		sym, ok := g.structuralMetadata(at, t)
 		if !ok {
 			return nil, false

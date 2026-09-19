@@ -44,6 +44,10 @@ func appendLeaves(out []leaf, st *types.Struct, base int64) ([]leaf, bool) {
 
 		// Recursively flatten nested structs and String aggregates (two words).
 		inner, ok := f.Type.Underlying().(*types.Struct)
+		// A tuple inside is the struct its image is.
+		if tu, isTuple := f.Type.Underlying().(*types.Tuple); isTuple {
+			inner, ok = tupleImage(tu)
+		}
 		if b, isBasic := f.Type.Underlying().(*types.Basic); isBasic && b.Kind() == types.String {
 			inner, ok = stringWords, true
 		}
@@ -145,6 +149,16 @@ func fieldLeaves(t sil.Type, member string) (lo, hi int, ok bool) {
 			}
 		} else if inner, isStruct := f.Type.Underlying().(*types.Struct); isStruct {
 			ls, got := structLeaves(inner)
+			if !got {
+				return 0, 0, false
+			}
+			n = len(ls)
+		} else if tu, isTuple := f.Type.Underlying().(*types.Tuple); isTuple {
+			image, got := tupleImage(tu)
+			if !got {
+				return 0, 0, false
+			}
+			ls, got := structLeaves(image)
 			if !got {
 				return 0, 0, false
 			}

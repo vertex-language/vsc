@@ -66,7 +66,7 @@ func (l *lowerer) allMetadata(m *sil.Module) error {
 					What: "an enum this compiler cannot describe at run time"}
 			}
 			continue
-		case *types.Optional, *types.Array, *types.Dictionary, *types.Set:
+		case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple:
 			if _, ok := l.structuralFor(t.Layout); !ok {
 				return &Error{Err: ErrUnsupported, Func: t.Name,
 					What: "a type this compiler cannot describe at run time"}
@@ -197,21 +197,22 @@ func (l *lowerer) buildEnumMetadata(typeName string, e *types.Enum) (*ir.Global,
 			return nil, false
 		}
 	}
-	// No fields to describe: an empty struct stands in, and the
-	// descriptor says so by its count.
-	descr := l.enumDescriptor(info, e)
-
+	// The record is made before its descriptor, which a recursive
+	// enum's payload names again: the descriptor finds it and stops.
 	rec := l.out.Struct("meta_" + identSafe(typeName))
 	rec.Field("vwt", ir.StorePtr.FType())
 	rec.Field("kind", ir.StoreI64.FType())
 	rec.Field("descriptor", ir.StorePtr.FType())
-	g := l.out.Global(l.sym(info.Mangled+"Mf"), ir.RO, rec.FType()).
-		Init(ir.Fields(
-			ir.Val("vwt", ir.RelocInit(vwt)),
-			ir.Val("kind", ir.Lit(ir.Int(metadataKindEnumRecord))),
-			ir.Val("descriptor", ir.RelocInit(descr)),
-		)).
-		Align(8)
+	g := l.out.Global(l.sym(info.Mangled+"Mf"), ir.RO, rec.FType()).Align(8)
+	l.meta[typeName] = g
+	// No fields to describe: an empty struct stands in, and the
+	// descriptor says so by its count.
+	descr := l.enumDescriptor(info, e)
+	g.Init(ir.Fields(
+		ir.Val("vwt", ir.RelocInit(vwt)),
+		ir.Val("kind", ir.Lit(ir.Int(metadataKindEnumRecord))),
+		ir.Val("descriptor", ir.RelocInit(descr)),
+	))
 	g.Export()
 	l.metadataAccessorFor(info.Mangled+"Ma", g)
 	return g, true
@@ -607,7 +608,7 @@ func (l *lowerer) fieldDescriptor(info sil.TypeMetadata, st *types.Struct) *ir.G
 // declared here or an Optional or Array of something.
 func (l *lowerer) fieldTypeRecord(t types.Type) (ir.Symbol, bool) {
 	switch t.Underlying().(type) {
-	case *types.Optional, *types.Array, *types.Dictionary, *types.Set:
+	case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple:
 		if _, known := l.module.MetadataFor(sil.StructuralKey(t)); !known {
 			return nil, false
 		}
@@ -1020,13 +1021,21 @@ func ownedLeaves(st *types.Struct, base int) ([]int, bool) {
 				continue
 			}
 			at++
-		case *types.Struct:
-			inner, ok := ownedLeaves(u, at)
+		case *types.Struct, *types.Tuple:
+			st, isStruct := u.(*types.Struct)
+			if !isStruct {
+				image, ok := tupleImage(u.(*types.Tuple))
+				if !ok {
+					return nil, false
+				}
+				st = image
+			}
+			inner, ok := ownedLeaves(st, at)
 			if !ok {
 				return nil, false
 			}
 			out = append(out, inner...)
-			n, ok := leafCount(u)
+			n, ok := leafCount(st)
 			if !ok {
 				return nil, false
 			}
@@ -1117,6 +1126,16 @@ func leafCount(st *types.Struct) (int, bool) {
 			n++
 		case *types.Struct:
 			k, ok := leafCount(u)
+			if !ok {
+				return 0, false
+			}
+			n += k
+		case *types.Tuple:
+			image, ok := tupleImage(u)
+			if !ok {
+				return 0, false
+			}
+			k, ok := leafCount(image)
 			if !ok {
 				return 0, false
 			}
@@ -1323,6 +1342,8 @@ func (l *lowerer) structuralFor(t types.Type) (*ir.Global, bool) {
 			ir.Val("kind", ir.Lit(ir.Int(stdlib.KindSet))),
 			ir.Val("element", ir.RelocInit(element).Plus(ir.Int(stdlib.MetadataOffset))),
 		}
+	case *types.Tuple:
+		return l.tupleMetadata(info, u, rec, size, align)
 	default:
 		return nil, false
 	}
@@ -1348,6 +1369,69 @@ func (l *lowerer) structuralFor(t types.Type) (*ir.Global, bool) {
 	l.meta[key] = g
 	accessor := l.metadataAccessorName(info)
 	_ = accessor
+	l.metadataAccessorFor(info.Mangled+"Ma", g)
+	return g, true
+}
+
+// tupleMetadata finishes a tuple's record, laid out as Swift lays tuple
+// metadata out: how many elements, their labels, and each element's
+// type and offset. Its value witnesses are a struct's with the same
+// fields, so its references are retained and released as a struct's.
+func (l *lowerer) tupleMetadata(info sil.TypeMetadata, tu *types.Tuple, rec *ir.Type, size, align int64) (*ir.Global, bool) {
+	key := sil.StructuralKey(tu)
+	image, ok := tupleImage(tu)
+	if !ok {
+		return nil, false
+	}
+	owned, ok := ownedWords(image, 0)
+	if !ok {
+		return nil, false
+	}
+	var vwt *ir.Global
+	if len(owned) == 0 {
+		vwt = l.valueWitnessTable(info.Mangled+"WV", size, align)
+	} else {
+		vwt = l.ownedValueWitnessTable(info, size, align, owned)
+	}
+	rec.Field("count", ir.StoreI64.FType())
+	rec.Field("labels", ir.StorePtr.FType())
+	vals := []ir.FieldVal{
+		ir.Val("vwt", ir.RelocInit(vwt)),
+		ir.Val("kind", ir.Lit(ir.Int(stdlib.KindTuple))),
+		ir.Val("count", ir.Lit(ir.Int(int64(len(tu.Elements))))),
+	}
+	labelled := false
+	var labels string
+	for _, el := range tu.Elements {
+		if el.Name != "" {
+			labelled = true
+		}
+		labels += el.Name + " "
+	}
+	if labelled {
+		vals = append(vals, ir.Val("labels", ir.RelocInit(l.cstring(info.Mangled+"ML", labels))))
+	} else {
+		vals = append(vals, ir.Val("labels", ir.Lit(ir.Int(0))))
+	}
+	for i, f := range image.Fields {
+		record, ok := l.fieldTypeRecord(f.Type)
+		if !ok {
+			return nil, false
+		}
+		off, ok := types.Offsetof(image, f.Name, types.DefaultTarget64)
+		if !ok {
+			return nil, false
+		}
+		rec.Field("type"+itoa(i), ir.StorePtr.FType())
+		rec.Field("offset"+itoa(i), ir.StoreI64.FType())
+		vals = append(vals,
+			ir.Val("type"+itoa(i), ir.RelocInit(record).Plus(ir.Int(stdlib.MetadataOffset))),
+			ir.Val("offset"+itoa(i), ir.Lit(ir.Int(off))))
+	}
+	g := l.out.Global(l.sym(info.Mangled+"Mf"), ir.RO, rec.FType()).
+		Init(ir.Fields(vals...)).Align(8)
+	l.meta[key] = g
+	l.metadataAccessorName(info)
 	l.metadataAccessorFor(info.Mangled+"Ma", g)
 	return g, true
 }
@@ -1494,6 +1578,10 @@ func (l *lowerer) enumDescriptor(info sil.TypeMetadata, e *types.Enum) *ir.Globa
 	text := l.cstring(info.Mangled+"MnName", info.Name)
 	g := l.out.Global(name, ir.RO, ir.Array(7, ir.StoreI32.FType()))
 	g.Export()
+	if l.descriptors == nil {
+		l.descriptors = map[string]*ir.Global{}
+	}
+	l.descriptors[name] = g
 
 	var ordered []*types.EnumCase
 	for _, payload := range []bool{true, false} {
@@ -1512,6 +1600,12 @@ func (l *lowerer) enumDescriptor(info sil.TypeMetadata, e *types.Enum) *ir.Globa
 		if c.AssociatedType != nil {
 			if r, ok := l.fieldTypeRecord(c.AssociatedType); ok {
 				payload = ir.RelocInit(r)
+				// An indirect case carries a box; the record's low bit
+				// says so, and the runtime reads the value out of the
+				// box, past its header.
+				if c.Indirect {
+					payload = ir.RelocInit(r).Plus(ir.Int(stdlib.FieldIndirect))
+				}
 			}
 		}
 		rec.Field("name"+itoa(i), ir.StorePtr.FType())
@@ -1529,9 +1623,5 @@ func (l *lowerer) enumDescriptor(info sil.TypeMetadata, e *types.Enum) *ir.Globa
 		ir.Lit(ir.Int(int64(len(ordered)))),
 		ir.Lit(ir.Int(payloadArea(e))),
 	))
-	if l.descriptors == nil {
-		l.descriptors = map[string]*ir.Global{}
-	}
-	l.descriptors[name] = g
 	return g
 }

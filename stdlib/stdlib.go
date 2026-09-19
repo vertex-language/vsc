@@ -206,6 +206,12 @@ const (
 	// The kinds of the records the compiler emits for types declared
 	// nowhere.
 	KindOptional   = 0x202
+	KindTuple      = 0x301
+
+	// FieldIndirect is set in the low bit of an enum case's payload
+	// record where the case is indirect: the value is a box, and the
+	// payload is inside it past the header.
+	FieldIndirect = 1
 	KindArray      = 0x800
 	KindClass      = 0x801
 	KindDictionary = 0x802

@@ -362,6 +362,18 @@ func (g *gen) staticRead(e *ast.MemberExpr, recv types.Type, f *types.Field) *si
 	if f.IsComputed {
 		return g.staticGetter(e, recv, f)
 	}
+	addr := g.staticAddr(e, recv, f)
+	if addr == nil {
+		return nil
+	}
+	t := lowerType(f.Type)
+	v := g.blk.Load(addr, loadQualifier(t))
+	return g.loaded(v, t)
+}
+
+// staticAddr is where a static stored property lives, through its
+// addressor: the storage a read loads from and a write stores to.
+func (g *gen) staticAddr(e ast.Node, recv types.Type, f *types.Field) *sil.Value {
 	d := mangle.Decl{
 		Module:    g.memberModule(recv, f),
 		Context:   memberChain(recv),
@@ -383,9 +395,26 @@ func (g *gen) staticRead(e *ast.MemberExpr, recv types.Type, f *types.Field) *si
 	// The addressor hands back a raw pointer to the storage, which is
 	// then an address: the shape Swift's addressors have.
 	p := g.blk.Apply(g.blk.FunctionRef(callee), rawPointerType())
-	addr := g.blk.PointerToAddress(p, t.Address())
-	v := g.blk.Load(addr, loadQualifier(t))
-	return g.loaded(v, t)
+	return g.blk.PointerToAddress(p, t.Address())
+}
+
+// implicitStaticAddr is the storage of a static stored property named
+// alone inside a member of its type: `made += 1` in a static method.
+func (g *gen) implicitStaticAddr(e *ast.IdentExpr) *sil.Value {
+	recv := g.recv
+	if recv == nil {
+		recv = g.staticRecv
+	}
+	if recv == nil || e.Name == nil {
+		return nil
+	}
+	name := g.text(e.Name)
+	for _, f := range g.staticsOf(recv) {
+		if f != nil && f.Name == name && !f.IsComputed {
+			return g.staticAddr(e, recv, f)
+		}
+	}
+	return nil
 }
 
 // staticGetter lowers a call to a static computed property's getter.

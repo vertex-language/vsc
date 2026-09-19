@@ -706,6 +706,10 @@ func (g *gen) needMetadata(at ast.Node, t types.Type) bool {
 			"run time, and this compiler has no name for it")
 		return false
 	}
+	// Once is enough: a recursive enum's payload names the enum again.
+	if _, done := g.m.MetadataFor(typeNameOf(t)); done {
+		return true
+	}
 	// Named as the type's own module, which is the module being compiled
 	// for a type declared here and the standard library for a core one.
 	// Every reference to the accessor names it that way too, and the two
@@ -743,7 +747,7 @@ func (g *gen) needMetadata(at ast.Node, t types.Type) bool {
 				continue
 			}
 			switch c.AssociatedType.Underlying().(type) {
-			case *types.Optional, *types.Array, *types.Dictionary, *types.Set:
+			case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple:
 				if g.quietlyDescribable(c.AssociatedType) {
 					g.structuralMetadata(at, c.AssociatedType)
 				}
@@ -763,7 +767,7 @@ func (g *gen) needMetadata(at ast.Node, t types.Type) bool {
 				continue
 			}
 			switch f.Type.Underlying().(type) {
-			case *types.Optional, *types.Array, *types.Dictionary, *types.Set:
+			case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple:
 				// Quietly: a field whose type cannot be described leaves
 				// the struct described without its fields.
 				if g.quietlyDescribable(f.Type) {
@@ -875,6 +879,13 @@ func (g *gen) structuralMetadata(at ast.Node, t types.Type) (string, bool) {
 		inner = []types.Type{u.Key, u.Value}
 	case *types.Set:
 		inner = []types.Type{u.Elem}
+	case *types.Tuple:
+		if len(u.Elements) == 0 {
+			return "", false
+		}
+		for _, el := range u.Elements {
+			inner = append(inner, el.Type)
+		}
 	default:
 		return "", false
 	}
@@ -920,6 +931,13 @@ func (g *gen) describable(at ast.Node, t types.Type) bool {
 	case *types.Optional, *types.Array, *types.Dictionary, *types.Set:
 		_, ok := g.structuralMetadata(at, t)
 		return ok
+	case *types.Tuple:
+		// The empty tuple is Void, which no value is.
+		if len(u.Elements) == 0 {
+			break
+		}
+		_, ok := g.structuralMetadata(at, t)
+		return ok
 	case *types.Struct, *types.Class, *types.Enum:
 		if len(nominalChain(t)) == 0 {
 			break
@@ -945,7 +963,14 @@ func (g *gen) quietlyDescribable(t types.Type) bool {
 		return g.quietlyDescribable(u.Key) && g.quietlyDescribable(u.Value)
 	case *types.Set:
 		return g.quietlyDescribable(u.Elem)
-	case *types.Struct:
+	case *types.Tuple:
+		for _, el := range u.Elements {
+			if !g.quietlyDescribable(el.Type) {
+				return false
+			}
+		}
+		return len(u.Elements) > 0
+	case *types.Struct, *types.Enum, *types.Class:
 		return len(nominalChain(t)) > 0
 	}
 	return false

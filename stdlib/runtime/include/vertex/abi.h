@@ -205,6 +205,19 @@ struct OptionalMetadata : Metadata {
   u64             none;
 };
 
+// A tuple, as Swift lays its metadata out: how many elements, their
+// labels as one string -- each label followed by a space, an unlabelled
+// element an empty one, null where none is labelled -- and, per element,
+// its type and where it sits.
+struct TupleMetadata : Metadata {
+  usize       numElements;
+  const char* labels;
+  struct Element {
+    const Metadata* type;
+    usize           offset;
+  } elements[1];
+};
+
 // An Array: what it holds.
 struct ArrayMetadata : Metadata {
   const Metadata* element;

@@ -186,7 +186,7 @@ func main() -> Int32 { return take(Ints()) }`,
 
 		{"a value whose type cannot be named at run time", `
 func take(_ x: Any) -> Int32 { return 1 }
-func main() -> Int32 { return take((1, 2)) }`,
+func main() -> Int32 { return take((1, ())) }`,
 			"cannot name"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

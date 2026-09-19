@@ -367,7 +367,11 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 				return addr
 			}
 		}
-		// In a method, bare names may resolve to receiver properties.
+		// In a method, bare names may resolve to receiver properties,
+		// or to static ones.
+		if addr := g.implicitStaticAddr(n); addr != nil {
+			return addr
+		}
 		return g.implicitSelfAddr(n)
 
 	// self in an initializer writes directly to instance storage.
@@ -384,6 +388,10 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 		// p.pointee writes through the pointer value.
 		if p, ok := g.isPointee(n); ok {
 			return g.pointeeAddrForWrite(n, p)
+		}
+		// `Counter.made = 5`: a static stored property's storage.
+		if recv, f, ok := g.staticProperty(n); ok && !f.IsComputed {
+			return g.staticAddr(n, recv, f)
 		}
 		// Computed properties have no storage address; writes go via setter.
 		if g.isComputedMember(g.typeOf(n.X), n.Name.Text(g.file)) {
@@ -464,6 +472,15 @@ func (g *gen) varDecl(d *ast.VarDecl) {
 	for _, b := range d.Bindings {
 		if tp, ok := untyped(b.Pat).(*ast.TuplePattern); ok {
 			g.tupleDecl(tp, b, d.Kind == token.LET)
+			continue
+		}
+		// `let _ = f()` evaluates f() for what it does and keeps nothing.
+		if _, discard := untyped(b.Pat).(*ast.WildcardPattern); discard && b.Value != nil {
+			g.push()
+			if v := g.expr(b.Value); v != nil {
+				g.destroyLater(v)
+			}
+			g.pop()
 			continue
 		}
 		name, sym := g.binding(b)
@@ -2180,6 +2197,15 @@ func (g *gen) forInStmt(s *ast.ForInStmt) {
 
 // bindLoopVar binds a for-in pattern to the current iteration value.
 func (g *gen) bindLoopVar(pat ast.Pattern, v *sil.Value, t sil.Type) {
+	// `for (i, v) in pairs`: the element taken apart, each name bound
+	// to its part.
+	if tp, ok := untyped(pat).(*ast.TuplePattern); ok && t.Formal() != nil {
+		if v.Ownership() != sil.Owned && !t.Trivial() {
+			v = g.blk.CopyValue(v)
+		}
+		g.bindTuple(tp, v, t.Formal(), true)
+		return
+	}
 	name := patternIdent(pat)
 	if name == nil {
 		return

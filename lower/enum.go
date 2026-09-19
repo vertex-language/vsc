@@ -127,6 +127,11 @@ func caseLeaves(t types.Type) ([]leaf, bool) {
 		return structLeaves(image)
 	}
 	if _, ok := machineOf(t); !ok {
+		// Anything else laid out as a struct -- an optional with a tag
+		// byte, one of a String or a function -- is its leaves.
+		if st, ok := structOf(sil.Object(t)); ok {
+			return structLeaves(st)
+		}
 		return nil, false
 	}
 	return []leaf{{typ: t, offset: 0}}, true

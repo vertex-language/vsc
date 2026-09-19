@@ -218,6 +218,35 @@ inline void describeStruct(Text& t, const void* value, const StructMetadata* typ
   textByte(t, ')');
 }
 
+// describeTupleElements writes a tuple's elements, each after its label
+// where it has one, without the parentheses around them.
+inline void describeTupleElements(Text& t, const void* value, const TupleMetadata* type) {
+  const char* label = type->labels;
+  for (usize i = 0; i < type->numElements; i++) {
+    if (i > 0)
+      textString(t, ", ");
+    if (label != nullptr) {
+      const char* end = label;
+      while (*end != '\0' && *end != ' ')
+        end++;
+      if (end != label) {
+        while (label != end)
+          textByte(t, *label++);
+        textString(t, ": ");
+      }
+      label = *end == ' ' ? end + 1 : end;
+    }
+    debugDescribe(t, static_cast<const u8*>(value) + type->elements[i].offset, type->elements[i].type);
+  }
+}
+
+// describeTuple writes a tuple as Swift does: its elements in parentheses.
+inline void describeTuple(Text& t, const void* value, const TupleMetadata* type) {
+  textByte(t, '(');
+  describeTupleElements(t, value, type);
+  textByte(t, ')');
+}
+
 // describeEnum writes an enum as Swift's reflection does: its case, and
 // what the case carries in parentheses. Where it is itself a field or an
 // element the case is qualified by the type: `main.Suit.spades`.
@@ -247,9 +276,26 @@ inline void describeEnum(Text& t, const void* value, const StructMetadata* type,
     textByte(t, '.');
   }
   textString(t, c.name);
-  if (c.type != nullptr) {
+  // The record's low bit says the case is indirect: the value is a
+  // box, and the payload is inside it past the header.
+  auto raw = reinterpret_cast<usize>(c.type);
+  auto* payloadType = reinterpret_cast<const FullMetadata*>(raw & ~static_cast<usize>(1));
+  if (payloadType != nullptr) {
+    const void* payload = value;
+    if (raw & 1)
+      payload = reinterpret_cast<const u8*>(*static_cast<const HeapObject* const*>(value)) + sizeof(HeapObject);
     textByte(t, '(');
-    debugDescribe(t, value, &c.type->metadata);
+    // Several values a case carries are its tuple's elements, written
+    // as the arguments they were.
+    if (payloadType->metadata.kind == kindTuple) {
+      auto* tuple = reinterpret_cast<const TupleMetadata*>(&payloadType->metadata);
+      if (tuple->numElements > 1) {
+        describeTupleElements(t, payload, tuple);
+        textByte(t, ')');
+        return;
+      }
+    }
+    debugDescribe(t, payload, &payloadType->metadata);
     textByte(t, ')');
   }
 }
@@ -266,7 +312,7 @@ inline void debugDescribe(Text& t, const void* value, const Metadata* type) {
     }
   }
   if (type->kind == kindOptional || type->kind == kindArray || type->kind == kindDictionary ||
-      type->kind == kindSet) {
+      type->kind == kindSet || type->kind == kindTuple) {
     describe(t, value, type);
     return;
   }
@@ -396,6 +442,10 @@ void describe(Text& t, const void* value, const Metadata* type) {
       }
     }
     textByte(t, ']');
+    return;
+  }
+  if (type->kind == kindTuple) {
+    describeTuple(t, value, static_cast<const TupleMetadata*>(type));
     return;
   }
   if (describeConforming(t, value, type))

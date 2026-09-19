@@ -1744,6 +1744,12 @@ func (c *fn) makeStructInMemory(in *sil.Inst, res *sil.Value) error {
 
 // loadFieldFrom reads one field out of a value that lives in memory.
 func (c *fn) loadFieldFrom(in *sil.Inst, base ir.Ptr, st *types.Struct, name string, ft types.Type) error {
+	return c.loadFieldInto(in, in.Result(), base, st, name, ft)
+}
+
+// loadFieldInto is loadFieldFrom defining res, which may be one of
+// several results.
+func (c *fn) loadFieldInto(in *sil.Inst, res *sil.Value, base ir.Ptr, st *types.Struct, name string, ft types.Type) error {
 	off, ok := types.Offsetof(st, name, types.DefaultTarget64)
 	if !ok {
 		return c.fail(ErrType, in.Op(), "no offset for "+name)
@@ -1763,7 +1769,7 @@ func (c *fn) loadFieldFrom(in *sil.Inst, base ir.Ptr, st *types.Struct, name str
 				}
 				parts = append(parts, v)
 			}
-			c.multi[in.Result()] = parts
+			c.multi[res] = parts
 			return nil
 		}
 	}
@@ -1775,7 +1781,7 @@ func (c *fn) loadFieldFrom(in *sil.Inst, base ir.Ptr, st *types.Struct, name str
 	if err != nil {
 		return c.fail(ErrType, in.Op(), err.Error())
 	}
-	c.def(in.Result(), v)
+	c.def(res, v)
 	return nil
 }
 
@@ -2741,6 +2747,32 @@ func (c *fn) extractElement(in *sil.Inst) error {
 // element owns.
 func (c *fn) destructureTuple(in *sil.Inst) error {
 	v := in.Args()[0]
+	// A tuple held in memory -- too wide for registers -- gives each
+	// element out of its storage, as a field is read out of a struct.
+	if base, inMem := c.mem[v]; inMem {
+		st, ok := structOf(v.Type())
+		if !ok || st == nil {
+			return c.fail(ErrType, in.Op(), v.Type().String())
+		}
+		for i, res := range in.Results() {
+			if res == nil {
+				continue
+			}
+			if i >= len(st.Fields) || st.Fields[i] == nil {
+				return c.fail(ErrUnsupported, in.Op(), "a tuple with no element "+itoa(i))
+			}
+			if holdsNothing(res.Type()) {
+				if err := c.defNothing(in, res); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := c.loadFieldInto(in, res, base, st, st.Fields[i].Name, st.Fields[i].Type); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	parts, multi := c.parts(v)
 	for i, res := range in.Results() {
 		if res == nil {
