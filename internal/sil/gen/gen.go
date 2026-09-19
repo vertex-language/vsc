@@ -859,6 +859,11 @@ type loop struct {
 	label  string // "" unless the loop was written with one
 
 	lazyExit func() *sil.Block // Creates exit block only when branched to
+
+	// isSwitch marks the entry a switch pushes so that `break` leaves
+	// it: `continue` looks past it to the loop it is in, whose depth is
+	// where the unwinding has to reach.
+	isSwitch bool
 }
 
 // exitBlock returns or lazily instantiates the loop exit block.
@@ -874,7 +879,17 @@ func (l loop) exitBlock() *sil.Block {
 
 // enclosing finds the target loop matching the given label, or innermost if label is empty.
 func (g *gen) enclosing(label string) (loop, bool) {
+	return g.enclosingFor(label, false)
+}
+
+// enclosingFor is enclosing, looking past the entries switches push
+// when continuing: a `continue` in a switch's arm goes to the loop
+// around the switch, and unwinds everything between.
+func (g *gen) enclosingFor(label string, continuing bool) (loop, bool) {
 	for i := len(g.loops) - 1; i >= 0; i-- {
+		if continuing && g.loops[i].isSwitch {
+			continue
+		}
 		if label == "" || g.loops[i].label == label {
 			return g.loops[i], true
 		}

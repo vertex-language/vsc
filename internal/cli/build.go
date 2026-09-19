@@ -31,6 +31,9 @@ var emits = []emitMode{
 	{"obj", vsc.All, ".o"},
 	{"vir", vsc.All, ".vir"},
 	{"sil", vsc.Lowered, ".sil"},
+	// The SIL as generated, before the ownership passes verify it: for
+	// reading what the generator wrote when the verifier refuses it.
+	{"rawsil", vsc.Raw, ".sil"},
 	{"interface", vsc.Checked, iface.Extension},
 }
 
@@ -162,7 +165,7 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		}
 		return out, write(out, stdout, stderr, buf.Bytes(), false)
 
-	case "sil":
+	case "sil", "rawsil":
 		var buf bytes.Buffer
 		if err := text.Print(&buf, u.SIL); err != nil {
 			fmt.Fprintln(stderr, "vsc:", err)

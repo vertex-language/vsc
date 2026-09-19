@@ -1082,7 +1082,7 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 		depth := len(g.scopes)
 		g.push()
 		g.destroyArmOwned(bodies[i])
-		g.loops = append(g.loops, loop{header: header, lazyExit: cont, depth: depth})
+		g.loops = append(g.loops, loop{header: header, lazyExit: cont, depth: depth, isSwitch: true})
 		for _, st := range cs.Stmts {
 			g.stmt(st)
 			if g.blk == nil || g.blk.Term() != nil {
@@ -1972,7 +1972,7 @@ func (g *gen) continueStmt(s *ast.ContinueStmt) {
 
 // leave resolves the target loop, unwinds intervening scopes, and branches.
 func (g *gen) leave(s ast.Stmt, keyword, label string, target func(loop) *sil.Block) {
-	l, ok := g.enclosing(label)
+	l, ok := g.enclosingFor(label, keyword == "continue")
 	if !ok {
 		// The checker does not model loop nesting, so this is where a
 		// break outside a loop, or one naming a label no enclosing
