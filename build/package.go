@@ -392,7 +392,7 @@ type cCompilers struct {
 // where the folder cannot be read, and then nothing is cached.
 func (cc *cCompilers) cacheKey() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "vsc-cobj-1\n%s\n%s\n%s\n", targetName(cc.b.opts.Target), cc.b.minOS,
+	fmt.Fprintf(h, "vsc-cobj-1\n%s\n%s\n%d\n", targetName(cc.b.opts.Target), cc.b.minOS,
 		cxxStd(cc.b.p.Manifest.CXXLanguageStandard))
 	for _, inc := range cc.flags.includes {
 		fmt.Fprintf(h, "I %s\n", inc)

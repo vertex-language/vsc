@@ -128,6 +128,13 @@ func (l *lowerer) buildMetadata(typeName string, st *types.Struct) (*ir.Global, 
 		vwt = l.ownedValueWitnessTable(info, size, align, owned)
 	}
 	descr := l.nominalDescriptor(info, st)
+	// Describing the fields describes their types, and a type that
+	// holds an array of itself through them -- a selector's pseudo-class
+	// holds selectors -- comes back around to this one and builds it
+	// on the way. Its record is the record.
+	if g, ok := l.meta[typeName]; ok && g != nil {
+		return g, true
+	}
 
 	// The record: the value witness table, then the metadata proper.
 	rec := l.out.Struct("meta_" + identSafe(typeName))
@@ -349,6 +356,12 @@ func (l *lowerer) nominalDescriptorWith(info sil.TypeMetadata, st *types.Struct,
 
 	g := l.out.Global(name, ir.RO, ir.Array(7, ir.StoreI32.FType()))
 	g.Export()
+	// Known before the fields are described: a field's type may be
+	// this one, through an array, and asks for this descriptor again.
+	if l.descriptors == nil {
+		l.descriptors = map[string]*ir.Global{}
+	}
+	l.descriptors[name] = g
 	fields := ir.Init(ir.Lit(ir.Int(0)))
 	if fd := l.fieldDescriptor(info, st); fd != nil {
 		fields = relative(fd, g, 4*4)
@@ -367,10 +380,6 @@ func (l *lowerer) nominalDescriptorWith(info sil.TypeMetadata, st *types.Struct,
 		ir.Lit(ir.Int(int64(len(st.Fields)))),
 		ir.Lit(ir.Int(fieldOffsetVectorWords)),
 	))
-	if l.descriptors == nil {
-		l.descriptors = map[string]*ir.Global{}
-	}
-	l.descriptors[name] = g
 	return g
 }
 
