@@ -108,9 +108,15 @@ func promote(alloc *sil.Inst, refs boxRefs) {
 		erase(in)
 	}
 
-	// Convert destroy_value to dealloc_stack. For non-trivial initialized
-	// variables, insert load [take] and destroy_value before deallocating.
-	destroy := !elem.Trivial() && initializedAtDeclaration(alloc)
+	// Convert destroy_value to dealloc_stack. Releasing a box destroyed
+	// what it held, so a non-trivial variable's value is taken and
+	// destroyed before the slot goes: one initialized where it was
+	// declared, and one declared without a value -- `var w: T`, given one
+	// later, perhaps on some paths only. That one is zeroed each time its
+	// declaration runs (see lower's zeroSlot), and zeros hold nothing to let
+	// go of, so destroying it is right whether or not it was assigned.
+	// Without this every such variable leaked what it last held.
+	destroy := !elem.Trivial() && (initializedAtDeclaration(alloc) || hasAttr(alloc, "zeroed"))
 	for _, in := range refs.destroys {
 		if destroy {
 			b := in.Block()
@@ -163,3 +169,4 @@ func erase(in *sil.Inst) {
 		b.Erase(in)
 	}
 }
+
