@@ -39,7 +39,7 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 			next++
 			continue
 		}
-		def := g.info.Defaults[p]
+		def := g.defaultOf(p)
 		if !p.HasDefault || def == nil {
 			g.refuse(e, "a call leaving out '"+p.Name+"', whose default this cannot reach")
 			return nil, false
@@ -197,7 +197,7 @@ func (g *gen) variadicArguments(e *ast.CallExpr, args []*ast.CallArg,
 			next++
 			continue
 		}
-		def := g.info.Defaults[p]
+		def := g.defaultOf(p)
 		if !p.HasDefault || def == nil {
 			g.refuse(e, "a call leaving out '"+p.Name+"', whose default this cannot reach")
 			return nil, false
@@ -223,4 +223,15 @@ func (g *gen) callsCorePrint(e *ast.CallExpr) bool {
 	}
 	sym, ok := g.info.Uses[id.Name].(*analyzer.FuncSymbol)
 	return ok && sym.Name() == "print" && g.info.Imported[sym] == "Swift"
+}
+
+// defaultOf is the expression a parameter's default is, following a
+// substituted parameter back to the one it was made from.
+func (g *gen) defaultOf(p *types.Param) ast.Expr {
+	for ; p != nil; p = p.Origin {
+		if def := g.info.Defaults[p]; def != nil {
+			return def
+		}
+	}
+	return nil
 }

@@ -232,6 +232,11 @@ func (g *gen) collectionMethodCall(e *ast.CallExpr, mem *ast.MemberExpr) (*sil.V
 	if mem.Name == nil {
 		return nil, false
 	}
+	// One the checker resolved to a method an extension declares --
+	// `contains(where:)` beside the runtime's `contains(_:)` -- is that.
+	if g.info.Methods[mem] != nil {
+		return nil, false
+	}
 	var args []*ast.CallArg
 	if e.Args != nil {
 		args = e.Args.Args

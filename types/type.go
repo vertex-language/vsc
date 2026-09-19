@@ -101,6 +101,10 @@ type Param struct {
 	Ownership  OwnershipKind
 	Variadic   bool
 	HasDefault bool
+	// Origin is the parameter this one was substituted from, where it
+	// was: what was recorded about that one -- its default -- is this
+	// one's too.
+	Origin *Param
 }
 
 // BodyType returns the parameter's type within the function body (e.g. Array<T> for variadic T...).

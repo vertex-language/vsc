@@ -845,6 +845,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// A literal on one side is of the other side's type: `c ? n - 1 : 0`
 		// with n a UInt64 is a UInt64.
 		thenT, elseT = c.reconcileLiterals(e.Then, thenT, e.Else, elseT, scope)
+		// `c ? x : nil` is an optional of what x is, the nil read again
+		// as one of that type.
+		if isUntypedNil(elseT) && !isUntypedNil(thenT) && !isOptionalType(thenT) && !isInvalid(thenT) {
+			elseT = &types.Optional{Wrapped: thenT}
+			c.checkExpr(e.Else, elseT, scope)
+		} else if isUntypedNil(thenT) && !isUntypedNil(elseT) && !isOptionalType(elseT) && !isInvalid(elseT) {
+			thenT = &types.Optional{Wrapped: elseT}
+			c.checkExpr(e.Then, thenT, scope)
+		}
 		if expected != nil && types.AssignableTo(thenT, expected) &&
 			types.AssignableTo(elseT, expected) {
 			return expected
@@ -883,7 +892,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				if t, ok := c.withUnsafeBytesCall(mem, baseType, args, expected, scope); ok {
 					return t
 				}
-				if m, ok := core.LowerCollectionMethod(baseType, name, labels); ok {
+				if m, ok := core.LowerCollectionMethod(baseType, name, labels); ok && closuresFit(args, m.Params) {
 					if m.Mutating {
 						c.checkMutableReceiver(mem.X, mem.Name.Pos(), "cannot use mutating member on immutable value", scope)
 					}
@@ -891,6 +900,13 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					c.info.Types[mem] = sig
 					c.info.Types[e.Fun] = sig
 					return c.checkCallArguments(e, sig, args, scope).Results
+				}
+				// A method an extension gives a built-in type, called:
+				// chosen by the arguments among those of its name, ahead of
+				// a property of the same name -- `first(where:)` beside
+				// `first` -- since a property is not called.
+				if t, ok := c.builtinMethodCall(e, mem, baseType, args, scope); ok {
+					return t
 				}
 			}
 		}
@@ -1437,6 +1453,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 		return &types.Optional{Wrapped: inner}
 
+	// An operator named as a value -- `reduce(0, +)` -- is the operator
+	// function the context's type picks out.
+	case *ast.OperatorExpr:
+		return c.operatorReference(e, expected, scope)
+
 	case *ast.ClosureExpr:
 		closureScope := NewScope(scope, e.Pos(), e.End())
 		c.info.Scopes[e] = closureScope
@@ -1749,6 +1770,125 @@ func (c *checker) optionalOperands(e *ast.BinaryExpr, lhs, rhs types.Type, scope
 		return types.AssignableTo(lhs, ro.Wrapped)
 	}
 	return false
+}
+
+// operatorReference types an operator written as a value, `+` in
+// `reduce(0, +)`: the declaration of the operator whose parameters are
+// the ones the context's function type has, where the context says
+// them, and which is recorded for the expression as an operator use is.
+func (c *checker) operatorReference(e *ast.OperatorExpr, expected types.Type, scope *Scope) types.Type {
+	op := c.operatorSpelling(e)
+	want, ok := expected.(*types.Signature)
+	if !ok {
+		c.typeErrorf(e.Pos(), "cannot infer the type of operator '%s' used as a value here", op)
+		return types.Typ[types.Invalid]
+	}
+	operands := make([]types.Type, len(want.Params))
+	for i, p := range want.Params {
+		operands[i] = p.Type
+	}
+	// A parameter the context leaves generic -- the Result of reduce --
+	// takes the type of the operand beside it, an operator's operands
+	// being alike as a rule.
+	var known types.Type
+	for _, t := range operands {
+		if _, isParam := t.(*types.TypeParam); !isParam && t != nil && !isInvalid(t) {
+			known = t
+		}
+	}
+	for i, t := range operands {
+		if _, isParam := t.(*types.TypeParam); isParam && known != nil {
+			operands[i] = known
+		}
+	}
+	for _, ch := range c.operatorChoices(scope, op, operands) {
+		sig := ch.sig()
+		fits := true
+		for i, t := range operands {
+			if t == nil || isInvalid(t) {
+				continue
+			}
+			if !types.AssignableTo(t, sig.Params[i].Type) {
+				fits = false
+			}
+		}
+		if fits {
+			c.chooseOperator(e, ch)
+			return sig
+		}
+	}
+	c.typeErrorf(e.Pos(), "no operator '%s' takes '%s'", op, want)
+	return types.Typ[types.Invalid]
+}
+
+// closuresFit reports whether every closure among the arguments goes
+// where a function is taken: a closure given to a runtime method's
+// non-function parameter means an extension's method of that name --
+// `contains(where:)` rather than `contains(_:)`.
+func closuresFit(args []*ast.CallArg, params []*types.Param) bool {
+	for i, a := range args {
+		if _, isClosure := unparen(a.X).(*ast.ClosureExpr); !isClosure {
+			continue
+		}
+		if i >= len(params) {
+			return false
+		}
+		if _, isFunc := params[i].Type.Underlying().(*types.Signature); !isFunc {
+			return false
+		}
+	}
+	return true
+}
+
+// builtinMethodCall types a call of a method an extension gives a
+// built-in type, chosen by the arguments among those of its name and
+// typed for the elements of the receiver.
+func (c *checker) builtinMethodCall(e *ast.CallExpr, mem *ast.MemberExpr, baseType types.Type, args []*ast.CallArg, scope *Scope) (types.Type, bool) {
+	name := mem.Name.Text(c.file)
+	recv, methods := c.builtinMethods(baseType, name)
+	if len(methods) == 0 {
+		return nil, false
+	}
+	b := c.builtinOf(baseType)
+	if b == nil {
+		return nil, false
+	}
+	subst := b.Subst(baseType)
+	substituted := func(m *types.Method) *types.Signature {
+		if len(subst) == 0 {
+			return m.Sig
+		}
+		if s, ok := types.Substitute(m.Sig, subst).(*types.Signature); ok {
+			return s
+		}
+		return m.Sig
+	}
+	chosen := methods[0]
+	if len(methods) > 1 {
+		candidates := make([]*types.Method, len(methods))
+		for i, m := range methods {
+			copied := *m
+			copied.Sig = substituted(m)
+			candidates[i] = &copied
+		}
+		picked := c.methodByArguments(candidates, args, scope)
+		if picked == nil {
+			return nil, false
+		}
+		for i, cand := range candidates {
+			if cand == picked {
+				chosen = methods[i]
+			}
+		}
+	}
+	sig := substituted(chosen)
+	if chosen.IsMutating {
+		c.checkMutableReceiver(mem.X, mem.Name.Pos(), "cannot use mutating member on immutable value", scope)
+	}
+	c.info.Methods[mem] = &MethodRef{Recv: recv, Method: chosen}
+	c.info.Types[mem] = sig
+	c.checkMemberConditions(mem, baseType, name)
+	return c.checkCallArguments(e, sig, args, scope).Results, true
 }
 
 // declaredSubscript resolves `s[args]` on a value of a type that declares

@@ -130,6 +130,9 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 	case *ast.CastExpr:
 		return g.cast(n)
 
+	case *ast.OperatorExpr:
+		return g.operatorValue(n)
+
 	case *ast.ClosureExpr:
 		return g.closure(n)
 
@@ -1458,6 +1461,11 @@ func (g *gen) implicitMethod(id *ast.IdentExpr) (*analyzer.MethodRef, bool) {
 	case *types.Enum:
 		methods = b.Methods
 	default:
+		// Inside an extension of a built-in type, the extensions' methods.
+		if b := builtinOf(g.info, g.recv); b != nil {
+			methods = b.Methods
+			break
+		}
 		return nil, false
 	}
 	// Of methods sharing the name, the one the checker chose.

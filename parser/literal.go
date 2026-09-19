@@ -89,7 +89,13 @@ func (p *parser) parseParenOrTuple() ast.Expr {
 			e.Label = p.ident()
 			e.Colon = p.expect(token.COLON)
 		}
-		e.X = p.parseExpr(0)
+		// An operator alone in parentheses -- `(+)` -- is the operator
+		// named as a value, as it is as an argument.
+		if p.atAnyOper() && (p.peek(1) == token.RPAREN || p.peek(1) == token.COMMA) {
+			e.X = p.oper()
+		} else {
+			e.X = p.parseExpr(0)
+		}
 		e.Span = p.span(elo)
 		elems = append(elems, e)
 		if !p.more(start) {

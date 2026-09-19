@@ -24,9 +24,12 @@ type genericMethodKey struct {
 }
 
 // genericMethodDecls is where every method of a generic type in the
-// module was written, in its type's body or in an extension of it.
-func genericMethodDecls(files []*ast.File, info *analyzer.Info) map[genericMethodKey]*ast.FuncDecl {
-	out := map[genericMethodKey]*ast.FuncDecl{}
+// module was written, in its type's body or in an extension of it: all
+// of a name, since a name may be overloaded -- `first()` beside
+// `first(where:)` -- and which one a call means is its signature's to
+// say. See genericMethodDecl.
+func genericMethodDecls(files []*ast.File, info *analyzer.Info) map[genericMethodKey][]*ast.FuncDecl {
+	out := map[genericMethodKey][]*ast.FuncDecl{}
 	add := func(t types.Type, body *ast.MemberBlock) {
 		if t == nil || body == nil || (len(nominalTypeParams(t)) == 0 && builtinParams(info, t) == nil) {
 			return
@@ -38,9 +41,7 @@ func genericMethodDecls(files []*ast.File, info *analyzer.Info) map[genericMetho
 			}
 			if fs, ok := info.Defs[fd.Name].(*analyzer.FuncSymbol); ok {
 				key := genericMethodKey{typ: t, name: fs.Name()}
-				if _, seen := out[key]; !seen {
-					out[key] = fd
-				}
+				out[key] = append(out[key], fd)
 			}
 		}
 	}
@@ -131,10 +132,19 @@ func (g *gen) genericMethod(e *ast.CallExpr, ref *analyzer.MethodRef) (*analyzer
 		recvT = t
 	}
 	// A method an extension gives Array, Dictionary, Set or Optional is
-	// the extension's, for the elements of the one it is called on.
+	// the extension's, for the elements of the one it is called on --
+	// which, inside a method being specialized, are the specialization's.
 	if b := builtinOf(g.info, ref.Recv); b != nil && len(b.Params) > 0 {
 		if recvT == nil || analyzer.BuiltinKey(recvT) != b.Key {
 			recvT = g.recv
+		}
+		if mem, ok := e.Fun.(*ast.MemberExpr); ok {
+			if _, onSelf := mem.X.(*ast.SelfExpr); onSelf && g.recv != nil {
+				recvT = g.recv
+			}
+		}
+		if len(g.subst) > 0 && recvT != nil {
+			recvT = types.Substitute(recvT, g.subst)
 		}
 		return g.builtinMethod(e, ref, b, recvT)
 	}
@@ -160,7 +170,7 @@ func (g *gen) genericMethod(e *ast.CallExpr, ref *analyzer.MethodRef) (*analyzer
 		g.refuse(e, "a method of a generic type on something whose type arguments are not known")
 		return nil, "", true
 	}
-	decl := g.methods[genericMethodKey{typ: base, name: ref.Method.Name}]
+	decl := g.genericMethodDecl(genericMethodKey{typ: base, name: ref.Method.Name}, ref.Method)
 	if decl == nil {
 		g.refuse(e, "a method of a generic type whose declaration this cannot find")
 		return nil, "", true
@@ -275,6 +285,40 @@ func (g *gen) emitMethodSpecialization(decl *ast.FuncDecl, inst types.Type, name
 	g.functionNamed(decl, inst, name)
 }
 
+// genericMethodDecl is the declaration of the one method of a name a
+// reference means: the one declared with the reference's signature, or,
+// failing that, the one whose parameters are labelled as it is.
+func (g *gen) genericMethodDecl(key genericMethodKey, m *types.Method) *ast.FuncDecl {
+	decls := g.methods[key]
+	if len(decls) == 0 {
+		return nil
+	}
+	if len(decls) == 1 {
+		return decls[0]
+	}
+	for _, fd := range decls {
+		if fs, ok := g.info.Defs[fd.Name].(*analyzer.FuncSymbol); ok && fs.Signature() == m.Sig {
+			return fd
+		}
+	}
+	for _, fd := range decls {
+		fs, ok := g.info.Defs[fd.Name].(*analyzer.FuncSymbol)
+		if !ok || m.Sig == nil || len(fs.Signature().Params) != len(m.Sig.Params) {
+			continue
+		}
+		same := true
+		for i, p := range fs.Signature().Params {
+			if p.Label != m.Sig.Params[i].Label {
+				same = false
+			}
+		}
+		if same {
+			return fd
+		}
+	}
+	return decls[0]
+}
+
 // builtinMethod is genericMethod for a method an extension gives a generic
 // built-in type, called on recv: [Int] for a method of Array.
 func (g *gen) builtinMethod(e *ast.CallExpr, ref *analyzer.MethodRef, b *analyzer.BuiltinMembers, recv types.Type) (*analyzer.MethodRef, string, bool) {
@@ -283,7 +327,7 @@ func (g *gen) builtinMethod(e *ast.CallExpr, ref *analyzer.MethodRef, b *analyze
 		g.refuse(e, "a method of "+b.Key+" on something whose element types are not known")
 		return nil, "", true
 	}
-	decl := g.methods[genericMethodKey{typ: b.Type, name: ref.Method.Name}]
+	decl := g.genericMethodDecl(genericMethodKey{typ: b.Type, name: ref.Method.Name}, ref.Method)
 	if decl == nil {
 		g.refuse(e, "a method of "+b.Key+" whose declaration this cannot find")
 		return nil, "", true

@@ -401,7 +401,7 @@ type gen struct {
 	poly        map[*types.Class]bool
 	nested      map[analyzer.Symbol]string
 	stated      map[*sil.Func]bool
-	methods     map[genericMethodKey]*ast.FuncDecl   // generic types' methods, shared by every file
+	methods     map[genericMethodKey][]*ast.FuncDecl // generic types' methods, shared by every file
 	props       map[genericMethodKey]genericProperty // generic types' computed properties, found when first needed
 	inits       map[types.Type][]*ast.InitDecl       // generic types' initializers, shared by every file
 	subst       map[*types.TypeParam]types.Type

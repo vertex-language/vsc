@@ -55,11 +55,56 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 		fits = lax
 	}
 	fits = c.byContext(fits)
+	if len(fits) > 1 {
+		var sigs []*types.Signature
+		for _, f := range fits {
+			sigs = append(sigs, f.Signature())
+		}
+		if keep := c.byLiteralDefaults(sigs, args); len(keep) > 0 {
+			var narrowed []*FuncSymbol
+			for _, i := range keep {
+				narrowed = append(narrowed, fits[i])
+			}
+			fits = narrowed
+		}
+	}
 	if len(fits) != 1 {
 		return nil
 	}
 	c.info.Uses[name] = fits[0]
 	return fits[0].Signature()
+}
+
+// byLiteralDefaults is which of several signatures that all fit take a
+// literal argument as the type the literal is on its own -- an integer
+// literal as an Int, a float literal as a Double -- which is the one
+// Swift prefers: `stride(from: 0, to: 10, by: 3)` is the Int stride
+// beside the Double one. It is the indices of those, or none.
+func (c *checker) byLiteralDefaults(sigs []*types.Signature, args []*ast.CallArg) []int {
+	var keep []int
+	for i, sig := range sigs {
+		if sig == nil {
+			continue
+		}
+		suits := true
+		for j, a := range args {
+			if j >= len(sig.Params) || !c.isLiteralTree(a.X) {
+				continue
+			}
+			pt := sig.Params[j].Type
+			if hasFloatLiteral(a.X) {
+				if !types.Identical(pt, types.Typ[types.Double]) {
+					suits = false
+				}
+			} else if !types.Identical(pt, types.Typ[types.Int]) {
+				suits = false
+			}
+		}
+		if suits {
+			keep = append(keep, i)
+		}
+	}
+	return keep
 }
 
 // checkAsyncCall holds a call to an async function to Swift's two rules: it
@@ -154,8 +199,47 @@ func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) b
 	if t == nil || isInvalid(t) || types.AssignableTo(t, p.Type) {
 		return true
 	}
-	// Untyped numeric literal arguments fit any numeric parameter.
-	return c.isLiteralTree(arg.X) && isNumericType(p.Type)
+	// A closure written at the call takes its parameters' types from the
+	// parameter it is passed as, so it fits any function parameter of its
+	// arity -- and one with `$0`, `$1` any function parameter at all.
+	if cl, ok := unparen(arg.X).(*ast.ClosureExpr); ok {
+		if want, isFunc := p.Type.Underlying().(*types.Signature); isFunc {
+			if cl.Sig == nil || cl.Sig.Params == nil {
+				return true
+			}
+			return len(cl.Sig.Params.Params) == len(want.Params)
+		}
+	}
+	// Untyped numeric literal arguments fit any numeric parameter -- an
+	// integer literal any number, a float literal a floating-point one.
+	if !c.isLiteralTree(arg.X) || !isNumericType(p.Type) {
+		return false
+	}
+	if hasFloatLiteral(arg.X) {
+		return isFloatingType(p.Type)
+	}
+	return true
+}
+
+// hasFloatLiteral reports whether a literal tree has a float literal in it.
+func hasFloatLiteral(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.FLOAT_LIT {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// isFloatingType reports whether t is Float or Double.
+func isFloatingType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsFloat != 0
 }
 
 // resolveMethodOverload picks, among the methods a member call could name
@@ -170,19 +254,44 @@ func (c *checker) resolveMethodOverload(mem *ast.MemberExpr, args []*ast.CallArg
 		return nil
 	}
 	recv, methods := methodsNamed(base, mem.Name.Text(c.file))
+	// A method an extension gives Array, Dictionary, Set or Optional is
+	// typed for the elements of the one it is called on: [Int].first()
+	// answers an Int?, not an Element?, and its arguments are matched
+	// against Int too.
+	var subst map[*types.TypeParam]types.Type
 	if len(methods) == 0 {
 		recv, methods = c.builtinMethods(base, mem.Name.Text(c.file))
+		if b := c.builtinOf(base); b != nil {
+			subst = b.Subst(base)
+		}
 	}
 	if len(methods) < 2 {
 		return nil
 	}
-	m := c.methodByArguments(methods, args, scope)
+	candidates := methods
+	if len(subst) > 0 {
+		candidates = make([]*types.Method, len(methods))
+		for i, m := range methods {
+			copied := *m
+			if s, ok := types.Substitute(m.Sig, subst).(*types.Signature); ok {
+				copied.Sig = s
+			}
+			candidates[i] = &copied
+		}
+	}
+	m := c.methodByArguments(candidates, args, scope)
 	if m == nil {
 		return nil
 	}
+	sig := m.Sig
+	for i, cand := range candidates {
+		if cand == m {
+			m = methods[i]
+		}
+	}
 	c.info.Methods[mem] = &MethodRef{Recv: recv, Method: m}
-	c.info.Types[mem] = m.Sig
-	return m.Sig
+	c.info.Types[mem] = sig
+	return sig
 }
 
 // methodByArguments is the one method of several the arguments fit, by
@@ -217,6 +326,19 @@ func (c *checker) methodByArguments(methods []*types.Method, args []*ast.CallArg
 		}
 		if len(suited) > 0 {
 			fits = suited
+		}
+	}
+	if len(fits) > 1 {
+		var sigs []*types.Signature
+		for _, m := range fits {
+			sigs = append(sigs, m.Sig)
+		}
+		if keep := c.byLiteralDefaults(sigs, args); len(keep) > 0 {
+			var narrowed []*types.Method
+			for _, i := range keep {
+				narrowed = append(narrowed, fits[i])
+			}
+			fits = narrowed
 		}
 	}
 	if len(fits) != 1 {
