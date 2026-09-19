@@ -30,6 +30,7 @@ func Mandatory(m *sil.Module) error {
 // the first pass -- and verifies what they leave. Mandatory must have run.
 func Optimize(m *sil.Module) error {
 	for _, f := range m.Funcs() {
+		elideHomeHops(f)
 		promoteSlots(f)
 	}
 	return verify.Module(m)
