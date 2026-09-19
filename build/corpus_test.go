@@ -177,8 +177,13 @@ func runSwiftc(t *testing.T, swiftc, src string) outcome {
 	// A throwing main is tried from top-level code, where an error it
 	// lets out ends the program, as it does this compiler's.
 	const throwingEntry = "func main() throws -> Int32 {"
+	const asyncThrowingEntry = "func main() async throws -> Int32 {"
 	var rewritten string
 	switch {
+	case strings.Contains(src, asyncThrowingEntry):
+		rewritten = "import Darwin\n" +
+			strings.Replace(src, asyncThrowingEntry, "func vsMain() async throws -> Int32 {", 1) +
+			"\nexit(try await vsMain())\n"
 	case strings.Contains(src, entry):
 		rewritten = "import Darwin\n" +
 			strings.Replace(src, entry, "func vsMain() -> Int32 {", 1) +
@@ -192,7 +197,7 @@ func runSwiftc(t *testing.T, swiftc, src string) outcome {
 			strings.Replace(src, throwingEntry, "func vsMain() throws -> Int32 {", 1) +
 			"\nexit(try vsMain())\n"
 	default:
-		t.Fatalf("the program has no %q, %q or %q to rewrite for swiftc", entry, asyncEntry, throwingEntry)
+		t.Fatalf("the program has no %q, %q, %q or %q to rewrite for swiftc", entry, asyncEntry, throwingEntry, asyncThrowingEntry)
 	}
 
 	dir := t.TempDir()

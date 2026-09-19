@@ -33,8 +33,6 @@ func (g *gen) checkEntry(sym *analyzer.FuncSymbol, sig *types.Signature) bool {
 		why = "is generic"
 	case len(sig.Params) > 0:
 		why = "takes parameters"
-	case sig.Throws && sig.Async:
-		why = "is async and throws"
 	case sig.Results != nil && !isVoid(sig.Results) && !isEntryResult(sig.Results):
 		why = "returns " + sig.Results.String()
 	default:
@@ -74,6 +72,44 @@ func (g *gen) result() *sil.Value {
 		return g.entryStatus()
 	}
 	return g.void()
+}
+
+// asyncThrowingEntry is the entry for a main that is async and throws:
+// its body is wrapped in an async function that catches what it throws
+// and ends the program with it, and that function is run as an async
+// main is. It is the wrapper.
+func (g *gen) asyncThrowingEntry(body *sil.Func) *sil.Func {
+	f := g.m.Func(asyncEntryName + "_caught").SetSourceName(EntryName).SetLinkage(sil.Hidden).SetAttr("ossa")
+	f.Type().Async = true
+	f.Type().Params = nil
+	f.SetResult(lowerType(entryResult()), sil.ResultUnowned)
+
+	prevFn, prevBlk, prevScopes := g.fn, g.blk, g.scopes
+	defer func() { g.fn, g.blk, g.scopes = prevFn, prevBlk, prevScopes }()
+	g.fn, g.blk, g.scopes = f, f.Entry(), nil
+	g.push()
+
+	normal, failed := f.Block(), f.Block()
+	var status *sil.Value
+	if len(body.Type().Results) == 1 {
+		status = normal.Arg(lowerType(entryResult()), sil.Owned)
+	}
+	box := failed.Arg(errorBoxType(), sil.Owned)
+	g.blk.TryApply(g.blk.FunctionRef(body), normal, failed)
+
+	g.blk = failed
+	g.runtimeResult(stdlib.ErrorInMain,
+		[]sil.Param{{Type: errorBoxType(), Convention: sil.ParamOwned}},
+		lowerType(types.Typ[types.Void]), box)
+	g.blk.Unreachable()
+
+	g.blk = normal
+	g.unwind()
+	if status == nil {
+		status = g.entryStatus()
+	}
+	g.blk.Return(status)
+	return f
 }
 
 // throwingEntryName is the symbol a throwing main's body is given, the

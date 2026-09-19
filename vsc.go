@@ -178,7 +178,7 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	if Errors(diags) {
 		return u, diags
 	}
-	info, checks := analyzer.CheckImporting(u.Files, imports)
+	info, checks := analyzer.CheckModule(opts.Module, u.Files, imports)
 	u.Info = info
 	diags = append(diags, attribute(checks, u.only())...)
 	if opts.Stop == Checked || Errors(diags) {

@@ -923,8 +923,9 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	// program's entry is a function of its own that starts it.
 	asyncEntry := g.entry && sig.Async
 	// A throwing main is an ordinary throwing function; the entry calls
-	// it, and an error it throws ends the program.
-	throwingEntry := g.entry && sig.Throws
+	// it, and an error it throws ends the program. One that is both is
+	// wrapped in an async function that catches, run as an async main.
+	throwingEntry := g.entry && sig.Throws && !sig.Async
 	if asyncEntry || throwingEntry {
 		g.entry = false
 	}
@@ -1077,6 +1078,9 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	g.entry = false
 	g.recv = nil
 	if asyncEntry {
+		if sig.Throws {
+			f = g.asyncThrowingEntry(f)
+		}
 		g.asyncEntry(entryName, f)
 	}
 	if throwingEntry {

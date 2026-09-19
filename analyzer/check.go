@@ -105,6 +105,13 @@ func (i Import) bound() string {
 
 // CheckImporting checks files as a module that can see imported modules.
 func CheckImporting(files []*ast.File, imports []Import) (*Info, []token.Diagnostic) {
+	return CheckModule("", files, imports)
+}
+
+// CheckModule is CheckImporting for a module that knows its own name,
+// which its code may use to qualify its own declarations --
+// `tls.ConnectionState()` inside module tls -- as Swift allows.
+func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []token.Diagnostic) {
 	info := NewInfo()
 	pg := NewPrecedenceGraph()
 
@@ -146,6 +153,14 @@ func CheckImporting(files []*ast.File, imports []Import) (*Info, []token.Diagnos
 	c.loadCore(coreScope)
 	c.modules["Swift"] = coreScope
 	c.loadImports(imports, importScope)
+	// A module may name itself. Its own declarations are what the
+	// package scope holds, which is looked up under the name where
+	// nothing in scope has it.
+	if module != "" {
+		if _, taken := c.modules[module]; !taken {
+			c.modules[module] = pkgScope
+		}
+	}
 
 	// Multi-pass analysis over all compilation units:
 

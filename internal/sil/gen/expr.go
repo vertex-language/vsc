@@ -492,6 +492,20 @@ func (g *gen) member(e *ast.MemberExpr) *sil.Value {
 	if fs, ok := g.info.Uses[e.Name].(*analyzer.FuncSymbol); ok {
 		return g.funcValue(fs)
 	}
+	// A module-qualified variable -- `main.limit` -- read as its name is.
+	if id, ok := e.X.(*ast.IdentExpr); ok && id.Name != nil && g.info.Uses[id.Name] == nil {
+		if sym := g.info.Uses[e.Name]; sym != nil {
+			if v, ok := g.moduleGetterCall(sym); ok {
+				return v
+			}
+			if addr, t, ok := g.moduleVarAddr(sym); ok {
+				access := g.blk.BeginAccess(addr, "read", "unknown")
+				v := g.blk.Load(access, loadQualifier(t))
+				g.blk.EndAccess(access)
+				return g.loaded(v, t)
+			}
+		}
+	}
 	if id, ok := e.X.(*ast.IdentExpr); ok && id.Name != nil && g.info.Uses[id.Name] == nil {
 		g.refuse(e, "'"+g.text(e.X)+"."+g.text(e.Name)+"', which names something "+
 			"other than a function through a module")

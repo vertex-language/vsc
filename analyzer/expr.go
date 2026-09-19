@@ -1691,7 +1691,16 @@ func (c *checker) namesModule(e ast.Expr, scope *Scope) bool {
 		return false
 	}
 	name := id.Name.Text(c.file)
-	return c.modules[name] != nil && scope.Lookup(name) == nil
+	if c.modules[name] == nil {
+		return false
+	}
+	// A function of the same name -- `main` beside module main -- has
+	// no members, so a member of the name is the module's.
+	switch scope.Lookup(name).(type) {
+	case nil, *FuncSymbol:
+		return true
+	}
+	return false
 }
 
 // moduleMemberValue resolves `Module.name` in expression position.
