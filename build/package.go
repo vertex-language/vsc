@@ -2,10 +2,14 @@ package build
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/vertex-language/ir"
@@ -256,14 +260,32 @@ func (b *packageBuild) cTarget(t *pkg.ResolvedTarget) ([]Input, error) {
 	}
 	cc := cCompilers{b: b, t: t, flags: fl}
 
+	// A C-family target is compiled once per version of its sources: the
+	// object is kept under Work, keyed by what went into it, and a build
+	// that finds the key reads it back. Compiling a window system's
+	// headers is most of what a program over one costs to build.
+	key := cc.cacheKey()
 	var objs []Input
 	for _, src := range t.Sources {
 		rel, _ := filepath.Rel(t.Dir, src.Path)
+		name := t.Name + "_" + strings.ReplaceAll(rel, string(filepath.Separator), "_") + ".o"
+		cached := ""
+		if key != "" {
+			cached = filepath.Join(b.opts.Work, "cache", key+"-"+name)
+			if data, err := os.ReadFile(cached); err == nil {
+				objs = append(objs, Input{Name: name, Data: data})
+				continue
+			}
+		}
 		data, err := cc.object(src)
 		if err != nil {
 			return nil, &PackageError{Target: t.Name, Err: fmt.Errorf("%s: %w", rel, err)}
 		}
-		name := t.Name + "_" + strings.ReplaceAll(rel, string(filepath.Separator), "_") + ".o"
+		if cached != "" {
+			if err := os.MkdirAll(filepath.Dir(cached), 0o755); err == nil {
+				_ = os.WriteFile(cached, data, 0o644)
+			}
+		}
 		objs = append(objs, Input{Name: name, Data: data})
 	}
 
@@ -361,6 +383,56 @@ type cCompilers struct {
 	c    *vcc.Compiler
 	cxx  *vcx.Compiler
 	objc *objv.Compiler
+}
+
+// cacheKey names what a target's objects are made from: the compiler
+// they go through, the target and deployment they are built for, the
+// flags, and every file in the target's folder -- its sources and the
+// headers beside them. Two folders that hash alike build alike. It is ""
+// where the folder cannot be read, and then nothing is cached.
+func (cc *cCompilers) cacheKey() string {
+	h := sha256.New()
+	fmt.Fprintf(h, "vsc-cobj-1\n%s\n%s\n%s\n", targetName(cc.b.opts.Target), cc.b.minOS,
+		cxxStd(cc.b.p.Manifest.CXXLanguageStandard))
+	for _, inc := range cc.flags.includes {
+		fmt.Fprintf(h, "I %s\n", inc)
+	}
+	for _, tool := range []string{"c", "cxx"} {
+		for _, d := range cc.flags.defines[tool] {
+			fmt.Fprintf(h, "D %s %s\n", tool, d)
+		}
+		for _, u := range cc.flags.undefines[tool] {
+			fmt.Fprintf(h, "U %s %s\n", tool, u)
+		}
+	}
+	var files []string
+	err := filepath.WalkDir(cc.t.Dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == ".build" || strings.HasPrefix(d.Name(), ".") && path != cc.t.Dir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return ""
+	}
+	sort.Strings(files)
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		rel, _ := filepath.Rel(cc.t.Dir, path)
+		fmt.Fprintf(h, "F %s %d\n", rel, len(data))
+		h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:24]
 }
 
 // object compiles one source file to object bytes.

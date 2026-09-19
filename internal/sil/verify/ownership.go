@@ -131,7 +131,7 @@ func (c *collector) borrow(v *sil.Value, d *domTree) {
 	// The borrowed base value cannot be consumed while borrow is active.
 	if base := in.Args(); len(base) == 1 && base[0] != nil {
 		for _, use := range base[0].Consumers() {
-			if liveAt(v, use, exit, uses, func(x *sil.Inst, _ int) bool { return endsBorrow(x) }) {
+			if liveAt(v, d, use, exit, uses, func(x *sil.Inst, _ int) bool { return endsBorrow(x) }) {
 				c.at(use.Block(), indexOf(use), use.Op(), base[0], ErrUseAfterConsume,
 					fmt.Sprintf("consumed while %%%d borrows it", v.ID()))
 			}
@@ -145,14 +145,14 @@ func (c *collector) borrow(v *sil.Value, d *domTree) {
 func (c *collector) walk(v *sil.Value, d *domTree, uses map[*sil.Inst]int,
 	twice, after error, ends func(*sil.Inst, int) bool) map[*sil.Block]state {
 
-	order := reversePostorder(v.Func())
+	order := d.order
 	exit := map[*sil.Block]state{}
 
 	// Phase one: the fixpoint.
 	for changed := true; changed; {
 		changed = false
 		for _, b := range order {
-			s := c.transfer(v, b, mergeStates(b, exit), uses, ends, nil)
+			s := c.transfer(v, b, mergeStates(d, b, exit), uses, ends, nil)
 			if old, seen := exit[b]; !seen || old != s {
 				exit[b] = s
 				changed = true
@@ -162,8 +162,8 @@ func (c *collector) walk(v *sil.Value, d *domTree, uses map[*sil.Inst]int,
 
 	// Phase two: the reporting pass.
 	for _, b := range order {
-		c.transfer(v, b, mergeStates(b, exit), uses, ends, c)
-		c.disagreement(v, b, exit)
+		c.transfer(v, b, mergeStates(d, b, exit), uses, ends, c)
+		c.disagreement(v, d, b, exit)
 	}
 	return exit
 }
@@ -199,10 +199,10 @@ func (c *collector) transfer(v *sil.Value, b *sil.Block, s state,
 }
 
 // disagreement checks for inconsistent states across predecessor paths entering b.
-func (c *collector) disagreement(v *sil.Value, b *sil.Block, exit map[*sil.Block]state) {
+func (c *collector) disagreement(v *sil.Value, d *domTree, b *sil.Block, exit map[*sil.Block]state) {
 	var seen bool
 	var first state
-	for _, p := range b.Preds() {
+	for _, p := range d.Preds(b) {
 		ps, ok := exit[p]
 		if !ok || ps == dead {
 			continue
@@ -220,9 +220,9 @@ func (c *collector) disagreement(v *sil.Value, b *sil.Block, exit map[*sil.Block
 }
 
 // mergeStates computes entry state from predecessor exit states.
-func mergeStates(b *sil.Block, exit map[*sil.Block]state) state {
+func mergeStates(d *domTree, b *sil.Block, exit map[*sil.Block]state) state {
 	s, seen := dead, false
-	for _, p := range b.Preds() {
+	for _, p := range d.Preds(b) {
 		ps, ok := exit[p]
 		if !ok {
 			continue
@@ -293,7 +293,7 @@ func endsBorrow(in *sil.Inst) bool {
 }
 
 // liveAt reports whether v is live at instruction in within its block.
-func liveAt(v *sil.Value, in *sil.Inst, exit map[*sil.Block]state,
+func liveAt(v *sil.Value, d *domTree, in *sil.Inst, exit map[*sil.Block]state,
 	uses map[*sil.Inst]int, ends func(*sil.Inst, int) bool) bool {
 
 	b := in.Block()
@@ -301,7 +301,7 @@ func liveAt(v *sil.Value, in *sil.Inst, exit map[*sil.Block]state,
 		return false
 	}
 	def, at := definedIn(v)
-	s := mergeStates(b, exit)
+	s := mergeStates(d, b, exit)
 
 	for i, other := range b.Insts() {
 		if b == def && i == at {

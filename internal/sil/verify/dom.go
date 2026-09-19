@@ -10,17 +10,43 @@ type domTree struct {
 	order []*sil.Block // reverse postorder
 	rpo   map[*sil.Block]int
 	idom  map[*sil.Block]*sil.Block
+	// preds is each block's predecessors, gathered once from every
+	// terminator: the dataflow walks ask for them per value, and the
+	// function does not change under the verifier.
+	preds map[*sil.Block][]*sil.Block
 }
+
+// Preds is the blocks that branch to b.
+func (d *domTree) Preds(b *sil.Block) []*sil.Block { return d.preds[b] }
 
 // buildDom computes the dominator tree of f for all reachable blocks.
 func buildDom(f *sil.Func) *domTree {
 	d := &domTree{
-		fn:   f,
-		rpo:  map[*sil.Block]int{},
-		idom: map[*sil.Block]*sil.Block{},
+		fn:    f,
+		rpo:   map[*sil.Block]int{},
+		idom:  map[*sil.Block]*sil.Block{},
+		preds: map[*sil.Block][]*sil.Block{},
 	}
 	if len(f.Blocks()) == 0 {
 		return d
+	}
+	for _, p := range f.Blocks() {
+		t := p.Term()
+		if t == nil {
+			continue
+		}
+		for _, s := range t.Successors() {
+			if s == p {
+				continue
+			}
+			known := false
+			for _, q := range d.preds[s] {
+				known = known || q == p
+			}
+			if !known {
+				d.preds[s] = append(d.preds[s], p)
+			}
+		}
 	}
 	d.order = reversePostorder(f)
 	for i, b := range d.order {
@@ -33,7 +59,7 @@ func buildDom(f *sil.Func) *domTree {
 		changed = false
 		for _, b := range d.order[1:] {
 			var new *sil.Block
-			for _, p := range b.Preds() {
+			for _, p := range d.preds[b] {
 				if _, seen := d.rpo[p]; !seen {
 					continue // unreachable: it dominates nothing
 				}

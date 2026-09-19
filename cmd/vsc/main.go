@@ -9,8 +9,23 @@ package main
 
 import (
 	"os"
+	"runtime/pprof"
 
 	"github.com/vertex-language/vsc/internal/cli"
 )
 
-func main() { os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() { os.Exit(run()) }
+
+// run is cli.Run, under a CPU profile when VSC_CPUPROFILE names a file
+// to write one to -- for finding where a slow build's time goes.
+func run() int {
+	if path := os.Getenv("VSC_CPUPROFILE"); path != "" {
+		if f, err := os.Create(path); err == nil {
+			defer f.Close()
+			if pprof.StartCPUProfile(f) == nil {
+				defer pprof.StopCPUProfile()
+			}
+		}
+	}
+	return cli.Run(os.Args[1:], os.Stdout, os.Stderr)
+}
