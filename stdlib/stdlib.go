@@ -63,6 +63,7 @@ const (
 
 	StringHasPrefix = "vertex_string_has_prefix"
 	StringHasSuffix = "vertex_string_has_suffix"
+	StringContains  = "vertex_string_contains"
 	StringAppend    = "vertex_string_append"
 	// StringDecodingUTF8 is String(decoding:as: UTF8.self) over an array.
 	StringDecodingUTF8 = "vertex_string_decoding_utf8"
@@ -103,17 +104,19 @@ const (
 	CommandLineArguments = "vertex_command_line_arguments"
 
 	// Array mutation and queries. See runtime/collections.cpp.
-	ArrayAppend         = "vertex_array_append"
-	ArrayAppendContents = "vertex_array_append_contents"
-	ArrayAssign         = "vertex_array_assign"
-	ArrayInsert         = "vertex_array_insert"
-	ArrayRemoveAt       = "vertex_array_remove_at"
-	ArrayRemoveLast     = "vertex_array_remove_last"
-	ArrayRemoveAll      = "vertex_array_remove_all"
-	ArrayFirst          = "vertex_array_first"
-	ArrayLast           = "vertex_array_last"
-	ArrayContains       = "vertex_array_contains"
-	ArrayEqual          = "vertex_array_equal"
+	ArrayAppend          = "vertex_array_append"
+	ArrayAppendContents  = "vertex_array_append_contents"
+	ArrayAssign          = "vertex_array_assign"
+	ArrayElementForWrite = "vertex_array_element_for_write"
+	ArrayInsert          = "vertex_array_insert"
+	ArrayRemoveAt        = "vertex_array_remove_at"
+	ArrayRemoveLast      = "vertex_array_remove_last"
+	ArrayPopLast         = "vertex_array_pop_last"
+	ArrayRemoveAll       = "vertex_array_remove_all"
+	ArrayFirst           = "vertex_array_first"
+	ArrayLast            = "vertex_array_last"
+	ArrayContains        = "vertex_array_contains"
+	ArrayEqual           = "vertex_array_equal"
 
 	// Hasher, whose state is core's struct and whose work is the runtime's.
 	HasherInit     = "vertex_hasher_init"

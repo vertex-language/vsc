@@ -207,11 +207,11 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 			return
 		}
 	}
-	// Subscript compound assignments: a[i] op= v, d[k, default: v] op= w.
+	// d[k, default: v] op= w reads and writes through the runtime. An
+	// array's a[i] op= v is written where the element is, below.
 	if sub, ok := e.X.(*ast.SubscriptExpr); ok {
-		_, isArr := g.typeOf(sub.X).Underlying().(*types.Array)
 		_, isDict := g.typeOf(sub.X).Underlying().(*types.Dictionary)
-		if isArr || (isDict && g.defaultSubscript(sub)) {
+		if isDict && g.defaultSubscript(sub) {
 			cur, rhs := g.expr(e.X), g.expr(e.Y)
 			if cur == nil || rhs == nil {
 				return
@@ -222,10 +222,7 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 				g.unsupported(e)
 				return
 			}
-			nv := g.consume(v)
-			if isDict {
-				nv = g.optionalFor(e, nv, t, &types.Optional{Wrapped: t})
-			}
+			nv := g.optionalFor(e, g.consume(v), t, &types.Optional{Wrapped: t})
 			g.subscriptAssign(e.X, collArg{value: nv})
 			return
 		}
@@ -237,6 +234,15 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 		}
 	}
 	said := len(g.diags)
+	// Through an array element, the operand comes first and the element
+	// is read where it is written, once. See assign.
+	var rhs *sil.Value
+	through := g.writesThroughElement(e.X)
+	if through {
+		if rhs = g.expr(e.Y); rhs == nil {
+			return
+		}
+	}
 	addr := g.lvalue(e.X)
 	if addr == nil {
 		if len(g.diags) == said {
@@ -244,7 +250,14 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 		}
 		return
 	}
-	cur, rhs := g.expr(e.X), g.expr(e.Y)
+	var cur *sil.Value
+	if through {
+		lt := lowerType(g.typeOf(e.X))
+		cur = g.blk.Load(addr, loadQualifier(lt))
+		g.destroyLater(cur)
+	} else {
+		cur, rhs = g.expr(e.X), g.expr(e.Y)
+	}
 	if cur == nil || rhs == nil {
 		return
 	}
@@ -283,6 +296,16 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 		return
 	}
 	said := len(g.diags)
+	// Through an array element, the value comes first: the element's
+	// address is where the array's storage is once it is unique, which
+	// reading or copying the array in the value would undo.
+	_, toExistential := existentialOf(g.typeOf(e.X))
+	var early *sil.Value
+	if !toExistential && g.writesThroughElement(e.X) {
+		if early = g.rvalue(e.Y); early == nil {
+			return
+		}
+	}
 	addr := g.lvalue(e.X)
 	if addr == nil {
 		if len(g.diags) == said {
@@ -316,7 +339,10 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 		return
 	}
 
-	v := g.rvalue(e.Y)
+	v := early
+	if v == nil {
+		v = g.rvalue(e.Y)
+	}
 	if v == nil {
 		return
 	}
@@ -383,6 +409,9 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 			return nil
 		}
 		return g.blk.StructElementAddr(addr, name, t)
+
+	case *ast.SubscriptExpr:
+		return g.elementAddr(n)
 	}
 	return nil
 }
@@ -988,7 +1017,7 @@ func (g *gen) switchOnEnum(s *ast.SwitchStmt, subject *sil.Value, t types.Type,
 				g.refuse(item.Pat, "this pattern in a switch over an enum")
 				return false
 			}
-			if len(cs.Items) > 1 && pat.Args != nil && patternBindsNames(pat.Args) {
+			if len(cs.Items) > 1 && pat.Args != nil && g.bindsNames(pat.Args) {
 				g.refuse(item.Pat, "a case of several patterns that binds names")
 				return false
 			}
@@ -1005,12 +1034,13 @@ func (g *gen) switchOnEnum(s *ast.SwitchStmt, subject *sil.Value, t types.Type,
 	for start := 0; ; {
 		end := len(items)
 		for j := start; j < len(items); j++ {
-			if items[j].item.Where != nil {
+			if items[j].item.Where != nil || g.refutablePayload(items[j].pat) {
 				end = j + 1
 				break
 			}
 		}
-		final := end == len(items) && (end == start || items[end-1].item.Where == nil)
+		final := end == len(items) && (end == start ||
+			(items[end-1].item.Where == nil && !g.refutablePayload(items[end-1].pat)))
 
 		part := enumPart{final: final}
 		if !final {
@@ -1080,6 +1110,24 @@ func (g *gen) enumItemArm(t types.Type, it enumItem, body *sil.Block, part enumP
 	// has one body and a payload of a different type from each case. Each
 	// case goes through an arm of its own that takes what it carries, lets
 	// go of it, and joins the body, which takes nothing.
+	if it.several && pat.Args != nil && g.refutablePayload(pat) {
+		// `.code(1), .quit`: the payload is matched, then let go.
+		arm := g.fn.Block()
+		var tests []payloadTest
+		g.payloadTests = &tests
+		bound := g.bindCasePayload(t, pat, arm)
+		g.payloadTests = nil
+		if !bound {
+			return nil, false
+		}
+		owned := g.armOwned[arm]
+		delete(g.armOwned, arm)
+		// The body is several arms', and owns none of what they bound.
+		if !g.joinArm(arm, body, owned, nil, part, true, tests...) {
+			return nil, false
+		}
+		return arm, true
+	}
 	if it.several && pat.Args != nil {
 		arm := g.fn.Block()
 		if k := g.caseOf(t, g.text(pat.Name)); k != nil && k.AssociatedType != nil {
@@ -1107,25 +1155,90 @@ func (g *gen) enumItemArm(t types.Type, it enumItem, body *sil.Block, part enumP
 	}
 
 	arm := g.fn.Block()
-	if pat.Args != nil && !g.bindCasePayload(t, pat, arm) {
+	var tests []payloadTest
+	g.payloadTests = &tests
+	bound := pat.Args == nil || g.bindCasePayload(t, pat, arm)
+	g.payloadTests = nil
+	if !bound {
 		return nil, false
 	}
 	owned := g.armOwned[arm]
 	delete(g.armOwned, arm)
-	if !g.joinArm(arm, body, owned, it.item.Where, part) {
+	if !g.joinArm(arm, body, owned, it.item.Where, part, false, tests...) {
 		return nil, false
 	}
 	return arm, true
+}
+
+// A payloadTest is a part of what a case carries that its pattern matches
+// rather than binds -- the 1 of `.a(1, let x)` -- tested once it is bound.
+type payloadTest struct {
+	pat ast.Pattern
+	v   *sil.Value
+	t   types.Type
+}
+
+// refutablePayload reports whether a case pattern's payload patterns can
+// fail to match what the case carries, so that the case is tried and the
+// ones after it are tried where it does not match, as with a where clause.
+func (g *gen) refutablePayload(pat *ast.EnumCasePattern) bool {
+	return pat.Args != nil && g.refutable(pat.Args)
+}
+
+func (g *gen) refutable(p ast.Pattern) bool {
+	switch p := p.(type) {
+	case nil, *ast.WildcardPattern, *ast.IdentPattern:
+		return false
+	case *ast.ValueBindingPattern:
+		return g.refutable(p.Pat)
+	case *ast.TuplePattern:
+		for _, el := range p.Elems {
+			if g.refutable(el.Pat) {
+				return true
+			}
+		}
+		return false
+	case *ast.ExprPattern:
+		// A name under a let -- `case let .a(n)` -- is bound.
+		if ie, ok := p.X.(*ast.IdentExpr); ok && ie.Name != nil && g.info.Defs[ie.Name] != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // joinArm ends an arm of a split switch that has bound owned: it tests the
 // where clause, if there is one, going on to the next part without what
 // was bound when it does not hold; lets go of the subject kept for the next
 // part; and joins the body, which owns what was bound from then on.
-func (g *gen) joinArm(arm, body *sil.Block, owned []*sil.Value, where *ast.WhereClause, part enumPart) bool {
+//
+// An arm that releases lets go of what it bound before it joins the body.
+func (g *gen) joinArm(arm, body *sil.Block, owned []*sil.Value, where *ast.WhereClause, part enumPart,
+	release bool, tests ...payloadTest) bool {
 	prev := g.blk
 	defer func() { g.blk = prev }()
 	g.blk = arm
+	// What the payload is matched against, part by part: where one does
+	// not match, it is let go and the cases after are tried.
+	for _, pt := range tests {
+		g.push()
+		bit, ok := g.patternTest(pt.pat, pt.v, pt.t)
+		if !ok {
+			g.scopes = g.scopes[:len(g.scopes)-1]
+			return false
+		}
+		g.pop()
+		if bit == nil {
+			continue
+		}
+		holds, fails := g.fn.Block(), g.fn.Block()
+		g.blk.CondBr(bit, holds, nil, fails, nil)
+		for _, v := range owned {
+			fails.DestroyValue(v)
+		}
+		fails.Br(part.next)
+		g.blk = holds
+	}
 	if where != nil {
 		g.push()
 		cond := g.rvalue(where.Cond)
@@ -1150,6 +1263,12 @@ func (g *gen) joinArm(arm, body *sil.Block, owned []*sil.Value, where *ast.Where
 	}
 	if part.dropKeep {
 		g.blk.DestroyValue(part.keep)
+	}
+	if release {
+		for _, v := range owned {
+			g.blk.DestroyValue(v)
+		}
+		owned = nil
 	}
 	g.blk.Br(body)
 	if len(owned) > 0 {
@@ -1311,7 +1430,7 @@ func (g *gen) switchOnOptional(s *ast.SwitchStmt, subject *sil.Value, o *types.O
 					arm.DestroyValue(payload)
 				}
 			}
-			if !g.joinArm(arm, body, owned, it.item.Where, part) {
+			if !g.joinArm(arm, body, owned, it.item.Where, part, false) {
 				return false
 			}
 			if member == "" {
@@ -2198,6 +2317,23 @@ func (g *gen) destroyArmOwned(arm *sil.Block) {
 	delete(g.armOwned, arm)
 }
 
+// bindsNames reports whether a case's argument patterns bind a name.
+func (g *gen) bindsNames(args *ast.TuplePattern) bool {
+	found := false
+	ast.Inspect(args, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.IdentPattern:
+			found = true
+		case *ast.ExprPattern:
+			if ie, ok := n.X.(*ast.IdentExpr); ok && ie.Name != nil && g.info.Defs[ie.Name] != nil {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 // patternBindsNames reports whether a case's argument patterns bind any
 // name, rather than only matching with `_`.
 func patternBindsNames(args *ast.TuplePattern) bool {
@@ -2236,6 +2372,13 @@ func (g *gen) bindPatternTo(p ast.Pattern, v *sil.Value, t types.Type) bool {
 	}
 	id, ok := p.(*ast.IdentPattern)
 	if !ok || id.Name == nil {
+		// Matched rather than bound: tested where the arm joins its body.
+		if g.payloadTests != nil && g.refutable(p) {
+			if _, nested := p.(*ast.EnumCasePattern); !nested {
+				*g.payloadTests = append(*g.payloadTests, payloadTest{pat: p, v: v, t: t})
+				return true
+			}
+		}
 		g.refuse(p, "this pattern inside a case")
 		return false
 	}

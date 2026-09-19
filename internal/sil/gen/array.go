@@ -34,7 +34,8 @@ func (g *gen) arrayLiteral(e *ast.ArrayLit) *sil.Value {
 			return nil
 		}
 		// An element of [Any] is its value in an existential, as an
-		// argument to a variadic Any... is.
+		// argument to a variadic Any... is; one of [T?] is wrapped.
+		v = g.optionalFor(item, v, g.typeOf(item), arr.Elem)
 		elems = append(elems, g.existentialFor(item, v, g.typeOf(item), arr.Elem))
 	}
 	return g.makeArray(e, t, arr.Elem, elems)
@@ -302,6 +303,96 @@ func (g *gen) elementAt(at ast.Node, base *sil.Value, t types.Type,
 	v := g.blk.Load(addr, loadQualifier(elem))
 	g.destroyLater(v)
 	return v
+}
+
+// elementAddr is where an array element is, for writing through: `a[i].x =
+// v`, `a[i].mutate()`, `a[i][j] = v`. It is Array's mutable addressor --
+// the storage is made the variable's alone and the element's address
+// handed back -- so the write changes this array and no other.
+//
+// Swift begins that access once the value or the arguments are evaluated,
+// so that one reading or copying the array sees it as it was; callers
+// that write through an element evaluate those first (see
+// writesThroughElement).
+func (g *gen) elementAddr(e *ast.SubscriptExpr) *sil.Value {
+	t := g.typeOf(e.X)
+	arr, ok := t.Underlying().(*types.Array)
+	if !ok || len(e.Args) != 1 || e.Args[0].Label != nil {
+		return nil
+	}
+	base := g.lvalue(e.X)
+	if base == nil {
+		return nil
+	}
+	index := g.rvalue(e.Args[0].X)
+	meta, ok := g.stdlibMetadata(e, arr.Elem)
+	if index == nil || !ok {
+		return nil
+	}
+	raw := rawPointerType()
+	access := g.blk.BeginAccess(base, "modify", "unknown")
+	p := g.runtimeResult(stdlib.ArrayElementForWrite, []sil.Param{
+		{Type: raw, Convention: sil.ParamUnowned},
+		{Type: lowerType(types.Typ[types.Int])},
+		{Type: raw, Convention: sil.ParamUnowned},
+	}, raw, g.blk.AddressToPointer(access, raw), index, meta)
+	g.blk.EndAccess(access)
+	return g.blk.PointerToAddress(p, lowerType(arr.Elem).Address())
+}
+
+// writesThroughElement reports whether a destination is reached through an
+// array element -- `a[i].x`, `a[i]` as a mutating receiver -- whose address
+// is taken only after the value written is evaluated.
+func (g *gen) writesThroughElement(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.ParenExpr:
+		return g.writesThroughElement(n.X)
+	case *ast.MemberExpr:
+		if isClass(g.typeOf(n.X)) {
+			return false
+		}
+		return g.writesThroughElement(n.X)
+	case *ast.SubscriptExpr:
+		_, isArray := g.typeOf(n.X).Underlying().(*types.Array)
+		return isArray
+	}
+	return false
+}
+
+// arrayConcat lowers `a + b` of two arrays: a copy of a, with b's elements
+// appended, as Swift's + on RangeReplaceableCollection is.
+func (g *gen) arrayConcat(e *ast.BinaryExpr) (*sil.Value, bool) {
+	if g.text(e.Op) != "+" {
+		return nil, false
+	}
+	t := g.typeOf(e)
+	arr, ok := arrayOf(t)
+	if !ok {
+		return nil, false
+	}
+	if _, ok := arrayOf(g.typeOf(e.X)); !ok {
+		return nil, false
+	}
+	if _, ok := arrayOf(g.typeOf(e.Y)); !ok {
+		return nil, false
+	}
+	lhs := g.rvalue(e.X)
+	rhs := g.expr(e.Y)
+	meta, ok := g.stdlibMetadata(e, arr.Elem)
+	if lhs == nil || rhs == nil || !ok {
+		return nil, true
+	}
+	lt := lowerType(t)
+	slot := g.blk.AllocStack(lt)
+	g.blk.Store(lhs, slot, storeQualifier(lt))
+	g.runtimeVoid(stdlib.ArrayAppendContents, []sil.Param{
+		{Type: lt.Address(), Convention: sil.ParamInout},
+		{Type: lt, Convention: sil.ParamGuaranteed},
+		{Type: rawPointerType()},
+	}, slot, rhs, meta)
+	v := g.blk.Load(slot, "take")
+	g.destroyLater(v)
+	return v, true
 }
 
 // forInArray lowers `for x in a` as a counted loop over the array's elements.

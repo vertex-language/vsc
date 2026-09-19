@@ -688,9 +688,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			rhs = c.checkExpr(e.Y, operandCtx, scope)
 		}
 		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs, scope)
-		// An array literal compared with an array is an array of that
-		// array's elements: `bytes == [109, 115]` with bytes a [UInt8].
-		if opName == "==" || opName == "!=" {
+		// An array literal compared with or added to an array is an array
+		// of that array's elements: `bytes == [109, 115]` with bytes a
+		// [UInt8], `xs + []`.
+		if opName == "==" || opName == "!=" || opName == "+" {
 			if _, lit := unparen(e.Y).(*ast.ArrayLit); lit && isArrayType(lhs) && !types.Identical(lhs, rhs) {
 				rhs = c.checkExpr(e.Y, lhs, scope)
 			} else if _, lit := unparen(e.X).(*ast.ArrayLit); lit && isArrayType(rhs) && !types.Identical(lhs, rhs) {
@@ -914,7 +915,14 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if _, ok := e.Fun.(*ast.ImplicitMemberExpr); ok {
 			calleeWant = expected
 		}
-		calleeType := c.checkExpr(e.Fun, calleeWant, scope)
+		var calleeType types.Type
+		// `.init(...)` where a T is wanted is T(...).
+		if im, ok := e.Fun.(*ast.ImplicitMemberExpr); ok && im.Name != nil && im.Name.Text(c.file) == "init" && expected != nil {
+			calleeType = &types.Metatype{Instance: unwrappedContext(expected)}
+			c.info.Types[im] = calleeType
+		} else {
+			calleeType = c.checkExpr(e.Fun, calleeWant, scope)
+		}
 		var args []*ast.CallArg
 		if e.Args != nil {
 			args = e.Args.Args
@@ -1055,6 +1063,19 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if meta, ok := arr.Elem.(*types.Metatype); ok {
 				inst := &types.Array{Elem: meta.Instance}
 				if len(args) == 0 {
+					return inst
+				}
+				// `[T](xs)` of an array of T -- `[UInt8](s.utf8)` -- is a
+				// copy of it, as `Array(xs)` is.
+				if len(args) == 1 && args[0].Label == nil {
+					t := c.checkExpr(args[0].X, inst, scope)
+					if a, isArray := t.Underlying().(*types.Array); isArray && types.Identical(a.Elem, meta.Instance) {
+						c.info.ArrayCopies[e] = inst
+						return inst
+					}
+					if !isInvalid(t) {
+						c.typeErrorf(e.Pos(), "no initializer of '%s' takes a '%s' yet", inst, t)
+					}
 					return inst
 				}
 				if len(args) == 2 && args[0].Label != nil && args[1].Label != nil &&

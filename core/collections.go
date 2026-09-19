@@ -144,6 +144,9 @@ func LowerCollectionMethod(recv types.Type, name string, labels []string) (Metho
 			}
 			return Method{Symbol: symbol, Params: []*types.Param{param(labels[0], str)}, Result: boolType,
 				Operands: []Operand{{Kind: OpReceiver}, {Kind: OpArgValue, Arg: 0}}}, true
+		case name == "contains" && is(""):
+			return Method{Symbol: stdlib.StringContains, Params: []*types.Param{param("", str)}, Result: boolType,
+				Operands: []Operand{{Kind: OpReceiver}, {Kind: OpArgValue, Arg: 0}}}, true
 		case name == "append" && (is("") || is("contentsOf")):
 			return Method{Symbol: stdlib.StringAppend, Params: []*types.Param{param(labels[0], str)},
 				Result: voidType, Mutating: true,
@@ -172,6 +175,10 @@ func LowerCollectionMethod(recv types.Type, name string, labels []string) (Metho
 		case name == "removeLast" && is():
 			return Method{Symbol: stdlib.ArrayRemoveLast, Result: elem, Mutating: true, ResultOut: true,
 				Operands: []Operand{{Kind: OpReceiverSlot}, {Kind: OpOut}, meta(elem)}}, true
+		case name == "popLast" && is():
+			opt := &types.Optional{Wrapped: elem}
+			return Method{Symbol: stdlib.ArrayPopLast, Result: opt, Mutating: true, ResultOut: true,
+				Operands: []Operand{{Kind: OpReceiverSlot}, {Kind: OpOut}, meta(opt)}}, true
 		case name == "removeAll" && is():
 			return Method{Symbol: stdlib.ArrayRemoveAll, Result: voidType, Mutating: true,
 				Operands: []Operand{{Kind: OpReceiverSlot}, meta(elem)}}, true

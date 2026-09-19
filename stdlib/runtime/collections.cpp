@@ -408,6 +408,15 @@ void vertex_array_assign(ArrayStorage** slot, i64 index, void* value, const Meta
   vw->assignWithTake(elementsOf(a) + index * vw->stride, value, element);
 }
 
+// vertex_array_element_for_write is where a[index] is, once the storage is
+// the slot's alone: Array's mutable addressor, which `a[i].x = v` and
+// `a[i].mutate()` write through.
+u8* vertex_array_element_for_write(ArrayStorage** slot, i64 index, const Metadata* element) {
+  checkIndex(index, (*slot)->count);
+  ArrayStorage* a = uniqueArray(slot, (*slot)->count, element);
+  return elementsOf(a) + index * witnesses(element)->stride;
+}
+
 // vertex_array_insert takes the value into the array at index, which may
 // be the count.
 void vertex_array_insert(ArrayStorage** slot, void* value, i64 index, const Metadata* element) {
@@ -441,6 +450,17 @@ void vertex_array_remove_last(ArrayStorage** slot, void* out, const Metadata* el
   if ((*slot)->count == 0)
     fatal("Can't remove last element from an empty collection");
   vertex_array_remove_at(slot, (*slot)->count - 1, out, element);
+}
+
+// vertex_array_pop_last moves the last element into the Optional at out,
+// or writes nil for an empty array, as Swift's popLast does.
+void vertex_array_pop_last(ArrayStorage** slot, void* out, const OptionalMetadata* result) {
+  if ((*slot)->count == 0) {
+    writeNone(out, result);
+    return;
+  }
+  vertex_array_remove_at(slot, (*slot)->count - 1, out, result->payload);
+  markSome(out, result);
 }
 
 // vertex_array_remove_all empties the array, keeping nothing.
@@ -935,6 +955,24 @@ bool vertex_string_has_suffix(u64 s0, u64 s1, u64 p0, u64 p1) {
     yes = sameCharacter(s, s.count - p.count + i, p, i);
   freeClusters(s);
   freeClusters(p);
+  return yes;
+}
+
+// vertex_string_contains is contains(_:) with a string: the Characters of
+// other appear in self as a run, compared as Characters are. Every string
+// contains the empty one.
+bool vertex_string_contains(u64 s0, u64 s1, u64 o0, u64 o1) {
+  Clusters s, o;
+  clustersOf(s, s0, s1);
+  clustersOf(o, o0, o1);
+  bool yes = o.count == 0;
+  for (usize at = 0; !yes && at + o.count <= s.count; at++) {
+    yes = true;
+    for (usize i = 0; yes && i < o.count; i++)
+      yes = sameCharacter(s, at + i, o, i);
+  }
+  freeClusters(s);
+  freeClusters(o);
   return yes;
 }
 

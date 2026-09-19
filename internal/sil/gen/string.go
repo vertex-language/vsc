@@ -297,12 +297,19 @@ func (g *gen) describing(at ast.Node, e ast.Expr) *sil.Value {
 	if !ok {
 		return nil
 	}
-	v := g.rvalue(e)
+	v := g.expr(e)
 	if v == nil {
 		return nil
 	}
 	slot := g.blk.AllocStack(lowerType(t))
-	g.blk.Store(v, slot, storeQualifier(lowerType(t)))
+	inMemory := v.Type().IsAddress()
+	if inMemory {
+		// An existential (the error a catch bound) is in memory: copy it
+		// out, leaving the original to whatever cleans it up.
+		g.blk.CopyAddr(v, slot, "init")
+	} else {
+		g.blk.Store(g.consume(v), slot, storeQualifier(lowerType(t)))
+	}
 
 	str := lowerType(types.Typ[types.String])
 	callee := g.m.Func(describingSymbol).SetSourceName("String.init")
@@ -319,7 +326,9 @@ func (g *gen) describing(at ast.Node, e ast.Expr) *sil.Value {
 	out := g.blk.Apply(g.blk.FunctionRef(callee), str, slot, meta)
 	g.destroyLater(out)
 	// Destroy the temporary copy after the call.
-	if lt := lowerType(t); !lt.Trivial() {
+	if inMemory {
+		g.destroyAddrLater(slot)
+	} else if lt := lowerType(t); !lt.Trivial() {
 		g.destroyLater(g.blk.Load(slot, "take"))
 	}
 	return out

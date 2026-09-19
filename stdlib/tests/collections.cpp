@@ -98,6 +98,9 @@ void arrays() {
   IntOpt none{};
   vertex_array_last(empty, &none, &intOptional);
   check(none.tag == 1, "last of empty", none.tag);
+  IntOpt popped{};
+  vertex_array_pop_last(&empty, &popped, &intOptional);
+  check(popped.tag == 1 && empty->count == 0, "pop last of empty", popped.tag);
 
   // Strings, whose copies and moves go through their witnesses.
   ArrayStorage* strings = vertex_array_allocate(0, stringType()).array;

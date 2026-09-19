@@ -1316,6 +1316,7 @@ func optionalEmptyCase(o *types.Optional) (offset, bytes, none int64, ok bool) {
 		return 0, 0, 0, false
 	case *types.Class, *types.Array, *types.Dictionary, *types.Set:
 		return 0, 8, 0, true
+	case *types.Struct:
 		// A struct that spares a representation: its never-zero word zero.
 		if _, at, ok := spareStructOptional(o); ok {
 			return at, 8, 0, true

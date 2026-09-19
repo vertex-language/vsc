@@ -434,6 +434,12 @@ type gen struct {
 	chainNone   []*sil.Block
 	chainDepth  []int // the scope each chain in chainNone opened, let go of on its way there
 	chainActive map[ast.Expr]bool
+	// lateReceivers are the calls whose receiver is evaluated after their
+	// arguments: a mutating method on an array element. See elementAddr.
+	lateReceivers map[*ast.CallExpr]bool
+	// payloadTests collects, while a case's payload is bound, the parts
+	// its pattern matches rather than binds. See enumItemArm.
+	payloadTests *[]payloadTest
 
 	diags []token.Diagnostic
 }

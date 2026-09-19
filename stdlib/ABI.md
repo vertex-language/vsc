@@ -259,8 +259,10 @@ after them:
 | `vertex_array_append` | `(ArrayStorage** slot, void* value, Metadata* element)` | `append(_:)`, taking the value |
 | `vertex_array_append_contents` | `(ArrayStorage**, ArrayStorage* other, Metadata*)` | `append(contentsOf:)` |
 | `vertex_array_assign` | `(ArrayStorage**, i64 index, void* value, Metadata*)` | `a[i] = v`, taking the value |
+| `vertex_array_element_for_write` | `(ArrayStorage**, i64 index, Metadata*) -> void*` | where `a[i]` is, the storage made unique: `a[i].x = v`, `a[i].mutate()` |
 | `vertex_array_insert` | `(ArrayStorage**, void* value, i64 index, Metadata*)` | `insert(_:at:)` |
 | `vertex_array_remove_at` / `_remove_last` | `(ArrayStorage**, [i64 index,] void* out, Metadata*)` | `remove(at:)`, `removeLast()` |
+| `vertex_array_pop_last` | `(ArrayStorage**, void* out, OptionalMetadata*)` | `popLast()`: the last element, or nil |
 | `vertex_array_remove_all` | `(ArrayStorage**, Metadata*)` | `removeAll()` |
 | `vertex_array_first` / `_last` | `(ArrayStorage*, void* out, OptionalMetadata*)` | `first`, `last` |
 | `vertex_array_contains` | `(ArrayStorage*, void* value, Metadata*) -> bool` | `contains(_:)` |

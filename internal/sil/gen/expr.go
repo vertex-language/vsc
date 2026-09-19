@@ -594,6 +594,10 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 	}
 	// Implicit member enum case call (.line(7)).
 	if im, ok := e.Fun.(*ast.ImplicitMemberExpr); ok && im.Name != nil {
+		// `.init(...)` where a T is wanted: T(...).
+		if meta, isMeta := g.typeOf(im).(*types.Metatype); isMeta && g.text(im.Name) == "init" {
+			return g.construct(e, analyzer.NewTypeName(typeName(meta.Instance), meta.Instance, im.Pos()))
+		}
 		if ec, ok := g.info.Uses[im.Name].(*analyzer.EnumCaseSymbol); ok {
 			return g.payloadCase(e, ec)
 		}
@@ -622,9 +626,12 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 		return nil
 	}
 	// A name bound to a function value in this scope -- a closure in a
-	// let, a nested function that captures -- is that value, called.
+	// let, a nested function that captures, a top-level let -- is that
+	// value, called.
 	if sym := g.info.Uses[id.Name]; sym != nil {
-		if _, isLocal := g.locals[sym]; isLocal {
+		_, isLocal := g.locals[sym]
+		_, isGlobal := g.vars[sym]
+		if isLocal || isGlobal {
 			if t := g.typeOf(id); t != nil {
 				if _, isFunc := t.Underlying().(*types.Signature); isFunc {
 					return g.applyValue(e, id)
@@ -874,7 +881,8 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *sil.Value
 		if v == nil {
 			return nil
 		}
-		values = append(values, v)
+		// A property of type T? given a T holds it wrapped.
+		values = append(values, g.optionalFor(from, v, g.typeOf(from), f.Type))
 	}
 	if next != len(args) {
 		g.refuse(e, "a constructor whose arguments do not match the properties in order")
@@ -1177,6 +1185,12 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *sil.Value {
 	if ex, ok := existentialOf(recv); ok {
 		return g.existentialCall(e, ref, mem, ex)
 	}
+	if mutatingRef(ref) && g.writesThroughElement(mem.X) {
+		if g.lateReceivers == nil {
+			g.lateReceivers = map[*ast.CallExpr]bool{}
+		}
+		g.lateReceivers[e] = true
+	}
 	return g.methodCall(e, ref, func() *sil.Value {
 		// Mutating methods receive receiver storage address.
 		if mutatingRef(ref) {
@@ -1250,8 +1264,22 @@ func (g *gen) dynamicCall(e *ast.CallExpr, ref *analyzer.MethodRef, cl *types.Cl
 	return v
 }
 
-// methodArgs evaluates receiver then arguments, returning them with receiver placed last.
+// methodArgs evaluates receiver then arguments, returning them with receiver
+// placed last. A receiver that is an array element is evaluated after
+// them, as Swift begins that access once the arguments are evaluated.
 func (g *gen) methodArgs(e *ast.CallExpr, sig *types.Signature, receiver func() *sil.Value) (*sil.Value, []*sil.Value, bool) {
+	if g.lateReceivers[e] {
+		args, ok := g.arguments(e, sig)
+		if !ok {
+			return nil, nil, false
+		}
+		self := receiver()
+		if self == nil {
+			g.unsupported(e)
+			return nil, nil, false
+		}
+		return self, args, true
+	}
 	self := receiver()
 	if self == nil {
 		g.unsupported(e)
@@ -1500,6 +1528,9 @@ func (g *gen) declareSignature(f *sil.Func, sig *types.Signature) {
 
 // binary lowers an operator expression.
 func (g *gen) binary(e *ast.BinaryExpr) *sil.Value {
+	if v, isArray := g.arrayConcat(e); isArray {
+		return v
+	}
 	sym, _ := g.info.Operators[e].(*analyzer.FuncSymbol)
 	if ref := g.info.OperatorMethods[e]; ref != nil || (sym != nil && !g.coreOperator(sym)) {
 		return g.operatorCall(e, ref, sym, e.X, e.Y)

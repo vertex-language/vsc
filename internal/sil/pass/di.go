@@ -35,7 +35,10 @@ func resolveAssigns(f *sil.Func) {
 		return
 	}
 	for _, b := range f.Blocks() {
-		for _, in := range b.Insts() {
+		// Inserting shifts b.Insts() in place, so walk a copy.
+		insts := make([]*sil.Inst, len(b.Insts()))
+		copy(insts, b.Insts())
+		for _, in := range insts {
 			if in.Op() != sil.Assign {
 				continue
 			}

@@ -62,6 +62,31 @@ func (g *gen) collectionCall(at ast.Node, m core.Method, recv ast.Expr, args []c
 		return g.optionalFor(a.expr, v, from, pt), pt
 	}
 
+	// A receiver that is an array element -- `rows[i].append(x)`, `a[i][j]
+	// = v` -- is reached after the arguments are evaluated. See elementAddr.
+	if receivesSlot(m) && g.writesThroughElement(recv) {
+		args = append([]collArg(nil), args...)
+		for _, op := range m.Operands {
+			if args == nil || op.Arg >= len(args) || args[op.Arg].value != nil {
+				continue
+			}
+			switch op.Kind {
+			case core.OpArgTake, core.OpArgBorrow:
+				v, _ := argValue(op.Arg)
+				if v == nil {
+					return nil
+				}
+				args[op.Arg].value = v
+			case core.OpArgValue:
+				v := g.expr(args[op.Arg].expr)
+				if v == nil {
+					return nil
+				}
+				args[op.Arg].value = v
+			}
+		}
+	}
+
 	for _, op := range m.Operands {
 		switch op.Kind {
 		case core.OpReceiverSlot:
@@ -189,6 +214,16 @@ func (g *gen) collectionCall(at ast.Node, m core.Method, recv ast.Expr, args []c
 		return answer
 	}
 	return g.void()
+}
+
+// receivesSlot reports whether a runtime method takes its receiver's storage.
+func receivesSlot(m core.Method) bool {
+	for _, op := range m.Operands {
+		if op.Kind == core.OpReceiverSlot {
+			return true
+		}
+	}
+	return false
 }
 
 // collectionMethodCall is a call through a dot that names a collection

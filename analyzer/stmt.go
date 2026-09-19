@@ -141,7 +141,7 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 
 	case *ast.SwitchStmt:
 		subjectType := c.checkExpr(s.Subject, nil, scope)
-		matchedCases := make(map[string]bool)
+		var rows [][]*space
 		var hasDefault bool
 		var caseInits [][]*VarSymbol
 
@@ -163,7 +163,7 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 						c.checkExpr(item.Where.Cond, types.Typ[types.Bool], caseScope)
 					}
 					if item.Where == nil {
-						c.collectMatchedCases(item.Pat, matchedCases, &hasDefault)
+						rows = append(rows, []*space{c.spaceOf(item.Pat, subjectType)})
 					}
 				}
 				caseInits = append(caseInits, c.branch(func() {
@@ -176,30 +176,12 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		c.joinBranches(caseInits)
 
 		if !hasDefault && subjectType != nil && !isInvalid(subjectType) {
-			switch u := subjectType.Underlying().(type) {
-			case *types.Enum:
-				var missing []string
-				for _, ec := range u.Cases {
-					if !matchedCases[ec.Name] {
-						missing = append(missing, "."+ec.Name)
-					}
-				}
+			if left, missing := missingSpaces(rows, subjectType); left {
 				if len(missing) > 0 {
 					c.errorf(s.Switch, "switch must be exhaustive (missing: %s)", strings.Join(missing, ", "))
-				}
-			case *types.Optional:
-				if !matchedCases["some"] || !matchedCases["none"] {
+				} else {
 					c.errorf(s.Switch, "switch must be exhaustive")
 				}
-			case *types.Basic:
-				if u.Kind() != types.Bool || !matchedCases["true"] || !matchedCases["false"] {
-					c.errorf(s.Switch, "switch must be exhaustive")
-				}
-			case *types.Tuple:
-				// Not modelled: a tuple's space is the product of its
-				// elements', and a switch over one is refused later.
-			default:
-				c.errorf(s.Switch, "switch must be exhaustive")
 			}
 		}
 
@@ -286,6 +268,13 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 		for i, el := range p.Elems {
 			c.declareCasePattern(el.Pat, elementAt(subjectType, i, len(p.Elems)), scope)
 		}
+	// `.c(let i)?` binds under the optional what it wraps.
+	case *ast.OptionalPattern:
+		var wrapped types.Type
+		if o, ok := underlying(subjectType).(*types.Optional); ok {
+			wrapped = o.Wrapped
+		}
+		c.declareCasePattern(p.Pat, wrapped, scope)
 	}
 }
 
@@ -326,50 +315,6 @@ func elementAt(assoc types.Type, i, n int) types.Type {
 		return tup.Elements[i].Type
 	}
 	return nil
-}
-
-func (c *checker) collectMatchedCases(pat ast.Pattern, matched map[string]bool, hasDefault *bool) {
-	if pat == nil {
-		return
-	}
-	switch p := pat.(type) {
-	case *ast.WildcardPattern:
-		*hasDefault = true
-	case *ast.EnumCasePattern:
-		matched[p.Name.Text(c.file)] = true
-	case *ast.ExprPattern:
-		if mem, ok := p.X.(*ast.MemberExpr); ok {
-			matched[mem.Name.Text(c.file)] = true
-		} else if id, ok := p.X.(*ast.IdentExpr); ok {
-			matched[id.Name.Text(c.file)] = true
-		} else if lit, ok := p.X.(*ast.BasicLit); ok {
-			switch lit.Kind {
-			case token.TRUE:
-				matched["true"] = true
-			case token.FALSE:
-				matched["false"] = true
-			case token.NIL:
-				matched["none"] = true
-			}
-		}
-	case *ast.OptionalPattern:
-		// `let x?` is .some of whatever x matches, all of it only where
-		// x matches everything.
-		inner := map[string]bool{}
-		all := false
-		c.collectMatchedCases(p.Pat, inner, &all)
-		if all {
-			matched["some"] = true
-		}
-	case *ast.ValueBindingPattern:
-		if _, ok := p.Pat.(*ast.IdentPattern); ok {
-			*hasDefault = true
-		} else {
-			c.collectMatchedCases(p.Pat, matched, hasDefault)
-		}
-	case *ast.IdentPattern:
-		*hasDefault = true
-	}
 }
 
 func (c *checker) checkCodeBlock(block *ast.CodeBlock, parent *Scope) {
