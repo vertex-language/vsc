@@ -373,8 +373,16 @@ func (s *scanner) scanOperator() {
 		}
 	}
 
-	text := string(s.src[start:s.off])
 	left := s.leftBound(start)
+	// An operator bound on the left that starts with '!' or '?' is that
+	// one character, as swiftc lexes it, so that `a!!` unwraps twice,
+	// `s??.y` chains through two optionals and `x!+1` adds to x's value
+	// -- and `p!=q` is p unwrapped, as it is for swiftc. The rest is
+	// lexed again, bound on the left by what was just taken.
+	if left && s.off-start > 1 && (s.src[start] == '!' || s.src[start] == '?') {
+		s.off = start + 1
+	}
+	text := string(s.src[start:s.off])
 	right := s.rightBound(s.off, left)
 
 	var fl token.Flags

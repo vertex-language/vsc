@@ -34,7 +34,7 @@ func (g *gen) stringLiteral(e *ast.StringLit) *sil.Value {
 		if t := g.typeOf(e); t != nil {
 			if _, isOpt := optionalOf(t); isOpt {
 				g.forget(s)
-				wrapped := g.blk.Enum(lowerType(t), optionalSome, s)
+				wrapped := g.optionalFor(e, s, types.Typ[types.String], t)
 				g.destroyLater(wrapped)
 				return wrapped
 			}

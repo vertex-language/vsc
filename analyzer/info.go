@@ -102,6 +102,12 @@ type Info struct {
 	OptionalSomes map[*ast.CallExpr]types.Type
 	OptionalNones map[ast.Expr]types.Type
 
+	// OptionalCompares are the `==` and `!=` whose operands are optionals,
+	// or an optional and a value, mapped to the type the payloads are
+	// compared as; the operator the payloads use is recorded for the
+	// expression as any operator is.
+	OptionalCompares map[*ast.BinaryExpr]types.Type
+
 	// CastTargets is the type each `x is T` names.
 	CastTargets map[*ast.CastExpr]types.Type
 
@@ -181,6 +187,7 @@ func NewInfo() *Info {
 		ArrayCopies:      make(map[*ast.CallExpr]types.Type),
 		OptionalSomes:    make(map[*ast.CallExpr]types.Type),
 		OptionalNones:    make(map[ast.Expr]types.Type),
+		OptionalCompares: make(map[*ast.BinaryExpr]types.Type),
 		CastTargets:      make(map[*ast.CastExpr]types.Type),
 		ChainRoots:       make(map[ast.Expr]bool),
 		ChainInner:       make(map[ast.Expr]types.Type),

@@ -2402,7 +2402,10 @@ func (c *fn) zeroLeaves(in *sil.Inst, t types.Type) ([]ir.Value, error) {
 		}
 		return out, nil
 	}
-	if st, ok := t.Underlying().(*types.Struct); ok {
+	// Anything laid out as a struct is -- a struct, a tuple, a String,
+	// a function, an optional with an image of its own -- is a zero
+	// for each of its leaves.
+	if st, ok := structOf(sil.Object(t)); ok {
 		leaves, ok := structLeaves(st)
 		if !ok {
 			return nil, c.fail(ErrUnsupported, in.Op(),

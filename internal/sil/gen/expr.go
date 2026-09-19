@@ -282,8 +282,14 @@ func (g *gen) constant(e ast.Expr) *sil.Value {
 		return nil
 	}
 	t := g.typeOf(e)
+	// A literal typed as an optional, however deep, is the number
+	// wrapped that deep.
 	payload := t
-	if o, isOpt := optionalOf(t); isOpt {
+	for {
+		o, isOpt := optionalOf(payload)
+		if !isOpt {
+			break
+		}
 		payload = o.Wrapped
 	}
 	var made *sil.Value
@@ -1590,6 +1596,12 @@ func (g *gen) declareSignature(f *sil.Func, sig *types.Signature) {
 func (g *gen) binary(e *ast.BinaryExpr) *sil.Value {
 	if v, isArray := g.arrayConcat(e); isArray {
 		return v
+	}
+	// An optional compared: the operator recorded is the payloads'.
+	if _, ok := g.info.OptionalCompares[e]; ok {
+		if v, isOptional := g.optionalComparison(e, g.text(e.Op)); isOptional {
+			return v
+		}
 	}
 	sym, _ := g.info.Operators[e].(*analyzer.FuncSymbol)
 	if ref := g.info.OperatorMethods[e]; ref != nil || (sym != nil && !g.coreOperator(sym)) {

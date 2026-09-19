@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/internal/sil"
@@ -33,19 +34,44 @@ func (g *gen) nilValue(e ast.Expr) (*sil.Value, bool) {
 }
 
 // optionalFor wraps a value into an Optional.some if target type is an optional.
+//
+// A value is wrapped once for each level the destination has beyond
+// its own: a T given for a T?? is some(some(v)), a T? given for a T??
+// is some(v).
 func (g *gen) optionalFor(at ast.Node, v *sil.Value, from, to types.Type) *sil.Value {
-	o, ok := optionalOf(to)
-	if !ok || v == nil {
+	if v == nil {
 		return v
 	}
-	if _, already := optionalOf(from); already {
+	levels := optionalDepth(to) - optionalDepth(from)
+	if levels <= 0 {
 		return v
 	}
-	if _, nested := optionalOf(o.Wrapped); nested {
-		g.refuse(at, "an optional of an optional")
-		return v
+	// Innermost first: the type each wrap makes is the destination
+	// with the outer levels peeled off.
+	wraps := make([]types.Type, 0, levels)
+	for t := to; len(wraps) < levels; {
+		o, _ := optionalOf(t)
+		wraps = append(wraps, t)
+		t = o.Wrapped
 	}
-	return g.blk.Enum(lowerType(to), optionalSome, v)
+	for i := len(wraps) - 1; i >= 0; i-- {
+		v = g.blk.Enum(lowerType(g.substituted(wraps[i])), optionalSome, v)
+	}
+	return v
+}
+
+// optionalDepth is how many optionals deep a type is: 0 for an Int, 1
+// for an Int?, 2 for an Int??.
+func optionalDepth(t types.Type) int {
+	n := 0
+	for {
+		o, ok := optionalOf(t)
+		if !ok {
+			return n
+		}
+		n++
+		t = o.Wrapped
+	}
 }
 
 // bindCondition lowers an optional binding condition (if/while/guard let x = v) using switch_enum.
@@ -107,16 +133,16 @@ func (g *gen) nilCoalescing(e *ast.BinaryExpr) *sil.Value {
 		g.refuse(e, "'??' on something that is not an optional")
 		return nil
 	}
-	if _, rhsOptional := optionalOf(g.typeOf(e.Y)); rhsOptional {
-		g.refuse(e, "'??' with an optional on the right, which answers an optional")
-		return nil
-	}
+	// With an optional on the right -- `hit ?? find(other)` -- the
+	// answer is an optional: a's value wrapped again where there is
+	// one, and b as it is where there is not.
+	rt := g.typeOf(e)
 	wrapped := lowerType(o.Wrapped)
 	v, own := g.switchable(e.X, wrapped)
 	if v == nil {
 		return nil
 	}
-	result := lowerType(g.typeOf(e))
+	result := lowerType(rt)
 
 	some := g.fn.Block()
 	none := g.fn.Block()
@@ -129,16 +155,22 @@ func (g *gen) nilCoalescing(e *ast.BinaryExpr) *sil.Value {
 		sil.Case{Member: optionalNone, Dest: none})
 
 	g.blk = some
-	g.blk.Br(join, payload)
+	g.blk.Br(join, g.optionalFor(e.X, payload, o.Wrapped, rt))
 
+	// What b makes on the way -- a borrow of the receiver it is called
+	// on -- ends here, before the branch, where it is dominated.
 	g.blk = none
+	g.push()
 	fallback := g.rvalue(e.Y)
 	if fallback == nil {
+		g.scopes = g.scopes[:len(g.scopes)-1]
 		return nil
 	}
-	if !wrapped.Trivial() {
+	fallback = g.optionalFor(e.Y, fallback, g.typeOf(e.Y), rt)
+	if !result.Trivial() {
 		fallback = g.consume(fallback)
 	}
+	g.pop()
 	g.blk.Br(join, fallback)
 
 	g.blk = join
@@ -407,9 +439,37 @@ func (g *gen) bothOptional(e *ast.BinaryExpr, xe, ye ast.Expr,
 // values of an ordinary type and `==` on that type is whatever core
 // says it is -- an instruction for a number, and the enum's own
 // comparison for an enum.
-func (g *gen) comparePayloads(at ast.Node, wrapped types.Type, op string,
+//
+// A type that declares or derives its own -- an Equatable struct or
+// enum -- is compared by that, as the checker recorded it for the
+// expression; an enum of cases alone by its tag.
+func (g *gen) comparePayloads(at *ast.BinaryExpr, wrapped types.Type, op string,
 	lhs, rhs *sil.Value) *sil.Value {
-	v := g.operate(at, op, wrapped, types.Typ[types.Bool], lhs, rhs)
+	xs, vals := []ast.Expr{at.X, at.Y}, []*sil.Value{lhs, rhs}
+	var v *sil.Value
+	sym, _ := g.info.Operators[at].(*analyzer.FuncSymbol)
+	switch {
+	case g.info.OperatorMethods[at] != nil || (sym != nil && !g.coreOperator(sym)):
+		v = g.operatorApply(at, g.info.OperatorMethods[at], sym, xs, vals)
+	case g.info.DerivedOperators[at] != nil:
+		d := g.info.DerivedOperators[at]
+		if d.Swap {
+			xs, vals = []ast.Expr{at.Y, at.X}, []*sil.Value{rhs, lhs}
+		}
+		v = g.operatorApply(at, d.Method, d.Fn, xs, vals)
+		if v != nil && d.Negate {
+			v = g.notBool(at, v)
+		}
+	default:
+		if e, ok := enumFor(wrapped); ok && !hasPayloadCase(e) {
+			verb := "cmp_eq_"
+			if op == "!=" {
+				verb = "cmp_ne_"
+			}
+			return g.blk.Builtin(verb+enumMachine(e), sil.Object(sil.BuiltinInt1), lhs, rhs)
+		}
+		v = g.operate(at, op, wrapped, types.Typ[types.Bool], lhs, rhs)
+	}
 	if v == nil {
 		g.refuse(at, "comparing two optionals of "+wrapped.String())
 		return nil

@@ -683,6 +683,16 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		} else if implicitOperand(e.X) && (operandCtx == nil || sharesOperandType(opName)) && implicitTakesOther(opName) && opName != "??" {
 			rhs = c.checkExpr(e.Y, operandCtx, scope)
 			lhs = c.checkExpr(e.X, c.implicitOperandContext(scope, opName, rhs, e.X, 0), scope)
+		} else if opName == "??" {
+			// The right of `??` is what the left wraps: `a ?? nil` for a
+			// String?? is a String?. Where what it wraps is no optional,
+			// `nil` there is the optional itself.
+			lhs = c.checkExpr(e.X, operandCtx, scope)
+			ctx := unwrappedContext(lhs)
+			if lit, isLit := unparen(e.Y).(*ast.BasicLit); isLit && lit.Kind == token.NIL && !isOptionalType(ctx) {
+				ctx = lhs
+			}
+			rhs = c.checkExpr(e.Y, ctx, scope)
 		} else {
 			lhs = c.checkExpr(e.X, operandCtx, scope)
 			rhs = c.checkExpr(e.Y, operandCtx, scope)
@@ -715,6 +725,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 			if opName == "==" || opName == "!=" {
 				if c.optionalOperands(e, lhs, rhs, scope) {
+					c.payloadOperator(scope, opName, e, lhs, rhs)
 					return types.Typ[types.Bool]
 				}
 			}
@@ -1718,6 +1729,33 @@ func (c *checker) optionalOperands(e *ast.BinaryExpr, lhs, rhs types.Type, scope
 		return types.AssignableTo(lhs, ro.Wrapped)
 	}
 	return false
+}
+
+// payloadOperator records how the payloads of an optional comparison are
+// compared: the operator the type they wrap declares or derives, where it
+// declares one, found as it would be for two values of that type.
+func (c *checker) payloadOperator(scope *Scope, op string, e *ast.BinaryExpr, lhs, rhs types.Type) {
+	w := lhs
+	for {
+		o, ok := w.(*types.Optional)
+		if !ok {
+			break
+		}
+		w = o.Wrapped
+	}
+	other := rhs
+	for {
+		o, ok := other.(*types.Optional)
+		if !ok {
+			break
+		}
+		other = o.Wrapped
+	}
+	if !types.AssignableTo(other, w) {
+		w = other
+	}
+	c.info.OptionalCompares[e] = w
+	c.resolveOperator(scope, op, e, []ast.Expr{e.X, e.Y}, []types.Type{w, w})
 }
 
 // initializesOwnProperty reports whether assigning name inside the body initializes a stored property.
