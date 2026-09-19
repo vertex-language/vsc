@@ -23,10 +23,10 @@ inline StringBytes bytesOf(const String& s, u8* scratch) {
   u64 tag = s.object & stringTagMask;
   if ((tag & stringTagSmall) == stringTagSmall) {
     usize n = static_cast<usize>((s.object >> 56) & 0xF);
-    for (usize i = 0; i < 8; i++)
-      scratch[i] = static_cast<u8>(s.countAndFlags >> (8 * i));
-    for (usize i = 0; i < 7; i++)
-      scratch[8 + i] = static_cast<u8>(s.object >> (8 * i));
+    // The words are the bytes in order, little-endian: two stores, not
+    // fifteen. The sixteenth byte is the tag, past n.
+    *reinterpret_cast<u64*>(scratch) = s.countAndFlags;
+    *reinterpret_cast<u64*>(scratch + 8) = s.object;
     return {scratch, n};
   }
   usize n = static_cast<usize>(s.countAndFlags & stringCountMask);
@@ -34,6 +34,13 @@ inline StringBytes bytesOf(const String& s, u8* scratch) {
     return {reinterpret_cast<const u8*>(s.object & stringPointerMask), n};
   auto* storage = reinterpret_cast<const u8*>(s.object);
   return {storage + stringStorageBytes, n};
+}
+
+// countOf is a String's length in bytes, read from its words.
+inline usize countOf(const String& s) {
+  if ((s.object & stringTagSmall) == stringTagSmall)
+    return static_cast<usize>((s.object >> 56) & 0xF);
+  return static_cast<usize>(s.countAndFlags & stringCountMask);
 }
 
 inline bool allASCII(const u8* bytes, usize n) {
@@ -182,6 +189,9 @@ bool vertex_string_equal(u64 a0, u64 a1, u64 b0, u64 b1) {
 // header names among them, compares by. Bytes beyond ASCII must match
 // exactly.
 bool vertex_string_equal_fold(u64 a0, u64 a1, u64 b0, u64 b1) {
+  // Lengths first: different ones are the usual answer, and need no bytes.
+  if (countOf(String{a0, a1}) != countOf(String{b0, b1}))
+    return false;
   u8 sa[16], sb[16];
   StringBytes a = bytesOf(String{a0, a1}, sa);
   StringBytes b = bytesOf(String{b0, b1}, sb);
@@ -206,6 +216,8 @@ bool vertex_string_equal_fold(u64 a0, u64 a1, u64 b0, u64 b1) {
 // holds a header name as a span of its buffer compares it to a name by,
 // without making the span into a String first.
 bool vertex_string_equal_fold_bytes(const u8* bytes, u64 count, u64 b0, u64 b1) {
+  if (countOf(String{b0, b1}) != count)
+    return false;
   u8 sb[16];
   StringBytes b = bytesOf(String{b0, b1}, sb);
   if (b.count != count)

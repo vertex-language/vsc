@@ -158,7 +158,8 @@ func (c *fn) asPointer(in *sil.Inst, v ir.Value) (ir.Ptr, error) {
 // 0-7 little-endian in the first word, 8-14 in the second, and 0xE0 | n
 // in the second word's top byte. That is a constant, so there is no call
 // to make at run time -- which is what swiftc does for a small literal
-// too. A longer literal names its bytes by address and keeps the call.
+// too. A longer literal is its bytes' address, tagged, and its count with
+// the ASCII flag: no call either.
 func (c *fn) smallStringLiteral(in *sil.Inst) (bool, error) {
 	res := in.Result()
 	args := in.Args()
@@ -171,8 +172,24 @@ func (c *fn) smallStringLiteral(in *sil.Inst) (bool, error) {
 		return false, nil
 	}
 	text := lit.Aux().Text
-	if int64(len(text)) != n.Aux().Int || len(text) > stringSmallCapacity {
+	if int64(len(text)) != n.Aux().Int {
 		return false, nil
+	}
+	if len(text) > stringSmallCapacity {
+		// A longer literal points at its bytes, which the object file
+		// keeps for good: the address tagged as a literal's, and the
+		// count with the ASCII flag, which is known here too.
+		bytes, ok := c.value(args[1])
+		p, isPtr := bytes.(ir.Ptr)
+		if !ok || !isPtr {
+			return false, nil
+		}
+		flags := uint64(len(text))
+		if isASCII(text) {
+			flags |= stringFlagASCII
+		}
+		obj := c.b.I64.Or(c.b.I64.FromPtr(p), c.b.I64.Const(int64(stringTagLiteral)))
+		return true, c.spreadInto(res, []ir.Value{c.b.I64.Const(int64(flags)), obj})
 	}
 	var w0, w1 uint64
 	for i := 0; i < len(text); i++ {
@@ -187,8 +204,19 @@ func (c *fn) smallStringLiteral(in *sil.Inst) (bool, error) {
 	return true, c.spreadInto(res, regs)
 }
 
-// The small-string form, as the runtime's abi.h declares it.
+// The String forms, as the runtime's abi.h declares them.
 const (
 	stringSmallCapacity = 15
 	stringTagSmall      = 0xE0
+	stringTagLiteral    = uint64(0x40) << 56
+	stringFlagASCII     = uint64(1) << 63
 )
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
