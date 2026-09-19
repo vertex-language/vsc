@@ -15,6 +15,8 @@ struct _xlocale;
 double strtod_l(const char* text, char** end, _xlocale* locale);
 void* malloc(vertex::usize size);
 void  free(void* p);
+void* memcpy(void* dest, const void* src, vertex::usize count);
+void* memset(void* dest, int byte, vertex::usize count);
 [[noreturn]] void abort(void);
 vertex::usize fwrite(const void* bytes, vertex::usize size, vertex::usize count, __sFILE* stream);
 extern __sFILE* __stdoutp;
@@ -25,6 +27,8 @@ int fflush(__sFILE* stream);
 
 void* vertex_pal_alloc(vertex::usize size, vertex::usize) { return malloc(size); }
 void  vertex_pal_free(void* p, vertex::usize, vertex::usize) { free(p); }
+void  vertex_pal_copy(void* dest, const void* src, vertex::usize count) { memcpy(dest, src, count); }
+void  vertex_pal_fill(void* dest, vertex::u8 byte, vertex::usize count) { memset(dest, byte, count); }
 void  vertex_pal_abort(void) { abort(); }
 
 // Conformance records are in each image's __TEXT,__vertex_proto, which

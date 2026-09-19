@@ -8,6 +8,8 @@ struct _iobuf;
 extern "C" {
 void* malloc(vertex::usize size);
 void  free(void* p);
+void* memcpy(void* dest, const void* src, vertex::usize count);
+void* memset(void* dest, int byte, vertex::usize count);
 [[noreturn]] void abort(void);
 vertex::usize fwrite(const void* bytes, vertex::usize size, vertex::usize count, _iobuf* stream);
 _iobuf* __acrt_iob_func(unsigned index);
@@ -16,6 +18,8 @@ int fflush(_iobuf* stream);
 
 void* vertex_pal_alloc(vertex::usize size, vertex::usize) { return malloc(size); }
 void  vertex_pal_free(void* p, vertex::usize, vertex::usize) { free(p); }
+void  vertex_pal_copy(void* dest, const void* src, vertex::usize count) { memcpy(dest, src, count); }
+void  vertex_pal_fill(void* dest, vertex::u8 byte, vertex::usize count) { memset(dest, byte, count); }
 // No conformance records are listed on Windows yet: a conformance is
 // not found at run time there, and a value is described by reflection.
 vertex::u32 vertex_pal_image_count(void) { return 0; }

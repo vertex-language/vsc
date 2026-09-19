@@ -768,6 +768,27 @@ func (g *gen) destroyLater(v *sil.Value) {
 	s.cleanups = append(s.cleanups, cleanup{destroy: v})
 }
 
+// destroyTemp registers an owned temporary -- a copy made to read a
+// variable -- for cleanup at the end of the statement it was made in,
+// which is where Swift ends a temporary: the copy exists for the
+// expression, and once the statement is over the variable is the only
+// holder again. Registered at the block's end instead, the copy would
+// outlive the statement, and a write to the variable in a later statement
+// would find its storage shared and copy all of it.
+func (g *gen) destroyTemp(v *sil.Value) {
+	if v == nil || v.Ownership() != sil.Owned {
+		return
+	}
+	if g.pendingDestroy(v) {
+		return
+	}
+	s := g.top()
+	if !s.formal {
+		s = g.lexical()
+	}
+	s.cleanups = append(s.cleanups, cleanup{destroy: v})
+}
+
 // destroyAddrLater registers storage whose value is destroyed in place at
 // the end of the current lexical scope.
 func (g *gen) destroyAddrLater(addr *sil.Value) {

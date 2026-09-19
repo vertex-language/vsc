@@ -12,6 +12,12 @@ extern "C" {
 void* vertex_pal_alloc(vertex::usize size, vertex::usize align);
 void  vertex_pal_free(void* p, vertex::usize size, vertex::usize align);
 
+// Bytes moved and bytes set, which the C library does with the
+// machine's wide loads and stores: the runtime copies arrays and strings
+// through these rather than a byte at a time.
+void vertex_pal_copy(void* dest, const void* src, vertex::usize count);
+void vertex_pal_fill(void* dest, vertex::u8 byte, vertex::usize count);
+
 // Bytes to a standard stream: 1 is output, 2 is error.
 void vertex_pal_write(int stream, const vertex::u8* bytes, vertex::usize count);
 

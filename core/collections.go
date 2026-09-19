@@ -182,6 +182,10 @@ func LowerCollectionMethod(recv types.Type, name string, labels []string) (Metho
 		case name == "removeAll" && is():
 			return Method{Symbol: stdlib.ArrayRemoveAll, Result: voidType, Mutating: true,
 				Operands: []Operand{{Kind: OpReceiverSlot}, meta(elem)}}, true
+		case name == "removeAll" && is("keepingCapacity"):
+			return Method{Symbol: stdlib.ArrayRemoveAllKeeping, Params: []*types.Param{param("keepingCapacity", boolType)},
+				Result: voidType, Mutating: true,
+				Operands: []Operand{{Kind: OpReceiverSlot}, {Kind: OpArgValue, Arg: 0}, meta(elem)}}, true
 		case name == "contains" && is("") && RuntimeHashable(elem):
 			return Method{Symbol: stdlib.ArrayContains, Params: []*types.Param{param("", elem)}, Result: boolType,
 				Operands: []Operand{{Kind: OpReceiver}, {Kind: OpArgBorrow, Arg: 0}, meta(elem)}}, true

@@ -253,7 +253,50 @@ func (g *gen) collectionMethodCall(e *ast.CallExpr, mem *ast.MemberExpr) (*sil.V
 	if !ok {
 		return nil, false
 	}
+	// `bytes.append(contentsOf: s.utf8)`: the string's bytes go straight
+	// onto the array, as they do in Swift, where utf8 is a view and not
+	// an array made for the call.
+	if m.Symbol == stdlib.ArrayAppendContents && len(exprs) == 1 {
+		if s, ok := g.utf8Of(exprs[0]); ok {
+			if arr, isArr := g.typeOf(mem.X).Underlying().(*types.Array); isArr && isUInt8(arr.Elem) {
+				direct := core.Method{Symbol: stdlib.ArrayAppendUTF8,
+					Params: []*types.Param{{Name: "contentsOf", Label: "contentsOf", Type: g.typeOf(s)}}, Result: types.Typ[types.Void],
+					Mutating: true,
+					Operands: []core.Operand{{Kind: core.OpReceiverSlot}, {Kind: core.OpArgValue, Arg: 0}}}
+				return g.collectionCall(e, direct, mem.X, exprArgs(s)), true
+			}
+		}
+	}
 	return g.collectionCall(e, m, mem.X, exprArgs(exprs...)), true
+}
+
+// utf8Of is the string x reads the bytes of, where x is `s.utf8`.
+func (g *gen) utf8Of(x ast.Expr) (ast.Expr, bool) {
+	for {
+		p, ok := x.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		x = p.X
+	}
+	mem, ok := x.(*ast.MemberExpr)
+	if !ok || mem.Name == nil || g.text(mem.Name) != "utf8" {
+		return nil, false
+	}
+	t := g.typeOf(mem.X)
+	if t == nil {
+		return nil, false
+	}
+	if b, ok := t.Underlying().(*types.Basic); !ok || b.Kind() != types.String {
+		return nil, false
+	}
+	return mem.X, true
+}
+
+// isUInt8 reports whether t is UInt8, the element of an array of bytes.
+func isUInt8(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Kind() == types.UInt8
 }
 
 // subscriptAssign is `a[i] = v` and `d[k] = v`, or false where the target

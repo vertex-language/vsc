@@ -177,6 +177,30 @@ bool vertex_string_equal(u64 a0, u64 a1, u64 b0, u64 b1) {
   return canonicalCompare(a.bytes, a.count, b.bytes, b.count) == 0;
 }
 
+// vertex_string_equal_fold is equality with ASCII letters' case set
+// aside: what a protocol that says its names are case-insensitive, HTTP's
+// header names among them, compares by. Bytes beyond ASCII must match
+// exactly.
+bool vertex_string_equal_fold(u64 a0, u64 a1, u64 b0, u64 b1) {
+  u8 sa[16], sb[16];
+  StringBytes a = bytesOf(String{a0, a1}, sa);
+  StringBytes b = bytesOf(String{b0, b1}, sb);
+  if (a.count != b.count)
+    return false;
+  for (usize i = 0; i < a.count; i++) {
+    u8 x = a.bytes[i], y = b.bytes[i];
+    if (x == y)
+      continue;
+    if (x >= 'A' && x <= 'Z')
+      x += 32;
+    if (y >= 'A' && y <= 'Z')
+      y += 32;
+    if (x != y)
+      return false;
+  }
+  return true;
+}
+
 // Ordering is by Unicode scalar value of the canonical forms.
 bool vertex_string_less(u64 a0, u64 a1, u64 b0, u64 b1) {
   u8 sa[16], sb[16];

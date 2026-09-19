@@ -2,6 +2,7 @@
 // ownership becomes once the compiler has lowered it away.
 #include "vertex/abi.h"
 #include "vertex/platform.h"
+#include "mem.h"
 
 namespace vertex {
 
@@ -41,9 +42,7 @@ HeapObject* vertex_alloc(u64 size) {
   // Stored properties start as zero. An initializer's first write to a
   // property is lowered as an assignment, which releases what was there
   // before -- so what was there has to be null, which release ignores.
-  auto* bytes = reinterpret_cast<u8*>(obj + 1);
-  for (u64 i = 0; i < size; i++)
-    bytes[i] = 0;
+  fillBytes(reinterpret_cast<u8*>(obj + 1), 0, static_cast<usize>(size));
   return obj;
 }
 

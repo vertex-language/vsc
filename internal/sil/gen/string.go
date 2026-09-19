@@ -203,6 +203,20 @@ func (g *gen) stdlibGetter(e *ast.MemberExpr, m core.Member) *sil.Value {
 // readProperty invokes a runtime property getter on an already lowered receiver.
 func (g *gen) readProperty(at ast.Node, recv *sil.Value, recvType types.Type,
 	m core.Member, name string) *sil.Value {
+	// An array's count is a word in its storage, read in place: a loop
+	// over an array asks for it every time round, and a call there is the
+	// loop's cost. Swift's Array.count is the same load.
+	if m.Symbol == stdlib.ArrayCount || m.Symbol == stdlib.ArrayIsEmpty {
+		intT := types.Typ[types.Int]
+		word := sil.Object(builtinFor(intT))
+		count := g.blk.Builtin("vertexArrayCount_Int64", word, recv)
+		if m.Symbol == stdlib.ArrayCount {
+			return g.blk.Struct(lowerType(intT), count)
+		}
+		bit := sil.Object(sil.BuiltinInt1)
+		empty := g.blk.Builtin("cmp_eq_Int64", bit, count, g.blk.IntegerLiteral(word, 0))
+		return g.blk.Struct(lowerType(types.Typ[types.Bool]), empty)
+	}
 	var meta *sil.Value
 	if m.Element != nil {
 		var ok bool

@@ -577,7 +577,7 @@ func (g *gen) member(e *ast.MemberExpr) *sil.Value {
 // loaded registers a cleanup for non-trivial copied loads.
 func (g *gen) loaded(v *sil.Value, t sil.Type) *sil.Value {
 	if v != nil && !t.Trivial() {
-		g.destroyLater(v)
+		g.destroyTemp(v)
 	}
 	return v
 }

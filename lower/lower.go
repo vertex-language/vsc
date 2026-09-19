@@ -437,7 +437,7 @@ func (l *lowerer) funcTypeOf(sig *types.Signature) (*ir.Type, error) {
 	if t, ok := l.funcTypes[name]; ok {
 		return t, nil
 	}
-	s, err := funcSig(sig)
+	s, err := l.funcSig(sig)
 	if err != nil {
 		return nil, err
 	}
@@ -452,12 +452,28 @@ func (l *lowerer) funcTypeOf(sig *types.Signature) (*ir.Type, error) {
 // funcSig is the VIR signature a call through a function value of this
 // Swift type uses: its arguments, its context in the self register, its
 // results, and the error register for one that throws.
-func funcSig(sig *types.Signature) (*ir.Sig, error) {
+func (l *lowerer) funcSig(sig *types.Signature) (*ir.Sig, error) {
 	s := ir.NewSig()
+	// A result too wide for registers is returned through storage the
+	// caller sets aside, whose address is the first parameter -- for an
+	// async function as much as a synchronous one, since the async ABI
+	// passes that pointer as a parameter and only a register-width result
+	// travels to the continuation. This mirrors lowerer.signature, the
+	// callee side, and the call site in asyncsplit, which prepends the
+	// same pointer (see answerStorage). Leaving it out here was a bug
+	// that only showed once a result grew past the register threshold.
+	if sig.Results != nil && !isVoidType(sig.Results) {
+		if _, wide := indirect(sil.Object(sig.Results)); wide {
+			s.Param(ir.TypePtr, ir.SRet(l.sretType(sil.Object(sig.Results))))
+		} else if _, split := l.splitResult(sil.Object(sig.Results)); split {
+			s.Param(ir.TypePtr, ir.SRet(l.sretType(sil.Object(sig.Results))))
+		}
+	}
 	// An async function value is called the way an async function is:
-	// the context first, and no results, because the answer goes to the
-	// continuation that context names. See lowerer.signature, which
-	// says the same thing about a declared one.
+	// the context first, and no register results, because a
+	// register-width answer goes to the continuation that context names.
+	// See lowerer.signature, which says the same thing about a declared
+	// one.
 	if sig.Async {
 		s.Param(ir.TypePtr, ir.SwiftAsync)
 	}
@@ -485,7 +501,11 @@ func funcSig(sig *types.Signature) (*ir.Sig, error) {
 		s.Param(r.reg)
 	}
 	if sig.Results != nil && !isVoidType(sig.Results) && !sig.Async {
-		if n, ok := directWords(sil.Object(sig.Results)); ok {
+		if _, wide := indirect(sil.Object(sig.Results)); wide {
+			// Already declared as the leading sret pointer above.
+		} else if _, split := l.splitResult(sil.Object(sig.Results)); split {
+			// Likewise.
+		} else if n, ok := directWords(sil.Object(sig.Results)); ok {
 			for i := 0; i < n; i++ {
 				s.Ret(ir.TypeI64)
 			}

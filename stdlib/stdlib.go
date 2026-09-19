@@ -101,6 +101,14 @@ const (
 	DynamicCast = "vertex_dynamic_cast"
 	// StringUTF8Array is a String's utf8, as an array of its bytes.
 	StringUTF8Array = "vertex_string_utf8_array"
+	// ArrayAppendUTF8 appends a String's bytes to an array of them:
+	// `bytes.append(contentsOf: s.utf8)` without the array in between.
+	ArrayAppendUTF8 = "vertex_array_append_utf8"
+	// ArrayRemoveAllKeeping empties an array, keeping its storage when
+	// asked to and it is the array's own: removeAll(keepingCapacity:).
+	ArrayRemoveAllKeeping = "vertex_array_remove_all_keeping"
+	// StringEqualFold is ASCII case-insensitive equality of two Strings.
+	StringEqualFold = "vertex_string_equal_fold"
 	// ArrayRepeating is [T](repeating:count:), which takes the value.
 	ArrayRepeating = "vertex_array_repeating"
 
@@ -204,9 +212,10 @@ const (
 	StringBytes      = 16
 	StringObjectWord = 1
 
-	// An array's elements begin past its header, count, capacity and
-	// element metadata.
-	ArrayElements = 40
+	// An array's count is the word after its header; its elements begin
+	// past the count, the capacity and the element metadata.
+	ArrayCountWord = 16
+	ArrayElements  = 40
 
 	// The kinds of the records the compiler emits for types declared
 	// nowhere.

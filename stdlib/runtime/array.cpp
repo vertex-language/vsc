@@ -1,6 +1,7 @@
 // Array storage: allocation, and what compiled code reads out of it.
 #include "vertex/abi.h"
 #include "vertex/platform.h"
+#include "mem.h"
 
 extern "C" {
 void vertex_release(vertex::HeapObject* obj);
@@ -88,6 +89,24 @@ ArrayStorage* vertex_array_repeating(i64 count, u8* value, const Metadata* eleme
   ArrayAllocation got = vertex_array_allocate(count, element);
   if (count == 0) {
     vw->destroy(value, element);
+    return got.array;
+  }
+  if (isPOD(vw)) {
+    // A byte repeated is a fill; anything wider is one copy of the value
+    // and then the run so far doubled until it is all there.
+    usize stride = vw->stride;
+    if (stride == 1) {
+      fillBytes(got.elements, *value, static_cast<usize>(count));
+    } else {
+      usize total = static_cast<usize>(count) * stride;
+      copyBytes(got.elements, value, stride);
+      usize have = stride;
+      while (have < total) {
+        usize chunk = have < total - have ? have : total - have;
+        copyBytes(got.elements + have, got.elements, chunk);
+        have += chunk;
+      }
+    }
     return got.array;
   }
   for (i64 i = 0; i < count - 1; i++)

@@ -327,11 +327,16 @@ ArrayStorage* uniqueArray(ArrayStorage** slot, i64 need, const Metadata* element
   const ValueWitnessTable* vw = witnesses(element);
   u8* from = elementsOf(a);
   u8* to = elementsOf(fresh);
-  for (i64 i = 0; i < a->count; i++) {
-    if (unique)
-      vw->initializeWithTake(to + i * vw->stride, from + i * vw->stride, element);
-    else
-      vw->initializeWithCopy(to + i * vw->stride, from + i * vw->stride, element);
+  if (isPOD(vw)) {
+    // Bits are moved and copied the same way: all at once.
+    copyBytes(to, from, static_cast<usize>(a->count) * vw->stride);
+  } else {
+    for (i64 i = 0; i < a->count; i++) {
+      if (unique)
+        vw->initializeWithTake(to + i * vw->stride, from + i * vw->stride, element);
+      else
+        vw->initializeWithCopy(to + i * vw->stride, from + i * vw->stride, element);
+    }
   }
   fresh->count = a->count;
   if (unique)
@@ -378,11 +383,23 @@ ArrayStorage* vertex_string_utf8_array(u64 countAndFlags, u64 object) {
   u64 count = 0;
   const u8* bytes = vertex_string_utf8(countAndFlags, object, scratch, &count);
   ArrayStorage* a = newArray(static_cast<i64>(count), &vertex_metadata_UInt8.metadata);
-  u8* to = elementsOf(a);
-  for (u64 i = 0; i < count; i++)
-    to[i] = bytes[i];
+  copyBytes(elementsOf(a), bytes, static_cast<usize>(count));
   a->count = static_cast<i64>(count);
   return a;
+}
+
+// vertex_array_append_utf8 copies a String's bytes onto the end of an
+// array of bytes: `bytes.append(contentsOf: s.utf8)`, which in Swift
+// walks a view and here is one copy.
+void vertex_array_append_utf8(ArrayStorage** slot, u64 s0, u64 s1) {
+  u8 scratch[16];
+  StringBytes b = bytesOf(String{s0, s1}, scratch);
+  if (b.count == 0)
+    return;
+  ArrayStorage* a = uniqueArray(slot, (*slot)->count + static_cast<i64>(b.count),
+                                &vertex_metadata_UInt8.metadata);
+  copyBytes(elementsOf(a) + a->count, b.bytes, b.count);
+  a->count += static_cast<i64>(b.count);
 }
 
 // vertex_array_append_contents copies every element of other onto the end.
@@ -393,9 +410,14 @@ void vertex_array_append_contents(ArrayStorage** slot, ArrayStorage* other, cons
   vertex_retain(&other->header);
   ArrayStorage* a = uniqueArray(slot, (*slot)->count + n, element);
   const ValueWitnessTable* vw = witnesses(element);
-  for (i64 i = 0; i < n; i++)
-    vw->initializeWithCopy(elementsOf(a) + (a->count + i) * vw->stride,
-                           elementsOf(other) + i * vw->stride, element);
+  if (isPOD(vw)) {
+    copyBytes(elementsOf(a) + a->count * vw->stride, elementsOf(other),
+              static_cast<usize>(n) * vw->stride);
+  } else {
+    for (i64 i = 0; i < n; i++)
+      vw->initializeWithCopy(elementsOf(a) + (a->count + i) * vw->stride,
+                             elementsOf(other) + i * vw->stride, element);
+  }
   a->count += n;
   vertex_release(&other->header);
 }
@@ -468,6 +490,25 @@ void vertex_array_remove_all(ArrayStorage** slot, const Metadata* element) {
   vertex_release(&(*slot)->header);
   ArrayAllocation empty = vertex_array_allocate(0, element);
   *slot = empty.array;
+}
+
+// vertex_array_remove_all_keeping empties the array and, where it was
+// asked to and the storage is the array's own, keeps the storage for
+// what comes next: a buffer refilled each time round a loop.
+void vertex_array_remove_all_keeping(ArrayStorage** slot, bool keep, const Metadata* element) {
+  ArrayStorage* a = *slot;
+  bool own = (a->header.refcount & immortal) == 0 && a->header.refcount == 1;
+  if (!keep || !own) {
+    vertex_array_remove_all(slot, element);
+    return;
+  }
+  const ValueWitnessTable* vw = witnesses(element);
+  if (!isPOD(vw)) {
+    u8* at = elementsOf(a);
+    for (i64 i = 0; i < a->count; i++)
+      vw->destroy(at + i * vw->stride, element);
+  }
+  a->count = 0;
 }
 
 // vertex_array_first and vertex_array_last write the element, or nil, into

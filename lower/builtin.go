@@ -23,6 +23,16 @@ func (c *fn) builtin(name string, args []ir.Value) ([]ir.Value, error) {
 	if !ok {
 		return nil, c.fail(ErrBuiltin, "builtin", name)
 	}
+	// How many elements an array's storage holds: the word after the
+	// header, see stdlib/ABI.md. Read inline so that a subscript is a
+	// compare and a load rather than a call.
+	if verb == "vertexArrayCount" {
+		storage, ok := args[0].(ir.Ptr)
+		if len(args) != 1 || !ok || r.reg != ir.TypeI64 {
+			return nil, c.fail(ErrBuiltin, "builtin", name+": operand is not an array's storage")
+		}
+		return []ir.Value{c.b.I64.Load(c.b.Ptr.Add(storage, c.b.I64.Const(stdlib.ArrayCountWord)))}, nil
+	}
 	switch r.reg {
 	case ir.TypeI1:
 		return c.boolBuiltin(name, verb, args)

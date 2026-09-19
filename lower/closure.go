@@ -250,7 +250,7 @@ func (l *lowerer) contextDestroyer(name string, caps []*sil.Value) (*ir.Func, er
 // call through it passes, then the captures read out of its context, into
 // the body; and the body's results back.
 func (l *lowerer) forwarder(name string, body *sil.Func, sig *types.Signature, caps []*sil.Value) (*ir.Func, error) {
-	incoming, err := funcSig(sig)
+	incoming, err := l.funcSig(sig)
 	if err != nil {
 		return nil, err
 	}

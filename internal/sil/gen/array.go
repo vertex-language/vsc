@@ -275,14 +275,32 @@ func (g *gen) subscript(e *ast.SubscriptExpr) *sil.Value {
 // elementAt lowers an element read for an already-lowered array and index.
 func (g *gen) elementAt(at ast.Node, base *sil.Value, t types.Type,
 	index *sil.Value, m core.Member) *sil.Value {
-	meta, ok := g.stdlibMetadata(at, m.Element)
-	if !ok {
-		return nil
-	}
 	elem := lowerType(m.Result)
 	_, isExistential := existentialOf(m.Result)
 
 	raw := sil.Object(sil.BuiltinRawPointer)
+	// An element that is only bits -- a byte, a number, a struct of them
+	// -- is read as Swift reads it: the bounds check, then a load at the
+	// index's stride from where the storage keeps its elements. A byte
+	// loop is then loads and compares, with no call in it.
+	if elem.Trivial() && !isExistential {
+		intT := types.Typ[types.Int]
+		word := sil.Object(builtinFor(intT))
+		bit := sil.Object(sil.BuiltinInt1)
+		i := g.machine(index, intT)
+		count := g.blk.Builtin("vertexArrayCount_Int64", word, base)
+		// One unsigned compare covers both ends: a negative index is a
+		// huge one.
+		outside := g.blk.Builtin("cmp_uge_Int64", bit, i, count)
+		g.blk.CondFail(outside, "Index out of range")
+		elements := g.blk.Builtin("vertexArrayElements_RawPointer", raw, base)
+		addr := g.blk.IndexAddr(g.blk.PointerToAddress(elements, elem.Address()), i)
+		return g.blk.Load(addr, "trivial")
+	}
+	meta, ok := g.stdlibMetadata(at, m.Element)
+	if !ok {
+		return nil
+	}
 	callee := g.m.Func(m.Symbol).SetSourceName("subscript")
 	if g.needsType(callee) {
 		callee.SetLinkage(sil.PublicExternal)
