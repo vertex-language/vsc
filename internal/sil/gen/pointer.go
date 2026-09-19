@@ -59,8 +59,12 @@ func (g *gen) pointeeAddrForWrite(e *ast.MemberExpr, p *types.Pointer) *sil.Valu
 }
 
 // pointerConvert lowers pointer type conversions (e.g. UnsafeRawPointer(p)).
+// The bits are the same; the value is retyped by passing it through an
+// address of the new pointee, so that what comes out is typed as the
+// conversion says and can be returned or stored as one.
 func (g *gen) pointerConvert(e *ast.CallExpr, arg ast.Expr, from, to types.Type) (*sil.Value, bool) {
-	if _, ok := pointerOf(to); !ok {
+	target, ok := pointerOf(to)
+	if !ok {
 		return nil, false
 	}
 	if _, ok := pointerOf(from); !ok {
@@ -73,7 +77,16 @@ func (g *gen) pointerConvert(e *ast.CallExpr, arg ast.Expr, from, to types.Type)
 		}
 		return nil, false
 	}
-	return g.rvalue(arg), true
+	v := g.rvalue(arg)
+	if v == nil {
+		return nil, true
+	}
+	elem := target.Elem
+	if elem == nil {
+		elem = types.Typ[types.UInt8]
+	}
+	addr := g.blk.PointerToAddress(v, lowerType(elem).Address())
+	return g.blk.AddressToPointer(addr, lowerType(to)), true
 }
 
 // pointerEquality lowers pointer comparison (p == q and p != q).

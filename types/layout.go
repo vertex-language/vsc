@@ -76,16 +76,17 @@ func Alignof(t Type, target *Target) int64 {
 		}
 		return maxAlign
 	case *Enum:
+		// An enum with a payload is lowered as whole words -- its
+		// payload and tag packed into as many as they take, see
+		// lower's enumImage -- so inside a struct it starts on a
+		// word, whatever its payload's own alignment. What the
+		// lowering stores and what the metadata says must agree, or
+		// an array of the struct copies from where nothing was
+		// written.
 		var maxAlign int64 = 1
 		for _, c := range tt.Cases {
-			if c.Indirect && c.AssociatedType != nil {
-				if target.WordSize > maxAlign {
-					maxAlign = target.WordSize
-				}
-				continue
-			}
-			if a := Alignof(c.AssociatedType, target); a > maxAlign {
-				maxAlign = a
+			if c.AssociatedType != nil {
+				return target.WordSize
 			}
 		}
 		return maxAlign
