@@ -198,6 +198,9 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	if opts.Stop == Canonical {
 		return u, diags
 	}
+	if err := pass.Optimize(m); err != nil {
+		return u, append(diags, phaseError(err))
+	}
 
 	if err := pass.LowerOwnership(m); err != nil {
 		return u, append(diags, phaseError(err))

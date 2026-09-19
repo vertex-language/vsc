@@ -22,6 +22,12 @@ import (
 // what these tests are about is the shape it leaves behind.
 func mandatory(t *testing.T, src string) string {
 	t.Helper()
+	return printed(t, canonicalOf(t, src))
+}
+
+// canonicalOf is src lowered to SIL and through the mandatory passes.
+func canonicalOf(t *testing.T, src string) *sil.Module {
+	t.Helper()
 	f := token.NewFile("t.swift", []byte(src))
 	file, ds := parser.ParseFile(f, 0)
 	for _, d := range ds {
@@ -41,6 +47,11 @@ func mandatory(t *testing.T, src string) string {
 	if got := m.Stage(); got != sil.StageCanonical {
 		t.Fatalf("stage is %s, want canonical", got)
 	}
+	return m
+}
+
+func printed(t *testing.T, m *sil.Module) string {
+	t.Helper()
 	var buf bytes.Buffer
 	if err := text.Print(&buf, m); err != nil {
 		t.Fatal(err)

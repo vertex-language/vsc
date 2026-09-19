@@ -304,8 +304,11 @@ func (l *lowerer) defineAsyncBody(f *sil.Func, p *asyncPlan, body *ir.Func, stub
 	// Lower every block. A suspension ends the block it is in and opens
 	// a new one for what follows, which is where the dispatch comes back
 	// to.
+	// In emissionOrder, as the synchronous path does, so that a value is
+	// lowered before any block that reads it: a value may be used in any
+	// block its definition dominates, not only the one it is made in.
 	resumeAt := make([]*ir.Block, len(p.suspends))
-	for _, b := range f.Blocks() {
+	for _, b := range emissionOrder(f) {
 		c.b = c.blocks[b]
 		// An argument that crosses a suspension is written down where
 		// the block is entered, because after one it is read out of the

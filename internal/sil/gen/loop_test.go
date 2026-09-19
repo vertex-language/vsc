@@ -311,7 +311,7 @@ func main() -> Int32 {
 		t.Fatalf("no loop test:\n%s", got)
 	}
 	header := got[start : start+end]
-	if !strings.Contains(header, "vertex_array_count") {
+	if !strings.Contains(header, "vertexArrayCount") {
 		t.Fatalf("the header does not count the array:\n%s", header)
 	}
 	if !strings.Contains(header, "destroy_value") && !strings.Contains(header, "end_borrow") {

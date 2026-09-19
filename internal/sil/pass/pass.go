@@ -24,3 +24,13 @@ func Mandatory(m *sil.Module) error {
 	m.SetStage(sil.StageCanonical)
 	return nil
 }
+
+// Optimize runs the passes that make a canonical module faster without
+// changing what it means -- swiftc's performance pipeline, of which this is
+// the first pass -- and verifies what they leave. Mandatory must have run.
+func Optimize(m *sil.Module) error {
+	for _, f := range m.Funcs() {
+		promoteSlots(f)
+	}
+	return verify.Module(m)
+}

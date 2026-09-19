@@ -201,6 +201,29 @@ bool vertex_string_equal_fold(u64 a0, u64 a1, u64 b0, u64 b1) {
   return true;
 }
 
+// vertex_string_equal_fold_bytes is vertex_string_equal_fold between
+// count bytes that are not a String and one that is: what a parser that
+// holds a header name as a span of its buffer compares it to a name by,
+// without making the span into a String first.
+bool vertex_string_equal_fold_bytes(const u8* bytes, u64 count, u64 b0, u64 b1) {
+  u8 sb[16];
+  StringBytes b = bytesOf(String{b0, b1}, sb);
+  if (b.count != count)
+    return false;
+  for (usize i = 0; i < count; i++) {
+    u8 x = bytes[i], y = b.bytes[i];
+    if (x == y)
+      continue;
+    if (x >= 'A' && x <= 'Z')
+      x += 32;
+    if (y >= 'A' && y <= 'Z')
+      y += 32;
+    if (x != y)
+      return false;
+  }
+  return true;
+}
+
 // Ordering is by Unicode scalar value of the canonical forms.
 bool vertex_string_less(u64 a0, u64 a1, u64 b0, u64 b1) {
   u8 sa[16], sb[16];
