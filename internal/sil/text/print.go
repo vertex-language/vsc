@@ -237,7 +237,7 @@ func (p *printer) operands(in *sil.Inst) {
 		}
 
 	case sil.StructExtract, sil.StructElementAddr, sil.RefElementAddr,
-		sil.UncheckedEnumData, sil.ClassMethod:
+		sil.UncheckedEnumData, sil.UncheckedTakeEnumDataAddr, sil.ClassMethod:
 		p.printf(" %s, #%s", p.refs(args), aux.Member)
 
 	case sil.TupleExtract:

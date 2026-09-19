@@ -955,9 +955,10 @@ func (g *gen) makeClass(e *ast.CallExpr, tn *analyzer.TypeNameSymbol, cl *types.
 	}
 
 	// Verify all stored properties have defaults when no init is declared.
+	// A `var` of an optional type starts as nil, as it does in Swift.
 	held := storedChain(t)
 	for _, held := range held {
-		if _, ok := g.classDefaults(held.owner)[held.field.Name]; !ok {
+		if _, ok := g.classDefaults(held.owner)[held.field.Name]; !ok && !g.implicitlyNil(held.owner, held.field) {
 			g.errorAt(e, "'"+tn.Name()+"' cannot be made without arguments: '"+
 				held.field.Name+"' has no initial value and there is no "+
 				"initializer to give it one")
@@ -968,11 +969,16 @@ func (g *gen) makeClass(e *ast.CallExpr, tn *analyzer.TypeNameSymbol, cl *types.
 	obj := g.blk.AllocRef(lowerType(t))
 	// Initialize stored properties in inheritance order (superclasses first).
 	for _, held := range held {
-		v := g.rvalue(g.classDefaults(held.owner)[held.field.Name])
+		ft := lowerType(held.field.Type)
+		var v *sil.Value
+		if init, ok := g.classDefaults(held.owner)[held.field.Name]; ok {
+			v = g.rvalue(init)
+		} else {
+			v = g.blk.Enum(ft, optionalNone, nil)
+		}
 		if v == nil {
 			return nil
 		}
-		ft := lowerType(held.field.Type)
 		addr := g.blk.RefElementAddr(obj, memberName(held.owner, held.field.Name), ft)
 		g.blk.Store(v, addr, storeQualifier(ft))
 	}
@@ -1048,6 +1054,30 @@ func (g *gen) classDefaults(t types.Type) map[string]ast.Expr {
 		}
 	}
 	return out
+}
+
+// implicitlyNil reports whether a stored property that is given no value
+// starts as nil: a `var` of an optional type, as Swift has it.
+func (g *gen) implicitlyNil(owner types.Type, f *types.Field) bool {
+	if _, ok := optionalOf(f.Type); !ok {
+		return false
+	}
+	body := classBody(g.classDecl(owner))
+	if body == nil {
+		return false
+	}
+	for _, mem := range body.Members {
+		vd, ok := mem.(*ast.VarDecl)
+		if !ok || vd.Kind != token.VAR {
+			continue
+		}
+		for _, b := range vd.Bindings {
+			if g.bindingName(b.Pat) == f.Name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // classDecl finds the AST declaration for a class type.

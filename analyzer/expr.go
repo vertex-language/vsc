@@ -1992,6 +1992,9 @@ func chainSpine(e ast.Expr) ast.Expr {
 func (c *checker) chainRoot(e ast.Expr) bool {
 	switch e.(type) {
 	case *ast.MemberExpr, *ast.CallExpr, *ast.SubscriptExpr, *ast.ForceExpr:
+	case *ast.OptionalExpr:
+		// A bare `x?` -- `s? += "c"` -- is a chain of one step.
+		return !c.inChain[e] && !c.info.ChainRoots[e]
 	default:
 		return false
 	}
@@ -2010,6 +2013,10 @@ func (c *checker) chainRoot(e ast.Expr) bool {
 func (c *checker) markChain(root ast.Expr) {
 	if c.inChain == nil {
 		c.inChain = map[ast.Expr]bool{}
+	}
+	// A bare `x?` is its own step.
+	if _, ok := root.(*ast.OptionalExpr); ok {
+		c.inChain[root] = true
 	}
 	for x := chainSpine(root); x != nil; x = chainSpine(x) {
 		c.inChain[x] = true

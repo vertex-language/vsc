@@ -110,6 +110,9 @@ func (c *fn) inst(in *sil.Inst) error {
 	case sil.StructElementAddr:
 		return c.structElementAddr(in)
 
+	case sil.UncheckedTakeEnumDataAddr:
+		return c.takeEnumDataAddr(in)
+
 	case sil.RefElementAddr:
 		return c.refElementAddr(in)
 
@@ -806,6 +809,23 @@ func (c *fn) structElementAddr(in *sil.Inst) error {
 		return c.fail(ErrUnsupported, in.Op(), "no such field: "+field)
 	}
 	c.def(in.Result(), c.fieldAddr(p, off))
+	return nil
+}
+
+// takeEnumDataAddr is a case's payload inside an enum's storage. Every
+// payload starts where the enum does -- an optional's some, whatever
+// its layout, and a payload enum's cases share the area before the tag
+// -- so it is the enum's own address, typed as the payload.
+func (c *fn) takeEnumDataAddr(in *sil.Inst) error {
+	base, err := c.operand(in, in.Args()[0])
+	if err != nil {
+		return err
+	}
+	p, ok := base.(ir.Ptr)
+	if !ok {
+		return c.fail(ErrType, in.Op(), "the operand is not an address")
+	}
+	c.def(in.Result(), p)
 	return nil
 }
 
@@ -2582,7 +2602,27 @@ func (c *fn) switchOptional(in *sil.Inst, o *types.Optional) error {
 
 	parts, ok := c.parts(v)
 	if !ok {
-		return c.fail(ErrUnsupported, in.Op(), "an optional this function did not take apart")
+		// Too wide for registers, it is in memory: its leaves are read
+		// out of it, the tag last.
+		from, inMem := c.mem[v]
+		if !inMem {
+			return c.fail(ErrUnsupported, in.Op(), "an optional this function did not take apart")
+		}
+		ls, ok := leavesOf(v.Type())
+		if !ok {
+			return c.fail(ErrUnsupported, in.Op(), "an optional in memory whose layout this cannot take apart")
+		}
+		for _, l := range ls {
+			r, ok := machineOf(l.typ)
+			if !ok {
+				return c.fail(ErrType, in.Op(), l.typ.String())
+			}
+			w, err := c.loadScalar(in, c.fieldAddr(from, l.offset), r)
+			if err != nil {
+				return err
+			}
+			parts = append(parts, w)
+		}
 	}
 	if len(parts) < 2 {
 		return c.fail(ErrUnsupported, in.Op(), "an optional with no tag to switch on")

@@ -735,6 +735,17 @@ func ownedWords(st *types.Struct, base int64) ([]ownedWord, bool) {
 				out = append(out, inner...)
 				continue
 			}
+			// One with a tag byte wrapping a struct or a tuple holds
+			// what the payload holds, before the tag, and zeros where
+			// it is none.
+			if st, ok := taggedAggregateOptional(u); ok {
+				inner, ok := ownedWords(st, at)
+				if !ok {
+					return nil, false
+				}
+				out = append(out, inner...)
+				continue
+			}
 			word, owns, ok := optionalOwned(u)
 			if !ok {
 				return nil, false
@@ -1029,6 +1040,21 @@ func ownedLeaves(st *types.Struct, base int) ([]int, bool) {
 				at += n
 				continue
 			}
+			// One with a tag byte wrapping a struct or a tuple: the
+			// payload's registers, then the tag's.
+			if inner, ok := taggedAggregateOptional(u); ok {
+				owned, ok := ownedLeaves(inner, at)
+				if !ok {
+					return nil, false
+				}
+				out = append(out, owned...)
+				n, ok := optionalLeafCount(u)
+				if !ok {
+					return nil, false
+				}
+				at += n
+				continue
+			}
 			// Its registers, as appendLeaves lays it out, and the one
 			// holding what it owns, if it owns anything.
 			word, owns, ok := optionalOwned(u)
@@ -1114,6 +1140,25 @@ func optionalOwned(o *types.Optional) (ownedWord, bool, bool) {
 		return ownedWord{}, true, true
 	}
 	return ownedWord{}, false, false
+}
+
+// taggedAggregateOptional is the struct an optional with a tag byte wraps
+// -- a tuple as the struct its image is -- whose references sit where the
+// payload keeps them, and are zero words where the optional is none.
+func taggedAggregateOptional(o *types.Optional) (*types.Struct, bool) {
+	if _, tagged := optionalImage(o); !tagged {
+		return nil, false
+	}
+	switch u := o.Wrapped.Underlying().(type) {
+	case *types.Struct:
+		if len(u.TypeParams) > 0 {
+			return nil, false
+		}
+		return u, true
+	case *types.Tuple:
+		return tupleImage(u)
+	}
+	return nil, false
 }
 
 // optionalLeafCount is how many registers an optional field is held in:

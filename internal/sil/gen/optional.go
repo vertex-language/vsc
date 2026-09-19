@@ -501,6 +501,49 @@ func (g *gen) chainStep(e *ast.OptionalExpr) *sil.Value {
 	return payload
 }
 
+// chainStepAddr lowers `a?` as a destination inside a chain -- `h.inner?.n
+// = 5`, `o?.bump()` -- as the address of a's payload where a holds one,
+// and a jump to the chain's empty answer where it does not. Which case
+// the storage holds is read from a copy of it; the payload is then
+// written in place, so the write changes this optional and no other.
+func (g *gen) chainStepAddr(e *ast.OptionalExpr) *sil.Value {
+	if len(g.chainNone) == 0 {
+		g.refuse(e, "an '?' outside an optional chain")
+		return nil
+	}
+	o, ok := optionalOf(g.typeOf(e.X))
+	if !ok {
+		g.refuse(e, "an '?' on something that is not an optional")
+		return nil
+	}
+	addr := g.lvalue(e.X)
+	if addr == nil {
+		return nil
+	}
+	wrapped := lowerType(o.Wrapped)
+	access := g.blk.BeginAccess(addr, "read", "unknown")
+	v := g.blk.Load(access, loadQualifier(access.Type()))
+	g.blk.EndAccess(access)
+	own := sil.Owned
+	if wrapped.Trivial() {
+		own = sil.Unowned
+	}
+	some, empty := g.fn.Block(), g.fn.Block()
+	payload := some.Arg(wrapped, own)
+	g.blk.SwitchEnum(v,
+		sil.Case{Member: optionalSome, Dest: some},
+		sil.Case{Member: optionalNone, Dest: empty})
+	g.blk = empty
+	g.unwindTo(g.chainDepth[len(g.chainDepth)-1])
+	g.blk.Br(g.chainNone[len(g.chainNone)-1])
+	g.blk = some
+	// The copy told the tag; the payload written is the one in storage.
+	if own == sil.Owned {
+		g.blk.DestroyValue(payload)
+	}
+	return g.blk.UncheckedTakeEnumDataAddr(addr, optionalSome, wrapped)
+}
+
 // switchable evaluates an optional expression for switching and determines payload ownership.
 func (g *gen) switchable(e ast.Expr, wrapped sil.Type) (*sil.Value, sil.Ownership) {
 	g.push()

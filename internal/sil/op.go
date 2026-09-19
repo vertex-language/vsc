@@ -48,6 +48,9 @@ const (
 	DestructureTuple  Op = "destructure_tuple"
 	Enum              Op = "enum"
 	UncheckedEnumData Op = "unchecked_enum_data"
+	// UncheckedTakeEnumDataAddr is where a case's payload is inside an
+	// enum's storage, the tag already known to be that case's.
+	UncheckedTakeEnumDataAddr Op = "unchecked_take_enum_data_addr"
 	InitEnumDataAddr  Op = "init_enum_data_addr"
 	InjectEnumAddr    Op = "inject_enum_addr"
 

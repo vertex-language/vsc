@@ -169,6 +169,13 @@ func (b *Block) UncheckedEnumData(v *Value, member string, t Type) *Value {
 	return b.add(UncheckedEnumData, Aux{Member: member}, []*Value{v}, t.Object()).Result()
 }
 
+// UncheckedTakeEnumDataAddr is the address of a case's payload inside
+// an enum's storage, whose tag is known to be that case's: an lvalue
+// for `x?` once x is some.
+func (b *Block) UncheckedTakeEnumDataAddr(addr *Value, member string, t Type) *Value {
+	return b.add(UncheckedTakeEnumDataAddr, Aux{Member: member}, []*Value{addr}, t.Address()).Result()
+}
+
 // ---- references and calls ----
 
 // RefElementAddr yields the address of a stored property in a class instance.

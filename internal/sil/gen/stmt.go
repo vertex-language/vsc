@@ -412,6 +412,10 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 
 	case *ast.SubscriptExpr:
 		return g.elementAddr(n)
+
+	// `a?.x = v` writes into a's payload where a is some.
+	case *ast.OptionalExpr:
+		return g.chainStepAddr(n)
 	}
 	return nil
 }

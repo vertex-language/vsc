@@ -100,7 +100,7 @@ func resultOwnership(op Op, aux Aux, t Type, args []*Value) Ownership {
 		return None
 	case AllocStack, ProjectBox, RefElementAddr, StructElementAddr,
 		TupleElementAddr, BeginAccess, InitExistentialAddr,
-		OpenExistentialAddr, InitEnumDataAddr,
+		OpenExistentialAddr, InitEnumDataAddr, UncheckedTakeEnumDataAddr,
 		PointerToAddress, IndexAddr, GlobalAddr:
 		return None
 	case AddressToPointer:
