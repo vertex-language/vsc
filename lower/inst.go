@@ -3164,7 +3164,14 @@ func (c *fn) wideAddress(in *sil.Inst, v *sil.Value) (ir.Ptr, bool, error) {
 	if err != nil || !wrote {
 		return ir.Ptr{}, false, err
 	}
-	c.mem[v] = slot
+	// The scalars are in the slot from here on -- on this path. A use
+	// in another block may be reached without passing this store, so
+	// the slot is remembered as the value's home only when the store
+	// is in the block that defines the value, which every use is
+	// reached through; elsewhere the next use writes the slot again.
+	if v.Block() == in.Block() {
+		c.mem[v] = slot
+	}
 	return slot, true, nil
 }
 

@@ -59,7 +59,9 @@ func main() -> Int32 { var x: Int32 = 1; bump(&x); return x }`)
 }
 
 // TestPointerConversionMovesNothing: every unsafe pointer is the same
-// address, so reading one as another is no instruction at all.
+// address, so reading one as another calls nothing and loads nothing:
+// a conversion is the value retyped, through an address and back, which
+// the lowering emits no instruction for.
 func TestPointerConversionMovesNothing(t *testing.T) {
 	got, said := refusals(t, `
 func f(_ p: UnsafeMutablePointer<Int32>) -> Int32 {
@@ -70,11 +72,18 @@ func main() -> Int32 { return 0 }`)
 	if said != "" {
 		t.Fatalf("refused: %s", said)
 	}
-	// One load, one address, and nothing in between: three
-	// conversions that each produced an instruction would show up
-	// here as three more values.
-	if n := strings.Count(got, "pointer_to_address"); n != 1 {
-		t.Errorf("pointer_to_address appears %d times, want 1:\n%s", n, got)
+	body := got[strings.Index(got, "@$s4main1f"):strings.Index(got, "@main")]
+	if n := strings.Count(body, "load "); n != 1 {
+		t.Errorf("load appears %d times, want 1:\n%s", n, got)
+	}
+	if strings.Contains(body, "apply ") || strings.Contains(body, "builtin ") {
+		t.Errorf("a conversion called something:\n%s", got)
+	}
+	// Each conversion retypes the pointer, through an address and back,
+	// so that a converted value is typed as the conversion says and can
+	// be returned or stored as one.
+	if n := strings.Count(body, "address_to_pointer"); n != 3 {
+		t.Errorf("address_to_pointer appears %d times, want one per conversion:\n%s", n, got)
 	}
 }
 
