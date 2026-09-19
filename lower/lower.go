@@ -85,10 +85,11 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 
 // lowerer maintains translation state across a lowered module.
 type lowerer struct {
-	closures    map[string]closureParts // capturing closures' forwarders, by body
-	releasers   map[string]*ir.Func     // a stack context's last release, by body; nil for none
-	boxes       map[string]*ir.Global   // captured variables' box metadata, by element type
-	globalStore map[string]*ir.Global   // module-level variables, by symbol
+	closures    map[string]closureParts  // capturing closures' forwarders, by body
+	releasers   map[string]*ir.Func      // a stack context's last release, by body; nil for none
+	onces       map[string]*onceAccessor // global addressors initialized once, by name; nil for not one
+	boxes       map[string]*ir.Global    // captured variables' box metadata, by element type
+	globalStore map[string]*ir.Global    // module-level variables, by symbol
 	out         *ir.Module
 	prefix      string
 	callee      map[string]ir.Callee

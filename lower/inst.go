@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"fmt"
 	"math"
 	"strings"
 
@@ -1115,6 +1116,14 @@ func (c *fn) apply(in *sil.Inst) error {
 	if done, err := c.smallStringLiteral(in); done || err != nil {
 		return err
 	}
+	if done, err := c.onceAccess(in); done || err != nil {
+		return err
+	}
+	return c.call(in)
+}
+
+// call lowers an apply as the call it is.
+func (c *fn) call(in *sil.Inst) error {
 	callee, direct := c.refs[in.Args()[0]]
 	var through, throughContext ir.Ptr
 	if !direct {
@@ -3009,20 +3018,30 @@ func (c *fn) globalAddr(in *sil.Inst) error {
 	if res == nil {
 		return nil
 	}
-	t := in.Aux().Type
+	g, err := c.globalStorage(in.Aux().Name, in.Aux().Type)
+	if err != nil {
+		return c.fail(ErrType, in.Op(), err.Error())
+	}
+	c.def(res, c.b.Ptr.GetAddr(g))
+	return nil
+}
+
+// globalStorage is the storage of the module-level variable name, of type
+// t: zeroed, writable, made the first time it is asked for.
+func (c *fn) globalStorage(silName string, t sil.Type) (*ir.Global, error) {
 	f := t.Formal()
 	if f == nil {
-		return c.fail(ErrType, in.Op(), "a global with no type")
+		return nil, fmt.Errorf("a global with no type")
 	}
 	size := types.Sizeof(f, types.DefaultTarget64)
 	align := types.Alignof(f, types.DefaultTarget64)
 	if size < 0 || align <= 0 {
-		return c.fail(ErrType, in.Op(), t.String())
+		return nil, fmt.Errorf("%s", t.String())
 	}
 	if size == 0 {
 		size = 1
 	}
-	name := c.l.sym(in.Aux().Name)
+	name := c.l.sym(silName)
 	g, ok := c.l.globalStore[name]
 	if !ok {
 		g = c.l.out.Global(name, ir.RW, ir.Array(uint64(size), ir.StoreI8.FType())).
@@ -3032,8 +3051,99 @@ func (c *fn) globalAddr(in *sil.Inst) error {
 		}
 		c.l.globalStore[name] = g
 	}
-	c.def(res, c.b.Ptr.GetAddr(g))
-	return nil
+	return g, nil
+}
+
+// onceAccessor is, for the addressor of a module-level variable of this
+// module that is initialized on first use, the variable and its once
+// flag: the function reads the flag, runs the initializer if it is clear,
+// and answers the variable's address.
+type onceAccessor struct {
+	value, once *sil.Global
+}
+
+// accessorOf recognizes such an addressor by what it touches.
+func (l *lowerer) accessorOf(name string) (onceAccessor, bool) {
+	if l.onces == nil {
+		l.onces = map[string]*onceAccessor{}
+	}
+	if a, seen := l.onces[name]; seen {
+		if a == nil {
+			return onceAccessor{}, false
+		}
+		return *a, true
+	}
+	l.onces[name] = nil
+	f := l.module.Lookup(name)
+	if f == nil || f.IsDeclaration() || !strings.HasSuffix(name, "vau") {
+		return onceAccessor{}, false
+	}
+	globals := map[string]*sil.Global{}
+	for _, g := range l.module.Globals() {
+		globals[g.Name()] = g
+	}
+	var a onceAccessor
+	for _, b := range f.Blocks() {
+		for _, in := range b.Insts() {
+			if in.Op() != sil.GlobalAddr {
+				continue
+			}
+			n := in.Aux().Name
+			if strings.HasSuffix(n, "_once") {
+				a.once = globals[n]
+				a.value = globals[strings.TrimSuffix(n, "_once")]
+			}
+		}
+	}
+	if a.once == nil || a.value == nil {
+		return onceAccessor{}, false
+	}
+	l.onces[name] = &a
+	return a, true
+}
+
+// onceAccess lowers a call of such an addressor the way swiftc's callers
+// check swift_once's token: the flag is read in place, and only while it
+// is clear -- the first time -- is the addressor called. Every later read
+// of a global let is a load and a branch rather than a call.
+func (c *fn) onceAccess(in *sil.Inst) (bool, error) {
+	res := in.Result()
+	if res == nil || len(in.Args()) != 1 {
+		return false, nil
+	}
+	a, ok := c.l.accessorOf(c.refNames[in.Args()[0]])
+	if !ok {
+		return false, nil
+	}
+	flag, err := c.globalStorage(a.once.Name(), a.once.Type())
+	if err != nil {
+		return false, nil
+	}
+	value, err := c.globalStorage(a.value.Name(), a.value.Type())
+	if err != nil {
+		return false, nil
+	}
+	c.conts++
+	n := itoa(c.conts)
+	ready := c.out.Block("once_ready" + n)
+	first := c.out.Block("once_first" + n)
+	join := c.out.Block("once_join" + n)
+	at := join.ParamPtr("once_addr" + n)
+	set := c.b.I32.Ne(c.b.I32.ULoad8(c.b.Ptr.GetAddr(flag)), c.b.I32.Const(0))
+	c.b.BrIf(set, ready.To(), first.To())
+	ready.Br(join.To(ready.Ptr.GetAddr(value)))
+	c.b = first
+	if err := c.call(in); err != nil {
+		return true, err
+	}
+	got, ok := c.value(res)
+	if !ok {
+		return true, c.fail(ErrIR, in.Op(), "an addressor with no address")
+	}
+	c.b.Br(join.To(got))
+	c.b = join
+	c.def(res, at)
+	return true, nil
 }
 
 // wideAddress is where a value too wide for registers is: the memory it
