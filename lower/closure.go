@@ -50,17 +50,37 @@ func (c *fn) partialApply(in *sil.Inst) error {
 		return c.fail(ErrUnsupported, in.Op(), err.Error())
 	}
 
-	if c.l.alloc == nil {
-		c.l.alloc = c.l.out.ImportFunc(c.l.sym(stdlib.Alloc),
-			ir.NewSig().Param(ir.TypeI64).Ret(ir.TypePtr)).NoUnwind()
-	}
-	got := c.b.Call(c.l.alloc, c.b.I64.Const(size))
-	if got.Len() == 0 {
-		return c.fail(ErrIR, in.Op(), "the allocator returned nothing")
-	}
-	obj, ok := got.Value(0).(ir.Ptr)
-	if !ok {
-		return c.fail(ErrType, in.Op(), "the allocator did not return a pointer")
+	var obj ir.Ptr
+	if at, onStack := c.contexts[res]; onStack {
+		// A context that cannot escape is in storage of this body's own
+		// (see stackContext), counted as immortal so that nothing the
+		// closure does with it can free it.
+		obj = at
+		c.b.I64.Store(c.b.I64.Const(immortalCount), c.b.Ptr.Add(obj, c.b.I64.Const(8)))
+		rel, err := c.l.contextReleaser(name, caps)
+		if err != nil {
+			return c.fail(ErrUnsupported, in.Op(), err.Error())
+		}
+		if rel != nil {
+			if c.releasers == nil {
+				c.releasers = map[*sil.Value]*ir.Func{}
+			}
+			c.releasers[res] = rel
+		}
+	} else {
+		if c.l.alloc == nil {
+			c.l.alloc = c.l.out.ImportFunc(c.l.sym(stdlib.Alloc),
+				ir.NewSig().Param(ir.TypeI64).Ret(ir.TypePtr)).NoUnwind()
+		}
+		got := c.b.Call(c.l.alloc, c.b.I64.Const(size))
+		if got.Len() == 0 {
+			return c.fail(ErrIR, in.Op(), "the allocator returned nothing")
+		}
+		p, ok := got.Value(0).(ir.Ptr)
+		if !ok {
+			return c.fail(ErrType, in.Op(), "the allocator did not return a pointer")
+		}
+		obj = p
 	}
 	c.b.Ptr.Store(c.b.Ptr.GetAddr(parts.meta), obj)
 	// The copies the context owns, which its destroyer lets go of.
@@ -107,6 +127,110 @@ func (c *fn) partialApply(in *sil.Inst) error {
 	}
 	c.multi[res] = []ir.Value{code, obj}
 	return nil
+}
+
+// immortalCount is the refcount of an object that is never counted and
+// never freed: the runtime's immortal bit (abi.h), and one reference.
+const immortalCount = -1<<63 | 1
+
+// stackContext reports whether a closure's context can live in the body's
+// own storage rather than on the heap: swiftc's partial_apply [on_stack].
+//
+// It can when the closure cannot escape: every use of the closure value is
+// a call of it, or a retain or release -- it is not stored, returned,
+// passed on or captured -- which is what a body handed to withUnsafeBytes
+// and its kind comes to once they are inlined. Nothing frees the context
+// then; a release of one that holds references lets go of those instead
+// (contextReleaser), and so it must be the only release on its path: a
+// context that holds references is never retained. In an async
+// body each call also has to come before the next suspension, in the
+// partial_apply's own block: the value's code half is not carried across
+// one, only the context in the frame is.
+func stackContext(f *sil.Func, in *sil.Inst) bool {
+	res := in.Result()
+	if res == nil {
+		return false
+	}
+	owns := false
+	for _, a := range in.Args()[1:] {
+		if !a.Type().Trivial() {
+			owns = true
+		}
+	}
+	if sig, ok := res.Type().Formal().Underlying().(*types.Signature); !ok || sig.Async {
+		return false
+	}
+	async := f.Type() != nil && f.Type().Async
+	for _, u := range res.Uses() {
+		switch u.Op() {
+		case sil.StrongRelease:
+			continue
+		case sil.StrongRetain:
+			// Counted as immortal, a retained context is never let go
+			// of: fine when it holds nothing, but what it holds has to be
+			// released once, at the one release -- which a retain would
+			// make one of several.
+			if owns {
+				return false
+			}
+			continue
+		case sil.Apply:
+			if u.Args()[0] != res {
+				return false
+			}
+			for _, a := range u.Args()[1:] {
+				if a == res {
+					return false
+				}
+			}
+			if async && !callBeforeSuspending(in, u) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// callBeforeSuspending reports whether call is in the same block as def,
+// after it, with no call to an async function between them.
+func callBeforeSuspending(def, call *sil.Inst) bool {
+	if def.Block() != call.Block() {
+		return false
+	}
+	seen := false
+	for _, x := range def.Block().Insts() {
+		if x == def {
+			seen = true
+			continue
+		}
+		if !seen {
+			continue
+		}
+		if x == call {
+			return true
+		}
+		if suspends(x) {
+			return false
+		}
+	}
+	return false
+}
+
+// suspends reports whether in may give up the thread: a call of an async
+// function.
+func suspends(in *sil.Inst) bool {
+	if in.Op() != sil.Apply && in.Op() != sil.TryApply {
+		return false
+	}
+	switch t := in.Args()[0].Type().Formal().Underlying().(type) {
+	case *sil.FuncType:
+		return t.Async
+	case *types.Signature:
+		return t.Async
+	}
+	return true
 }
 
 // forwarderRecord is the record beside a capturing async closure's
@@ -224,6 +348,38 @@ func (l *lowerer) closureParts(name string, body *sil.Func, sig *types.Signature
 
 // contextDestroyer releases what a context holds and frees it.
 func (l *lowerer) contextDestroyer(name string, caps []*sil.Value) (*ir.Func, error) {
+	return l.contextRelease(name, caps, true)
+}
+
+// contextReleaser releases what a context holds and leaves it where it is:
+// the last release of a context in a body's own storage. It is nil for a
+// context that holds nothing counted.
+func (l *lowerer) contextReleaser(name string, caps []*sil.Value) (*ir.Func, error) {
+	if l.releasers == nil {
+		l.releasers = map[string]*ir.Func{}
+	}
+	if f, ok := l.releasers[name]; ok {
+		return f, nil
+	}
+	owns := false
+	for _, a := range caps {
+		if !a.Type().Trivial() {
+			owns = true
+		}
+	}
+	var f *ir.Func
+	if owns {
+		var err error
+		f, err = l.contextRelease(name, caps, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+	l.releasers[name] = f
+	return f, nil
+}
+
+func (l *lowerer) contextRelease(name string, caps []*sil.Value, free bool) (*ir.Func, error) {
 	var owned []ownedWord
 	offsets, _ := captureLayout(caps)
 	for i, a := range caps {
@@ -234,14 +390,20 @@ func (l *lowerer) contextDestroyer(name string, caps []*sil.Value) (*ir.Func, er
 		}
 		owned = append(owned, words...)
 	}
-	f := l.out.Func(l.sym("$sVSCdestroycontext_" + identSafe(name)))
+	prefix := "$sVSCdestroycontext_"
+	if !free {
+		prefix = "$sVSCreleasecontext_"
+	}
+	f := l.out.Func(l.sym(prefix + identSafe(name)))
 	f.Internal()
 	obj := f.ParamPtr("context")
 	b := f.Entry()
 	release := l.runtimeFunc(stdlib.Release, ir.NewSig().Param(ir.TypePtr))
 	releaseString := l.runtimeFunc(stdlib.StringRelease, ir.NewSig().Param(ir.TypePtr))
 	b = countOwned(f, b, obj, owned, releaseString, release, "d")
-	b.Call(l.runtimeFunc(stdlib.Dealloc, ir.NewSig().Param(ir.TypePtr)), obj)
+	if free {
+		b.Call(l.runtimeFunc(stdlib.Dealloc, ir.NewSig().Param(ir.TypePtr)), obj)
+	}
 	b.Return()
 	return f, nil
 }

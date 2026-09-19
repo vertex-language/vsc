@@ -1068,6 +1068,14 @@ func (c *fn) storeScalar(in *sil.Inst, v ir.Value, p ir.Ptr, r repr) error {
 // runtime, which runtime/ builds as a VIR module of its own; that
 // they exist is all this package needs to know.
 func (c *fn) refCount(in *sil.Inst, slot *ir.Callee, name string) error {
+	// A closure context in the body's own storage is not counted: see
+	// stackContext.
+	if at, onStack := c.contexts[in.Args()[0]]; onStack {
+		if rel, owns := c.releasers[in.Args()[0]]; owns && in.Op() == sil.StrongRelease {
+			c.b.Call(rel, at)
+		}
+		return nil
+	}
 	// A String is counted through its own retain and release, which
 	// read its tag. See string.go.
 	if bridged(in.Args()[0].Type()) {

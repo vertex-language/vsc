@@ -27,6 +27,13 @@ type fn struct {
 	// spill is storage for any other value too wide for registers, which
 	// is written there when something wants its address.
 	spill map[*sil.Value]ir.Ptr
+	// contexts is where a closure context that does not escape lives:
+	// the machine stack, or the async frame of a split body. See
+	// stackContext.
+	contexts map[*sil.Value]ir.Ptr
+	// releasers is, for such a context that holds references, what its
+	// release calls instead: see contextReleaser.
+	releasers map[*sil.Value]*ir.Func
 	// sret is the caller-allocated storage pointer for indirect returns.
 	sret    ir.Ptr
 	hasSRet bool
@@ -116,6 +123,8 @@ const (
 	storageStack
 	// storageSpill is any other value too wide for registers.
 	storageSpill
+	// storageContext is the context of a closure that cannot escape.
+	storageContext
 )
 
 // storageWalk visits every piece of memory a body wants, in a fixed
@@ -154,6 +163,13 @@ func (c *fn) storageWalk(yield func(k storageKind, v *sil.Value, size, align int
 	}
 	for _, b := range c.src.Blocks() {
 		for _, in := range b.Insts() {
+			if in.Op() == sil.PartialApply && stackContext(c.src, in) {
+				_, size := captureLayout(in.Args()[1:])
+				if err := yield(storageContext, in.Result(), int64(stdlib.HeaderBytes)+size, 16); err != nil {
+					return err
+				}
+				continue
+			}
 			if in.Op() == sil.AllocStack {
 				size, align, err := c.stackBytes(in)
 				if err != nil {
@@ -267,6 +283,11 @@ func (c *fn) place(k storageKind, v *sil.Value, at ir.Ptr) {
 		c.def(v, at)
 	case storageSpill:
 		c.spill[v] = at
+	case storageContext:
+		if c.contexts == nil {
+			c.contexts = map[*sil.Value]ir.Ptr{}
+		}
+		c.contexts[v] = at
 	default:
 		c.wide[v] = at
 	}
