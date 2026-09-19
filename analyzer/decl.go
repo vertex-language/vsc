@@ -699,7 +699,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Struct)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
-				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
 			}
 
 		case *ast.ClassDecl:
@@ -707,7 +707,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Class)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, &n.Superclass)
-				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
 			}
 
 		case *ast.ActorDecl:
@@ -715,7 +715,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Class)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
-				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics)
+				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
 			}
 
 		case *ast.EnumDecl:
@@ -724,7 +724,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n.TypeParams = params
 				n.RawType = c.rawTypeOf(d.Inherit, scope)
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
-				c.readMembers(d.Body, inner, nil, &n.Methods, n, nil, &n.Computed, &n.Statics)
+				c.readMembers(d.Body, inner, nil, &n.Methods, n, nil, &n.Computed, &n.Statics, &n.Subscripts)
 			}
 
 		case *ast.TypealiasDecl:
@@ -793,7 +793,7 @@ func (c *checker) protocolsOf(inherit *ast.InheritanceClause, scope *Scope, supe
 }
 
 // readMembers populates fields, methods, enum cases, initializers, and computed properties.
-func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[]*types.Field, methods *[]*types.Method, en *types.Enum, inits *[]*types.Signature, computed, statics *[]*types.Field) {
+func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[]*types.Field, methods *[]*types.Method, en *types.Enum, inits *[]*types.Signature, computed, statics *[]*types.Field, subscripts *[]*types.Subscript) {
 	if body == nil || typeScope == nil {
 		return
 	}
@@ -877,6 +877,12 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			sig.Exported = exported(c.accessOf(m.Mods))
 			*inits = append(*inits, sig)
 
+		case *ast.SubscriptDecl:
+			if subscripts == nil {
+				continue
+			}
+			*subscripts = append(*subscripts, c.subscriptOf(m, typeScope))
+
 		case *ast.FuncDecl:
 			if methods == nil {
 				continue
@@ -901,6 +907,33 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			c.info.Defs[m.Name] = sym
 		}
 	}
+}
+
+// subscriptOf is the subscript a declaration declares. A parameter
+// written with one name has no label -- `subscript(x: Int)` is used as
+// `s[1]` -- which is the other way round from a function's.
+func (c *checker) subscriptOf(m *ast.SubscriptDecl, typeScope *Scope) *types.Subscript {
+	sig := c.buildFuncSig(&ast.FuncSig{Lparen: m.Lparen, Params: m.Params, Rparen: m.Rparen, Result: m.Result}, typeScope)
+	for i, p := range m.Params {
+		if i < len(sig.Params) && p.Name == nil {
+			sig.Params[i].Label = ""
+		}
+	}
+	sub := &types.Subscript{
+		Params:   sig.Params,
+		Result:   sig.Results,
+		IsStatic: isStatic(m.Mods),
+		Exported: exported(c.accessOf(m.Mods)),
+	}
+	if m.Accessors != nil {
+		for _, a := range m.Accessors.Accessors {
+			if a != nil && a.Keyword != nil && a.Keyword.Text(c.file) == "set" {
+				sub.Settable = true
+			}
+		}
+	}
+	c.info.SubscriptDecls[m] = sub
+	return sub
 }
 
 // declareFunctions discovers top-level functions and signatures.
@@ -1164,7 +1197,16 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		if computed != nil {
 			computedBefore = len(*computed)
 		}
-		c.readMembers(ext.Body, typeScope, fields, methods, en, inits, computed, statics)
+		var subscripts *[]*types.Subscript
+		switch u := extType.Underlying().(type) {
+		case *types.Struct:
+			subscripts = &u.Subscripts
+		case *types.Class:
+			subscripts = &u.Subscripts
+		case *types.Enum:
+			subscripts = &u.Subscripts
+		}
+		c.readMembers(ext.Body, typeScope, fields, methods, en, inits, computed, statics, subscripts)
 		if isBuiltin && builtin != nil && c.importing != "" {
 			if builtin.Modules == nil {
 				builtin.Modules = map[any]string{}

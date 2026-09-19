@@ -199,6 +199,7 @@ func (g *gen) extension(d *ast.ExtensionDecl) {
 	// A computed property an extension adds has a getter to emit, as one
 	// the type's body declares does.
 	g.emitGetters(d.Body, recv)
+	g.emitSubscripts(d.Body, recv)
 	for _, mem := range d.Body.Members {
 		switch m := mem.(type) {
 		case *ast.FuncDecl:
@@ -229,6 +230,7 @@ func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
 	// A generic type's are lowered where they are used.
 	if len(nominalTypeParams(sym.Type())) == 0 {
 		g.emitGetters(body, sym.Type())
+		g.emitSubscripts(body, sym.Type())
 	}
 	g.emitStatics(sym.Type())
 	for _, mem := range body.Members {
@@ -431,7 +433,11 @@ type gen struct {
 	// chainNone is where an `a?` that finds nothing goes, for each optional
 	// chain being lowered, innermost last; chainActive is the roots whose
 	// steps are being lowered, which are typed as their unwrapped result.
-	chainNone   []*sil.Block
+	chainNone []*sil.Block
+	// writebacks are what the current statement wrote through the
+	// temporaries of declared subscripts, set back when it ends. See
+	// subscript.go.
+	writebacks  []func()
 	chainDepth  []int // the scope each chain in chainNone opened, let go of on its way there
 	chainActive map[ast.Expr]bool
 	// lateReceivers are the calls whose receiver is evaluated after their

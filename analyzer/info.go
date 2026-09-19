@@ -102,6 +102,11 @@ type Info struct {
 	OptionalSomes map[*ast.CallExpr]types.Type
 	OptionalNones map[ast.Expr]types.Type
 
+	// Subscripts are the uses of subscripts types declare: `grid[1, 2]`.
+	// SubscriptDecls is the subscript each declaration declares.
+	Subscripts     map[*ast.SubscriptExpr]*SubscriptRef
+	SubscriptDecls map[*ast.SubscriptDecl]*types.Subscript
+
 	// OptionalCompares are the `==` and `!=` whose operands are optionals,
 	// or an optional and a value, mapped to the type the payloads are
 	// compared as; the operator the payloads use is recorded for the
@@ -156,6 +161,13 @@ type MethodRef struct {
 	Method *types.Method
 }
 
+// A SubscriptRef is a subscript a type declares, used on a value of it
+// -- or on the type itself, for a static one.
+type SubscriptRef struct {
+	Recv      types.Type
+	Subscript *types.Subscript
+}
+
 // NewInfo allocates an empty Info container.
 func NewInfo() *Info {
 	return &Info{
@@ -187,6 +199,8 @@ func NewInfo() *Info {
 		ArrayCopies:      make(map[*ast.CallExpr]types.Type),
 		OptionalSomes:    make(map[*ast.CallExpr]types.Type),
 		OptionalNones:    make(map[ast.Expr]types.Type),
+		Subscripts:       make(map[*ast.SubscriptExpr]*SubscriptRef),
+		SubscriptDecls:   make(map[*ast.SubscriptDecl]*types.Subscript),
 		OptionalCompares: make(map[*ast.BinaryExpr]types.Type),
 		CastTargets:      make(map[*ast.CastExpr]types.Type),
 		ChainRoots:       make(map[ast.Expr]bool),

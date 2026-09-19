@@ -181,6 +181,43 @@ func Setter(d Decl) (string, error) { return accessor(d, "vs") }
 // Addressor returns the mangled symbol for a static stored property addressor (suffix `vau`).
 func Addressor(d Decl) (string, error) { return accessor(d, "vau") }
 
+// SubscriptGetter returns the mangled symbol for a subscript's getter
+// (suffix `cig`), SubscriptSetter its setter's (`cis`). A subscript has
+// no name: the symbol is its context, its type -- the labels left out,
+// as swiftc leaves them -- and the letters saying which accessor.
+// `Grid.subscript(x: Int, y: Int) -> Int` reads `$s4main4GridVyS2i_Sitcig`.
+func SubscriptGetter(d Decl) (string, error) { return subscriptAccessor(d, "ig") }
+
+// SubscriptSetter returns the mangled symbol for a subscript's setter.
+func SubscriptSetter(d Decl) (string, error) { return subscriptAccessor(d, "is") }
+
+func subscriptAccessor(d Decl, kind string) (string, error) {
+	m := &mangler{moduleName: d.Module, moduleOf: d.ModuleOf, subAt: -1}
+	m.write("$s")
+	if err := m.context(d); err != nil {
+		return "", err
+	}
+	if d.Signature == nil {
+		return "", fail(ErrUnsupported, "a subscript with no type")
+	}
+	unlabelled := *d.Signature
+	unlabelled.Params = make([]*types.Param, len(d.Signature.Params))
+	for i, p := range d.Signature.Params {
+		q := *p
+		q.Label = ""
+		unlabelled.Params[i] = &q
+	}
+	if err := m.signature(&unlabelled); err != nil {
+		return "", err
+	}
+	m.writeByte('c')
+	m.write(kind)
+	if d.Static {
+		m.writeByte('Z')
+	}
+	return string(m.buf), nil
+}
+
 // accessor writes a property's symbol: the context, the name, the
 // type it is, and the letters that say which accessor this is.
 func accessor(d Decl, kind string) (string, error) {

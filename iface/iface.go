@@ -142,15 +142,16 @@ func (p *printer) nominal(keyword string, name *ast.Ident, mods []*ast.Modifier)
 	var fields, computed, statics []*types.Field
 	var methods []*types.Method
 	var inits []*types.Signature
+	var subscripts []*types.Subscript
 	var inherits []string
 	switch t := sym.Type().Underlying().(type) {
 	case *types.Struct:
 		fields, methods, inits = t.Fields, t.Methods, t.Inits
-		computed, statics = t.Computed, t.Statics
+		computed, statics, subscripts = t.Computed, t.Statics, t.Subscripts
 		inherits = protocolNames(t.Conformances)
 	case *types.Class:
 		fields, methods, inits = t.Fields, t.Methods, t.Inits
-		computed, statics = t.Computed, t.Statics
+		computed, statics, subscripts = t.Computed, t.Statics, t.Subscripts
 		if t.Superclass != nil {
 			inherits = append(inherits, typeText(t.Superclass))
 		}
@@ -184,8 +185,45 @@ func (p *printer) nominal(keyword string, name *ast.Ident, mods []*ast.Modifier)
 		p.line("  %s", p.initializer(sig))
 	}
 	p.methods(methods)
+	p.subscripts(subscripts)
 	p.line("}")
 	p.line("")
+}
+
+// subscripts writes the ones a client may use, with the accessors it
+// may call. A parameter is written with its label, or with `_` where it
+// has none -- which is what a subscript's parameter has by default, the
+// other way round from a function's.
+func (p *printer) subscripts(subs []*types.Subscript) {
+	for _, sub := range subs {
+		if sub == nil || !sub.Exported {
+			continue
+		}
+		var b strings.Builder
+		b.WriteString("  public ")
+		if sub.IsStatic {
+			b.WriteString("static ")
+		}
+		b.WriteString("subscript(")
+		for i, param := range sub.Params {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			q := *param
+			if q.Label == "" {
+				q.Label = "_"
+			}
+			b.WriteString(p.paramText(&q))
+		}
+		b.WriteString(") -> ")
+		b.WriteString(typeText(sub.Result))
+		if sub.Settable {
+			b.WriteString(" { get set }")
+		} else {
+			b.WriteString(" { get }")
+		}
+		p.line("%s", b.String())
+	}
 }
 
 // methods writes the ones a client may call. A method that is not public

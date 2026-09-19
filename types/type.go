@@ -254,6 +254,18 @@ type Method struct {
 	Exported bool
 }
 
+// Subscript is a subscript a type declares: `subscript(x: Int) -> T`.
+// Its parameters carry no label unless one is written: `subscript(x: Int)`
+// is used as `s[1]`, and `subscript(at i: Int)` as `s[at: 1]`.
+type Subscript struct {
+	Params   []*Param
+	Result   Type
+	IsStatic bool
+	// Settable is whether the subscript declares a setter.
+	Settable bool
+	Exported bool
+}
+
 // Requirement represents a protocol requirement.
 type Requirement struct {
 	Name    string
@@ -299,6 +311,7 @@ type Struct struct {
 	In           Type            // enclosing type if nested
 	Computed     []*Field        // computed properties
 	Statics      []*Field        // static properties
+	Subscripts   []*Subscript
 }
 
 // Memberwise returns the synthesized memberwise initializer signature for the struct,
@@ -351,6 +364,7 @@ type Class struct {
 	In           Type            // enclosing type if nested
 	Computed     []*Field        // computed properties
 	Statics      []*Field        // static properties
+	Subscripts   []*Subscript
 }
 
 func (c *Class) Underlying() Type { return c }
@@ -386,6 +400,7 @@ type Enum struct {
 	In           Type            // enclosing type if nested
 	Computed     []*Field        // computed properties
 	Statics      []*Field        // static properties
+	Subscripts   []*Subscript
 }
 
 func (e *Enum) Underlying() Type { return e }

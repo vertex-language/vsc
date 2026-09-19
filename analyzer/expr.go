@@ -619,6 +619,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					case *types.Array, *types.Dictionary:
 						c.checkMutableReceiver(sub.X, sub.Lsquare, "cannot assign through subscript", scope)
 					}
+					c.checkSubscriptWrite(sub, scope)
 				}
 			}
 
@@ -792,6 +793,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				case *types.Array, *types.Dictionary:
 					c.checkMutableReceiver(sub.X, e.Op.Pos(), "left side of mutating operator isn't mutable", scope)
 				}
+				c.checkSubscriptWrite(sub, scope)
 			} else if mem, ok := e.X.(*ast.MemberExpr); ok {
 				baseType := c.info.Types[mem.X]
 				propName := mem.Name.Text(c.file)
@@ -1242,6 +1244,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			index, result = b.Key, &types.Optional{Wrapped: b.Value}
 			if len(e.Args) == 2 && e.Args[1].Label != nil && e.Args[1].Label.Text(c.file) == "default" {
 				result, fallback = b.Value, b.Value
+			}
+		default:
+			if t, ok := c.declaredSubscript(e, baseType, scope); ok {
+				return t
 			}
 		}
 		for i, arg := range e.Args {
@@ -1734,6 +1740,145 @@ func (c *checker) optionalOperands(e *ast.BinaryExpr, lhs, rhs types.Type, scope
 		return types.AssignableTo(lhs, ro.Wrapped)
 	}
 	return false
+}
+
+// declaredSubscript resolves `s[args]` on a value of a type that declares
+// subscripts -- or on the type, for a static one -- to the one whose
+// labels and parameters the arguments fit, and is its result.
+func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, scope *Scope) (types.Type, bool) {
+	if baseType == nil || isInvalid(baseType) {
+		return nil, false
+	}
+	recv, static := baseType, false
+	if meta, ok := baseType.(*types.Metatype); ok {
+		recv, static = meta.Instance, true
+	}
+	var candidates []*SubscriptRef
+	for t := recv; t != nil; {
+		for _, sub := range subscriptsOf(t) {
+			if sub != nil && sub.IsStatic == static {
+				candidates = append(candidates, &SubscriptRef{Recv: t, Subscript: sub})
+			}
+		}
+		cl, ok := t.Underlying().(*types.Class)
+		if !ok || cl.Superclass == nil {
+			break
+		}
+		t = cl.Superclass
+	}
+	if len(candidates) == 0 {
+		switch recv.Underlying().(type) {
+		case *types.Struct, *types.Class, *types.Enum:
+			c.typeErrorf(e.Lsquare, "value of type '%s' has no subscripts", baseType)
+			for _, arg := range e.Args {
+				c.checkExpr(arg.X, nil, scope)
+			}
+			return types.Typ[types.Invalid], true
+		}
+		return nil, false
+	}
+	// The subscript whose labels and arity fit, and then whose
+	// parameters the arguments convert to: types are tried against
+	// each in turn, as an overloaded call's are.
+	fits := func(ref *SubscriptRef) bool {
+		params := ref.Subscript.Params
+		if len(params) != len(e.Args) {
+			return false
+		}
+		for i, arg := range e.Args {
+			label := ""
+			if arg.Label != nil {
+				label = arg.Label.Text(c.file)
+			}
+			if label != params[i].Label && !(params[i].Label == "_" && label == "") {
+				return false
+			}
+		}
+		return true
+	}
+	var chosen *SubscriptRef
+	for _, ref := range candidates {
+		if !fits(ref) {
+			continue
+		}
+		ok := true
+		quiet := len(c.info.Diagnostics)
+		for i, arg := range e.Args {
+			if _, isLit := literalUnder(arg.X); isLit {
+				continue
+			}
+			got := c.checkExpr(arg.X, ref.Subscript.Params[i].Type, scope)
+			if !isInvalid(got) && !types.AssignableTo(got, ref.Subscript.Params[i].Type) {
+				ok = false
+				break
+			}
+		}
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+		if ok {
+			chosen = ref
+			break
+		}
+	}
+	if chosen == nil {
+		for _, ref := range candidates {
+			if fits(ref) {
+				chosen = ref
+				break
+			}
+		}
+	}
+	if chosen == nil {
+		c.typeErrorf(e.Lsquare, "no subscript of '%s' takes these arguments", baseType)
+		for _, arg := range e.Args {
+			c.checkExpr(arg.X, nil, scope)
+		}
+		return types.Typ[types.Invalid], true
+	}
+	for i, arg := range e.Args {
+		want := chosen.Subscript.Params[i].Type
+		got := c.checkExpr(arg.X, want, scope)
+		if t, adopted := c.adopt(arg.X, want); adopted {
+			got = t
+		}
+		if !isInvalid(got) && !types.AssignableTo(got, want) {
+			c.typeErrorf(arg.X.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", got, want)
+		}
+	}
+	c.info.Subscripts[e] = chosen
+	return chosen.Subscript.Result, true
+}
+
+// checkSubscriptWrite says what is wrong with writing through a declared
+// subscript where something is: one with no setter, or one of a value
+// held in a `let`.
+func (c *checker) checkSubscriptWrite(sub *ast.SubscriptExpr, scope *Scope) {
+	ref := c.info.Subscripts[sub]
+	if ref == nil {
+		return
+	}
+	if !ref.Subscript.Settable {
+		c.errorf(sub.Lsquare, "cannot assign through subscript: subscript is get-only")
+		return
+	}
+	if _, isClass := ref.Recv.Underlying().(*types.Class); !isClass && !ref.Subscript.IsStatic {
+		c.checkMutableReceiver(sub.X, sub.Lsquare, "cannot assign through subscript", scope)
+	}
+}
+
+// subscriptsOf is the subscripts a type declares.
+func subscriptsOf(t types.Type) []*types.Subscript {
+	if inst, ok := t.(*types.GenericInstance); ok {
+		t = inst.Base
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		return u.Subscripts
+	case *types.Class:
+		return u.Subscripts
+	case *types.Enum:
+		return u.Subscripts
+	}
+	return nil
 }
 
 // payloadOperator records how the payloads of an optional comparison are

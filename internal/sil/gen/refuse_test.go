@@ -232,10 +232,11 @@ func main() -> Int32 { return fib(10) }`)
 // the node knows its extent.
 func TestRefusalsCoverTheirSpan(t *testing.T) {
 	src := `
-struct Box { var n: Int }
+class Base { var n: Int { get { return 1 } set {} } }
+final class Sub: Base {}
 func main() -> Int32 {
-    let b = Box(n: 1)
-    b[keyPath: \Box.n] = 4
+    let b: Base = Sub()
+    b.n = 4
     return 0
 }`
 	_, diags := generate(t, "main", src)

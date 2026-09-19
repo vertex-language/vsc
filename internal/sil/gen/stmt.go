@@ -29,6 +29,9 @@ func (g *gen) block(b *ast.CodeBlock) {
 func (g *gen) stmt(s ast.Stmt) {
 	g.pushFormal()
 	g.stmtBody(s)
+	// What the statement wrote through a subscript's temporary is set
+	// back before the statement's temporaries end.
+	g.flushWritebacks()
 	g.popReachable()
 }
 
@@ -207,6 +210,25 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 			return
 		}
 	}
+	// Through a subscript a type declares: read by its getter, written
+	// by its setter.
+	if sub, ok := e.X.(*ast.SubscriptExpr); ok {
+		if ref := g.info.Subscripts[sub]; ref != nil {
+			cur := g.declaredSubscriptRead(sub, ref)
+			rhs := g.expr(e.Y)
+			if cur == nil || rhs == nil {
+				return
+			}
+			t := g.typeOf(e.X)
+			v := g.operate(e, op, t, t, cur, rhs)
+			if v == nil {
+				g.unsupported(e)
+				return
+			}
+			g.declaredSubscriptWrite(sub, ref, v)
+			return
+		}
+	}
 	// d[k, default: v] op= w reads and writes through the runtime. An
 	// array's a[i] op= v is written where the element is, below.
 	if sub, ok := e.X.(*ast.SubscriptExpr); ok {
@@ -290,6 +312,20 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 			g.destroyLater(v)
 		}
 		return
+	}
+	// Through a subscript a type declares: its setter.
+	if sub, ok := e.X.(*ast.SubscriptExpr); ok {
+		if ref := g.info.Subscripts[sub]; ref != nil {
+			// The setter borrows the value; what made it ends with
+			// the statement.
+			v := g.expr(e.Y)
+			if v == nil {
+				return
+			}
+			v = g.optionalFor(e.Y, v, g.typeOf(e.Y), ref.Subscript.Result)
+			g.declaredSubscriptWrite(sub, ref, v)
+			return
+		}
 	}
 	// Subscript assignment handled by runtime calls.
 	if g.subscriptAssign(e.X, collArg{expr: e.Y}) {
@@ -419,6 +455,9 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 		return g.blk.StructElementAddr(addr, name, t)
 
 	case *ast.SubscriptExpr:
+		if ref := g.info.Subscripts[n]; ref != nil {
+			return g.declaredSubscriptAddr(n, ref)
+		}
 		return g.elementAddr(n)
 
 	// `a?.x = v` writes into a's payload where a is some.

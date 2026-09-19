@@ -228,6 +228,10 @@ var metadataRecords = map[types.BasicKind]string{
 
 // subscript lowers an array or dictionary element read.
 func (g *gen) subscript(e *ast.SubscriptExpr) *sil.Value {
+	// One a type declares: its getter.
+	if ref := g.info.Subscripts[e]; ref != nil {
+		return g.declaredSubscriptRead(e, ref)
+	}
 	t := g.typeOf(e.X)
 	// `a[lo..<hi]`: a slice of it.
 	if v, ok := g.arraySliceSubscript(e); ok {

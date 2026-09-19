@@ -54,6 +54,12 @@ public struct Point {
     // A memberwise initializer is internal, so a client needs this one.
     public init(x: Int32, y: Int32) { self.x = x; self.y = y }
     public func sum() -> Int32 { return x + y }
+    // A subscript crosses as its accessors, which the interface lists.
+    public subscript(scale: Int32) -> Int32 {
+        get { return (x + y) * scale }
+        set { x = newValue; y = 0 }
+    }
+    public static subscript(n: Int32) -> Int32 { return n + 1 }
 }
 
 public func triple(_ n: Int32) -> Int32 { return n * 3 }
@@ -85,8 +91,11 @@ func hidden() -> Int32 { return 99 }
 	// 4. Check the client against it.
 	const appSrc = `
 func main() -> Int32 {
-    let p = Point(x: 20, y: 8)
-    return p.sum() + triple(4) + p.x - 18
+    var p = Point(x: 20, y: 8)
+    let scaled = p[2] // 56
+    p[0] = 12 // x = 12, y = 0
+    // 12 + 12 + 12 - 18 + 56 - 56 + 2 - 2 + 24 + 0 = 42
+    return p.sum() + triple(4) + p.x - 18 + scaled - 56 + Point[1] - 2 + p[2] + p.y
 }
 `
 	appFile := token.NewFile("app.swift", []byte(appSrc))
