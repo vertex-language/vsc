@@ -150,3 +150,45 @@ func (c *fn) asPointer(in *sil.Inst, v ir.Value) (ir.Ptr, error) {
 	}
 	return ir.Ptr{}, c.fail(ErrType, in.Op(), "a reference that is not one")
 }
+
+// smallStringLiteral lowers the runtime call a short string literal
+// makes -- vertex_string_literal(bytes, count, ascii) -- to the two words
+// it would return, and reports whether it did. A String of at most
+// fifteen bytes holds them in itself (the runtime's smallString): bytes
+// 0-7 little-endian in the first word, 8-14 in the second, and 0xE0 | n
+// in the second word's top byte. That is a constant, so there is no call
+// to make at run time -- which is what swiftc does for a small literal
+// too. A longer literal names its bytes by address and keeps the call.
+func (c *fn) smallStringLiteral(in *sil.Inst) (bool, error) {
+	res := in.Result()
+	args := in.Args()
+	if res == nil || len(args) != 4 || c.refNames[args[0]] != "vertex_string_literal" {
+		return false, nil
+	}
+	lit := args[1].Inst()
+	n := args[2].Inst()
+	if lit == nil || lit.Op() != sil.StringLiteral || n == nil || n.Op() != sil.IntegerLiteral {
+		return false, nil
+	}
+	text := lit.Aux().Text
+	if int64(len(text)) != n.Aux().Int || len(text) > stringSmallCapacity {
+		return false, nil
+	}
+	var w0, w1 uint64
+	for i := 0; i < len(text); i++ {
+		if i < 8 {
+			w0 |= uint64(text[i]) << (8 * i)
+		} else {
+			w1 |= uint64(text[i]) << (8 * (i - 8))
+		}
+	}
+	w1 |= (stringTagSmall | uint64(len(text))) << 56
+	regs := []ir.Value{c.b.I64.Const(int64(w0)), c.b.I64.Const(int64(w1))}
+	return true, c.spreadInto(res, regs)
+}
+
+// The small-string form, as the runtime's abi.h declares it.
+const (
+	stringSmallCapacity = 15
+	stringTagSmall      = 0xE0
+)

@@ -1104,6 +1104,9 @@ func (c *fn) refCount(in *sil.Inst, slot *ir.Callee, name string) error {
 }
 
 func (c *fn) apply(in *sil.Inst) error {
+	if done, err := c.smallStringLiteral(in); done || err != nil {
+		return err
+	}
 	callee, direct := c.refs[in.Args()[0]]
 	var through, throughContext ir.Ptr
 	if !direct {

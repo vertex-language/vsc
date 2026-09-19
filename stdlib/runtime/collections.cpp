@@ -360,11 +360,38 @@ extern "C" {
 
 ArrayAllocation vertex_array_allocate(i64 count, const Metadata* element);
 
-// vertex_array_append takes the value at `value` onto the end.
+// roomFor is uniqueArray's answer without the call in the case an append
+// nearly always is: storage that is the slot's alone with room to spare.
+// An immortal array's refcount carries the immortal bit, so it is never 1.
+inline ArrayStorage* roomFor(ArrayStorage** slot, i64 need, const Metadata* element) {
+  ArrayStorage* a = *slot;
+  if (a->header.refcount == 1 && a->capacity >= need)
+    return a;
+  return uniqueArray(slot, need, element);
+}
+
+// vertex_array_append takes the value at `value` onto the end. A plain
+// value of a machine word or less -- a byte, an Int, a pointer, a small
+// struct of them -- is moved as its bits, without the witness call.
 void vertex_array_append(ArrayStorage** slot, void* value, const Metadata* element) {
-  ArrayStorage* a = uniqueArray(slot, (*slot)->count + 1, element);
+  ArrayStorage* a = roomFor(slot, (*slot)->count + 1, element);
   const ValueWitnessTable* vw = witnesses(element);
-  vw->initializeWithTake(elementsOf(a) + a->count * vw->stride, value, element);
+  u8* at = elementsOf(a) + a->count * vw->stride;
+  if (isPOD(vw)) {
+    switch (vw->stride) {
+    case 1:
+      *at = *static_cast<u8*>(value);
+      break;
+    case 8:
+      *reinterpret_cast<u64*>(at) = *static_cast<u64*>(value);
+      break;
+    default:
+      copyBytes(at, value, static_cast<usize>(vw->stride));
+      break;
+    }
+  } else {
+    vw->initializeWithTake(at, value, element);
+  }
   a->count++;
 }
 
@@ -396,8 +423,8 @@ void vertex_array_append_utf8(ArrayStorage** slot, u64 s0, u64 s1) {
   StringBytes b = bytesOf(String{s0, s1}, scratch);
   if (b.count == 0)
     return;
-  ArrayStorage* a = uniqueArray(slot, (*slot)->count + static_cast<i64>(b.count),
-                                &vertex_metadata_UInt8.metadata);
+  ArrayStorage* a = roomFor(slot, (*slot)->count + static_cast<i64>(b.count),
+                             &vertex_metadata_UInt8.metadata);
   copyBytes(elementsOf(a) + a->count, b.bytes, b.count);
   a->count += static_cast<i64>(b.count);
 }
@@ -407,8 +434,12 @@ void vertex_array_append_contents(ArrayStorage** slot, ArrayStorage* other, cons
   i64 n = other->count;
   if (n == 0)
     return;
-  vertex_retain(&other->header);
-  ArrayStorage* a = uniqueArray(slot, (*slot)->count + n, element);
+  // other is held across the growth in case it is this array's own
+  // storage, which growing frees. When it is not, nothing can free it.
+  bool self = other == *slot;
+  if (self)
+    vertex_retain(&other->header);
+  ArrayStorage* a = roomFor(slot, (*slot)->count + n, element);
   const ValueWitnessTable* vw = witnesses(element);
   if (isPOD(vw)) {
     copyBytes(elementsOf(a) + a->count * vw->stride, elementsOf(other),
@@ -419,7 +450,8 @@ void vertex_array_append_contents(ArrayStorage** slot, ArrayStorage* other, cons
                              elementsOf(other) + i * vw->stride, element);
   }
   a->count += n;
-  vertex_release(&other->header);
+  if (self)
+    vertex_release(&other->header);
 }
 
 // vertex_array_assign is `a[index] = value`, taking the value.
