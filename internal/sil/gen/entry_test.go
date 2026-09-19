@@ -124,7 +124,7 @@ func TestEntryPointRefused(t *testing.T) {
 	for _, c := range []struct{ name, src, want string }{
 		{"parameters", `func main(_ n: Int) {}`, "takes parameters"},
 		{"a result that is not a status", `func main() -> Int { return 0 }`, "returns Int"},
-		{"async and throws", `func main() async throws {}`, "is async and throws"},
+		{"a status that is not Int32", `func main() async throws -> Int { return 0 }`, "returns Int"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, diags := generate(t, "main", c.src)
