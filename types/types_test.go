@@ -309,13 +309,16 @@ func TestLayoutMatchesSwift(t *testing.T) {
 		{"(Int, Int)?", &Optional{Wrapped: &Tuple{Elements: []*TupleElement{
 			{Type: Typ[Int]}, {Type: Typ[Int]}}}}, 17, 24, 8},
 		// Enums: the tag alone, nothing at all, or the largest
-		// payload and the tag.
+		// payload and the tag. A payload enum departs from Swift here:
+		// it is lowered and stored as whole words, so it takes whole
+		// words (Swift packs Payload into 9 bytes), and its optional
+		// puts its tag in the next word.
 		{"Three", noPayload, 1, 1, 1},
 		{"Three?", &Optional{Wrapped: noPayload}, 1, 1, 1},
 		{"One", onlyCase, 0, 1, 1},
 		{"One?", &Optional{Wrapped: onlyCase}, 1, 1, 1},
-		{"Payload", payload, 9, 16, 8},
-		{"Payload?", &Optional{Wrapped: payload}, 10, 16, 8},
+		{"Payload", payload, 16, 16, 8},
+		{"Payload?", &Optional{Wrapped: payload}, 17, 24, 8},
 	}
 	for _, c := range cases {
 		if got := Sizeof(c.typ, target); got != c.size {

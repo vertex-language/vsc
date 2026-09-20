@@ -169,6 +169,18 @@ func (c *fn) optionalEnumRefCount(in *sil.Inst, e *types.Enum, retain bool) erro
 		return c.fail(ErrUnsupported, in.Op(), e.Name)
 	}
 	parts, held := c.parts(in.Args()[0])
+	if !held {
+		// Too wide for registers: the words and the tag are read out of
+		// where it lives.
+		if from, inMemory := c.mem[in.Args()[0]]; inMemory {
+			parts = nil
+			for i := range image.Fields {
+				parts = append(parts, c.b.I64.Load(c.fieldAddr(from, int64(i)*8)))
+			}
+			parts = append(parts, c.b.I32.ULoad8(c.fieldAddr(from, int64(len(image.Fields))*8)))
+			held = true
+		}
+	}
 	if !held || len(parts) != len(image.Fields)+1 {
 		return c.fail(ErrUnsupported, in.Op(), "an optional enum that is not its words and a tag")
 	}

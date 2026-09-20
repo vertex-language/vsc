@@ -2729,6 +2729,18 @@ func (c *fn) extractElement(in *sil.Inst) error {
 	if i < 0 {
 		return c.fail(ErrUnsupported, in.Op(), "element out of range")
 	}
+	// A tuple held in memory -- too wide for registers -- gives the
+	// element out of its storage, as a field is read out of a struct.
+	if base, inMem := c.mem[v]; inMem {
+		st, ok := structOf(v.Type())
+		if !ok || st == nil {
+			return c.fail(ErrType, in.Op(), v.Type().String())
+		}
+		if i >= len(st.Fields) || st.Fields[i] == nil {
+			return c.fail(ErrUnsupported, in.Op(), "a tuple with no element "+itoa(i))
+		}
+		return c.loadFieldInto(in, in.Result(), base, st, st.Fields[i].Name, st.Fields[i].Type)
+	}
 	parts, multi := c.parts(v)
 	if lo, hi, ok := fieldLeaves(v.Type(), itoa(i)); ok {
 		if !multi {

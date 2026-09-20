@@ -283,7 +283,15 @@ func (g *gen) elementAt(at ast.Node, base *sil.Value, t types.Type,
 	// -- is read as Swift reads it: the bounds check, then a load at the
 	// index's stride from where the storage keeps its elements. A byte
 	// loop is then loads and compares, with no call in it.
-	if elem.Trivial() && !isExistential {
+	//
+	// Any other element whose layout is known here -- a String, a class
+	// reference, a struct holding them -- is found the same way and then
+	// copied out (load [copy]: its references retained), which is what the
+	// runtime's vertex_array_element did after a call and a lookup of the
+	// stride in the element's witnesses. A generic element's stride is not
+	// known until run time, and an existential is read as a temporary in
+	// memory; both keep the call.
+	if !isExistential && (elem.Trivial() || !mentionsTypeParam(m.Result)) {
 		intT := types.Typ[types.Int]
 		word := sil.Object(builtinFor(intT))
 		bit := sil.Object(sil.BuiltinInt1)
@@ -295,7 +303,12 @@ func (g *gen) elementAt(at ast.Node, base *sil.Value, t types.Type,
 		g.blk.CondFail(outside, "Index out of range")
 		elements := g.blk.Builtin("vertexArrayElements_RawPointer", raw, base)
 		addr := g.blk.IndexAddr(g.blk.PointerToAddress(elements, elem.Address()), i)
-		return g.blk.Load(addr, "trivial")
+		if elem.Trivial() {
+			return g.blk.Load(addr, "trivial")
+		}
+		v := g.blk.Load(addr, "copy")
+		g.destroyLater(v)
+		return v
 	}
 	meta, ok := g.stdlibMetadata(at, m.Element)
 	if !ok {

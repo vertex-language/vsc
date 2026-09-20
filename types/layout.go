@@ -177,7 +177,11 @@ func Sizeof(t Type, target *Target) int64 {
 		if maxPayload == 0 {
 			return tagSize(len(tt.Cases))
 		}
-		return maxPayload + tagSize(len(tt.Cases))
+		// A payload enum is lowered as whole words, each stored whole,
+		// so it takes whole words: nothing may sit in the part of its
+		// last word the payload and tag leave, or a store would
+		// overwrite it. See lower's enumImage.
+		return alignUp(maxPayload+tagSize(len(tt.Cases)), target.WordSize)
 
 	default:
 		return target.WordSize
