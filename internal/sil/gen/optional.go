@@ -340,8 +340,12 @@ func (g *gen) halfOptional(e *ast.BinaryExpr, opt, plain ast.Expr,
 		sil.Case{Member: optionalNone, Dest: none})
 
 	g.blk = some
+	// The plain side is evaluated on this arm alone, so what it borrows
+	// is given back on this arm too, before the arms join.
+	g.push()
 	other := g.rvalue(plain)
 	if other == nil {
+		g.scopes = g.scopes[:len(g.scopes)-1]
 		return nil
 	}
 	lhs, rhs := payload, other
@@ -350,8 +354,10 @@ func (g *gen) halfOptional(e *ast.BinaryExpr, opt, plain ast.Expr,
 	}
 	same := g.comparePayloads(e, o.Wrapped, op, lhs, rhs)
 	if same == nil {
+		g.scopes = g.scopes[:len(g.scopes)-1]
 		return nil
 	}
+	g.pop()
 	g.blk.Br(join, same)
 
 	// Nothing on one side and something on the other: unequal.
@@ -389,14 +395,19 @@ func (g *gen) bothOptional(e *ast.BinaryExpr, xe, ye ast.Expr,
 		sil.Case{Member: optionalSome, Dest: xSome},
 		sil.Case{Member: optionalNone, Dest: xNone})
 
-	// Evaluate right operand inside branches to preserve domination.
+	// Evaluate right operand inside branches to preserve domination,
+	// and give back what it borrows on those branches, before the join.
 	g.blk = xSome
 	ySome, yNone := g.fn.Block(), g.fn.Block()
 	yPayload := ySome.Arg(lowerType(yo.Wrapped), sil.Unowned)
+	g.push()
 	yFull := g.rvalue(ye)
 	if yFull == nil {
+		g.scopes = g.scopes[:len(g.scopes)-1]
 		return nil
 	}
+	yScope := g.scopes[len(g.scopes)-1]
+	g.scopes = g.scopes[:len(g.scopes)-1]
 	g.blk.SwitchEnum(yFull,
 		sil.Case{Member: optionalSome, Dest: ySome},
 		sil.Case{Member: optionalNone, Dest: yNone})
@@ -406,9 +417,11 @@ func (g *gen) bothOptional(e *ast.BinaryExpr, xe, ye ast.Expr,
 	if same == nil {
 		return nil
 	}
+	g.emitCleanups(yScope)
 	g.blk.Br(join, same)
 
 	g.blk = yNone
+	g.emitCleanups(yScope)
 	g.blk.Br(join, g.blk.IntegerLiteral(bit, unequal))
 
 	// The left holds nothing, so the answer is whether the right
@@ -416,17 +429,23 @@ func (g *gen) bothOptional(e *ast.BinaryExpr, xe, ye ast.Expr,
 	g.blk = xNone
 	emptySome, emptyNone := g.fn.Block(), g.fn.Block()
 	emptySome.Arg(lowerType(yo.Wrapped), sil.Unowned)
+	g.push()
 	yEmpty := g.rvalue(ye)
 	if yEmpty == nil {
+		g.scopes = g.scopes[:len(g.scopes)-1]
 		return nil
 	}
+	emptyScope := g.scopes[len(g.scopes)-1]
+	g.scopes = g.scopes[:len(g.scopes)-1]
 	g.blk.SwitchEnum(yEmpty,
 		sil.Case{Member: optionalSome, Dest: emptySome},
 		sil.Case{Member: optionalNone, Dest: emptyNone})
 
 	g.blk = emptySome
+	g.emitCleanups(emptyScope)
 	g.blk.Br(join, g.blk.IntegerLiteral(bit, unequal))
 	g.blk = emptyNone
+	g.emitCleanups(emptyScope)
 	g.blk.Br(join, g.blk.IntegerLiteral(bit, equal))
 
 	g.blk = join

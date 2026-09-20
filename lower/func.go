@@ -726,6 +726,33 @@ func (c *fn) args(vs []*sil.Value) []ir.Value {
 		}
 		if got, ok := c.value(v); ok {
 			out = append(out, got)
+			continue
+		}
+		// A value that lives in memory -- a struct a call answered by
+		// address -- is read out field by field, as a load reads it,
+		// since the block takes it as registers.
+		if from, ok := c.mem[v]; ok {
+			if ls, ok := leavesOf(v.Type()); ok {
+				loaded := true
+				fields := make([]ir.Value, 0, len(ls))
+				for _, l := range ls {
+					fr, ok := machineOf(l.typ)
+					if !ok {
+						loaded = false
+						break
+					}
+					got, err := c.loadScalar(nil, c.fieldAddr(from, l.offset), fr)
+					if err != nil {
+						loaded = false
+						break
+					}
+					fields = append(fields, got)
+				}
+				if loaded {
+					out = append(out, fields...)
+					continue
+				}
+			}
 		}
 	}
 	return out

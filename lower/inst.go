@@ -944,7 +944,7 @@ func (c *fn) loadScalar(in *sil.Inst, p ir.Ptr, r repr) (ir.Value, error) {
 		// A Bool is one byte in memory and one bit in a register.
 		return c.b.I32.Ne(c.b.I32.ULoad8(p), c.b.I32.Const(0)), nil
 	default:
-		return nil, c.fail(ErrType, in.Op(), r.reg.String())
+		return nil, c.fail(ErrType, opOf(in), r.reg.String())
 	}
 }
 
