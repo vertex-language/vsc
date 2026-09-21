@@ -76,8 +76,17 @@ func (s *shifter) blk() *sil.Block          { return s.g.blk }
 func (s *shifter) konst(n int64) *sil.Value { return s.blk().IntegerLiteral(s.word, n) }
 
 // left emits a machine left shift.
+//
+// A narrow register holds an unsigned value zero-extended and a signed one
+// sign-extended, but shl_IntN names no signedness and the lowering keeps
+// its result sign-extended. An unsigned narrow shift is masked back to its
+// width, so `uint16(0xBE) << 8 == 0xBE00` compares the same bits.
 func (s *shifter) left(v, by *sil.Value) *sil.Value {
-	return s.blk().Builtin("shl_"+s.machine, s.word, v, by)
+	r := s.blk().Builtin("shl_"+s.machine, s.word, v, by)
+	if s.unsigned && s.width < 32 {
+		r = s.blk().Builtin("and_"+s.machine, s.word, r, s.konst(int64(1)<<s.width-1))
+	}
+	return r
 }
 
 // right emits an arithmetic or logical right shift based on signedness.
