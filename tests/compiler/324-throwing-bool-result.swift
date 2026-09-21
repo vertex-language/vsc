@@ -16,6 +16,9 @@ func check(_ x: Int) -> String {
     }
 }
 
-print(check(5))
-print(check(-3))
-print(check(0))
+func main() -> Int32 {
+    print(check(5))
+    print(check(-3))
+    print(check(0))
+    return 0
+}

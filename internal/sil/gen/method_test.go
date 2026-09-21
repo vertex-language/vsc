@@ -153,3 +153,42 @@ func main() -> Int32 { return P(x: 1).bad(2) }`)
 		t.Errorf("one mistake produced %d diagnostics", len(diags))
 	}
 }
+
+// TestAReceiverCopyEndsWithItsCall: in `write(above())` inside a mutating
+// method, above takes a copy of self. Swift ends that borrow when above
+// returns; kept to the end of the statement, the copy still shares self's
+// array while write stores into it, and each store copies the array.
+func TestAReceiverCopyEndsWithItsCall(t *testing.T) {
+	got, diags := generate(t, "main", `
+struct D {
+    var dst: [Int32]
+    func above() -> Int32 { return dst[0] }
+    mutating func write(_ v: Int32) { dst[0] = v }
+    mutating func step() { write(above()) }
+}
+func main() -> Int32 {
+    var d = D(dst: [1])
+    d.step()
+    return d.dst[0]
+}`)
+	for _, d := range diags {
+		t.Fatalf("gen: %s", d.Message)
+	}
+	start := strings.Index(got, "@$s4main1DV4stepyyF : $@convention(method) (@inout *D) -> () {")
+	if start < 0 {
+		t.Fatalf("no step body:\n%s", got)
+	}
+	body := got[start:]
+	if end := strings.Index(body, "} // end sil function"); end > 0 {
+		body = body[:end]
+	}
+	first := strings.Index(body, "= apply")
+	second := first + 1 + strings.Index(body[first+1:], "= apply")
+	destroy := strings.Index(body, "destroy_value")
+	if first < 0 || second <= first || destroy < 0 {
+		t.Fatalf("step is missing a call or the copy's destroy:\n%s", body)
+	}
+	if !(first < destroy && destroy < second) {
+		t.Errorf("self's copy for above is not destroyed before write is called:\n%s", body)
+	}
+}

@@ -688,7 +688,8 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 		if ref.Method.IsStatic {
 			return g.staticCall(e, ref, ref.Recv)
 		}
-		return g.methodCall(e, ref, func() *sil.Value {
+		var copied *sil.Value
+		v := g.methodCall(e, ref, func() *sil.Value {
 			if g.self != nil && g.self.addr != nil {
 				if mutatingRef(ref) {
 					return g.self.addr
@@ -697,11 +698,14 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 				// method that does not mutate takes its value: a copy,
 				// as `self.f()` reads it.
 				if !isClass(g.recv) {
-					return g.loaded(g.blk.Load(g.self.addr, loadQualifier(g.self.typ)), g.self.typ)
+					copied = g.loaded(g.blk.Load(g.self.addr, loadQualifier(g.self.typ)), g.self.typ)
+					return copied
 				}
 			}
 			return g.selfValue()
 		})
+		g.endReceiverTemp(copied)
+		return v
 	}
 	// Pointer type conversions.
 	if _, ok := pointerOf(g.typeOf(e)); ok {
@@ -1294,14 +1298,50 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *sil.Value {
 		}
 		g.lateReceivers[e] = true
 	}
-	return g.methodCall(e, ref, func() *sil.Value {
+	var copied *sil.Value
+	v := g.methodCall(e, ref, func() *sil.Value {
 		// Mutating methods receive receiver storage address.
 		if mutatingRef(ref) {
 			return g.lvalue(mem.X)
 		}
 		// Non-mutating receivers are borrowed as @guaranteed.
-		return g.expr(mem.X)
+		copied = g.expr(mem.X)
+		return copied
 	})
+	g.endReceiverTemp(copied)
+	return v
+}
+
+// endReceiverTemp ends a receiver copied to call a method on it as soon as
+// the call returns, where Swift ends that borrow, rather than at the end
+// of the statement. Held longer, the copy keeps the variable's storage
+// shared: in `write(above())` inside a mutating method, above's copy of
+// self would still be alive while write mutates self's array, and every
+// element store would copy the whole array.
+func (g *gen) endReceiverTemp(v *sil.Value) {
+	if v == nil || v.Ownership() != sil.Owned || g.blk == nil || g.blk.Term() != nil {
+		return
+	}
+	if g.isLocalValue(v) {
+		return
+	}
+	for _, s := range g.scopes {
+		for i, c := range s.cleanups {
+			if c.destroy != v {
+				continue
+			}
+			if !s.formal {
+				return
+			}
+			s.cleanups = append(s.cleanups[:i], s.cleanups[i+1:]...)
+			if isExistentialType(v.Type().Formal()) {
+				g.blk.DestroyAddr(v)
+			} else {
+				g.blk.DestroyValue(v)
+			}
+			return
+		}
+	}
 }
 
 // methodCall emits a method call over the given receiver.

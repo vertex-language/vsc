@@ -21,13 +21,16 @@ func make(_ v: Int) -> String {
     }
 }
 
-print(make(7))
-print(make(-2))
-
 func makeTwo(_ a: Int, _ b: Int) throws -> Int {
     let x = try Positive(a)
     let y = try Positive(b)
     return x.value + y.value
 }
-do { print(try makeTwo(4, 5)) } catch { print("two failed") }
-do { print(try makeTwo(4, -5)) } catch { print("two failed") }
+
+func main() -> Int32 {
+    print(make(7))
+    print(make(-2))
+    do { print(try makeTwo(4, 5)) } catch { print("two failed") }
+    do { print(try makeTwo(4, -5)) } catch { print("two failed") }
+    return 0
+}
