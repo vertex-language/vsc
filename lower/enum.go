@@ -168,13 +168,31 @@ func (c *fn) makePayloadEnum(in *sil.Inst, res *sil.Value, e *types.Enum) error 
 
 	// The payload's scalars, each at its own offset from the start.
 	if len(ls) > 0 {
-		parts, ok := c.parts(in.Args()[0])
+		arg := in.Args()[0]
+		parts, ok := c.parts(arg)
 		if !ok {
-			got, err := c.operand(in, in.Args()[0])
-			if err != nil {
-				return err
+			if from, inMemory := c.mem[arg]; inMemory {
+				// A payload too wide for registers is read out of its
+				// storage a leaf at a time, as a field of one is.
+				parts = make([]ir.Value, 0, len(ls))
+				for _, l := range ls {
+					r, ok := machineOf(l.typ)
+					if !ok {
+						return c.fail(ErrType, in.Op(), whyNoRegister(sil.Object(l.typ)))
+					}
+					v, err := c.loadScalar(in, c.fieldAddr(from, l.offset), r)
+					if err != nil {
+						return c.fail(ErrType, in.Op(), err.Error())
+					}
+					parts = append(parts, v)
+				}
+			} else {
+				got, err := c.operand(in, arg)
+				if err != nil {
+					return err
+				}
+				parts = []ir.Value{got}
 			}
-			parts = []ir.Value{got}
 		}
 		if len(parts) != len(ls) {
 			return c.fail(ErrUnsupported, in.Op(),
