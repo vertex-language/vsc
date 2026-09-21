@@ -1517,7 +1517,13 @@ func (c *fn) throwInst(in *sil.Inst) error {
 		case ir.TypePtr:
 			vals = append(vals, c.b.Ptr.Const())
 		default:
-			return c.fail(ErrUnsupported, in.Op(), "a throw from a function with a result of "+r.Type.String())
+			// Narrow results (i1 for Bool) have no plain zero literal;
+			// zeroOf builds one. Nothing reads it on the error path.
+			z, ok := zeroOf(c.b, r.Type)
+			if !ok {
+				return c.fail(ErrUnsupported, in.Op(), "a throw from a function with a result of "+r.Type.String())
+			}
+			vals = append(vals, z)
 		}
 	}
 	c.b.Return(vals...)
