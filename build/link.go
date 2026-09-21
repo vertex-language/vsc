@@ -67,6 +67,13 @@ type LinkOptions struct {
 
 	// Libs are additional archives or stubs linked in order.
 	Libs []Input
+
+	// Shared links a shared library rather than a program: on Android,
+	// the lib<name>.so an app's NativeActivity loads.
+	Shared bool
+
+	// SOName is a shared library's DT_SONAME.
+	SOName string
 }
 
 // Executable links objects into a runnable image and returns its
@@ -86,6 +93,8 @@ func Executable(objs []Input, opts LinkOptions) ([]byte, error) {
 		return aarch64MachOExe(objs, opts)
 	case "x86_64/windows":
 		return amd64PEExe(objs, opts)
+	case "aarch64/android":
+		return aarch64AndroidELF(objs, opts)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrTarget, opts.Target.Use())
 }

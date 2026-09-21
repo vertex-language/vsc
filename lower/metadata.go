@@ -515,12 +515,25 @@ func (l *lowerer) conformanceDescriptor(t *sil.WitnessTable, table *ir.Global) (
 // read records it did not write.
 const ConformanceSection = "__TEXT,__vertex_proto,regular,no_dead_strip"
 
+// ELFConformanceSection is ConformanceSection on ELF targets. It is a C
+// identifier so that the linker brackets it with __start_vertex_proto and
+// __stop_vertex_proto, which is how the runtime finds it.
+const ELFConformanceSection = "vertex_proto"
+
+// conformanceSection is the section records go in for the module's target.
+func (l *lowerer) conformanceSection() string {
+	if strings.HasSuffix(l.out.Use(), "/android") || strings.HasSuffix(l.out.Use(), "/linux") {
+		return ELFConformanceSection
+	}
+	return ConformanceSection
+}
+
 // conformanceRecord lists a conformance descriptor where the runtime
 // looks for them.
 func (l *lowerer) conformanceRecord(descriptor string, d *ir.Global) {
 	g := l.out.Global(l.sym(descriptor+"_record"), ir.RO, ir.StoreI32.FType())
 	g.Internal()
-	g.Section(ConformanceSection)
+	g.Section(l.conformanceSection())
 	g.Init(ir.RelocInit(d).Minus(g))
 }
 

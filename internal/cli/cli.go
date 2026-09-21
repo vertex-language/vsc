@@ -38,6 +38,7 @@ Common flags:
 Flags for build and run:
     --emit exe      compile and link (the default)
     --emit obj      compile to an object file
+    --emit lib      compile and link a shared library (aarch64-android)
     --emit vir      stop after lowering and print the machine IR
     --emit sil      stop after the ownership passes and print the IR, as SIL
     --emit interface  write the module's public face, for another module

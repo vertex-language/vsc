@@ -383,6 +383,11 @@ func TaskAsm(target string) (string, bool) {
 	for _, p := range asyncEntries {
 		out += asyncThunk(prefix, p.name, p.args)
 	}
+	if strings.HasSuffix(target, "-android") {
+		// A zero record, so that every image has a vertex_proto for the
+		// linker to bracket: see runtime/platform/android.h.
+		out += "\t.section vertex_proto,\"aw\"\n\t.p2align 2\n\t.word 0\n\t.text\n"
+	}
 	return out, true
 }
 
@@ -399,6 +404,8 @@ func RuntimeUnit(target string) (string, bool) {
 		return "darwin.cpp", true
 	case strings.HasSuffix(target, "-windows"):
 		return "windows.cpp", true
+	case strings.HasSuffix(target, "-android"):
+		return "android.cpp", true
 	}
 	return "", false
 }

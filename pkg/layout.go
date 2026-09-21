@@ -249,10 +249,14 @@ func resolveTarget(root string, t *Target, platform, config string, owned []stri
 	if err != nil {
 		return nil, err
 	}
-	swift, cfamily := 0, 0
+	swift, cfamily, elsewhere := 0, 0, 0
 	for _, f := range files {
 		lang, ok := languageOf(f)
 		if !ok {
+			continue
+		}
+		if !ForPlatform(f, platform) {
+			elsewhere++
 			continue
 		}
 		rt.Sources = append(rt.Sources, SourceFile{Path: f, Language: lang})
@@ -263,13 +267,16 @@ func resolveTarget(root string, t *Target, platform, config string, owned []stri
 		}
 	}
 	switch {
+	case len(rt.Sources) == 0 && elsewhere > 0:
+		// Every source is another platform's: on this one the target is
+		// empty, and a program that needs nothing from it still builds.
 	case len(rt.Sources) == 0:
 		return nil, fmt.Errorf("target '%s' has no sources in '%s'", t.Name, rt.Dir)
 	case swift > 0 && cfamily > 0:
 		return nil, fmt.Errorf("target '%s' contains mixed language source files: Swift and C-family sources go in separate targets", t.Name)
 	}
 
-	if cfamily > 0 {
+	if cfamily > 0 || elsewhere > 0 {
 		headers := "include"
 		if t.PublicHeadersPath != nil {
 			headers = *t.PublicHeadersPath
@@ -420,4 +427,52 @@ func buildOrder(targets []*ResolvedTarget) ([]*ResolvedTarget, error) {
 		}
 	}
 	return out, nil
+}
+
+// sourcePlatforms are the file-name suffixes that limit a source to some
+// platforms, as Go's do: cwindow_darwin.m is Cocoa's and cwindow_android.c
+// NativeActivity's, and each target builds the one that is its own.
+var sourcePlatforms = map[string][]string{
+	"darwin":  {"macos", "ios", "tvos", "watchos", "visionos", "maccatalyst"},
+	"macos":   {"macos"},
+	"ios":     {"ios"},
+	"windows": {"windows"},
+	"linux":   {"linux"},
+	"android": {"android"},
+}
+
+// ForPlatform reports whether the source file at path is built for
+// platform: yes, unless its base name ends in a platform suffix
+// (name_darwin.m) that does not include it.
+func ForPlatform(path, platform string) bool {
+	base := filepath.Base(path)
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	i := strings.LastIndexByte(base, '_')
+	if i < 0 {
+		return true
+	}
+	plats, ok := sourcePlatforms[base[i+1:]]
+	if !ok {
+		return true
+	}
+	for _, p := range plats {
+		if p == platform {
+			return true
+		}
+	}
+	return false
+}
+
+// PlatformOf is the manifest platform name for an IR target's use path:
+// "aarch64/android" is "android".
+func PlatformOf(use string) string {
+	switch {
+	case strings.HasSuffix(use, "/windows"):
+		return "windows"
+	case strings.HasSuffix(use, "/android"):
+		return "android"
+	case strings.HasSuffix(use, "/linux"):
+		return "linux"
+	}
+	return "macos"
 }

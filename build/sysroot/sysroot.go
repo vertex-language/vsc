@@ -127,6 +127,8 @@ func LibraryNames(target, name string) []string {
 		return []string{name + ".lib", "lib" + name + ".lib"}
 	case IsMacOS(target):
 		return []string{"lib" + name + ".tbd", "lib" + name + ".dylib", "lib" + name + ".a"}
+	case strings.HasSuffix(target, "-android"):
+		return []string{"lib" + name + ".so", "lib" + name + ".a"}
 	}
 	return []string{"lib" + name + ".a"}
 }

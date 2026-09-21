@@ -11,6 +11,7 @@ import (
 	arm64lower "github.com/vertex-language/ir/lower/arm64"
 
 	amd64pe "github.com/vertex-language/amd64/obj/pe"
+	arm64elf "github.com/vertex-language/arm64/obj/elf"
 	arm64macho "github.com/vertex-language/arm64/obj/macho"
 	machocore "github.com/vertex-language/macho"
 )
@@ -33,6 +34,8 @@ func Object(m *ir.Module, opts Options) ([]byte, error) {
 		return aarch64MachO(m, opts)
 	case "x86_64/windows":
 		return amd64PE(m, opts)
+	case "aarch64/android":
+		return aarch64ELF(m)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrTarget, m.Use())
 }
@@ -57,6 +60,23 @@ func aarch64MachO(m *ir.Module, opts Options) ([]byte, error) {
 		MinOS:       opts.MinOS,
 		Subsections: true,
 	}); err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// aarch64ELF lowers for base AAPCS64, as Android has it, and writes an ELF
+// relocatable object. Libcalls are unprefixed and variadic arguments go
+// where named ones would.
+func aarch64ELF(m *ir.Module) ([]byte, error) {
+	o, err := arm64lower.Lower(m, arm64lower.Options{
+		Variadic: arm64lower.VariadicAAPCS64,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := arm64elf.Write(&buf, o); err != nil {
 		return nil, fmt.Errorf("build: %w", err)
 	}
 	return buf.Bytes(), nil

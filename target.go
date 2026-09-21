@@ -19,6 +19,7 @@ type target struct {
 
 // targets lists all fully supported compilation targets.
 var targets = []target{
+	{name: "aarch64-android", ir: ir.AArch64Android, prefix: ""},
 	{name: "aarch64-macos", ir: ir.AArch64MacOS, prefix: "_"},
 	{name: "x86_64-windows", ir: ir.X86_64Windows, prefix: "", suffix: ".exe"},
 }

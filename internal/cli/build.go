@@ -16,7 +16,6 @@ import (
 	"github.com/vertex-language/vsc/pkg"
 	"github.com/vertex-language/vsc/token"
 	"path/filepath"
-	"strings"
 )
 
 // emitMode describes how far down the compilation pipeline to go and what to write.
@@ -29,6 +28,8 @@ type emitMode struct {
 var emits = []emitMode{
 	{"exe", vsc.All, ""},
 	{"obj", vsc.All, ".o"},
+	// A shared library, for an Android app's NativeActivity to load.
+	{"lib", vsc.All, ".so"},
 	{"vir", vsc.All, ".vir"},
 	{"sil", vsc.Lowered, ".sil"},
 	// The SIL as generated, before the ownership passes verify it: for
@@ -190,7 +191,11 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		return out, write(out, stdout, stderr, obj, false)
 	}
 
-	// exe: the object, then the link.
+	// exe and lib: the object, then the link.
+	if mode.name == "lib" && target.Use() != "aarch64/android" {
+		fmt.Fprintf(stderr, "vsc: --emit lib builds for aarch64-android only, not %s\n", target.Use())
+		return "", exitUsage
+	}
 	obj, err := object(u.VIR)
 	if err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
@@ -246,6 +251,10 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		Freestanding: bf.freestanding,
 		Swift:        len(u.Info.SwiftModules) > 0,
 		LibNames:     libs,
+		Shared:       mode.name == "lib",
+	}
+	if link.Shared {
+		link.SOName = filepath.Base(out)
 	}
 	for _, n := range need {
 		link = n.Options(link)
@@ -326,10 +335,7 @@ func packageTargets(abs string, target ir.Target) (*targetBuild, error) {
 					return nil, fmt.Errorf("%s: %s", d, diag.Message)
 				}
 			}
-			platform := "macos"
-			if strings.HasSuffix(target.Use(), "/windows") {
-				platform = "windows"
-			}
+			platform := pkg.PlatformOf(target.Use())
 			p, err := pkg.Resolve(d, m, platform, "debug")
 			if err != nil {
 				return nil, err

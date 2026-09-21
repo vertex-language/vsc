@@ -34,33 +34,41 @@ struct ConformanceDescriptor {
 
 }  // namespace vertex
 
+// A symbol named in assembly is the object file's name for it, which
+// Mach-O gives C's leading underscore and ELF and COFF do not.
+#ifdef __APPLE__
+#define VERTEX_ASM_NAME(name) "_" name
+#else
+#define VERTEX_ASM_NAME(name) name
+#endif
+
 extern "C" {
 // Kind 3 is a protocol. Linked with Swift's runtime, libswiftCore defines
 // these under the same names, and those are the ones.
 #ifndef VERTEX_WITH_SWIFT_RUNTIME
-extern const vertex::ProtocolDescriptor vertex_protocol_Error __asm("_$ss5ErrorMp");
+extern const vertex::ProtocolDescriptor vertex_protocol_Error __asm(VERTEX_ASM_NAME("$ss5ErrorMp"));
 const vertex::ProtocolDescriptor vertex_protocol_Error = {3, 0, 0, 0, 0, 0};
-extern const vertex::ProtocolDescriptor vertex_protocol_Equatable __asm("_$sSQMp");
+extern const vertex::ProtocolDescriptor vertex_protocol_Equatable __asm(VERTEX_ASM_NAME("$sSQMp"));
 const vertex::ProtocolDescriptor vertex_protocol_Equatable = {3, 0, 0, 0, 0, 0};
-extern const vertex::ProtocolDescriptor vertex_protocol_Comparable __asm("_$sSLMp");
+extern const vertex::ProtocolDescriptor vertex_protocol_Comparable __asm(VERTEX_ASM_NAME("$sSLMp"));
 const vertex::ProtocolDescriptor vertex_protocol_Comparable = {3, 0, 0, 0, 0, 0};
-extern const vertex::ProtocolDescriptor vertex_protocol_Hashable __asm("_$sSHMp");
+extern const vertex::ProtocolDescriptor vertex_protocol_Hashable __asm(VERTEX_ASM_NAME("$sSHMp"));
 const vertex::ProtocolDescriptor vertex_protocol_Hashable = {3, 0, 0, 0, 0, 0};
 extern const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible
-    __asm("_$ss23CustomStringConvertibleMp");
+    __asm(VERTEX_ASM_NAME("$ss23CustomStringConvertibleMp"));
 const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible = {3, 0, 0, 0, 0, 0};
-extern const vertex::ProtocolDescriptor vertex_protocol_Sequence __asm("_$sSTMp");
+extern const vertex::ProtocolDescriptor vertex_protocol_Sequence __asm(VERTEX_ASM_NAME("$sSTMp"));
 const vertex::ProtocolDescriptor vertex_protocol_Sequence = {3, 0, 0, 0, 0, 0};
-extern const vertex::ProtocolDescriptor vertex_protocol_IteratorProtocol __asm("_$sStMp");
+extern const vertex::ProtocolDescriptor vertex_protocol_IteratorProtocol __asm(VERTEX_ASM_NAME("$sStMp"));
 const vertex::ProtocolDescriptor vertex_protocol_IteratorProtocol = {3, 0, 0, 0, 0, 0};
 
 #else
-extern const vertex::ProtocolDescriptor vertex_protocol_Error __asm("_$ss5ErrorMp");
-extern const vertex::ProtocolDescriptor vertex_protocol_Equatable __asm("_$sSQMp");
-extern const vertex::ProtocolDescriptor vertex_protocol_Comparable __asm("_$sSLMp");
-extern const vertex::ProtocolDescriptor vertex_protocol_Hashable __asm("_$sSHMp");
+extern const vertex::ProtocolDescriptor vertex_protocol_Error __asm(VERTEX_ASM_NAME("$ss5ErrorMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_Equatable __asm(VERTEX_ASM_NAME("$sSQMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_Comparable __asm(VERTEX_ASM_NAME("$sSLMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_Hashable __asm(VERTEX_ASM_NAME("$sSHMp"));
 extern const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible
-    __asm("_$ss23CustomStringConvertibleMp");
+    __asm(VERTEX_ASM_NAME("$ss23CustomStringConvertibleMp"));
 #endif
 
 // Calls a witness whose only argument is the conformer, by address, in the

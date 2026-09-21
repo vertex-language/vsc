@@ -72,10 +72,7 @@ func doPackageBuild(bf *buildFlags, mode emitMode, root, product string, target 
 	if printDiags(stderr, diags) {
 		return "", exitDiags
 	}
-	platform := "macos"
-	if strings.HasSuffix(target.Use(), "/windows") {
-		platform = "windows"
-	}
+	platform := pkg.PlatformOf(target.Use())
 	p, err := pkg.Resolve(root, m, platform, "debug")
 	if err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
