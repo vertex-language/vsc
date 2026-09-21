@@ -57,13 +57,16 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 		recv    types.Type
 		self    *local
 		initRet func()
-	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.initReturn}
+		throws  bool
+		catches []catchTarget
+	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.initReturn, g.throws, g.catches}
 	defer func() {
 		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
 		g.scopes, g.locals = outer.scopes, outer.locals
 		g.loops, g.pending = outer.loops, outer.pending
 		g.recv, g.self = outer.recv, outer.self
 		g.initReturn = outer.initRet
+		g.throws, g.catches = outer.throws, outer.catches
 	}()
 
 	g.fn = f
@@ -72,6 +75,12 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes = nil
 	g.loops, g.pending = nil, ""
+	// An initializer declared 'throws' can throw before it finishes filling
+	// self in; its error result is wired like any throwing function's.
+	g.throws, g.catches = sig.Throws, nil
+	if sig.Throws {
+		f.SetThrows(sil.Object(sil.BuiltinNativeObj))
+	}
 	g.recv = recv
 	g.push()
 	g.blk = f.Entry()
@@ -107,6 +116,16 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 	addr := g.blk.ProjectBox(borrow, 0, t)
 	g.self = &local{addr: addr, box: marked, typ: t}
 
+	// Register the self box's teardown as scope cleanups so that every path
+	// out -- falling off the end, an explicit return, and a `throw` before
+	// self is finished -- ends the borrow and frees the box. Cleanups run
+	// last-registered-first, so destroy is registered before end_borrow to
+	// have the borrow end before the box it borrows is destroyed. A throwing
+	// initializer relies on this on its error path.
+	selfCleanup := len(g.top().cleanups)
+	g.top().cleanups = append(g.top().cleanups, cleanup{destroy: marked})
+	g.top().cleanups = append(g.top().cleanups, cleanup{endBorrow: borrow})
+
 	// A stored property with a default value has it before the body runs,
 	// as Swift gives it; an assignment in the body replaces it. Without
 	// this a property the body left alone was whatever the memory held.
@@ -136,12 +155,14 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 	}
 
 	g.initReturn = func() {
+		// Load self out as an owned copy before the box cleanups run, so it
+		// survives the box being destroyed, then let unwind emit the borrow
+		// end and box destroy (registered above) along with any parameters.
 		v := g.blk.Load(addr, loadQualifier(t))
-		g.blk.EndBorrow(borrow)
-		g.blk.DestroyValue(marked)
 		g.unwind()
 		g.blk.Return(v)
 	}
+	_ = selfCleanup
 
 	g.block(d.Body)
 
@@ -537,6 +558,9 @@ func (g *gen) applyInitNamed(e *ast.CallExpr, t types.Type, out *types.Signature
 			sil.Param{Type: self, Convention: sil.ParamUnowned})
 		callee.Type().Convention = sil.Method
 		callee.SetResult(lowerType(t), resultConvention(lowerType(t)))
+		if out.Throws {
+			callee.SetThrows(sil.Object(sil.BuiltinNativeObj))
+		}
 	}
 	ref := g.blk.FunctionRef(callee)
 
@@ -554,6 +578,18 @@ func (g *gen) applyInitNamed(e *ast.CallExpr, t types.Type, out *types.Signature
 		vals = append(vals, meta)
 	} else {
 		vals = append(vals, g.blk.Metatype(lowerType(t)))
+	}
+
+	// A throwing initializer is called like any throwing function: through
+	// a try_apply whose error edge raises to the enclosing catch or out of
+	// the caller. `try?`/`try!` written on the call are honored.
+	if out.Throws {
+		optional := false
+		if pendingOptional, pendingTrap := g.tryOn(e); pendingOptional || pendingTrap {
+			optional = pendingOptional
+			g.tryBang = pendingTrap
+		}
+		return g.tryApply(e, ref, vals, t, optional, false)
 	}
 
 	v := g.blk.Apply(ref, lowerType(t), vals...)
