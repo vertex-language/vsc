@@ -26,6 +26,7 @@ require (
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/vertex-language/amd64 v0.0.0 // indirect
+	github.com/vertex-language/amdgpu v0.0.0 // indirect
 	github.com/vertex-language/arm64 v0.0.0 // indirect
 	github.com/vertex-language/asm v0.0.0 // indirect
 	github.com/vertex-language/elf v0.0.0 // indirect
@@ -34,6 +35,7 @@ require (
 	github.com/vertex-language/macho v0.0.0 // indirect
 	github.com/vertex-language/objv v0.0.0-00010101000000-000000000000 // indirect
 	github.com/vertex-language/pe v0.0.0 // indirect
+	github.com/vertex-language/ptx v0.0.0 // indirect
 	github.com/vertex-language/vcc v0.0.0 // indirect
 	github.com/vertex-language/vcx v0.0.0 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
@@ -59,3 +61,7 @@ replace (
 	github.com/vertex-language/vsc/build => ./build
 	github.com/vertex-language/vsc/stdlib => ./stdlib
 )
+
+replace github.com/vertex-language/amdgpu => ../amdgpu
+
+replace github.com/vertex-language/ptx => ../ptx

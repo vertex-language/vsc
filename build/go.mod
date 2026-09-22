@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/vertex-language/amd64 v0.0.0
 	github.com/vertex-language/arm64 v0.0.0
+	github.com/vertex-language/elf v0.0.0
 	github.com/vertex-language/ir v0.0.0
 	github.com/vertex-language/ir/lower v0.0.0
 	github.com/vertex-language/macho v0.0.0
@@ -17,9 +18,10 @@ require (
 )
 
 require (
+	github.com/vertex-language/amdgpu v0.0.0 // indirect
 	github.com/vertex-language/asm v0.0.0 // indirect
-	github.com/vertex-language/elf v0.0.0 // indirect
 	github.com/vertex-language/i386 v0.0.0 // indirect
+	github.com/vertex-language/ptx v0.0.0 // indirect
 )
 
 replace (
@@ -38,3 +40,7 @@ replace (
 	github.com/vertex-language/vsc => ..
 	github.com/vertex-language/vsc/stdlib => ../stdlib
 )
+
+replace github.com/vertex-language/amdgpu => ../../amdgpu
+
+replace github.com/vertex-language/ptx => ../../ptx
