@@ -41,6 +41,7 @@ runtime spell each one once.
 | `vertex_task_cell_typed` | `(const Metadata* type) -> HeapObject*` | a counted box for a value of that type, zeroed, whose end destroys the value |
 | `vertex_task_cell_typed_contents` | `(HeapObject* cell) -> void*` | where a typed cell's value is |
 | `vertex_task_wait_fd` | `(i32 fd, i32 events, i64 timeout) -> i32` | waits until the descriptor can be read (1) or written (2), or until timeout nanoseconds pass (negative: no deadline); 1 ready, 0 timed out. In a task the task waits and the executor runs everything else; outside one, or with no readiness registration, the thread waits |
+| `vertex_task_workers` | `() -> i32` | how many workers the pool has, starting it if it has not started; 0 where there is none. For a package that spreads work over the pool |
 | `vertex_task_start_detached` | `(void (*)(), void* context) -> HeapObject*` | starts a task as `vertex_task_start` does, on a worker of the pool: `Task.detached` |
 | `vertex_task_hop` | `(u64 where) -> void` | suspends the task and resumes it on another executor, once its frames have unwound: 0 the main executor, 1 the pool, 2 the task's home (where it was started); on that executor already, a yield |
 | `vertex_task_needs_hop` | `(u64 where) -> u64` | 1 when a hop there would move the task, 0 when it is there already or there is no task: what the compiler asks before each hop it emits |

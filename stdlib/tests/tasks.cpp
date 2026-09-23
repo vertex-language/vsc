@@ -15,6 +15,7 @@ using namespace vertex;
 extern "C" {
 void* vertex_task_alloc(u64 size);
 void  vertex_task_dealloc(void* frame);
+i32   vertex_task_workers(void);
 }
 
 namespace {
@@ -158,6 +159,14 @@ void freeingNull() {
   vertex_task_dealloc(p);
 }
 
+// The pool's size is asked for, not worked out: it starts the pool once,
+// and asking again is the same answer.
+void workers() {
+  i32 n = vertex_task_workers();
+  check(n >= 0 && n <= 64, "vertex_task_workers is out of range", n);
+  check(vertex_task_workers() == n, "vertex_task_workers changed between calls", n);
+}
+
 } // namespace
 
 int main() {
@@ -170,6 +179,7 @@ int main() {
   unwindAtOnce();
   oversized();
   freeingNull();
+  workers();
 
   vertex_pal_write(1, report.bytes, report.count);
   return failures == 0 ? 0 : 1;

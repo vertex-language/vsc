@@ -554,6 +554,17 @@ using namespace vertex;
 
 extern "C" {
 
+// vertex_task_workers is how many workers the pool has, starting it if it
+// has not started: what VERTEX_WORKERS asked for, or one per processor but
+// the main thread's, less any the platform could not start. 0 where there
+// is no pool (VERTEX_WORKERS=0, or no threads, as on Windows today). A
+// package that spreads work over the pool -- net/tcp binding a listener
+// per worker -- asks here rather than working the number out again.
+i32 vertex_task_workers(void) {
+  startPool();
+  return workerCount;
+}
+
 // vertex_task_spawn starts a task running code, which runs when the
 // executor next reaches it.
 void vertex_task_spawn(const AsyncFunctionPointer* fp, void* self) {
