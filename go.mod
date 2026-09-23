@@ -25,6 +25,7 @@ require (
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
+	github.com/vertex-language/air v0.0.0
 	github.com/vertex-language/amd64 v0.0.0 // indirect
 	github.com/vertex-language/amdgpu v0.0.0 // indirect
 	github.com/vertex-language/arm64 v0.0.0 // indirect
@@ -65,3 +66,5 @@ replace (
 replace github.com/vertex-language/amdgpu => ../amdgpu
 
 replace github.com/vertex-language/ptx => ../ptx
+
+replace github.com/vertex-language/air => ../air

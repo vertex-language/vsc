@@ -18,6 +18,7 @@ require (
 )
 
 require (
+	github.com/vertex-language/air v0.0.0
 	github.com/vertex-language/amdgpu v0.0.0 // indirect
 	github.com/vertex-language/asm v0.0.0 // indirect
 	github.com/vertex-language/i386 v0.0.0 // indirect
@@ -44,3 +45,5 @@ replace (
 replace github.com/vertex-language/amdgpu => ../../amdgpu
 
 replace github.com/vertex-language/ptx => ../../ptx
+
+replace github.com/vertex-language/air => ../../air
