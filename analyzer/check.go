@@ -333,7 +333,38 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 			c.resolveAssociatedTypes(decls, staging)
 			c.declareFunctions(decls, staging)
 		}
+		// Stored module-scope variables, last, so that an initializer
+		// whose type has to be inferred sees every function it may call.
+		// An annotated one is declared from its annotation alone: its
+		// initializer runs in its own module, and is not this one's to check.
+		for i, f := range imp.Files {
+			if i < len(imp.Units) {
+				c.file = imp.Units[i]
+			}
+			c.declareImportedVars(declsOf(f.Stmts), staging)
+		}
 		c.recordModule(imp, staging, scope)
+	}
+}
+
+// declareImportedVars declares the stored module-scope variables an
+// imported module's files declare, as the client sees them.
+func (c *checker) declareImportedVars(decls []ast.Decl, scope *Scope) {
+	for _, decl := range decls {
+		d, ok := decl.(*ast.VarDecl)
+		if !ok {
+			continue
+		}
+		for _, b := range d.Bindings {
+			if b.Body != nil || b.Accessors != nil {
+				continue
+			}
+			if _, typed := b.Pat.(*ast.TypedPattern); typed {
+				c.declarePatternInit(b.Pat, nil, d.Kind == token.LET, true, scope)
+				continue
+			}
+			c.checkStored(b, d.Kind == token.LET, scope)
+		}
 	}
 }
 

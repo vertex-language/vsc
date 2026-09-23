@@ -33,10 +33,17 @@ type VarSymbol struct {
 	// isolated is @MainActor on a module-scope variable: read and
 	// written on the main thread only.
 	isolated bool
+	// computed is a module-scope variable that is a getter and no
+	// storage: another module reads it by calling the getter rather
+	// than through an addressor.
+	computed bool
 }
 
 // Isolated reports whether the variable is @MainActor.
 func (v *VarSymbol) Isolated() bool { return v.isolated }
+
+// Computed reports whether the variable is a getter with no storage.
+func (v *VarSymbol) Computed() bool { return v.computed }
 
 func NewVar(name string, typ types.Type, pos token.Pos, isConst bool, ownership types.OwnershipKind) *VarSymbol {
 	return &VarSymbol{

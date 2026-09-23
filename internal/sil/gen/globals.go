@@ -244,3 +244,50 @@ func (g *gen) moduleVarAddr(sym analyzer.Symbol) (*sil.Value, sil.Type, bool) {
 	p := g.blk.Apply(g.blk.FunctionRef(callee), rawPointerType())
 	return g.blk.PointerToAddress(p, t.Address()), t, true
 }
+
+// importedVarRead reads another module's module-scope variable: through
+// its getter where it is computed, and through its addressor where it
+// is stored. Both are mangled with the module that defines them, which
+// emits them public.
+func (g *gen) importedVarRead(e ast.Node, sym analyzer.Symbol) (*sil.Value, bool) {
+	v, ok := sym.(*analyzer.VarSymbol)
+	if !ok || g.blk == nil {
+		return nil, false
+	}
+	module, imported := g.info.Imported[sym]
+	if !imported || module == "" || module == "Swift" {
+		return nil, false
+	}
+	d := mangle.Decl{
+		Module:    module,
+		ModuleOf:  g.moduleOfType,
+		Name:      v.Name(),
+		Signature: &types.Signature{Results: v.Type()},
+	}
+	if v.Computed() {
+		name, err := mangle.Getter(d)
+		if err != nil {
+			g.refuse(e, "a computed variable this compiler cannot name: "+err.Error())
+			return nil, false
+		}
+		g.getters[sym] = &moduleGetter{name: v.Name(), symbol: name, typ: v.Type()}
+		return g.moduleGetterCall(sym)
+	}
+	name, err := mangle.Addressor(d)
+	if err != nil {
+		g.refuse(e, "a module-level variable this compiler cannot name: "+err.Error())
+		return nil, false
+	}
+	t := lowerType(v.Type())
+	callee := g.m.Func(name).SetSourceName(v.Name())
+	if g.needsType(callee) {
+		callee.Type().Convention = sil.Thin
+		callee.SetResult(rawPointerType(), sil.ResultUnowned)
+	}
+	p := g.blk.Apply(g.blk.FunctionRef(callee), rawPointerType())
+	addr := g.blk.PointerToAddress(p, t.Address())
+	access := g.blk.BeginAccess(addr, "read", "unknown")
+	val := g.blk.Load(access, loadQualifier(t))
+	g.blk.EndAccess(access)
+	return g.loaded(val, t), true
+}

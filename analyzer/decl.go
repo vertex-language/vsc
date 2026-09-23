@@ -1003,6 +1003,11 @@ func (c *checker) declareComputedVars(v *ast.VarDecl, scope *Scope) {
 			continue
 		}
 		c.declarePatternInit(b.Pat, c.resolveType(tp.Type, scope), v.Kind == token.LET, true, scope)
+		if id, ok := tp.Pat.(*ast.IdentPattern); ok && id.Name != nil {
+			if sym, ok := c.info.Defs[id.Name].(*VarSymbol); ok {
+				sym.computed = true
+			}
+		}
 	}
 }
 

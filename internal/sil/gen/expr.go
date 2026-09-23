@@ -505,6 +505,9 @@ func (g *gen) member(e *ast.MemberExpr) *sil.Value {
 				g.blk.EndAccess(access)
 				return g.loaded(v, t)
 			}
+			if v, ok := g.importedVarRead(e, sym); ok {
+				return v
+			}
 		}
 	}
 	if id, ok := e.X.(*ast.IdentExpr); ok && id.Name != nil && g.info.Uses[id.Name] == nil {
