@@ -125,6 +125,14 @@ func (g *gen) exprStmt(e ast.Expr) {
 	if v := g.expr(e); v != nil {
 		g.destroyLater(v)
 	}
+	// A call that returns Never -- `process.Exit(2)`, `fatalError()` --
+	// does not come back, so nothing after it runs, and a body that ends
+	// with one ends there: it is not missing a return.
+	if g.blk != nil && g.blk.Term() == nil {
+		if t := g.typeOf(e); t != nil && types.Identical(t, types.Typ[types.Never]) {
+			g.blk.Unreachable()
+		}
+	}
 }
 
 // chainedDestination lowers an assignment whose destination is an optional
