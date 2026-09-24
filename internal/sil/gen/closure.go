@@ -413,7 +413,7 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 		// Wrapped where the closure returns an optional, as `return` does.
 		if v != nil {
 			if rs := f.Type().Results; len(rs) == 1 && rs[0].Type.IsValid() {
-				v = g.optionalFor(x, v, g.typeOf(x), rs[0].Type.Formal())
+				v = g.carried(x, v, g.typeOf(x), rs[0].Type.Formal())
 			}
 		}
 		g.unwind()

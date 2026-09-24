@@ -493,7 +493,7 @@ protocol RandomAccessCollection<Element>: BidirectionalCollection {}
 // element, until it answers nil.
 protocol AsyncIteratorProtocol {
     associatedtype Element
-    mutating func next() async -> Element?
+    mutating func next() async throws -> Element?
 }
 
 // Something whose elements arrive over time, gone through with

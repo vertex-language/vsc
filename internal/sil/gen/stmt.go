@@ -513,6 +513,11 @@ func unparenExpr(e ast.Expr) ast.Expr {
 
 // lvalue lowers an expression to its destination address for assignment.
 func (g *gen) lvalue(e ast.Expr) *sil.Value {
+	// A place the checker read as another -- `p[i]` as `(p + i).pointee`
+	// -- is that one.
+	if to, ok := g.info.ImplicitSelf[e]; ok {
+		return g.lvalue(to)
+	}
 	switch n := e.(type) {
 	case *ast.ParenExpr:
 		return g.lvalue(n.X)
@@ -940,7 +945,7 @@ func (g *gen) ret(s *ast.ReturnStmt) {
 	// `return .success(p)` from a function returning Result<T, E>?.
 	if v != nil && g.fn != nil {
 		if rs := g.fn.Type().Results; len(rs) == 1 && rs[0].Type.IsValid() {
-			v = g.optionalFor(s.X, v, g.typeOf(s.X), rs[0].Type.Formal())
+			v = g.carried(s.X, v, g.typeOf(s.X), rs[0].Type.Formal())
 		}
 	}
 	g.unwind()
@@ -2833,6 +2838,39 @@ func (g *gen) bindPatternTo(p ast.Pattern, v *sil.Value, t types.Type) bool {
 				return true
 			}
 		}
+	}
+	// `(a, b)`: each element of the tuple, bound by its own pattern. What
+	// is borrowed is read in place; what is owned is taken apart.
+	if tp, ok := p.(*ast.TuplePattern); ok && !g.refutable(p) {
+		tu, isTuple := t.Underlying().(*types.Tuple)
+		if !isTuple || len(tu.Elements) != len(tp.Elems) {
+			g.refuse(p, "a tuple pattern of another length than its tuple")
+			return false
+		}
+		elems := make([]*sil.Value, len(tu.Elements))
+		if v.Ownership() == sil.Owned {
+			types_ := make([]sil.Type, len(tu.Elements))
+			for i, el := range tu.Elements {
+				types_[i] = lowerType(el.Type)
+			}
+			parts := g.blk.DestructureTuple(v, types_...)
+			for i, part := range parts {
+				if !types_[i].Trivial() {
+					g.destroyLater(part)
+				}
+				elems[i] = part
+			}
+		} else {
+			for i, el := range tu.Elements {
+				elems[i] = g.blk.TupleExtract(v, i, lowerType(el.Type))
+			}
+		}
+		for i, el := range tp.Elems {
+			if !g.bindPatternTo(el.Pat, elems[i], tu.Elements[i].Type) {
+				return false
+			}
+		}
+		return true
 	}
 	id, ok := p.(*ast.IdentPattern)
 	if !ok || id.Name == nil {

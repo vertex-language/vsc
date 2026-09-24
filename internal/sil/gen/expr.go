@@ -890,12 +890,6 @@ func (g *gen) callFuncTry(e *ast.CallExpr, sym *analyzer.FuncSymbol, optional bo
 	if op, ok := g.builtinOp(sym); ok && op != "" {
 		return g.callBuiltinOp(e, sym, op)
 	}
-	// Refuse unimported existential return functions.
-	if _, isEx := existentialOf(sym.Signature().Results); isEx {
-		if _, imported := g.info.Imported[sym]; !imported {
-			return nil
-		}
-	}
 	// Generic specialization or imported call. A core function written
 	// as source -- zip, stride, min -- is specialized from that source,
 	// as the program's own generic functions are.
@@ -1134,7 +1128,11 @@ func (g *gen) memberwise(e *ast.CallExpr, t types.Type, st *types.Struct) *sil.V
 			return nil
 		}
 		// A property of type T? given a T holds it wrapped.
-		values = append(values, g.optionalFor(from, v, g.typeOf(from), f.Type))
+		v = g.carried(from, v, g.typeOf(from), f.Type)
+		if v == nil {
+			return nil
+		}
+		values = append(values, v)
 	}
 	if next != len(args) {
 		g.refuse(e, "a constructor whose arguments do not match the properties in order")
@@ -2184,7 +2182,10 @@ func (g *gen) conditionalAs(e *ast.ConditionalExpr, bit *sil.Value, t types.Type
 	g.blk = thenBlk
 	yes := g.branchArm(func() *sil.Value {
 		v := g.rvalue(e.Then)
-		return g.optionalFor(e.Then, v, g.typeOf(e.Then), t)
+		if v == nil {
+			return nil
+		}
+		return g.carried(e.Then, v, g.typeOf(e.Then), t)
 	})
 	if yes == nil {
 		return nil
@@ -2194,7 +2195,10 @@ func (g *gen) conditionalAs(e *ast.ConditionalExpr, bit *sil.Value, t types.Type
 	g.blk = elseBlk
 	no := g.branchArm(func() *sil.Value {
 		v := g.rvalue(e.Else)
-		return g.optionalFor(e.Else, v, g.typeOf(e.Else), t)
+		if v == nil {
+			return nil
+		}
+		return g.carried(e.Else, v, g.typeOf(e.Else), t)
 	})
 	if no == nil {
 		return nil
@@ -2596,6 +2600,9 @@ func (g *gen) operatorApply(at ast.Expr, ref *analyzer.MethodRef, sym *analyzer.
 			v = g.optionalFor(xs[i], v, g.typeOf(xs[i]), sig.Params[i].Type)
 		}
 		args[i] = g.boxArg(xs[i], v, want, i)
+		if args[i] == nil {
+			return nil
+		}
 	}
 	v := g.blk.Apply(fnRef, lowerType(sig.Results), args...)
 	g.destroyLater(v)

@@ -183,6 +183,11 @@ func (g *gen) stdlibMetadata(at ast.Node, t types.Type) (*sil.Value, bool) {
 	if _, ok := t.(*types.Metatype); ok {
 		return g.blk.MetadataGlobal(lowerType(t), stdlib.Metadata("Metatype"), stdlib.MetadataOffset), true
 	}
+	// Every pointer is one uncounted word, so one record serves every
+	// pointer type: an array of C strings holds them.
+	if _, ok := t.Underlying().(*types.Pointer); ok {
+		return g.blk.MetadataGlobal(lowerType(t), stdlib.Metadata("Pointer"), stdlib.MetadataOffset), true
+	}
 	// Every function value is a code pointer and a counted context, so
 	// one record serves every function type.
 	if _, ok := t.Underlying().(*types.Signature); ok {

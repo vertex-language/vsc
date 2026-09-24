@@ -1690,6 +1690,17 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				return b.Elem
 			}
 			index, result = types.Typ[types.Int], b.Elem
+		// `p[i]` is what Swift's pointer subscript is: `(p + i).pointee`,
+		// read or written.
+		case *types.Pointer:
+			if b.Dereferenceable() && len(e.Args) == 1 && e.Args[0].Label == nil {
+				span := ast.Span{Lo: e.Pos(), Hi: e.End()}
+				sum := &ast.BinaryExpr{Span: span, X: e.X, Op: &ast.OperatorExpr{Span: span, Kind: token.OPER_BINARY, Synth: "+"}, Y: e.Args[0].X}
+				read := &ast.MemberExpr{Span: span, X: &ast.ParenExpr{Span: span, X: sum}, Dot: e.Pos(),
+					Name: &ast.Ident{Span: span, Synth: "pointee"}}
+				c.info.ImplicitSelf[e] = read
+				return c.checkExpr(read, expected, scope)
+			}
 		case *types.Dictionary:
 			index, result = b.Key, &types.Optional{Wrapped: b.Value}
 			if len(e.Args) == 2 && e.Args[1].Label != nil && e.Args[1].Label.Text(c.file) == "default" {
@@ -2714,7 +2725,7 @@ func (c *checker) checkSubscriptWrite(sub *ast.SubscriptExpr, scope *Scope) {
 		c.errorf(sub.Lsquare, "cannot assign through subscript: subscript is get-only")
 		return
 	}
-	if _, isClass := ref.Recv.Underlying().(*types.Class); !isClass && !ref.Subscript.IsStatic {
+	if _, isClass := ref.Recv.Underlying().(*types.Class); !isClass && !ref.Subscript.IsStatic && !ref.Subscript.NonmutatingSet {
 		c.checkMutableReceiver(sub.X, sub.Lsquare, "cannot assign through subscript", scope)
 	}
 }
@@ -3121,6 +3132,18 @@ func (c *checker) basicInit(e *ast.CallExpr, b *types.Basic, inst types.Type, ar
 		return out, true
 	case b.Kind() == types.String && len(args) == 2 && label(0) == "decoding" && label(1) == "as":
 		bytes := &types.Array{Elem: types.Typ[types.UInt8]}
+		// Any sequence of bytes -- a slice, a string's utf8 -- is read as
+		// the array of them: `String(decoding: buf[0..<n], as: UTF8.self)`.
+		quiet := len(c.info.Diagnostics)
+		t := c.checkExpr(args[0].X, bytes, scope)
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+		if !types.AssignableTo(t, bytes) && !isInvalid(t) {
+			if seq, ok := c.coreProtocol("Sequence"); ok && c.conformsTo(t, seq) {
+				span := ast.Span{Lo: args[0].X.Pos(), Hi: args[0].X.End()}
+				fun := &ast.IdentExpr{Span: span, Name: &ast.Ident{Span: span, Synth: "Array"}}
+				args[0].X = &ast.CallExpr{Span: span, Fun: fun, Args: &ast.CallArgs{Args: []*ast.CallArg{{X: args[0].X}}}}
+			}
+		}
 		if t := c.checkExpr(args[0].X, bytes, scope); !types.AssignableTo(t, bytes) {
 			c.typeErrorf(args[0].X.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", t, bytes)
 		}

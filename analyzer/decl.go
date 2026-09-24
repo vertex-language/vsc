@@ -1135,6 +1135,11 @@ func (c *checker) subscriptOf(m *ast.SubscriptDecl, typeScope *Scope) *types.Sub
 		for _, a := range m.Accessors.Accessors {
 			if a != nil && a.Keyword != nil && a.Keyword.Text(c.file) == "set" {
 				sub.Settable = true
+				for _, mod := range a.Mods {
+					if mod != nil && mod.Name != nil && mod.Name.Text(c.file) == "nonmutating" {
+						sub.NonmutatingSet = true
+					}
+				}
 			}
 		}
 	}
@@ -1282,7 +1287,7 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 			// leaves the parameter out, because that is where Swift
 			// evaluates it.
 			if p.Default != nil {
-				c.checkExpr(p.Default, pt, scope)
+				c.checkDefault(p.Default, pt, scope)
 			}
 			params[i] = &types.Param{
 				Name:        name,

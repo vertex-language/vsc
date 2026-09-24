@@ -2049,8 +2049,9 @@ func (c *fn) destroyExistential(in *sil.Inst) error {
 	buf := c.fieldAddr(p, existentialBuffer)
 	meta := c.b.Ptr.Load(c.fieldAddr(p, existentialMetadata))
 	// An optional existential that is empty -- its metadata word null --
-	// holds nothing to end.
-	if optionalEx {
+	// holds nothing to end, and nor does storage not yet given a value:
+	// a field an initializer assigns for the first time, zeroed.
+	{
 		c.conts++
 		held := c.out.Block("held" + itoa(c.conts))
 		empty := c.out.Block("empty" + itoa(c.conts))

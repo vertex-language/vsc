@@ -160,22 +160,6 @@ func measure(_ s: Shape) -> Int32 { return s.area() }
 func main() -> Int32 { return measure(Wide(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10)) }`,
 			"it is boxed"},
 
-		{"a result that is an existential", `
-protocol Shape { func area() -> Int32 }
-struct Square: Shape { var side: Int32
-    func area() -> Int32 { return side * side } }
-func make() -> any Shape { return Square(side: 6) }
-func main() -> Int32 { return 1 }`,
-			"storage the caller set aside"},
-
-		{"a stored property that is an existential", `
-protocol Shape { func area() -> Int32 }
-struct Square: Shape { var side: Int32
-    func area() -> Int32 { return side * side } }
-struct Holder { var s: any Shape }
-func main() -> Int32 { return 1 }`,
-			"stored property"},
-
 		{"a protocol with an associated type", `
 protocol Container { associatedtype Item
     func get() -> Item }

@@ -213,6 +213,16 @@ extension Array {
         self = out
     }
 
+    // Room for n elements without growing: a hint, which the runtime's
+    // growth does not need.
+    mutating func reserveCapacity(_ n: Int) {}
+
+    // The elements of any sequence of them appended, in order: a slice,
+    // a range, a string's bytes. An array is appended by the runtime.
+    mutating func append<S: Sequence>(contentsOf newElements: S) where S.Element == Element {
+        for x in newElements { append(x) }
+    }
+
     // newElements put in before position i.
     mutating func insert(contentsOf newElements: [Element], at i: Int) {
         replaceSubrange(i..<i, with: newElements)
@@ -3758,5 +3768,79 @@ extension Set: Collection {
     subscript(position: _SetIndex) -> Element {
         if position._bucket == Int.max { fatalError("Set index is out of bounds") }
         return _member(at: position._bucket)
+    }
+}
+
+// A slice is a collection of its elements at its base array's positions,
+// as Swift's ArraySlice is.
+extension ArraySlice: RandomAccessCollection {
+    typealias Index = Int
+    typealias Iterator = _ArraySliceIterator<Element>
+
+    func index(after i: Int) -> Int { return i + 1 }
+    func index(before i: Int) -> Int { return i - 1 }
+}
+
+// Buffer pointers are collections of what they point at, at positions 0
+// up to their count, as Swift's are.
+extension UnsafeBufferPointer: RandomAccessCollection {
+    typealias Index = Int
+    typealias Iterator = _UnsafeBufferIterator<Element>
+
+    func makeIterator() -> _UnsafeBufferIterator<Element> {
+        return _UnsafeBufferIterator(_buffer: self, _at: 0)
+    }
+
+    var startIndex: Int { return 0 }
+    var endIndex: Int { return count }
+    func index(after i: Int) -> Int { return i + 1 }
+    func index(before i: Int) -> Int { return i - 1 }
+
+    subscript(i: Int) -> Element {
+        return (baseAddress! + i).pointee
+    }
+}
+
+extension UnsafeMutableBufferPointer: RandomAccessCollection {
+    typealias Index = Int
+    typealias Iterator = _UnsafeMutableBufferIterator<Element>
+
+    func makeIterator() -> _UnsafeMutableBufferIterator<Element> {
+        return _UnsafeMutableBufferIterator(_buffer: self, _at: 0)
+    }
+
+    var startIndex: Int { return 0 }
+    var endIndex: Int { return count }
+    func index(after i: Int) -> Int { return i + 1 }
+    func index(before i: Int) -> Int { return i - 1 }
+
+    subscript(i: Int) -> Element {
+        get { return (baseAddress! + i).pointee }
+        nonmutating set { (baseAddress! + i).pointee = newValue }
+    }
+}
+
+// What for-in over a buffer pointer walks: its elements, in order.
+struct _UnsafeBufferIterator<Element>: IteratorProtocol {
+    let _buffer: UnsafeBufferPointer<Element>
+    var _at: Int
+
+    mutating func next() -> Element? {
+        if _at >= _buffer.count { return nil }
+        let x = (_buffer.baseAddress! + _at).pointee
+        _at += 1
+        return x
+    }
+}
+
+struct _UnsafeMutableBufferIterator<Element>: IteratorProtocol {
+    let _buffer: UnsafeMutableBufferPointer<Element>
+    var _at: Int
+
+    mutating func next() -> Element? {
+        if _at >= _buffer.count { return nil }
+        let x = (_buffer.baseAddress! + _at).pointee
+        _at += 1
+        return x
     }
 }

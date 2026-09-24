@@ -661,6 +661,9 @@ func (l *lowerer) fieldTypeRecord(t types.Type) (ir.Symbol, bool) {
 	if t == nil {
 		return nil, false
 	}
+	if _, ok := t.Underlying().(*types.Pointer); ok {
+		return l.metadataRecord(stdlib.Metadata("Pointer")), true
+	}
 	switch ex := t.(type) {
 	case *types.Metatype:
 		return l.metadataRecord(stdlib.Metadata("Metatype")), true

@@ -162,7 +162,7 @@ func (g *gen) emitSubscriptAccessorNamed(m *ast.SubscriptDecl, recv types.Type, 
 	// writes through it, and borrowed otherwise.
 	if !sub.IsStatic {
 		st := lowerType(recv)
-		if set != nil && !isClass(recv) {
+		if set != nil && !isClass(recv) && !sub.NonmutatingSet {
 			g.self = &local{addr: f.Param(st.Address(), sil.ParamInout), typ: st}
 		} else {
 			f.Param(st, selfConvention(st))
@@ -219,7 +219,7 @@ func (g *gen) subscriptCalleeNamed(recv types.Type, sub *types.Subscript, setter
 	}
 	if !sub.IsStatic {
 		st := lowerType(recv)
-		if setter && !isClass(recv) {
+		if setter && !isClass(recv) && !sub.NonmutatingSet {
 			callee.Type().Params = append(callee.Type().Params, sil.Param{Type: st.Address(), Convention: sil.ParamInout})
 		} else {
 			callee.Type().Params = append(callee.Type().Params, sil.Param{Type: st, Convention: selfConvention(st)})
@@ -247,7 +247,11 @@ func (g *gen) subscriptIndices(e *ast.SubscriptExpr, sub *types.Subscript) ([]*s
 		if v == nil {
 			return nil, false
 		}
-		args = append(args, g.boxArg(a.X, v, want, i))
+		boxed := g.boxArg(a.X, v, want, i)
+		if boxed == nil {
+			return nil, false
+		}
+		args = append(args, boxed)
 	}
 	return args, true
 }
@@ -259,7 +263,8 @@ func (g *gen) subscriptReceiver(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef
 	if ref.Subscript.IsStatic {
 		return nil, true
 	}
-	if setter && !isClass(ref.Recv) {
+	// A nonmutating setter writes through self, which it borrows.
+	if setter && !isClass(ref.Recv) && !ref.Subscript.NonmutatingSet {
 		addr := g.lvalue(e.X)
 		if addr == nil {
 			g.refuse(e, "an assignment through a subscript of something that is not storage")
@@ -471,17 +476,19 @@ func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef,
 				g.specialized = map[string]bool{}
 			}
 			g.specialized[name] = true
+			// Read in the file it was written in, its accessors' keywords
+			// included.
+			restore := g.apart()
+			if f := g.fileOf(decl); f != nil {
+				g.file = f
+			}
 			if body, set := subscriptAccessor(g, decl, setter); body != nil {
-				restore := g.apart()
-				if f := g.fileOf(decl); f != nil {
-					g.file = f
-				}
 				g.subst = subst
 				done := g.asSpecialization()
 				g.emitSubscriptAccessorNamed(decl, recvType, &sub, body, set, sil.Private, name)
 				done()
-				restore()
 			}
+			restore()
 		}
 	}
 	return out, g.subscriptCalleeNamed(recvType, &sub, setter, name), true

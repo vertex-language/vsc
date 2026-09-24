@@ -237,16 +237,21 @@ func hasSpareValues(t Type) bool {
 		return true
 	case *Pointer:
 		return true
+	// A struct or a tuple spares a representation where one of its
+	// words is never zero -- a reference, a String's object, a function's
+	// code -- which nil is all zeros beside. A Bool or an enum inside one
+	// travels in as few bits as it needs and has no value to spare there,
+	// so an optional of it has a tag byte (see lower's neverZeroWord).
 	case *Struct:
 		for _, f := range tt.Fields {
-			if hasSpareValues(f.Type) {
+			if neverZero(f.Type) {
 				return true
 			}
 		}
 		return false
 	case *Tuple:
 		for _, elem := range tt.Elements {
-			if hasSpareValues(elem.Type) {
+			if neverZero(elem.Type) {
 				return true
 			}
 		}
@@ -367,4 +372,22 @@ func ClassFields(cl *Class) []*Field {
 		out = append(out, c.Fields...)
 	}
 	return out
+}
+
+// neverZero reports whether a value of t has a word that is never zero,
+// as lower's neverZeroWord finds one.
+func neverZero(t Type) bool {
+	switch tt := t.Underlying().(type) {
+	case *Class, *Array, *Dictionary, *Set, *Signature:
+		return true
+	case *Basic:
+		return tt.kind == String
+	case *Struct:
+		for _, f := range tt.Fields {
+			if neverZero(f.Type) {
+				return true
+			}
+		}
+	}
+	return false
 }

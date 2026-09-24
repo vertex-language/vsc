@@ -24,7 +24,13 @@ func isPackageBuild(bf *buildFlags, names []string) (root, product string, ok bo
 	switch len(names) {
 	case 0:
 	case 1:
-		if _, err := os.Stat(names[0]); err == nil || filepath.Ext(names[0]) != "" {
+		if filepath.Ext(names[0]) != "" {
+			return "", "", false
+		}
+		// A name that is a path is that path -- unless the manifest here
+		// declares a product of the name, which is what it means then:
+		// `vsc build rdpviewer` beside a folder rdpviewer/.
+		if _, err := os.Stat(names[0]); err == nil && !declaresProduct(bf, names[0]) {
 			return "", "", false
 		}
 		product = names[0]
@@ -39,6 +45,28 @@ func isPackageBuild(bf *buildFlags, names []string) (root, product string, ok bo
 		return "", "", false
 	}
 	return dir, product, true
+}
+
+// declaresProduct reports whether the manifest in the package directory
+// declares a product named name.
+func declaresProduct(bf *buildFlags, name string) bool {
+	dir := bf.packagePath
+	if dir == "" {
+		dir = "."
+	}
+	if _, ok := pkg.FindManifest(dir); !ok {
+		return false
+	}
+	m, _, err := pkg.Load(dir)
+	if err != nil || m == nil {
+		return false
+	}
+	for _, p := range m.Products {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // doPackageBuild builds the package at root and writes its programs, or the

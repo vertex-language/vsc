@@ -148,11 +148,8 @@ func (g *gen) dynamicCast(e *ast.CastExpr, from, to types.Type, kind castKind) *
 		return g.boolOf(answer)
 	}
 
+	// An existential answered is held as the optional's payload, a value.
 	opt := &types.Optional{Wrapped: to}
-	if _, isEx := existentialOf(to); isEx {
-		g.refuse(e, "an 'as?' to an existential")
-		return nil
-	}
 	optType := lowerType(opt)
 	yes, no, join := g.fn.Block(), g.fn.Block(), g.fn.Block()
 	g.blk.CondBr(bit, yes, nil, no, nil)

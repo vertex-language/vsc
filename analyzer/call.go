@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -976,7 +977,11 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 			literals = append(literals, i)
 			continue
 		}
-		types.Unify(sig.Params[i].Type, c.checkExpr(arg.X, nil, scope), subst)
+		got := c.checkExpr(arg.X, nil, scope)
+		if tp, ok := sig.Params[i].Type.(*types.TypeParam); ok {
+			got = c.meetSameTypes(e, arg.X, got, tp, sig.TypeParams, subst, scope)
+		}
+		types.Unify(sig.Params[i].Type, got, subst)
 	}
 	for _, i := range operators {
 		want := types.Substitute(sig.Params[i].Type, subst)
@@ -1010,11 +1015,30 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 			types.Unify(sig.Params[i].Type, got, subst)
 		}
 	}
+	// With every argument's say in, one more look at those passed as a
+	// bare parameter: a requirement between two of them -- `A.Element ==
+	// B.Element` -- can only be met once both are known, and a literal
+	// is read last.
+	for i, arg := range args {
+		if i >= len(sig.Params) {
+			break
+		}
+		tp, ok := sig.Params[i].Type.(*types.TypeParam)
+		if !ok || subst[tp] == nil {
+			continue
+		}
+		if _, isClosure := arg.X.(*ast.ClosureExpr); isClosure {
+			continue
+		}
+		if got := c.meetSameTypes(e, arg.X, subst[tp], tp, sig.TypeParams, subst, scope); !types.Identical(got, subst[tp]) {
+			subst[tp] = got
+		}
+	}
 	c.info.Diagnostics = c.info.Diagnostics[:quiet]
 	if len(subst) == 0 {
 		return sig
 	}
-	c.checkConstraints(e, sig.TypeParams, subst)
+	c.checkConstraints(e, sig.TypeParams, subst, scope)
 
 	// Record type specialization arguments for code generation.
 	if e != nil {
@@ -1040,7 +1064,7 @@ func isNumericType(t types.Type) bool {
 }
 
 // checkConstraints checks that type arguments satisfy parameter protocol constraints.
-func (c *checker) checkConstraints(e *ast.CallExpr, params []*types.TypeParam, subst map[*types.TypeParam]types.Type) {
+func (c *checker) checkConstraints(e *ast.CallExpr, params []*types.TypeParam, subst map[*types.TypeParam]types.Type, scope *Scope) {
 	if e == nil {
 		return
 	}
@@ -1060,7 +1084,215 @@ func (c *checker) checkConstraints(e *ast.CallExpr, params []*types.TypeParam, s
 			c.typeErrorf(e.Pos(), "%s requires that '%s' conform to '%s'",
 				calleeDescription(e, c), arg, proto.Name)
 		}
+		// `where S.Element == UInt8`: what the argument's Element is
+		// must be that type, once both are known.
+		wants := c.sameTypeWants(e, p, params, subst)
+		for _, name := range sortedNames(wants) {
+			want := wants[name]
+			got := c.concreteAssoc(arg, name)
+			if got == nil || !c.settled(want, scope) || !c.settled(got, scope) {
+				continue
+			}
+			if !types.Identical(got, want) {
+				c.typeErrorf(e.Pos(), "%s requires the types '%s.%s' (aka '%s') and '%s' be equivalent",
+					calleeDescription(e, c), arg, name, got, want)
+			}
+		}
 	}
+}
+
+// sortedNames is a map's keys in a fixed order, for diagnostics.
+func sortedNames(m map[string]types.Type) []string {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// sameTypeWants is what a call's where clause makes tp's associated
+// types the same as, by name, with what is known so far in place: the
+// call's inferred arguments, its receiver's, and associated types of
+// those resolved. A requirement is read from both sides, as swiftc's
+// generic signature has it: `A.Element == B.Element` says what
+// B.Element is once A is known, as well as the other way about.
+func (c *checker) sameTypeWants(e *ast.CallExpr, tp *types.TypeParam, params []*types.TypeParam, subst map[*types.TypeParam]types.Type) map[string]types.Type {
+	recv := c.receiverSubst(e)
+	known := func(t types.Type) types.Type {
+		if len(recv) > 0 {
+			t = types.Substitute(t, recv)
+		}
+		return c.resolveAssocs(types.Substitute(t, subst))
+	}
+	out := map[string]types.Type{}
+	for name, b := range tp.Bound {
+		if b != nil {
+			out[name] = known(b)
+		}
+	}
+	for _, q := range params {
+		if q == tp || subst[q] == nil {
+			continue
+		}
+		for name, b := range q.Bound {
+			d, ok := b.(*types.Dependent)
+			if !ok || d.Base != tp {
+				continue
+			}
+			if _, said := out[d.Name]; said {
+				continue
+			}
+			if other := c.concreteAssoc(subst[q], name); other != nil {
+				out[d.Name] = known(other)
+			}
+		}
+	}
+	return out
+}
+
+// resolveAssocs is t with each associated type of a known type -- the
+// Element of ClosedRange<Int> -- replaced by what it is.
+func (c *checker) resolveAssocs(t types.Type) types.Type {
+	return types.MapDependents(t, func(d *types.Dependent) types.Type {
+		if mentionsTypeParam(d.Base) || hasDependent(d.Base) {
+			return nil
+		}
+		return c.concreteAssoc(d.Base, d.Name)
+	})
+}
+
+// hasDependent reports whether t still names an associated type no
+// argument has answered.
+func hasDependent(t types.Type) bool {
+	found := false
+	types.MapDependents(t, func(*types.Dependent) types.Type {
+		found = true
+		return nil
+	})
+	return found
+}
+
+// settled reports whether t is a type a same-type requirement can be
+// checked against here: known, and naming no parameter still to be
+// inferred or associated type still to be answered.
+func (c *checker) settled(t types.Type, scope *Scope) bool {
+	return t != nil && !isInvalid(t) && !c.mentionsOpenParam(t, scope) && !hasDependent(t)
+}
+
+// receiverSubst is the generic arguments of a method call's receiver, by
+// the parameters of the type they are arguments to: Element for UInt8 in
+// `bytes.append(...)` on a [UInt8]. nil for a call that is not a
+// method's, or a receiver with none.
+func (c *checker) receiverSubst(e *ast.CallExpr) map[*types.TypeParam]types.Type {
+	if e == nil {
+		return nil
+	}
+	m, ok := unparen(e.Fun).(*ast.MemberExpr)
+	if !ok {
+		return nil
+	}
+	base := c.info.Types[m.X]
+	if meta, ok := base.(*types.Metatype); ok {
+		base = meta.Instance
+	}
+	if base == nil {
+		return nil
+	}
+	if b := c.builtinOf(base); b != nil && len(b.Params) > 0 {
+		return b.Subst(base)
+	}
+	if inst, ok := base.(*types.GenericInstance); ok {
+		params := typeParamsOf(inst.Base.Underlying())
+		if len(params) != len(inst.Args) {
+			return nil
+		}
+		out := make(map[*types.TypeParam]types.Type, len(params))
+		for i, p := range params {
+			out[p] = inst.Args[i]
+		}
+		return out
+	}
+	return nil
+}
+
+// concreteAssoc is a concrete type's associated type: what its
+// declaration says, or the typealias core's extension of a built-in type
+// names it by. nil when neither says.
+func (c *checker) concreteAssoc(t types.Type, name string) types.Type {
+	if a := types.AssocOf(t, name); a != nil {
+		return a
+	}
+	d := &types.Dependent{Base: t, Name: name}
+	if out := c.builtinDependents(d); out != d {
+		return out
+	}
+	return nil
+}
+
+// meetSameTypes is an argument passed as a bare type parameter, typed
+// again so its associated types are what the parameter's where clause
+// says -- `append(contentsOf: 65...67)` on a [UInt8] passes a
+// ClosedRange<UInt8>, as swiftc's solver makes it, not the
+// ClosedRange<Int> the literals default to. An argument that cannot be
+// that type is left as it was, and checkConstraints says why.
+func (c *checker) meetSameTypes(e *ast.CallExpr, x ast.Expr, got types.Type, tp *types.TypeParam, params []*types.TypeParam, subst map[*types.TypeParam]types.Type, scope *Scope) types.Type {
+	if got == nil || isInvalid(got) {
+		return got
+	}
+	wants := c.sameTypeWants(e, tp, params, subst)
+	for _, name := range sortedNames(wants) {
+		want := wants[name]
+		have := c.concreteAssoc(got, name)
+		if have == nil || !c.settled(want, scope) || types.Identical(have, want) {
+			continue
+		}
+		candidate := replaceArg(got, have, want)
+		if candidate == nil {
+			continue
+		}
+		quiet := len(c.info.Diagnostics)
+		retyped := c.checkExpr(x, candidate, scope)
+		failed := len(c.info.Diagnostics) > quiet
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+		if !failed && retyped != nil && types.Identical(retyped, candidate) {
+			got = retyped
+			continue
+		}
+		c.checkExpr(x, nil, scope)
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	}
+	return got
+}
+
+// replaceArg is t with its generic arguments that are from made to, one
+// level down: ClosedRange<Int> to ClosedRange<UInt8>, [Int] to [UInt8].
+// nil when t has no such argument.
+func replaceArg(t, from, to types.Type) types.Type {
+	switch x := t.(type) {
+	case *types.Array:
+		if types.Identical(x.Elem, from) {
+			return &types.Array{Elem: to}
+		}
+	case *types.Set:
+		if types.Identical(x.Elem, from) {
+			return &types.Set{Elem: to}
+		}
+	case *types.GenericInstance:
+		args := make([]types.Type, len(x.Args))
+		changed := false
+		for i, a := range x.Args {
+			args[i] = a
+			if types.Identical(a, from) {
+				args[i] = to
+				changed = true
+			}
+		}
+		if changed {
+			return &types.GenericInstance{Base: x.Base, Args: args}
+		}
+	}
+	return nil
 }
 
 // protocolOf returns the protocol referenced by t, if any.

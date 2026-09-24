@@ -10,6 +10,13 @@ import (
 )
 
 type checker struct {
+	// deferDefaults queues parameter defaults while declarations are
+	// read, to be checked once every type has its members: a default of
+	// `.stdout` names a case an enum in a later file declares. Swift
+	// type-checks default arguments after declarations too.
+	deferDefaults   bool
+	pendingDefaults []pendingDefault
+
 	// initLog is the deferred lets given their value since the branch
 	// being checked began; see branch.
 	initLog     []*VarSymbol
@@ -201,6 +208,7 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		modules:   map[string]*Scope{},
 	}
 	c.pkgScope = pkgScope
+	c.deferDefaults = true
 	c.loadCore(coreScope)
 	c.modules["Swift"] = coreScope
 	c.loadAlgorithms(coreScope)
@@ -282,6 +290,9 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		}
 		c.declareFunctions(declsOf(f.Stmts), pkgScope)
 	}
+
+	// Pass 4.3: Parameter defaults, now that every declaration is in.
+	c.checkPendingDefaults()
 
 	// Pass 4.4: Derived conformances. Every conformance is known now, and
 	// none has been checked for its witnesses: what a type gets by
@@ -590,4 +601,35 @@ func (c *checker) recordModule(imp Import, staging, scope *Scope) {
 			}
 		}
 	}
+}
+
+// A pendingDefault is a parameter default waiting to be checked.
+type pendingDefault struct {
+	expr  ast.Expr
+	typ   types.Type
+	scope *Scope
+	file  *token.File
+}
+
+// checkDefault checks a parameter's default in the parameter's type:
+// later, while declarations are still being read.
+func (c *checker) checkDefault(e ast.Expr, t types.Type, scope *Scope) {
+	if c.deferDefaults {
+		c.pendingDefaults = append(c.pendingDefaults, pendingDefault{expr: e, typ: t, scope: scope, file: c.file})
+		return
+	}
+	c.checkExpr(e, t, scope)
+}
+
+// checkPendingDefaults checks the defaults queued so far, each in the
+// file it was written in, and checks any from here on as they come.
+func (c *checker) checkPendingDefaults() {
+	c.deferDefaults = false
+	prev := c.file
+	for _, d := range c.pendingDefaults {
+		c.file = d.file
+		c.checkExpr(d.expr, d.typ, d.scope)
+	}
+	c.pendingDefaults = nil
+	c.file = prev
 }

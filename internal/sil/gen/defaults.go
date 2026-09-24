@@ -23,7 +23,11 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 		return g.variadicArguments(e, args, sig, i)
 	}
 	if len(args) == len(sig.Params) {
-		return g.argumentValues(args, sig), true
+		vals := g.argumentValues(args, sig)
+		if vals == nil && len(args) > 0 {
+			return nil, false
+		}
+		return vals, true
 	}
 	if len(args) > len(sig.Params) {
 		return nil, false
@@ -38,7 +42,11 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 			if v == nil {
 				return nil, false
 			}
-			out = append(out, g.boxArg(args[next].X, v, want, i))
+			boxed := g.boxArg(args[next].X, v, want, i)
+			if boxed == nil {
+				return nil, false
+			}
+			out = append(out, boxed)
 			next++
 			continue
 		}
@@ -51,7 +59,11 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 		if v == nil {
 			return nil, false
 		}
-		out = append(out, g.boxArg(def, v, want, i))
+		boxed := g.boxArg(def, v, want, i)
+		if boxed == nil {
+			return nil, false
+		}
+		out = append(out, boxed)
 	}
 	if next != len(args) {
 		g.refuse(e, "a call whose arguments this could not match to parameters")
@@ -70,7 +82,11 @@ func (g *gen) argumentValues(args []*ast.CallArg, sig *types.Signature) []*sil.V
 		if v == nil {
 			return nil
 		}
-		out = append(out, g.boxArg(a.X, v, want, i))
+		boxed := g.boxArg(a.X, v, want, i)
+		if boxed == nil {
+			return nil
+		}
+		out = append(out, boxed)
 	}
 	return out
 }
@@ -191,7 +207,11 @@ func (g *gen) variadicArguments(e *ast.CallExpr, args []*ast.CallArg,
 		if v == nil {
 			return nil, false
 		}
-		out = append(out, g.boxArg(args[next].X, v, want, i))
+		boxed := g.boxArg(args[next].X, v, want, i)
+		if boxed == nil {
+			return nil, false
+		}
+		out = append(out, boxed)
 		next++
 	}
 
@@ -236,7 +256,11 @@ func (g *gen) variadicArguments(e *ast.CallExpr, args []*ast.CallArg,
 			if v == nil {
 				return nil, false
 			}
-			out = append(out, g.boxArg(args[next].X, v, want, i))
+			boxed := g.boxArg(args[next].X, v, want, i)
+			if boxed == nil {
+				return nil, false
+			}
+			out = append(out, boxed)
 			next++
 			continue
 		}
@@ -249,7 +273,11 @@ func (g *gen) variadicArguments(e *ast.CallExpr, args []*ast.CallArg,
 		if v == nil {
 			return nil, false
 		}
-		out = append(out, g.boxArg(def, v, want, i))
+		boxed := g.boxArg(def, v, want, i)
+		if boxed == nil {
+			return nil, false
+		}
+		out = append(out, boxed)
 	}
 	if next != len(args) {
 		g.refuse(e, "a call whose arguments this could not match to parameters")

@@ -175,14 +175,22 @@ func entryBody(sil string) (string, bool) {
 // and not on whether it verifies.
 func TestARefusedReturnInventsNothing(t *testing.T) {
 	got, said := refusals(t, `
-protocol P {}
-struct S: P {}
+protocol P { func size() -> Int32 }
+struct Wide: P {
+    var a: Int32 = 0; var b: Int32 = 0; var c: Int32 = 0; var d: Int32 = 0; var e: Int32 = 0
+    var f: Int32 = 0; var g: Int32 = 0; var h: Int32 = 0; var i: Int32 = 0; var j: Int32 = 0
+    func size() -> Int32 { return 40 }
+}
+func measure(_ p: P) -> Int32 { return p.size() }
 func main() -> Int32 {
-    let x: Any = S()
-    return (x as? P) == nil ? 1 : 0
+    return measure(Wide())
 }`)
 	if said == "" {
 		t.Fatal("refused the body and said nothing")
+	}
+	got, ok := entryBody(got)
+	if !ok {
+		t.Fatal("no entry point emitted")
 	}
 	if strings.Contains(got, "return %") {
 		t.Errorf("a refused return produced a value anyway:\n%s", got)

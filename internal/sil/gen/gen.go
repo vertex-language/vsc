@@ -261,7 +261,6 @@ func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
 	if sym == nil {
 		return
 	}
-	g.checkStoredExistentials(name, sym.Type())
 	// A computed property is a function, and needs one emitted: the
 	// call site names its getter's symbol, and nothing would define
 	// it. See computed.go.
@@ -307,40 +306,6 @@ func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
 			g.members(m.Name, m.Body)
 		case *ast.EnumDecl:
 			g.members(m.Name, m.Body)
-		}
-	}
-}
-
-// checkExistentialSignature checks whether a function signature contains unsupported existential returns (@out).
-func (g *gen) checkExistentialSignature(d *ast.FuncDecl, sig *types.Signature) bool {
-	if _, isEx := existentialOf(sig.Results); isEx {
-		g.refuse(d, "a function whose result is an existential, which is returned by "+
-			"filling in storage the caller set aside rather than in registers")
-		return false
-	}
-	return true
-}
-
-// checkStoredExistentials refuses types with stored existential properties (address-only types).
-func (g *gen) checkStoredExistentials(at ast.Node, t types.Type) {
-	var fields []*types.Field
-	switch b := t.Underlying().(type) {
-	case *types.Struct:
-		fields = b.Fields
-	case *types.Class:
-		fields = b.Fields
-	default:
-		return
-	}
-	for _, f := range fields {
-		if f == nil {
-			continue
-		}
-		if _, ok := existentialOf(f.Type); ok {
-			g.refuse(at, "'"+f.Name+"', a stored property whose type is an "+
-				"existential: a type holding one is held in memory rather than "+
-				"in registers, and this builds every struct in registers")
-			return
 		}
 	}
 }
@@ -1037,10 +1002,6 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	if d.Sig != nil && d.Sig.Exec != ast.ExecNone {
 		g.errorAt(d.Name, "cannot lower a "+d.Sig.Exec.String()+
 			" function yet: the modifier is reserved and has no backend")
-		return
-	}
-
-	if !g.checkExistentialSignature(d, sig) {
 		return
 	}
 

@@ -223,6 +223,14 @@ func (g *gen) bindCondition(b *ast.OptionalBinding, fail func() *sil.Block) (*si
 		sil.Case{Member: optionalNone, Dest: none})
 
 	g.blk = some
+	// `if let (a, b) = pair` takes the payload apart as a case pattern
+	// takes what a case carries.
+	if _, isTuple := b.Pat.(*ast.TuplePattern); isTuple {
+		if !g.bindPatternTo(b.Pat, payload, o.Wrapped) {
+			return nil, false
+		}
+		return payload, true
+	}
 	_, sym := g.binding(&ast.PatternBinding{Pat: b.Pat})
 	// `if var x = o` binds storage the body may change, which starts as
 	// what o held.

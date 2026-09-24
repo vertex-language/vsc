@@ -471,7 +471,11 @@ func (g *gen) witnessApply(at ast.Node, x ast.Expr, ex *types.Existential, m *ty
 		if v == nil {
 			return nil
 		}
-		args = append(args, g.boxArg(a, v, want, i))
+		boxed := g.boxArg(a, v, want, i)
+		if boxed == nil {
+			return nil
+		}
+		args = append(args, boxed)
 	}
 
 	method := g.blk.WitnessMethodOn(addr, witnessMember(path, m.Name), witnessType(m, ex))
@@ -680,7 +684,7 @@ func (g *gen) existentialFor(at ast.Node, v *sil.Value, from, to types.Type) *si
 			g.refuse(at, "a value in 'any "+p.Name+"': "+p.Name+" leaves '"+a+
 				"' to the conforming type, and an existential here carries a witness "+
 				"table but not the metadata that would say what it is")
-			return v
+			return nil
 		}
 	}
 	if len(ex.Protocols) > 0 && g.conformancesOf(from) == nil && from != nil && !conformsToAll(from, ex) {
@@ -689,7 +693,9 @@ func (g *gen) existentialFor(at ast.Node, v *sil.Value, from, to types.Type) *si
 	}
 	slot := g.blk.AllocStack(lowerType(ex))
 	if !g.initExistential(at, slot, v, from, ex) {
-		return v
+		// Refused: the concrete value is not the existential, and
+		// passing it on in its place would be a miscompile.
+		return nil
 	}
 	return slot
 }
@@ -1106,6 +1112,8 @@ func (g *gen) describable(at ast.Node, t types.Type) bool {
 		return true
 	}
 	switch u := t.Underlying().(type) {
+	case *types.Pointer:
+		return true
 	case *types.Basic:
 		if _, ok := metadataRecords[u.Kind()]; ok {
 			return true
@@ -1608,6 +1616,10 @@ func (g *gen) existentialPlace(x ast.Expr) *sil.Value {
 	// Indirect existential return values already reside in allocated memory.
 	if _, isCall := x.(*ast.CallExpr); isCall {
 		addr := g.rvalue(x)
+		// A call's existential result is a value: put in memory below.
+		if addr != nil && !addr.Type().IsAddress() {
+			return g.spillExistential(addr)
+		}
 		g.destroyLater(addr)
 		if addr != nil {
 			return addr
@@ -1632,6 +1644,20 @@ func (g *gen) existentialPlace(x ast.Expr) *sil.Value {
 	lt := v.Type()
 	slot := g.blk.AllocStack(lt)
 	g.blk.Store(g.consume(v), slot, storeQualifier(lt))
+	g.destroyAddrLater(slot)
+	return slot
+}
+
+// spillExistential puts an existential held as a value in a temporary of
+// its own, ended with the statement.
+func (g *gen) spillExistential(v *sil.Value) *sil.Value {
+	lt := v.Type()
+	slot := g.blk.AllocStack(lt)
+	if v.Ownership() == sil.Owned {
+		g.blk.Store(g.consume(v), slot, "init")
+	} else {
+		g.blk.Store(g.blk.CopyValue(v), slot, "init")
+	}
 	g.destroyAddrLater(slot)
 	return slot
 }

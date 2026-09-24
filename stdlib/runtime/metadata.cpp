@@ -225,6 +225,8 @@ extern const FullMetadata vertex_metadata_Function = {&functionWitnesses, {kindF
 // Every metatype is one word, the metadata of the type it names, so one
 // record serves them all: the value says which type.
 extern const FullMetadata vertex_metadata_Metatype = {&trivial8, {kindMetatype, nullptr}};
+// Every pointer: one uncounted word.
+extern const FullMetadata vertex_metadata_Pointer = {&trivial8, {kindStruct, nullptr}};
 }
 
 // vertex_existential_type is `type(of: x)` for an existential x: the type

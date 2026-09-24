@@ -38,10 +38,9 @@ func paramConvention(p *types.Param, t sil.Type) sil.ParamConvention {
 
 // resultConvention is how a result comes back.
 func resultConvention(t sil.Type) sil.ResultConvention {
-	// Existential returns are passed via indirect return (@out / sret).
-	if t.IsValid() && t.Formal() != nil && isExistentialType(t.Formal()) {
-		return sil.ResultOut
-	}
+	// An existential is returned as the value it is -- its words, which
+	// lower hands back through storage the caller sets aside where they
+	// are too many for registers.
 	if t.Trivial() {
 		return sil.ResultUnowned
 	}

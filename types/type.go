@@ -324,6 +324,9 @@ type Subscript struct {
 	IsStatic   bool
 	// Settable is whether the subscript declares a setter.
 	Settable bool
+	// NonmutatingSet is a `nonmutating set`: it writes through self --
+	// a buffer pointer's elements -- rather than to it, so a `let` may.
+	NonmutatingSet bool
 	Exported bool
 }
 

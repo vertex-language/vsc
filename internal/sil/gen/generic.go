@@ -120,6 +120,11 @@ func (g *gen) emitSpecialization(sym *analyzer.FuncSymbol, name string, subst ma
 	if g.specialized[name] {
 		return nil
 	}
+	// Another file of the module may have lowered it already: each file
+	// has a gen of its own, and the module one function of the name.
+	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
+		return nil
+	}
 	if g.specialized == nil {
 		g.specialized = map[string]bool{}
 	}
