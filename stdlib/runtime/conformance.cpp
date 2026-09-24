@@ -89,6 +89,8 @@ VERTEX_CORE_PROTOCOL(ExpressibleByStringLiteral, "$ss26ExpressibleByStringLitera
 VERTEX_CORE_PROTOCOL(ExpressibleByArrayLiteral, "$ss25ExpressibleByArrayLiteralMp")
 VERTEX_CORE_PROTOCOL(ExpressibleByDictionaryLiteral, "$ss30ExpressibleByDictionaryLiteralMp")
 VERTEX_CORE_PROTOCOL(CaseIterable, "$ss12CaseIterableMp")
+VERTEX_CORE_PROTOCOL(AsyncSequence, "$ss13AsyncSequenceMp")
+VERTEX_CORE_PROTOCOL(AsyncIteratorProtocol, "$ss21AsyncIteratorProtocolMp")
 #undef VERTEX_CORE_PROTOCOL
 
 #else

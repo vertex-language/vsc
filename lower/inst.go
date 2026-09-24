@@ -1856,20 +1856,17 @@ func (c *fn) initExistential(in *sil.Inst) error {
 	if !ok {
 		return c.fail(ErrUnsupported, in.Op(), "an existential of no protocol")
 	}
-	// One table today: a value satisfying several protocols needs a
-	// word for each, and the layout above has room for one. `Any` has
-	// none at all, which is the four-word shape.
-	if len(protos) > 1 {
-		return c.fail(ErrUnsupported, in.Op(),
-			"an existential of more than one protocol")
-	}
-	var table *ir.Global
-	if len(protos) == 1 {
-		table, ok = c.l.witness[typeNameOfType(concrete)+":"+protos[0]]
+	// A table for each protocol, in the order the existential names them,
+	// after the metadata word -- Swift's layout for `any P & Q`. `Any`
+	// has none at all, which is the four-word shape.
+	tables := make([]*ir.Global, len(protos))
+	for i, name := range protos {
+		table, ok := c.l.witness[typeNameOfType(concrete)+":"+name]
 		if !ok {
 			return c.fail(ErrUnsupported, in.Op(),
-				"no witness table for "+typeNameOfType(concrete)+": "+protos[0])
+				"no witness table for "+typeNameOfType(concrete)+": "+name)
 		}
+		tables[i] = table
 	}
 	if len(in.Args()) < 2 {
 		return c.fail(ErrUnsupported, in.Op(),
@@ -1883,8 +1880,8 @@ func (c *fn) initExistential(in *sil.Inst) error {
 	if !ok {
 		return c.fail(ErrType, in.Op(), "metadata that is not a pointer")
 	}
-	if table != nil {
-		c.b.Ptr.Store(c.b.Ptr.GetAddr(table), c.fieldAddr(p, existentialWitness))
+	for i, table := range tables {
+		c.b.Ptr.Store(c.b.Ptr.GetAddr(table), c.fieldAddr(p, existentialWitness+int64(i)*8))
 	}
 	c.b.Ptr.Store(record, c.fieldAddr(p, existentialMetadata))
 	// A value wider than the buffer goes in a box the runtime makes for
@@ -2100,9 +2097,19 @@ func (c *fn) witnessMethod(in *sil.Inst) error {
 	}
 	protos := strings.Split(chain, ":")
 
+	// The table of the protocol the requirement is reached from: an
+	// existential of several holds one for each, in its order.
+	slot := 0
+	if names, ok := protocolsOf(in.Args()[0].Type()); ok {
+		for i, n := range names {
+			if n == protos[0] {
+				slot = i
+			}
+		}
+	}
 	// The first table entry is the conformance descriptor; requirement
 	// rows follow at word offsets.
-	table := c.b.Ptr.Load(c.fieldAddr(p, existentialWitness))
+	table := c.b.Ptr.Load(c.fieldAddr(p, existentialWitness+int64(slot)*8))
 	for i := 0; i+1 < len(protos); i++ {
 		n, err := c.witnessRow(in, protos[i], protos[i]+":"+protos[i+1])
 		if err != nil {

@@ -115,7 +115,13 @@ struct Task {
 struct TaskJoin {
   Task* waiters;
   bool  done;
+  // cancelled is Task.cancel(): what Task.isCancelled answers inside the
+  // task, and what makes its sleeps end at once.
+  u32   cancelled;
   u32   lock;
+  // What a throwing operation threw, which the Task's value raises: an
+  // error box, or null.
+  HeapObject* error;
 };
 
 static TaskJoin* joinOf(HeapObject* handle) {
@@ -576,7 +582,9 @@ static HeapObject* startOn(Executor* e, const AsyncFunctionPointer* fp, void* se
   HeapObject* handle = vertex_alloc(sizeof(TaskJoin));
   joinOf(handle)->waiters = nullptr;
   joinOf(handle)->done = false;
+  joinOf(handle)->cancelled = 0;
   joinOf(handle)->lock = 0;
+  joinOf(handle)->error = nullptr;
   vertex_retain(handle);
   Task* t = spawn(e, fp, self);
   t->handle = handle;
@@ -597,6 +605,51 @@ HeapObject* vertex_task_start(const AsyncFunctionPointer* fp, void* self) {
 HeapObject* vertex_task_start_detached(const AsyncFunctionPointer* fp, void* self) {
   startPool();
   return startOn(poolExecutor(), fp, self);
+}
+
+// vertex_task_set_error is where the operation of a throwing Task puts
+// what it threw: on its handle, for the Task's value to raise. It takes
+// the box.
+void vertex_task_set_error(HeapObject* box) {
+  Task* current = currentTask();
+  if (current == nullptr || current->handle == nullptr) {
+    vertex_release(box);
+    return;
+  }
+  TaskJoin* j = joinOf(current->handle);
+  HeapObject* old = j->error;
+  j->error = box;
+  if (old != nullptr)
+    vertex_release(old);
+}
+
+// vertex_task_error is what the task a handle is to threw, retained for
+// the caller, or null where it finished without throwing.
+HeapObject* vertex_task_error(HeapObject* handle) {
+  HeapObject* box = joinOf(handle)->error;
+  if (box != nullptr)
+    vertex_retain(box);
+  return box;
+}
+
+// vertex_task_failed is 1 where the task a handle is to threw.
+u64 vertex_task_failed(HeapObject* handle) {
+  return joinOf(handle)->error != nullptr ? 1 : 0;
+}
+
+// vertex_task_cancel is Task.cancel(): the task sees it through
+// Task.isCancelled, and a sleep it is in or starts ends at once.
+void vertex_task_cancel(HeapObject* handle) {
+  __builtin_atomic_store(&joinOf(handle)->cancelled, 1u);
+}
+
+// vertex_task_is_cancelled is Task.isCancelled: whether the running task
+// has been cancelled. Outside a task, nothing has.
+bool vertex_task_is_cancelled(void) {
+  Task* current = currentTask();
+  if (current == nullptr || current->handle == nullptr)
+    return false;
+  return __builtin_atomic_load(&joinOf(current->handle)->cancelled) != 0;
 }
 
 // vertex_task_cell is a counted object of size bytes, zeroed, which a task
@@ -768,6 +821,12 @@ void vertex_task_sleep_at(AsyncContext* ctx, u64 nanoseconds) {
   Task* current = e->current;
   if (current == nullptr) {
     vertex_pal_sleep(nanoseconds);
+    carryOn(ctx, 0);
+    return;
+  }
+  // A cancelled task does not sleep: Swift's sleep ends -- throwing
+  // CancellationError, which a `try?` around it lets go -- at once.
+  if (current->handle != nullptr && __builtin_atomic_load(&joinOf(current->handle)->cancelled) != 0) {
     carryOn(ctx, 0);
     return;
   }

@@ -413,6 +413,12 @@ struct Task {
     static func yield() async
 }
 
+@_silgen_name("vertex_task_is_cancelled")
+func _vertexTaskIsCancelled() -> Bool
+
+@_silgen_name("vertex_task_cancel")
+func _vertexTaskCancel(_ handle: TaskHandle)
+
 // The main actor: Thread 0, which hosts the window system and runs what
 // is marked @MainActor. `await MainActor.run { … }` runs the closure there
 // and comes back; `MainActor.assumeIsolated { … }` runs it here, where the
@@ -461,6 +467,21 @@ protocol Sequence {
     associatedtype Element
     associatedtype Iterator: IteratorProtocol
     func makeIterator() -> Iterator
+}
+
+// An iterator whose next() may wait: what `for await` asks for each
+// element, until it answers nil.
+protocol AsyncIteratorProtocol {
+    associatedtype Element
+    mutating func next() async -> Element?
+}
+
+// Something whose elements arrive over time, gone through with
+// `for await`: makeAsyncIterator() makes the iterator that waits for them.
+protocol AsyncSequence {
+    associatedtype Element
+    associatedtype AsyncIterator: AsyncIteratorProtocol
+    func makeAsyncIterator() -> AsyncIterator
 }
 
 // A type whose values can be told equal or not. A struct or enum that
@@ -527,6 +548,70 @@ protocol CaseIterable {
 }
 
 protocol ExpressibleByIntegerLiteral {}
+
+// The numbers' protocols. Every integer and floating-point type is
+// AdditiveArithmetic and Numeric; the integers are BinaryInteger and
+// FixedWidthInteger, and the signed ones SignedInteger; Float and Double
+// are FloatingPoint and BinaryFloatingPoint. Code written over them is
+// specialized for the type it is used with, where each requirement is
+// that type's own operator or member.
+protocol AdditiveArithmetic: Equatable {
+    static func + (lhs: Self, rhs: Self) -> Self
+    static func - (lhs: Self, rhs: Self) -> Self
+    static func += (lhs: inout Self, rhs: Self)
+    static func -= (lhs: inout Self, rhs: Self)
+    static var zero: Self { get }
+}
+
+protocol Numeric: AdditiveArithmetic, ExpressibleByIntegerLiteral {
+    static func * (lhs: Self, rhs: Self) -> Self
+    static func *= (lhs: inout Self, rhs: Self)
+}
+
+protocol SignedNumeric: Numeric {
+    static prefix func - (operand: Self) -> Self
+}
+
+protocol BinaryInteger: Numeric, Hashable, Comparable, CustomStringConvertible {
+    static func / (lhs: Self, rhs: Self) -> Self
+    static func % (lhs: Self, rhs: Self) -> Self
+    static func /= (lhs: inout Self, rhs: Self)
+    static func %= (lhs: inout Self, rhs: Self)
+    static var isSigned: Bool { get }
+    init(_ source: Int)
+}
+
+protocol FixedWidthInteger: BinaryInteger {
+    static var bitWidth: Int { get }
+    static var max: Self { get }
+    static var min: Self { get }
+}
+
+protocol SignedInteger: BinaryInteger, SignedNumeric {}
+protocol UnsignedInteger: BinaryInteger {}
+
+// How rounded(_:) rounds.
+enum FloatingPointRoundingRule {
+    case toNearestOrAwayFromZero, toNearestOrEven, up, down, towardZero, awayFromZero
+}
+
+protocol FloatingPoint: SignedNumeric, Comparable, Hashable, CustomStringConvertible {
+    static func / (lhs: Self, rhs: Self) -> Self
+    static func /= (lhs: inout Self, rhs: Self)
+    static var nan: Self { get }
+    static var infinity: Self { get }
+    static var pi: Self { get }
+    var isNaN: Bool { get }
+    var isInfinite: Bool { get }
+    var isFinite: Bool { get }
+    var isZero: Bool { get }
+    var nextUp: Self { get }
+    func squareRoot() -> Self
+    func rounded(_ rule: FloatingPointRoundingRule) -> Self
+    init(_ value: Int)
+}
+
+protocol BinaryFloatingPoint: FloatingPoint, ExpressibleByFloatLiteral {}
 protocol ExpressibleByFloatLiteral {}
 protocol ExpressibleByBooleanLiteral {}
 protocol ExpressibleByNilLiteral {}
@@ -551,6 +636,17 @@ struct KeyPath<Root, Value> {
     let _get: (Root) -> Value
     let _set: ((inout Root, Value) -> Void)?
 }
+
+// A binary16 floating-point number: its sixteen bits, IEEE 754's half
+// precision. algorithms.swift gives it its conversions and arithmetic;
+// each operation is done in Float, which holds every result exactly
+// enough to round once to Float16 as Swift's own does.
+struct Float16 {
+    var _bits: UInt16
+}
+
+@_silgen_name("vertex_float16_description")
+func _float16Description(_ bits: UInt32) -> String
 
 // A value or the error that stood in for it.
 enum Result<Success, Failure: Error> {

@@ -23,7 +23,23 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 
 	// Catch clauses bind 'error' if no explicit pattern is provided.
 	case *ast.DoStmt:
+		prevThrown := c.currThrown
+		c.currThrown = nil
+		if s.Throws != nil {
+			_, c.currThrown = c.throwsOf(s.Throws, scope)
+		}
 		c.checkCodeBlock(s.Body, scope)
+		c.currThrown = prevThrown
+		// What the body throws, where every way out of it throws the
+		// same type: a bare catch binds `error` as that type (SE-0413).
+		caught := types.Type(types.ErrorProtocol)
+		if s.Throws != nil {
+			if _, t := c.throwsOf(s.Throws, scope); t != nil {
+				caught = t
+			}
+		} else if t := c.bodyThrown(s.Body); t != nil {
+			caught = t
+		}
 		for _, cl := range s.Catches {
 			catchScope := NewScope(scope, cl.Pos(), cl.End())
 			c.info.Scopes[cl] = catchScope
@@ -36,7 +52,7 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 				}
 			}
 			if len(cl.Items) == 0 {
-				catchScope.Insert(NewVar("error", types.ErrorProtocol, cl.Pos(), true, types.DefaultOwnership))
+				catchScope.Insert(NewVar("error", caught, cl.Pos(), true, types.DefaultOwnership))
 			}
 			c.checkCodeBlock(cl.Body, catchScope)
 		}
@@ -45,7 +61,7 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		c.checkCodeBlock(s.Body, scope)
 
 	case *ast.ThrowStmt:
-		c.checkExpr(s.X, nil, scope)
+		c.checkExpr(s.X, c.currThrown, scope)
 
 	case *ast.DiscardStmt:
 		c.checkExpr(s.X, nil, scope)
@@ -71,6 +87,22 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 
 	case *ast.ReturnStmt:
 		var retType types.Type = types.Typ[types.Void]
+		// `-> some P`: the body's return is the type it hides, which every
+		// return has to agree on.
+		if o, ok := c.currFuncRet.(*types.Opaque); ok {
+			if s.X != nil {
+				retType = literalDefault(c.checkExpr(s.X, o.Concrete, scope))
+			}
+			c.opaqueReturn(s, o, retType)
+			break
+		}
+		if c.inferRet != nil {
+			if s.X != nil {
+				retType = c.checkExpr(s.X, nil, scope)
+			}
+			*c.inferRet = append(*c.inferRet, retType)
+			break
+		}
 		if s.X != nil {
 			retType = c.checkExpr(s.X, c.currFuncRet, scope)
 		}
@@ -128,7 +160,14 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 			elemType = &types.Tuple{Elements: []*types.TupleElement{
 				{Name: "key", Type: seq.Key}, {Name: "value", Type: seq.Value}}}
 		default:
-			if isRange {
+			if s.Await.IsValid() {
+				if it := c.asyncIteration(seqType); it != nil {
+					c.info.Iterations[s] = it
+					elemType = it.Element
+				} else if !isInvalid(seqType) {
+					c.typeErrorf(s.Seq.Pos(), "for-await-in loop requires '%s' to conform to 'AsyncSequence'", seqType)
+				}
+			} else if isRange {
 				// A range counts from one bound to the other.
 				elemType = bound
 			} else if it := c.iteration(seqType); it != nil {
@@ -273,6 +312,12 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 
 	case *ast.ExprPattern:
 		if p.X == nil {
+			return
+		}
+		// A `~=` the program declares for the pattern's type and the
+		// subject's is what matches: `case Even():` over an Int.
+		if fn := c.patternMatchOperator(p, subjectType, scope); fn != nil {
+			c.info.PatternMatches[p] = fn
 			return
 		}
 		// Match against subject type or range element type.
@@ -504,6 +549,7 @@ func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
 	switch d := decl.(type) {
 	case *ast.VarDecl:
 		isConst := d.Kind == token.LET
+		asyncLet := c.rewriteAsyncLet(d)
 		for _, b := range d.Bindings {
 			if b.Body != nil || b.Accessors != nil {
 				// A computed variable: a getter and no storage, so there is
@@ -527,12 +573,30 @@ func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
 				continue
 			}
 			c.checkStored(b, isConst, scope)
+			if asyncLet {
+				ast.Inspect(b.Pat, func(n ast.Node) bool {
+					if id, ok := n.(*ast.IdentPattern); ok && id.Name != nil {
+						if v, ok := c.info.Defs[id.Name].(*VarSymbol); ok {
+							c.asyncLets[v] = true
+						}
+					}
+					return true
+				})
+			}
 		}
 		c.markIsolatedVars(d)
 
 	case *ast.FuncDecl:
 		if d.Recv != nil {
 			c.checkReceiverMethod(d, scope)
+			break
+		}
+		// One with parameter packs is checked as each call expands it.
+		if len(c.packParams(d)) > 0 {
+			break
+		}
+		// One returning `some P` was checked ahead of the rest.
+		if c.checkedEarly[d] {
 			break
 		}
 		// A generic function's body is checked where its parameters were
@@ -707,14 +771,18 @@ func (c *checker) restoreTypeParams(tps []*types.TypeParam) func() {
 		constraints []types.Type
 		bound       map[string]types.Type
 		promised    map[string][]types.Type
+		// same too: `extension Array where Element == String` says what
+		// Element is for its own members only, and core's said it for
+		// every extension of Array after it.
+		same types.Type
 	}
 	was := make([]saved, len(tps))
 	for i, tp := range tps {
-		was[i] = saved{append([]types.Type(nil), tp.Constraints...), copyBound(tp.Bound), copyPromised(tp.Promised)}
+		was[i] = saved{append([]types.Type(nil), tp.Constraints...), copyBound(tp.Bound), copyPromised(tp.Promised), tp.Same}
 	}
 	return func() {
 		for i, tp := range tps {
-			tp.Constraints, tp.Bound, tp.Promised = was[i].constraints, was[i].bound, was[i].promised
+			tp.Constraints, tp.Bound, tp.Promised, tp.Same = was[i].constraints, was[i].bound, was[i].promised, was[i].same
 		}
 	}
 }
@@ -790,6 +858,9 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 
 	case *ast.SubscriptDecl:
 		sig := &ast.FuncSig{Lparen: m.Lparen, Params: m.Params, Rparen: m.Rparen, Result: m.Result}
+		if generic := c.info.Scopes[m]; generic != nil && m.Generics != nil {
+			typeScope = generic
+		}
 		var result types.Type
 		if m.Result != nil {
 			result = c.resolveType(m.Result.Type, typeScope)
@@ -916,6 +987,16 @@ func (c *checker) declName(base string, params []*ast.Param, subscript bool) str
 // next() answers an Element?, or t is its own iterator and next() is
 // its. Nil where it is neither.
 func (c *checker) iteration(t types.Type) *Iteration {
+	return c.iterationThrough(t, "makeIterator")
+}
+
+// asyncIteration is iteration for `for await`: through the iterator
+// makeAsyncIterator() makes, whose next() is async.
+func (c *checker) asyncIteration(t types.Type) *Iteration {
+	return c.iterationThrough(t, "makeAsyncIterator")
+}
+
+func (c *checker) iterationThrough(t types.Type, makeName string) *Iteration {
 	if t == nil || isInvalid(t) {
 		return nil
 	}
@@ -947,7 +1028,7 @@ func (c *checker) iteration(t types.Type) *Iteration {
 		return &MethodRef{Recv: recv, Method: m}, o.Wrapped
 	}
 	if builtin {
-		recv, ms := c.builtinMethods(t, "makeIterator")
+		recv, ms := c.builtinMethods(t, makeName)
 		for _, m := range ms {
 			if m.IsStatic || len(m.Sig.Params) != 0 {
 				continue
@@ -958,8 +1039,8 @@ func (c *checker) iteration(t types.Type) *Iteration {
 		}
 		return nil
 	}
-	if recv, m := c.findMethod(t, "makeIterator"); m != nil && !m.IsStatic && len(m.Sig.Params) == 0 {
-		sig, _ := c.lookupMember(t, "makeIterator").(*types.Signature)
+	if recv, m := c.findMethod(t, makeName); m != nil && !m.IsStatic && len(m.Sig.Params) == 0 {
+		sig, _ := c.lookupMember(t, makeName).(*types.Signature)
 		if sig == nil {
 			sig = m.Sig
 		}
@@ -1041,7 +1122,7 @@ func (c *checker) checkBodyWithParams(d ast.Node, sig *ast.FuncSig, body *ast.Co
 	c.info.Scopes[d] = inner
 	if sig != nil {
 		for _, p := range c.buildFuncSig(sig, scope).Params {
-			inner.Insert(NewVar(p.Name, p.Type, d.Pos(), true, p.Ownership))
+			inner.Insert(NewVar(p.Name, p.BodyType(), d.Pos(), true, p.Ownership))
 		}
 	}
 	if body != nil {
@@ -1113,8 +1194,8 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 		fnScope.Insert(sym)
 	}
 
-	prevRet, prevAsync, prevName, prevIsolated := c.currFuncRet, c.currAsync, c.currFuncName, c.currIsolated
-	c.currFuncRet, c.currAsync = sig.Results, sig.Async
+	prevRet, prevAsync, prevName, prevIsolated, prevThrown, prevInfer := c.currFuncRet, c.currAsync, c.currFuncName, c.currIsolated, c.currThrown, c.inferRet
+	c.currFuncRet, c.currAsync, c.currThrown, c.inferRet = sig.Results, sig.Async, sig.Thrown, nil
 	// Its body runs where the declaration says it does; see funcIsolated.
 	c.currIsolated = c.declIsolated(d.Attrs, d.Mods)
 	if d.Name != nil {
@@ -1126,7 +1207,7 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 		c.currFuncName = c.declName(d.Name.Text(c.file), d.Sig.Params, false)
 	}
 	defer func() {
-		c.currFuncRet, c.currAsync, c.currFuncName, c.currIsolated = prevRet, prevAsync, prevName, prevIsolated
+		c.currFuncRet, c.currAsync, c.currFuncName, c.currIsolated, c.currThrown, c.inferRet = prevRet, prevAsync, prevName, prevIsolated, prevThrown, prevInfer
 	}()
 
 	if d.Body != nil {
@@ -1137,6 +1218,34 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 		for _, st := range d.Body.Stmts {
 			c.checkStmt(st, bodyScope)
 		}
+	}
+	// What `-> some P` hides is what callers get: a caller of makeBox()
+	// has the IntBox its body returns, as Swift's lowering does.
+	if o, ok := sig.Results.(*types.Opaque); ok && o.Concrete != nil && d.Name != nil {
+		if sym, ok := c.info.Defs[d.Name].(*FuncSymbol); ok && sym.Signature() != nil {
+			sym.Signature().Results = o.Concrete
+		}
+	}
+}
+
+// opaqueReturn records what a function returning `some P` returns, where
+// it is the first return, and holds the rest to it.
+func (c *checker) opaqueReturn(s *ast.ReturnStmt, o *types.Opaque, t types.Type) {
+	if isInvalid(t) {
+		return
+	}
+	if o.Concrete == nil {
+		for _, p := range o.Constraints {
+			if !c.conformsTo(t, p) {
+				c.typeErrorf(s.Pos(), "return type '%s' does not conform to '%s'", t, p.Name)
+				return
+			}
+		}
+		o.Concrete = t
+		return
+	}
+	if !types.Identical(t, o.Concrete) {
+		c.typeErrorf(s.Pos(), "function declares an opaque return type, but the return statements in its body do not have matching underlying types ('%s' and '%s')", o.Concrete, t)
 	}
 }
 
@@ -1331,4 +1440,148 @@ func (c *checker) bareGenericAnnotation(t ast.Type, value ast.Expr, scope *Scope
 		}
 	}
 	return nil, false
+}
+
+// bodyThrown is the one error type every way out of a do body throws --
+// a `throw` of a value of it, a call declared `throws(E)` -- or nil where
+// there is none, or one of them throws any Error. Closures and nested
+// functions throw on their own account; a nested do that catches all
+// lets out only what its catch clauses throw.
+func (c *checker) bodyThrown(body *ast.CodeBlock) types.Type {
+	var found types.Type
+	untyped := false
+	note := func(t types.Type) {
+		if t == nil || isInvalid(t) {
+			untyped = true
+			return
+		}
+		if _, isEx := t.Underlying().(*types.Existential); isEx {
+			untyped = true
+			return
+		}
+		if _, isProto := t.Underlying().(*types.Protocol); isProto {
+			untyped = true
+			return
+		}
+		if found != nil && !types.Identical(found, t) {
+			untyped = true
+			return
+		}
+		found = t
+	}
+	var walk func(n ast.Node) bool
+	walk = func(n ast.Node) bool {
+		if untyped {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.ClosureExpr, *ast.FuncDecl:
+			return false
+		case *ast.ThrowStmt:
+			note(c.info.Types[x.X])
+		case *ast.CallExpr:
+			if sig, ok := c.info.Types[x.Fun].(*types.Signature); ok && sig.Throws {
+				if sig.Rethrows {
+					untyped = true
+				} else {
+					note(sig.Thrown)
+				}
+			}
+		case *ast.DoStmt:
+			catchesAll := false
+			for _, cl := range x.Catches {
+				if len(cl.Items) == 0 {
+					catchesAll = true
+				}
+				ast.Inspect(cl.Body, walk)
+			}
+			if !catchesAll {
+				ast.Inspect(x.Body, walk)
+			}
+			return false
+		}
+		return true
+	}
+	ast.Inspect(body, walk)
+	if untyped {
+		return nil
+	}
+	return found
+}
+
+// rewriteAsyncLet makes `async let a = work(1)` the child task it
+// starts, `let a = Task { await work(1) }`, in place, and reports whether
+// it did. Each later read of a is the task's value, awaited.
+func (c *checker) rewriteAsyncLet(d *ast.VarDecl) bool {
+	at := -1
+	for i, m := range d.Mods {
+		if m != nil && m.Name != nil && m.Name.Text(c.file) == "async" {
+			at = i
+		}
+	}
+	if at < 0 || d.Kind != token.LET {
+		return false
+	}
+	d.Mods = append(d.Mods[:at:at], d.Mods[at+1:]...)
+	if c.asyncLets == nil {
+		c.asyncLets = map[*VarSymbol]bool{}
+		c.asyncLetReads = map[*ast.IdentExpr]bool{}
+	}
+	for _, b := range d.Bindings {
+		if b.Value == nil {
+			continue
+		}
+		x := b.Value
+		span := ast.Span{Lo: x.Pos(), Hi: x.End()}
+		body := x
+		if _, awaited := x.(*ast.AwaitExpr); !awaited {
+			body = &ast.AwaitExpr{Span: span, Await: x.Pos(), X: x}
+		}
+		cl := &ast.ClosureExpr{Span: span, Lbrace: x.Pos(), Rbrace: x.End(),
+			Stmts: []ast.Stmt{&ast.ExprStmt{Span: span, X: body}}}
+		task := &ast.IdentExpr{Span: span, Name: &ast.Ident{Span: span, Synth: "Task"}}
+		b.Value = &ast.CallExpr{Span: span, Fun: task,
+			Args:     &ast.CallArgs{Span: span, Args: []*ast.CallArg{{Span: span, X: cl}}},
+			Trailing: []*ast.TrailingClosure{{Span: span, Closure: cl}}}
+		// A type written for the value is the task's result's.
+		if tp, typed := b.Pat.(*ast.TypedPattern); typed {
+			b.Pat = tp.Pat
+		}
+	}
+	return true
+}
+
+// patternMatchOperator is the `~=` a program declares whose operands are
+// the pattern's value and the subject, where there is one; the pattern's
+// expression is checked as its first operand. A module's own `~=` comes
+// before the core's equality, as Swift prefers the more specific.
+func (c *checker) patternMatchOperator(p *ast.ExprPattern, subject types.Type, scope *Scope) *FuncSymbol {
+	if subject == nil || isInvalid(subject) {
+		return nil
+	}
+	fs, ok := c.lookupValue(scope, "~=").(*FuncSymbol)
+	if !ok {
+		return nil
+	}
+	for _, f := range fs.Overloads() {
+		if _, imported := c.info.Imported[f]; imported {
+			continue
+		}
+		sig := f.Signature()
+		if sig == nil || len(sig.Params) != 2 || len(sig.TypeParams) > 0 {
+			continue
+		}
+		if !types.AssignableTo(subject, sig.Params[1].Type) {
+			continue
+		}
+		quiet := len(c.info.Diagnostics)
+		t := c.checkExpr(p.X, sig.Params[0].Type, scope)
+		fits := len(c.info.Diagnostics) == quiet && !isInvalid(t) && types.AssignableTo(t, sig.Params[0].Type)
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+		if fits {
+			c.checkExpr(p.X, sig.Params[0].Type, scope)
+			return f
+		}
+	}
+	return nil
 }

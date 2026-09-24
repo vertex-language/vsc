@@ -567,6 +567,16 @@ func (m *mangler) rawIdentifier(name string) error {
 		m.writePunycode(name)
 		return nil
 	}
+	// A generic instance's name -- `Result<Int, M>` -- is spelled
+	// without the separators no symbol may hold.
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '$', r == '<', r == '>', r == '.', r == '?', r == '@':
+			return r
+		}
+		return '_'
+	}, strings.ReplaceAll(name, ", ", ","))
 	m.write(strconv.Itoa(len(name)))
 	m.write(name)
 	return nil

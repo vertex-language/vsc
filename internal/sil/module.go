@@ -118,6 +118,9 @@ type TypeMetadata struct {
 	// for: this module refers to its full record, Mangled+"Mf", and emits
 	// nothing.
 	Imported bool
+	// Protocols is, for an existential's record, the descriptor symbol of
+	// each protocol it stands for, in order.
+	Protocols []string
 }
 
 // StructuralKey returns a key for structural composite types (e.g. Array, Optional).

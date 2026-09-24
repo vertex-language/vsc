@@ -61,11 +61,12 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 	if err := l.vtables(m); err != nil {
 		return nil, err
 	}
-	// Emit metadata and tables before function bodies.
+	// The protocols' descriptors first: an existential's metadata names
+	// them. Then metadata and tables, before function bodies.
+	l.protocolDescriptors(m)
 	if err := l.allMetadata(m); err != nil {
 		return nil, err
 	}
-	l.protocolDescriptors(m)
 	if err := l.witnessTables(m); err != nil {
 		return nil, err
 	}
@@ -122,9 +123,11 @@ type lowerer struct {
 	meta        map[string]*ir.Global
 	vwts        map[string]*ir.Global
 	descriptors map[string]*ir.Global
-	strings2    map[string]*ir.Global
-	witnessFns  map[string]*ir.Func
-	records     map[string]*ir.GlobalImport
+	// importedDescriptors is the protocol descriptors other modules define.
+	importedDescriptors map[string]*ir.GlobalImport
+	strings2            map[string]*ir.Global
+	witnessFns          map[string]*ir.Func
+	records             map[string]*ir.GlobalImport
 
 	module         *sil.Module
 	destroyWitness *ir.Type

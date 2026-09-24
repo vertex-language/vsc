@@ -22,7 +22,7 @@ func (g *gen) initializer(d *ast.InitDecl, recv types.Type) {
 	case isClass(recv):
 		g.classInitializer(d, recv)
 		return
-	case !isStructType(recv) && !isBasicValue(recv):
+	case !isStructType(recv) && !isBasicValue(recv) && !isEnumType(recv):
 		g.refuse(d, "an initializer this type declares")
 		return
 	}
@@ -88,7 +88,7 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 
 	params := g.initParams(d)
 	for i, p := range sig.Params {
-		t := lowerType(p.Type)
+		t := lowerType(p.BodyType())
 		v := f.Param(t, paramConvention(p, t))
 		if i < len(params) && params[i] != nil {
 			g.locals[params[i]] = &local{value: v, typ: t}
@@ -236,7 +236,7 @@ func (g *gen) convenienceInit(d *ast.InitDecl, recv types.Type, sig *types.Signa
 
 	params := g.initParams(d)
 	for i, p := range sig.Params {
-		t := lowerType(p.Type)
+		t := lowerType(p.BodyType())
 		v := f.Param(t, paramConvention(p, t))
 		if i < len(params) && params[i] != nil {
 			g.locals[params[i]] = &local{value: v, typ: t}
@@ -285,7 +285,7 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 
 	params := g.initParams(d)
 	for i, p := range sig.Params {
-		t := lowerType(p.Type)
+		t := lowerType(p.BodyType())
 		v := f.Param(t, paramConvention(p, t))
 		if i < len(params) && params[i] != nil {
 			g.locals[params[i]] = &local{value: v, typ: t}
@@ -572,6 +572,8 @@ func (g *gen) initSignature(d *ast.InitDecl, recv types.Type) *types.Signature {
 	var inits []*types.Signature
 	if st, ok := recv.Underlying().(*types.Struct); ok {
 		inits = st.Inits
+	} else if en, ok := recv.Underlying().(*types.Enum); ok {
+		inits = en.Inits
 	} else if b := g.info.Builtins[analyzer.BuiltinKey(recv)]; b != nil && isBasicValue(recv) {
 		// Int's and String's are the ones their extensions declare.
 		inits = b.Inits
@@ -630,7 +632,8 @@ func (g *gen) sameInitParams(sig *types.Signature, d *ast.InitDecl) bool {
 		if sym == nil || i >= len(sig.Params) {
 			continue
 		}
-		declared, called := sym.Type(), sig.Params[i].Type
+		// A variadic parameter binds the array of what it takes.
+		declared, called := sym.Type(), sig.Params[i].BodyType()
 		if declared == nil || called == nil || mentionsTypeParam(declared) || mentionsTypeParam(called) {
 			continue
 		}
@@ -750,6 +753,14 @@ func isBasicValue(t types.Type) bool {
 	}
 	b, ok := t.Underlying().(*types.Basic)
 	return ok && b.Info()&types.IsUntyped == 0 && b.Kind() != types.Invalid
+}
+
+func isEnumType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Enum)
+	return ok
 }
 
 func isStructType(t types.Type) bool {
@@ -1058,6 +1069,86 @@ func (g *gen) deinitializer(d *ast.DeinitDecl, recv types.Type) {
 		g.unwind()
 		g.blk.Return(g.void())
 	}
+}
+
+// structDeinitializer emits a ~Copyable struct's deinit: a function that
+// takes the value, runs the body with it as self, and then lets go of
+// what the value holds. Where a value of the struct ends -- the end of
+// its scope, a consuming method's end -- this is what is called.
+func (g *gen) structDeinitializer(d *ast.DeinitDecl, recv types.Type) {
+	if d.Body == nil {
+		return
+	}
+	f := g.m.Func(deinitSymbol(g.module, recv)).SetSourceName("deinit").SetAttr("ossa")
+	if !f.IsDeclaration() && len(f.Blocks()) > 0 && f.Entry().Term() != nil {
+		return
+	}
+	restore := g.saveFunction()
+	defer restore()
+
+	g.fn, g.entry = f, false
+	f.Type().Params = nil
+	g.locals = map[analyzer.Symbol]*local{}
+	g.scopes, g.loops, g.pending = nil, nil, ""
+	g.recv, g.self, g.initReturn = recv, nil, nil
+	g.push()
+	g.blk = f.Entry()
+
+	t := lowerType(recv)
+	self := f.Param(t, sil.ParamOwned)
+	f.Type().Convention = sil.Method
+	g.blk.DebugValue(self, "self", "let")
+
+	g.block(d.Body)
+	if g.blk != nil && g.blk.Term() == nil {
+		g.unwind()
+		// What the value holds is let go of as a value's is; its deinit
+		// has run.
+		g.blk.DestroyValue(self)
+		g.blk.Return(g.void())
+	}
+}
+
+// structDeinit is the deinit a value of t ends with, or nil.
+func (g *gen) structDeinit(t types.Type) *sil.Func {
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok || !st.Deinit {
+		return nil
+	}
+	f := g.m.Func(deinitSymbol(g.module, t)).SetSourceName("deinit")
+	if g.needsType(f) {
+		f.Type().Params = []sil.Param{{Type: lowerType(t), Convention: sil.ParamOwned}}
+		f.Type().Convention = sil.Method
+	}
+	return f
+}
+
+// endValue ends an owned value: its deinit, for a ~Copyable struct that
+// has one, and otherwise destroy_value.
+func (g *gen) endValue(v *sil.Value) {
+	if v != nil && v.Type().Formal() != nil {
+		if f := g.structDeinit(v.Type().Formal()); f != nil {
+			g.blk.Apply(g.blk.FunctionRef(f), sil.Object(types.Typ[types.Void]), v)
+			return
+		}
+	}
+	g.blk.DestroyValue(v)
+}
+
+// takeLocal is `consume x`: a let's value, which is the caller's from
+// here on; the let's own end is forgotten. Nil where x is not a local
+// held as a value.
+func (g *gen) takeLocal(x ast.Expr) *sil.Value {
+	id, ok := unparen(x).(*ast.IdentExpr)
+	if !ok || id.Name == nil {
+		return nil
+	}
+	l := g.locals[g.info.Uses[id.Name]]
+	if l == nil || l.value == nil || l.value.Ownership() != sil.Owned {
+		return nil
+	}
+	g.forget(l.value)
+	return l.value
 }
 
 // deinitSymbol names a class's deinit. It is called only from the class's

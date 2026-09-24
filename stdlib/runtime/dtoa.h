@@ -223,13 +223,23 @@ inline void describeFloat(Text& t, u64 bits, i32 precision, i32 exponentBits) {
     e = biased - bias - (precision - 1);
   }
 
+  // A half that is a whole number -- past 2^11 every one is -- is
+  // written exactly, as Swift writes 65504.0 and not 65500.0.
+  if (precision < 24 && e >= 0) {
+    textUnsigned(t, f << e);
+    textString(t, ".0");
+    return;
+  }
+
   u8 digits[32];
   i32 k = 0;
   u32 n = shortestDigits(f, e, precision, minExponent, digits, &k);
 
-  // Past 2^precision, where not every integer is representable.
-  bool huge = biased != 0 && (biased - bias > precision ||
-                              (biased - bias == precision && mantissa != 0));
+  // Past 2^precision, where not every integer is representable -- and
+  // never for a half, whose every finite value Swift writes in decimal.
+  i32 limit = precision < 24 ? 24 : precision;
+  bool huge = biased != 0 && (biased - bias > limit ||
+                              (biased - bias == limit && mantissa != 0));
   if (huge || k < -3) {
     textByte(t, static_cast<u8>('0' + digits[0]));
     if (n > 1) {

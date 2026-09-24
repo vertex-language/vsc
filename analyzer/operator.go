@@ -89,6 +89,20 @@ func (c *checker) operatorChoices(scope *Scope, op string, operands []types.Type
 		if op == "==" && len(methods) == 0 {
 			_, methods = methodsNamed(&types.Metatype{Instance: t}, derive.EnumEqualsName)
 		}
+		// On an instance of a generic type -- Pair<Int> -- the type's own
+		// are in terms of its parameters, which the instance says.
+		if subst := types.InstanceSubst(t); subst != nil && len(methods) > 0 {
+			inst := make([]*types.Method, 0, len(methods))
+			for _, m := range methods {
+				if sig, ok := types.Substitute(m.Sig, subst).(*types.Signature); ok && m.Sig != nil {
+					copied := *m
+					copied.Sig, copied.Origin = sig, m
+					inst = append(inst, &copied)
+				}
+			}
+			methods = inst
+			recv = t
+		}
 		seenType[recv] = true
 		for _, m := range methods {
 			if m.Sig != nil && len(m.Sig.Params) == len(operands) {

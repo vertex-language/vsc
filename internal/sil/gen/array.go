@@ -170,6 +170,13 @@ func (g *gen) stdlibMetadata(at ast.Node, t types.Type) (*sil.Value, bool) {
 		case 1:
 			return g.blk.MetadataGlobal(lowerType(t), stdlib.Metadata("Existential1"), stdlib.MetadataOffset), true
 		}
+		// `any P & Q`: a record of this module's, which says how many
+		// tables each value holds.
+		sym, ok := g.structuralMetadata(at, t)
+		if !ok {
+			return nil, false
+		}
+		return g.blk.TypeMetadata(lowerType(t), sym+"Ma"), true
 	}
 	// Every metatype is the metadata of the type it names, one word, so
 	// one record serves every metatype.
@@ -229,6 +236,7 @@ var metadataRecords = map[types.BasicKind]string{
 	types.Float:  "Float",
 	types.Double: "Double",
 	types.String: "String",
+	types.Void:   "Void",
 }
 
 // subscript lowers an array or dictionary element read.

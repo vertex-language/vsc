@@ -44,6 +44,11 @@ VERTEX_TRIVIAL_WITNESSES(trivial2, 2)
 VERTEX_TRIVIAL_WITNESSES(trivial4, 4)
 VERTEX_TRIVIAL_WITNESSES(trivial8, 8)
 
+// The empty tuple, Void: no bytes, a stride of one, as Swift lays it out.
+static const ValueWitnessTable trivial0 = {
+    trivialCopy, trivialDestroy, trivialCopy, trivialCopy, trivialCopy, trivialCopy,
+    noEnumTag,   noStoreEnumTag, 0,           1,           0,           0};
+
 // ---- String ----
 
 static void* stringCopy(void* dest, void* src, const Metadata*) {
@@ -211,6 +216,8 @@ extern const FullMetadata vertex_metadata_UInt64 = {&trivial8, {kindStruct, null
 extern const FullMetadata vertex_metadata_Double = {&trivial8, {kindStruct, nullptr}};
 extern const FullMetadata vertex_metadata_String = {&stringWitnesses, {kindStruct, nullptr}};
 extern const FullMetadata vertex_metadata_Any    = {&anyWitnesses, {kindExistential, nullptr}};
+// Void is a tuple of nothing: the word after the kind is its count, zero.
+extern const FullMetadata vertex_metadata_Void   = {&trivial0, {kindTuple, nullptr}};
 // Every existential of one protocol is laid out alike, so one record serves
 // them all: what is inside says the rest.
 extern const FullMetadata vertex_metadata_Existential1 = {&existential1Witnesses, {kindExistential, nullptr}};

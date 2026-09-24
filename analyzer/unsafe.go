@@ -110,13 +110,34 @@ func (c *checker) taskResult(t types.Type) types.Type {
 
 // taskOf is core's Task for operations returning result: Task itself for
 // those returning nothing, and an instance of it naming the result for the
-// rest. What an operation may throw is not kept: core's Task runs none that
-// do.
-func taskOf(base, result types.Type) types.Type {
+// rest. One whose operation throws names the error too, `Task<T, any
+// Error>`, and its value is read with try.
+func taskOf(base, result types.Type, throws ...bool) types.Type {
+	if len(throws) > 0 && throws[0] {
+		if returnsNothing(result) {
+			result = types.Typ[types.Void]
+		}
+		return &types.GenericInstance{Base: base, Args: []types.Type{result,
+			&types.Existential{Protocols: []*types.Protocol{types.ErrorProtocol}}}}
+	}
 	if returnsNothing(result) {
 		return base
 	}
 	return &types.GenericInstance{Base: base, Args: []types.Type{result}}
+}
+
+// taskOfArgs is core's Task spelled with its arguments, Task<Success,
+// Failure>: a Failure other than Never makes one that throws.
+func taskOfArgs(base types.Type, args []types.Type) types.Type {
+	throws := len(args) > 1 && args[1] != nil && !types.Identical(args[1], types.Typ[types.Never])
+	return taskOf(base, args[0], throws)
+}
+
+// TaskThrows reports whether a core Task's operation may throw, which
+// makes reading its value a call that may.
+func TaskThrows(t types.Type) bool {
+	gi, ok := t.(*types.GenericInstance)
+	return ok && len(gi.Args) > 1
 }
 
 // isArraySlice reports whether t is the core's ArraySlice of something.

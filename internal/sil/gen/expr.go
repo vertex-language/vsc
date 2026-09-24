@@ -53,6 +53,9 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		return g.forceUnwrap(n)
 
 	case *ast.MemberExpr:
+		if v, ok := g.specializedIntegerBound(n); ok {
+			return v
+		}
 		return g.member(n)
 
 	// A key path used as a function is the closure the checker read it as;
@@ -85,6 +88,17 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		return g.await(n)
 	case *ast.TryExpr:
 		return g.tryExpr(n)
+
+	// `consume x` takes x's value; `copy x` and `borrow x`-less uses read
+	// it as any use does.
+	case *ast.ConsumeExpr:
+		if v := g.takeLocal(n.X); v != nil {
+			g.destroyLater(v)
+			return v
+		}
+		return g.expr(n.X)
+	case *ast.CopyExpr:
+		return g.expr(n.X)
 
 	// `&a` passes variable address under modify access.
 	case *ast.InOutExpr:
@@ -969,8 +983,7 @@ func (g *gen) applyValue(e *ast.CallExpr, id ast.Expr) *sil.Value {
 		}
 	}
 	if sig.Throws {
-		optional, trap := g.tryOn(e)
-		g.tryBang = trap
+		optional := g.throwingCall(e, sig)
 		return g.tryApply(e, callee, args, sig.Results, optional, false)
 	}
 	v := g.blk.Apply(callee, lowerType(sig.Results), args...)
@@ -1016,7 +1029,8 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *sil.Value
 	// String(x): a String is itself, and anything else is what
 	// interpolating it would write.
 	if b, ok := t.Underlying().(*types.Basic); ok && b.Kind() == types.String &&
-		e.Args != nil && len(e.Args.Args) == 1 && e.Args.Args[0].Label == nil {
+		e.Args != nil && len(e.Args.Args) == 1 &&
+		(e.Args.Args[0].Label == nil || g.text(e.Args.Args[0].Label) == "describing") {
 		arg := e.Args.Args[0].X
 		if from := g.typeOf(arg); from != nil {
 			if fb, ok := from.Underlying().(*types.Basic); ok && fb.Kind() == types.String {
@@ -1031,6 +1045,19 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *sil.Value
 	if !ok {
 		if cl, isClass := t.Underlying().(*types.Class); isClass {
 			return g.makeClass(e, tn, cl, t)
+		}
+		// An initializer an enum declares.
+		if sig := g.info.Inits[e]; sig != nil && isEnumType(t) {
+			var args []*ast.CallArg
+			if e.Args != nil {
+				args = e.Args.Args
+			}
+			if v, generic := g.genericStructInit(e, t, sig, args); generic {
+				return v
+			}
+			out := *sig
+			out.Results = t
+			return g.applyInit(e, t, &out, args)
 		}
 		g.unsupported(e)
 		return nil
@@ -1533,6 +1560,19 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 	}
 	fnRef := g.blk.FunctionRef(callee)
 
+	// A consuming method takes its receiver: a let's value is given up to
+	// it, and anything else is a copy it is given.
+	if consumingRef(ref) {
+		if mem, ok := e.Fun.(*ast.MemberExpr); ok {
+			read := receiver
+			receiver = func() *sil.Value {
+				if v := g.takeLocal(mem.X); v != nil {
+					return v
+				}
+				return g.consume(read())
+			}
+		}
+	}
 	self, args, ok := g.methodArgs(e, ref.Method.Sig, receiver)
 	if !ok {
 		return nil
@@ -1540,8 +1580,7 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 	args = append(args, self)
 
 	if ref.Method.Sig.Throws {
-		optional, trap := g.tryOn(e)
-		g.tryBang = trap
+		optional := g.throwingCall(e, ref.Method.Sig)
 		return g.tryApply(e, fnRef, args, ref.Method.Sig.Results, optional, false)
 	}
 	result := lowerType(ref.Method.Sig.Results)
@@ -1594,8 +1633,7 @@ func (g *gen) superMethodCall(e *ast.CallExpr, ref *analyzer.MethodRef) *sil.Val
 	args = append(args, self)
 	fnRef := g.blk.FunctionRef(callee)
 	if impl.Method.Sig.Throws {
-		optional, trap := g.tryOn(e)
-		g.tryBang = trap
+		optional := g.throwingCall(e, impl.Method.Sig)
 		return g.tryApply(e, fnRef, args, impl.Method.Sig.Results, optional, false)
 	}
 	v := g.blk.Apply(fnRef, lowerType(impl.Method.Sig.Results), args...)
@@ -1618,8 +1656,7 @@ func (g *gen) dynamicCall(e *ast.CallExpr, ref *analyzer.MethodRef, cl *types.Cl
 
 	args = append(args, self)
 	if ref.Method.Sig.Throws {
-		optional, trap := g.tryOn(e)
-		g.tryBang = trap
+		optional := g.throwingCall(e, ref.Method.Sig)
 		return g.tryApply(e, method, args, ref.Method.Sig.Results, optional, false)
 	}
 	result := lowerType(ref.Method.Sig.Results)
@@ -1733,6 +1770,12 @@ func (g *gen) implicitMethod(id *ast.IdentExpr) (*analyzer.MethodRef, bool) {
 		return nil, false
 	}
 	name := g.text(id.Name)
+	// An operator the checker made a call of -- `(a.x, a.y) < (b.x, b.y)`
+	// inside `static func <` -- is the function it chose, never the
+	// enclosing type's operator of the same spelling.
+	if _, isFunc := g.info.Uses[id.Name].(*analyzer.FuncSymbol); isFunc && isOperatorName(name) {
+		return nil, false
+	}
 	var methods []*types.Method
 	switch b := g.recv.Underlying().(type) {
 	case *types.Struct:
@@ -1846,7 +1889,16 @@ func selfParam(ref *analyzer.MethodRef) sil.Param {
 	if mutatingRef(ref) {
 		return sil.Param{Type: self.Address(), Convention: sil.ParamInout}
 	}
+	if consumingRef(ref) && !self.Trivial() {
+		return sil.Param{Type: self, Convention: sil.ParamOwned}
+	}
 	return sil.Param{Type: self, Convention: selfConvention(self)}
+}
+
+// consumingRef reports whether the method is a consuming one of a value
+// type: it takes its receiver, which ends with it.
+func consumingRef(ref *analyzer.MethodRef) bool {
+	return ref != nil && ref.Method != nil && ref.Method.IsConsuming && !isClass(ref.Recv)
 }
 
 // mutatingRef reports whether the method is mutating on a value type.
@@ -2262,8 +2314,7 @@ func (g *gen) staticCall(e *ast.CallExpr, ref *analyzer.MethodRef, recv types.Ty
 	}
 	// One that may fail goes out on both edges, as a method that may does.
 	if ref.Method.Sig.Throws {
-		optional, trap := g.tryOn(e)
-		g.tryBang = trap
+		optional := g.throwingCall(e, ref.Method.Sig)
 		return g.tryApply(e, fnRef, args, ref.Method.Sig.Results, optional, false)
 	}
 	v := g.blk.Apply(fnRef, lowerType(ref.Method.Sig.Results), args...)
@@ -2321,8 +2372,7 @@ func (g *gen) classMethodCall(e *ast.CallExpr, mem *ast.MemberExpr, ref *analyze
 		return nil, true
 	}
 	if sig.Throws {
-		optional, trap := g.tryOn(e)
-		g.tryBang = trap
+		optional := g.throwingCall(e, sig)
 		return g.tryApply(e, method, args, sig.Results, optional, false), true
 	}
 	v := g.blk.Apply(method, lowerType(sig.Results), args...)
@@ -2411,9 +2461,28 @@ func (g *gen) operatorApply(at ast.Expr, ref *analyzer.MethodRef, sym *analyzer.
 	}
 	var symbol, name string
 	var sig *types.Signature
+	if ref != nil && isGenericInstance(ref.Recv) && len(xs) > 0 {
+		// A generic type's operator -- Pair<Int>'s derived == -- is the
+		// declaration specialized for the instance its operand is.
+		orig := ref
+		if ref.Method.Origin != nil {
+			orig = &analyzer.MethodRef{Recv: ref.Recv, Method: ref.Method.Origin}
+		}
+		call := &ast.CallExpr{Span: ast.Span{Lo: at.Pos(), Hi: at.End()},
+			Fun: &ast.MemberExpr{Span: ast.Span{Lo: xs[0].Pos(), Hi: xs[0].End()}, X: xs[0]}}
+		spec, specName, generic := g.genericMethod(call, orig)
+		if generic {
+			if specName == "" {
+				return nil
+			}
+			ref, symbol = spec, specName
+		}
+	}
 	if ref != nil {
 		sig, name = ref.Method.Sig, ref.Method.Name
-		symbol = g.staticSymbol(ref, ref.Recv)
+		if symbol == "" {
+			symbol = g.staticSymbol(ref, ref.Recv)
+		}
 	} else {
 		sig, name = sym.Signature(), sym.Name()
 		symbol = g.symbol(sym)
@@ -2658,4 +2727,55 @@ func (g *gen) objectPointer(x ast.Expr) *sil.Value {
 	}
 	g.destroyTemp(v)
 	return v
+}
+
+// isGenericInstance reports whether t is an instance of a generic type.
+func isGenericInstance(t types.Type) bool {
+	_, ok := t.(*types.GenericInstance)
+	return ok
+}
+
+// specializedIntegerBound is `T.bitWidth`, `T.max` or `T.min` where T is
+// an integer type only in the specialization being lowered: the checker
+// folds these for a type it knows, and here the type is known.
+func (g *gen) specializedIntegerBound(e *ast.MemberExpr) (*sil.Value, bool) {
+	if len(g.subst) == 0 || e.Name == nil {
+		return nil, false
+	}
+	if _, folded := g.info.Values[e]; folded {
+		return nil, false
+	}
+	meta, ok := g.typeOf(e.X).(*types.Metatype)
+	if !ok {
+		return nil, false
+	}
+	t := meta.Instance
+	b, ok := t.Underlying().(*types.Basic)
+	if !ok || b.Info()&types.IsInteger == 0 || b.Info()&types.IsUntyped != 0 {
+		return nil, false
+	}
+	bits := uint(types.Sizeof(t, types.DefaultTarget64) * 8)
+	signed := b.Info()&types.IsUnsigned == 0
+	var v uint64
+	switch g.text(e.Name) {
+	case "bitWidth":
+		t, v = types.Typ[types.Int], uint64(bits)
+	case "max":
+		switch {
+		case signed:
+			v = 1<<(bits-1) - 1
+		case bits == 64:
+			v = ^uint64(0)
+		default:
+			v = 1<<bits - 1
+		}
+	case "min":
+		if signed {
+			v = ^uint64(0) << (bits - 1)
+		}
+	default:
+		return nil, false
+	}
+	raw := g.blk.IntegerLiteral(sil.Object(builtinFor(t)), int64(v))
+	return g.blk.Struct(lowerType(t), raw), true
 }

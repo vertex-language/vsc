@@ -105,6 +105,10 @@ type Param struct {
 	// function of no arguments, and what a call writes for it is the
 	// expression the function evaluates, not the function.
 	Autoclosure bool
+	// Builder is the result builder the parameter is marked with --
+	// `@Lines _ body: () -> [String]` -- whose calls a closure written
+	// for it is made of. Nil for most parameters.
+	Builder Type
 	// Origin is the parameter this one was substituted from, where it
 	// was: what was recorded about that one -- its default -- is this
 	// one's too.
@@ -297,6 +301,8 @@ type Method struct {
 	Sig        *Signature
 	IsStatic   bool
 	IsMutating bool
+	// IsConsuming is a `consuming func`: it takes self, which ends with it.
+	IsConsuming bool
 	// Exported is whether the method was declared public or open, which
 	// is what a module interface writes and nothing else.
 	Exported bool
@@ -310,9 +316,12 @@ type Method struct {
 // Its parameters carry no label unless one is written: `subscript(x: Int)`
 // is used as `s[1]`, and `subscript(at i: Int)` as `s[at: 1]`.
 type Subscript struct {
-	Params   []*Param
-	Result   Type
-	IsStatic bool
+	// TypeParams are the subscript's own generic parameters,
+	// `subscript<U>(...)`, which each use infers.
+	TypeParams []*TypeParam
+	Params     []*Param
+	Result     Type
+	IsStatic   bool
 	// Settable is whether the subscript declares a setter.
 	Settable bool
 	Exported bool
@@ -360,11 +369,14 @@ type Struct struct {
 	Inits        []*Signature
 	Conformances []*Protocol
 	Copyable     bool
-	Assoc        map[string]Type // associated type mappings
-	In           Type            // enclosing type if nested
-	Computed     []*Field        // computed properties
-	Statics      []*Field        // static properties
-	Subscripts   []*Subscript
+	// Deinit is whether the struct -- a ~Copyable one -- declares a
+	// deinit, which runs where a value of it ends.
+	Deinit     bool
+	Assoc      map[string]Type // associated type mappings
+	In         Type            // enclosing type if nested
+	Computed   []*Field        // computed properties
+	Statics    []*Field        // static properties
+	Subscripts []*Subscript
 	// BodyInits is how many of Inits the struct's own body declares,
 	// which come first. Only those take the memberwise initializer away:
 	// one an extension declares is beside it, as in Swift.
@@ -462,6 +474,7 @@ type Enum struct {
 	Computed     []*Field        // computed properties
 	Statics      []*Field        // static properties
 	Subscripts   []*Subscript
+	Inits        []*Signature // initializers the enum and its extensions declare
 }
 
 func (e *Enum) Underlying() Type { return e }
@@ -713,6 +726,9 @@ func (e *Existential) String() string {
 type Opaque struct {
 	Base        Type
 	Constraints []*Protocol
+	// Concrete is, for a function's result, the type its body returns,
+	// which is what `some P` stands for there.
+	Concrete Type
 }
 
 func (o *Opaque) Underlying() Type { return o }

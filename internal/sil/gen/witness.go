@@ -617,6 +617,11 @@ func (g *gen) conformancesOf(t types.Type) []*types.Protocol {
 }
 
 func typeNameOf(t types.Type) string {
+	// Each instance of a generic type is a type of its own: P<Int> and
+	// P<String> have a record each.
+	if _, ok := t.(*types.GenericInstance); ok {
+		return typeName(t)
+	}
 	switch n := t.Underlying().(type) {
 	case *types.Struct:
 		return n.Name
@@ -695,7 +700,7 @@ func (g *gen) initExistential(at ast.Node, slot, v *sil.Value, from types.Type, 
 	// makes the box, and opening the existential finds the value in it.
 	// One wider than four words is also passed to its witnesses by
 	// address, which a witness thunk does not do yet.
-	if size := types.Sizeof(from, types.DefaultTarget64); size > 32 && len(ex.Protocols) > 0 {
+	if size := types.Sizeof(from, types.DefaultTarget64); size > 32 && hasRequirements(ex.Protocols) {
 		g.refuse(at, "a value of "+size64(size)+" bytes in an existential of a protocol: "+
 			"it is boxed, and a witness called on a boxed value wider than four words is not lowered")
 		return false
@@ -1022,8 +1027,24 @@ func (g *gen) structuralMetadata(at ast.Node, t types.Type) (string, bool) {
 		for _, el := range u.Elements {
 			inner = append(inner, el.Type)
 		}
+	case *types.Existential:
+		if len(u.Protocols) == 0 {
+			return "", false
+		}
 	default:
 		return "", false
+	}
+	// An existential's record names its protocols' descriptors.
+	var protocols []string
+	if ex, ok := t.Underlying().(*types.Existential); ok {
+		for _, p := range ex.Protocols {
+			s, err := mangle.ProtocolDescriptor(g.moduleOfType(p), p.Name)
+			if err != nil {
+				g.refuse(at, "a protocol this compiler cannot name: "+err.Error())
+				return "", false
+			}
+			protocols = append(protocols, s)
+		}
 	}
 	for _, x := range inner {
 		if !g.describable(at, x) {
@@ -1046,6 +1067,7 @@ func (g *gen) structuralMetadata(at ast.Node, t types.Type) (string, bool) {
 		Module:    g.module,
 		ModuleSym: modSym,
 		Layout:    t,
+		Protocols: protocols,
 	})
 	return mangled, true
 }
@@ -1246,7 +1268,12 @@ func (g *gen) getterWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 		out = g.blk.StructExtract(self, memberName(concrete, field.Name), rt)
 	} else {
 		borrowed := g.blk.BeginBorrow(self)
-		out = g.blk.CopyValue(g.blk.StructExtract(borrowed, memberName(concrete, field.Name), rt))
+		out = g.blk.StructExtract(borrowed, memberName(concrete, field.Name), rt)
+		// A field that owns nothing -- an Int in a struct that holds a
+		// String -- is read as it is.
+		if !rt.Trivial() {
+			out = g.blk.CopyValue(out)
+		}
 		g.blk.EndBorrow(borrowed)
 	}
 	if !ct.Trivial() {
@@ -1566,4 +1593,34 @@ func conformsToAll(t types.Type, ex *types.Existential) bool {
 		}
 	}
 	return true
+}
+
+// hasRequirements reports whether any of the protocols -- or those they
+// inherit -- requires something a witness answers. Error requires
+// nothing, so a value too wide for the buffer is boxed and no witness is
+// ever called on it.
+func hasRequirements(ps []*types.Protocol) bool {
+	seen := map[*types.Protocol]bool{}
+	var walk func(p *types.Protocol) bool
+	walk = func(p *types.Protocol) bool {
+		if p == nil || seen[p] {
+			return false
+		}
+		seen[p] = true
+		if len(p.Requirements) > 0 {
+			return true
+		}
+		for _, up := range p.Inherited {
+			if walk(up) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, p := range ps {
+		if walk(p) {
+			return true
+		}
+	}
+	return false
 }

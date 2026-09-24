@@ -98,6 +98,11 @@ func caseLeaves(t types.Type) ([]leaf, bool) {
 	if t == nil {
 		return nil, true
 	}
+	// A payload of no bytes -- a one-case enum, an empty struct -- has
+	// nothing to place.
+	if types.Sizeof(t, types.DefaultTarget64) == 0 {
+		return nil, true
+	}
 	if st, ok := t.Underlying().(*types.Struct); ok {
 		return structLeaves(st)
 	}
@@ -424,6 +429,18 @@ func (c *fn) payloadArgs(in *sil.Inst, words []ir.Value, e *types.Enum, name str
 		}
 	}
 	if payload == nil {
+		return nil, nil
+	}
+	// A payload of no bytes held no bits, but the arm still names it: a
+	// one-case enum is its tag in a register, which is zero.
+	if types.Sizeof(payload, types.DefaultTarget64) == 0 {
+		if _, ok := machineOf(payload); ok {
+			z, err := c.zeroOf(in, payload)
+			if err != nil {
+				return nil, err
+			}
+			return []ir.Value{z}, nil
+		}
 		return nil, nil
 	}
 	ls, ok := caseLeaves(payload)

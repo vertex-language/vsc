@@ -253,6 +253,14 @@ func (l *lowerer) defineAsyncBody(f *sil.Func, p *asyncPlan, body *ir.Func, stub
 		stubs: stubs,
 	}
 	params := body.Params()
+	if len(params) == 0 {
+		// The module failed earlier, and took nothing since: that is
+		// the error to report.
+		if err := l.out.Err(); err != nil {
+			return &Error{Err: ErrIR, Func: f.SourceName(), What: err.Error()}
+		}
+		return &Error{Err: ErrIR, Func: f.SourceName(), What: "an async body with no context"}
+	}
 	ctx, ok := ir.Wrap(params[0]).(ir.Ptr)
 	if !ok {
 		return &Error{Err: ErrType, Func: f.SourceName(), What: "a context that is not a pointer"}

@@ -94,6 +94,10 @@ func (g *gen) coreBuiltinValue(t types.Type) bool {
 // usesType reports whether anything in the module so far names t: a
 // function of its, called or defined.
 func (g *gen) usesType(t types.Type) bool {
+	// A value of it made into an Any names its metadata.
+	if _, named := g.m.MetadataFor(typeNameOf(t)); named {
+		return true
+	}
 	prefix, err := mangle.NominalType(mangle.Decl{Module: g.moduleOfType(t), Context: nominalChain(t), ModuleOf: g.moduleOfType})
 	if err != nil {
 		return false

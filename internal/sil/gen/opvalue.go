@@ -21,7 +21,24 @@ func (g *gen) operatorValue(e *ast.OperatorExpr) *sil.Value {
 		// specialization, the one the concrete type declares.
 		// The concrete type is what the operands are, substituted.
 		if _, abstract := ref.Recv.(*types.Protocol); abstract && ref.Method.Sig != nil && len(ref.Method.Sig.Params) > 0 {
-			if resolved, ok := g.witness(ref, g.substituted(ref.Method.Sig.Params[0].Type)); ok {
+			concrete := g.substituted(ref.Method.Sig.Params[0].Type)
+			// A built-in number's operator is an instruction: a thunk
+			// applies it.
+			if _, basic := concrete.Underlying().(*types.Basic); basic && len(ref.Method.Sig.Params) == 2 {
+				sig, _ := g.substituted(ref.Method.Sig).(*types.Signature)
+				if sig == nil {
+					g.refuse(e, "an operator used as a value this compiler cannot resolve")
+					return nil
+				}
+				thunk := g.operatorThunkNamed(e, ref.Method.Name, sig)
+				if thunk == nil {
+					return nil
+				}
+				v := g.blk.ThinToThickFunction(g.blk.FunctionRef(thunk), lowerType(sig))
+				g.destroyLater(v)
+				return v
+			}
+			if resolved, ok := g.witness(ref, concrete); ok {
 				ref = resolved
 			}
 		} else if tp, ok := ref.Recv.(*types.TypeParam); ok {
@@ -66,9 +83,14 @@ func (g *gen) operatorValue(e *ast.OperatorExpr) *sil.Value {
 // operatorThunk is the function that applies a core operator to its two
 // parameters, written once per operator and operand type.
 func (g *gen) operatorThunk(e *ast.OperatorExpr, sym *analyzer.FuncSymbol, sig *types.Signature) *sil.Func {
+	return g.operatorThunkNamed(e, sym.Name(), sig)
+}
+
+// operatorThunkNamed is operatorThunk for the operator spelled op.
+func (g *gen) operatorThunkNamed(e *ast.OperatorExpr, op string, sig *types.Signature) *sil.Func {
 	name, err := mangle.Function(mangle.Decl{
 		Module:    g.module,
-		Name:      sym.Name(),
+		Name:      op,
 		Signature: sig,
 		ModuleOf:  g.moduleOfType,
 	})
@@ -80,7 +102,7 @@ func (g *gen) operatorThunk(e *ast.OperatorExpr, sym *analyzer.FuncSymbol, sig *
 	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
 		return existing
 	}
-	f := g.m.Func(name).SetSourceName(sym.Name()).SetLinkage(sil.Hidden).SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName(op).SetLinkage(sil.Hidden).SetAttr("ossa")
 
 	outer := struct {
 		fn     *sil.Func
@@ -110,9 +132,9 @@ func (g *gen) operatorThunk(e *ast.OperatorExpr, sym *analyzer.FuncSymbol, sig *
 		args = append(args, f.Param(t, paramConvention(p, t)))
 	}
 	f.SetResult(lowerType(sig.Results), resultConvention(lowerType(sig.Results)))
-	v := g.operate(e, sym.Name(), sig.Params[0].Type, sig.Results, args[0], args[1])
+	v := g.operate(e, op, sig.Params[0].Type, sig.Results, args[0], args[1])
 	if v == nil {
-		if bit, ok := g.compareBit(sym.Name(), sig.Params[0].Type, args[0], args[1]); ok {
+		if bit, ok := g.compareBit(op, sig.Params[0].Type, args[0], args[1]); ok {
 			v = g.boolOf(bit)
 		}
 	}

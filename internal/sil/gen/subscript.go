@@ -368,7 +368,7 @@ func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef,
 		base = gi.Base
 	}
 	params := nominalTypeParams(base)
-	if len(params) == 0 {
+	if len(params) == 0 && len(ref.Subst) == 0 {
 		return ref, nil, false
 	}
 	inst, _ := g.typeOf(e.X).(*types.GenericInstance)
@@ -377,6 +377,10 @@ func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef,
 	}
 	if inst == nil {
 		inst, _ = g.recv.(*types.GenericInstance)
+	}
+	// A type with no parameters of its own is its own instance.
+	if inst == nil && len(params) == 0 {
+		inst = &types.GenericInstance{Base: base}
 	}
 	if inst == nil || len(inst.Args) != len(params) {
 		g.refuse(e, "a subscript of a generic type on something whose type arguments are not known")
@@ -394,7 +398,17 @@ func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef,
 	for i, p := range params {
 		subst[p] = inst.Args[i]
 	}
+	// And the subscript's own, as this use infers them.
+	var own []types.Type
+	for _, p := range ref.Subscript.TypeParams {
+		if a, ok := ref.Subst[p]; ok {
+			a = types.Substitute(a, g.subst)
+			subst[p] = a
+			own = append(own, a)
+		}
+	}
 	sub := *ref.Subscript
+	sub.TypeParams = nil
 	sub.Params = make([]*types.Param, len(ref.Subscript.Params))
 	for i, p := range ref.Subscript.Params {
 		q := *p
@@ -410,6 +424,10 @@ func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef,
 	b.WriteString(mangled)
 	b.WriteString("Tv")
 	for _, a := range inst.Args {
+		b.WriteString(identifierSafe(a.String()))
+	}
+	for _, a := range own {
+		b.WriteString("_")
 		b.WriteString(identifierSafe(a.String()))
 	}
 	name := b.String()

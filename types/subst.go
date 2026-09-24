@@ -120,6 +120,7 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 				Variadic:    p.Variadic,
 				HasDefault:  p.HasDefault,
 				Autoclosure: p.Autoclosure,
+				Builder:     p.Builder,
 				Origin:      p,
 			}
 		}

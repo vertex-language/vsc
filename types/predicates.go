@@ -233,6 +233,19 @@ func ConformsTo(t Type, proto *Protocol) bool {
 			return tt.info&(IsNumeric|IsBoolean|IsString) != 0 || tt.kind == Character
 		case "Comparable":
 			return tt.info&(IsNumeric|IsString) != 0 || tt.kind == Character
+		// The numbers' protocols; see core.swift.
+		case "AdditiveArithmetic", "Numeric", "ExpressibleByIntegerLiteral":
+			return tt.info&IsNumeric != 0 && tt.info&IsUntyped == 0
+		case "SignedNumeric":
+			return tt.info&IsNumeric != 0 && tt.info&IsUnsigned == 0 && tt.info&IsUntyped == 0
+		case "BinaryInteger", "FixedWidthInteger":
+			return tt.info&IsInteger != 0 && tt.info&IsUntyped == 0
+		case "SignedInteger":
+			return tt.info&IsInteger != 0 && tt.info&IsUnsigned == 0 && tt.info&IsUntyped == 0
+		case "UnsignedInteger":
+			return tt.info&IsInteger != 0 && tt.info&IsUnsigned != 0 && tt.info&IsUntyped == 0
+		case "FloatingPoint", "BinaryFloatingPoint", "ExpressibleByFloatLiteral":
+			return tt.info&IsFloat != 0 && tt.info&IsUntyped == 0
 		}
 		return false
 
@@ -339,6 +352,25 @@ func AssignableTo(from, to Type) bool {
 				}
 			}
 			return true
+		}
+	}
+
+	// Inside a generic type's declaration its own name alone is the
+	// instance of its own parameters: `self` in TaskGroup<R> is a
+	// TaskGroup<R>.
+	if selfInstance(from, to) || selfInstance(to, from) {
+		return true
+	}
+
+	// A function that cannot fail goes where one that may is wanted,
+	// as in Swift: the error edge is never taken.
+	if fs, ok := from.(*Signature); ok {
+		if ts, ok := to.(*Signature); ok && ts.Throws && !fs.Throws && !fs.Async && !ts.Async &&
+			len(fs.TypeParams) == 0 && len(ts.TypeParams) == 0 {
+			relaxed := *fs
+			relaxed.Throws, relaxed.Rethrows, relaxed.Thrown = ts.Throws, ts.Rethrows, ts.Thrown
+			relaxed.Isolated = ts.Isolated
+			return Identical(&relaxed, ts)
 		}
 	}
 
@@ -571,4 +603,23 @@ func LiteralProtocols(kind BasicKind) []string {
 		return []string{"ExpressibleByNilLiteral"}
 	}
 	return nil
+}
+
+// selfInstance reports whether bare is a generic nominal type and inst
+// the instance of it whose arguments are its own parameters.
+func selfInstance(bare, inst Type) bool {
+	gi, ok := inst.(*GenericInstance)
+	if !ok || gi.Base != bare {
+		return false
+	}
+	params := typeParamsOf(bare)
+	if len(params) == 0 || len(params) != len(gi.Args) {
+		return false
+	}
+	for i, p := range params {
+		if tp, ok := gi.Args[i].(*TypeParam); !ok || tp != p {
+			return false
+		}
+	}
+	return true
 }

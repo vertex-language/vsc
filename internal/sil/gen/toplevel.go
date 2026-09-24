@@ -88,7 +88,13 @@ func hasTopLevelCode(f *ast.File) bool {
 
 // topLevelMain emits the entry point from main.swift's statements.
 func (g *gen) topLevelMain(stmts []ast.Stmt) {
-	f := g.m.Func(EntryName).SetSourceName(EntryName).
+	// Code that awaits is an async main's body, run as the first task.
+	async := g.info.AsyncTopLevel
+	name := EntryName
+	if async {
+		name = asyncEntryName
+	}
+	f := g.m.Func(name).SetSourceName(EntryName).
 		SetLinkage(sil.Public).SetAttr("ossa")
 	g.fn = f
 	f.Type().Params = nil
@@ -96,10 +102,18 @@ func (g *gen) topLevelMain(stmts []ast.Stmt) {
 	g.scopes = nil
 	g.loops, g.pending = nil, ""
 	g.self, g.recv = nil, nil
-	g.entry = true
+	g.entry = !async
+	g.topLevel = f
+	defer func() { g.topLevel = nil }()
 	g.push()
 	g.blk = f.Entry()
-	entrySignature(f)
+	if async {
+		f.SetLinkage(sil.Hidden)
+		f.Type().Convention = sil.Thin
+		f.Type().Async = true
+	} else {
+		entrySignature(f)
+	}
 	for _, st := range stmts {
 		if g.blk == nil || g.blk.Term() != nil {
 			break
@@ -118,4 +132,7 @@ func (g *gen) topLevelMain(stmts []ast.Stmt) {
 	}
 	g.fn = nil
 	g.entry = false
+	if async {
+		g.asyncEntry(EntryName, f)
+	}
 }

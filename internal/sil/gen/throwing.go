@@ -93,6 +93,18 @@ func (g *gen) raise(at ast.Node, box *sil.Value) {
 		}
 		return
 	}
+	// main.swift's code may throw, as though in a throwing function;
+	// what reaches the top is reported, and the program traps.
+	if !g.throws && g.topLevel != nil && g.fn == g.topLevel {
+		g.unwind()
+		if g.blk != nil && g.blk.Term() == nil {
+			g.runtimeResult(stdlib.ErrorInMain,
+				[]sil.Param{{Type: errorBoxType(), Convention: sil.ParamOwned}},
+				lowerType(types.Typ[types.Void]), box)
+			g.blk.Unreachable()
+		}
+		return
+	}
 	if !g.throws {
 		g.errorAt(at, "errors thrown from here are not handled: the enclosing "+
 			"function is not declared 'throws'")
@@ -241,9 +253,8 @@ func (g *gen) tryExpr(e *ast.TryExpr) *sil.Value {
 		break
 	}
 	call, ok := x.(*ast.CallExpr)
-	if !ok {
-		g.refuse(e, keyword+" on something other than a call")
-		return nil
+	if !ok || g.throwsInside(call) {
+		return g.tryScope(e, x, optional)
 	}
 	// A function named through its module, `time.Sleep(…)`, is the
 	// function, as a bare name is.
@@ -279,6 +290,79 @@ func (g *gen) tryExpr(e *ast.TryExpr) *sil.Value {
 	v := g.callFuncTry(call, sym, optional)
 	g.tryBang = false
 	return v
+}
+
+// throwsInside reports whether a call's arguments make a call that may
+// fail: `try? half(half(8))` covers both.
+func (g *gen) throwsInside(call *ast.CallExpr) bool {
+	if call.Args == nil {
+		return false
+	}
+	found := false
+	for _, a := range call.Args.Args {
+		ast.Inspect(a.X, func(n ast.Node) bool {
+			if found {
+				return false
+			}
+			if _, isClosure := n.(*ast.ClosureExpr); isClosure {
+				return false
+			}
+			if c, isCall := n.(*ast.CallExpr); isCall {
+				if sig, ok := g.typeOf(c.Fun).(*types.Signature); ok && sig.Throws {
+					found = true
+				}
+			}
+			return !found
+		})
+	}
+	return found
+}
+
+// tryScope lowers `try? x` or `try! x` for any x: x is lowered as a do
+// block's body would be, each call in it that fails going to a catch of
+// its own. Under try? that catch lets the error go and makes nil, and x's
+// value is made optional -- once: `try?` on a T? is a T?, as SE-0230 has
+// it. Under try! it reports the error and traps.
+func (g *gen) tryScope(e *ast.TryExpr, x ast.Expr, optional bool) *sil.Value {
+	dispatch := g.fn.Block()
+	box := dispatch.Arg(errorBoxType(), sil.Owned)
+	g.catches = append(g.catches, catchTarget{dispatch: dispatch, depth: len(g.scopes)})
+	v := g.rvalue(x)
+	g.catches = g.catches[:len(g.catches)-1]
+	if v == nil {
+		g.fn.RemoveBlock(dispatch)
+		return nil
+	}
+	if len(dispatch.Preds()) == 0 {
+		g.fn.RemoveBlock(dispatch)
+		if optional {
+			v = g.optionalFor(x, v, g.typeOf(x), g.typeOf(e))
+		}
+		g.destroyLater(v)
+		return v
+	}
+	if !optional {
+		after := g.blk
+		g.blk = dispatch
+		g.runtimeResult(stdlib.TryFailed,
+			[]sil.Param{{Type: errorBoxType(), Convention: sil.ParamOwned}},
+			lowerType(types.Typ[types.Void]), box)
+		g.blk.Unreachable()
+		g.blk = after
+		g.destroyLater(v)
+		return v
+	}
+	want := g.substituted(g.typeOf(e))
+	some := g.optionalFor(x, v, g.typeOf(x), want)
+	join := g.fn.Block()
+	made := join.Arg(lowerType(want), sil.Owned)
+	g.blk.Br(join, some)
+	g.blk = dispatch
+	g.blk.DestroyValue(box)
+	g.blk.Br(join, g.blk.Enum(lowerType(want), optionalNone, nil))
+	g.blk = join
+	g.destroyLater(made)
+	return made
 }
 
 // doCatch lowers `do { … } catch { … }`.
@@ -349,6 +433,26 @@ func (g *gen) catchClause(cl *ast.CatchClause, box *sil.Value, join func() *sil.
 		return false, false
 	}
 	if sym, name, isName := g.catchBinding(cl); isName {
+		// A body that throws one type binds `error` as that type: a copy
+		// out of the box, which is let go.
+		if sym != nil && len(cl.Items) == 0 {
+			if t := sym.Type(); t != nil {
+				if _, isEx := existentialOf(t); !isEx {
+					g.push()
+					lt := lowerType(t)
+					p := g.runtimeResult(stdlib.ErrorProject,
+						[]sil.Param{{Type: errorBoxType(), Convention: sil.ParamGuaranteed}},
+						rawPointerType(), box)
+					bound := g.blk.MoveValue(g.blk.Load(g.blk.PointerToAddress(p, lt.Address()), loadQualifier(lt)), "lexical", "var_decl")
+					g.blk.DebugValue(bound, name, "let")
+					g.blk.DestroyValue(box)
+					g.destroyLater(bound)
+					g.locals[sym] = &local{value: bound, typ: lt}
+					g.catchBody(cl, join)
+					return true, true
+				}
+			}
+		}
 		g.push()
 		t := lowerType(errorExistential())
 		slot := g.blk.AllocStackFor(t, name, "let")
@@ -521,10 +625,28 @@ func (g *gen) tryOn(e *ast.CallExpr) (optional, trap bool) {
 	return optional, trap
 }
 
+// throwingCall takes a pending `try?` or `try!` for a call of a function
+// that may fail, and reports whether its result is made optional. A
+// rethrows function given nothing that throws cannot fail, so nothing
+// has to catch it: its error edge is never taken, and traps if it is.
+func (g *gen) throwingCall(e *ast.CallExpr, sig *types.Signature) bool {
+	optional, trap := g.tryOn(e)
+	g.tryBang = trap
+	if sig != nil && sig.Rethrows && !optional && !g.argumentThrows(e) {
+		g.tryBang = true
+	}
+	return optional
+}
+
 // argumentThrows reports whether any argument of a call is a function
 // that may throw, which is what makes a call to a rethrows function one
 // that may fail.
 func (g *gen) argumentThrows(e *ast.CallExpr) bool {
+	for _, tc := range e.Trailing {
+		if tc != nil && tc.Closure != nil && closureMayThrow(tc.Closure) {
+			return true
+		}
+	}
 	if e.Args == nil {
 		return false
 	}
@@ -533,8 +655,13 @@ func (g *gen) argumentThrows(e *ast.CallExpr) bool {
 			continue
 		}
 		// A closure written in the call throws only if it can: it
-		// takes a throwing type from the parameter either way.
-		if cl, isClosure := a.X.(*ast.ClosureExpr); isClosure {
+		// takes a throwing type from the parameter either way. So does
+		// the one a method or initializer named as a value is.
+		x := a.X
+		if r, ok := g.info.ImplicitSelf[x]; ok {
+			x = r
+		}
+		if cl, isClosure := x.(*ast.ClosureExpr); isClosure {
 			if closureMayThrow(cl) {
 				return true
 			}

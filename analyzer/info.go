@@ -46,6 +46,17 @@ type Info struct {
 	// Swift's `==` on tuples -- each as the specialized call it is.
 	OperatorCalls map[ast.Expr]*ast.CallExpr
 
+	// PatternMatches are the expression patterns matched through a `~=`
+	// the program declares.
+	PatternMatches map[*ast.ExprPattern]*FuncSymbol
+
+	// CallSites are the calls that leave a parameter to its default.
+	CallSites map[*ast.CallExpr]CallSite
+
+	// AsyncTopLevel is whether main.swift's top-level code awaits, which
+	// makes it the body of an async main.
+	AsyncTopLevel bool
+
 	// ArraySequences are the calls `Array(s)` of a sequence that is not
 	// an array -- a String's Characters, a Sequence of the program's own
 	// -- each an array of the elements an iteration of s gives.
@@ -235,6 +246,9 @@ type Info struct {
 	// call of a wrapper's initializer a wrapped property's storage starts
 	// as, by the property's binding: `Clamped(wrappedValue: 5, 0...10)`.
 	Wrappers     map[types.Type]bool
+	// DynamicMembers is the types declared @dynamicMemberLookup, whose
+	// members nothing declares are subscripts with dynamicMember:.
+	DynamicMembers map[types.Type]bool
 	WrapperInits map[*ast.PatternBinding]*ast.CallExpr
 
 	// Diagnostics holds all warnings and errors produced during analysis.
@@ -260,9 +274,20 @@ type Iteration struct {
 
 // A SubscriptRef is a subscript a type declares, used on a value of it
 // -- or on the type itself, for a static one.
+// A CallSite is where a call is, for the #line and #function a parameter
+// it leaves to its default takes: the function the call is made in, as
+// #function spells it, and its position.
+type CallSite struct {
+	Func string
+	Pos  token.Pos
+}
+
 type SubscriptRef struct {
 	Recv      types.Type
 	Subscript *types.Subscript
+	// Subst is what the subscript's own generic parameters are at this
+	// use, where it has any.
+	Subst map[*types.TypeParam]types.Type
 }
 
 // NewInfo allocates an empty Info container.
@@ -286,6 +311,9 @@ func NewInfo() *Info {
 		CoreCalls:        make(map[*ast.CallExpr]*ast.CallExpr),
 		MainActor:        make(map[types.Type]bool),
 		Wrappers:         make(map[types.Type]bool),
+		DynamicMembers:   make(map[types.Type]bool),
+		CallSites:        make(map[*ast.CallExpr]CallSite),
+		PatternMatches:   make(map[*ast.ExprPattern]*FuncSymbol),
 		WrapperInits:     make(map[*ast.PatternBinding]*ast.CallExpr),
 		Values:           make(map[ast.Node]Value),
 		Methods:          make(map[*ast.MemberExpr]*MethodRef),

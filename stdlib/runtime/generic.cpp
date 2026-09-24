@@ -30,6 +30,49 @@ using namespace vertex;
 
 extern "C" {
 
+// ---- An existential of protocols: Any's four words, then a table each ----
+
+static void existentialDestroyContents(AnyExistential* any) {
+  const ValueWitnessTable* vw = witnesses(any->type);
+  if (vw->flags & vwIsNonInline)
+    vertex_release(reinterpret_cast<HeapObject*>(any->buffer[0]));
+  else
+    vw->destroy(any->buffer, any->type);
+}
+
+void* vertex_vw_existential_copy(void* dest, void* src, const Metadata* type) {
+  auto* d = static_cast<AnyExistential*>(dest);
+  auto* s = static_cast<AnyExistential*>(src);
+  const ValueWitnessTable* vw = witnesses(s->type);
+  if (vw->flags & vwIsNonInline) {
+    vertex_retain(reinterpret_cast<HeapObject*>(s->buffer[0]));
+    d->buffer[0] = s->buffer[0];
+  } else {
+    vw->initializeWithCopy(d->buffer, s->buffer, s->type);
+  }
+  d->type = s->type;
+  auto* dt = reinterpret_cast<const void**>(d + 1);
+  auto* st = reinterpret_cast<const void* const*>(s + 1);
+  for (u64 i = 0; i < existentialTables(type); i++)
+    dt[i] = st[i];
+  return dest;
+}
+
+void vertex_vw_existential_destroy(void* value, const Metadata*) {
+  existentialDestroyContents(static_cast<AnyExistential*>(value));
+}
+
+void* vertex_vw_existential_assign_copy(void* dest, void* src, const Metadata* type) {
+  existentialDestroyContents(static_cast<AnyExistential*>(dest));
+  return vertex_vw_existential_copy(dest, src, type);
+}
+
+void* vertex_vw_existential_assign_take(void* dest, void* src, const Metadata* type) {
+  existentialDestroyContents(static_cast<AnyExistential*>(dest));
+  copyBytes(dest, src, sizeof(AnyExistential) + existentialTables(type) * sizeof(void*));
+  return dest;
+}
+
 // ---- Optional ----
 
 void* vertex_vw_optional_copy(void* dest, void* src, const Metadata* type) {

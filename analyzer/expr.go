@@ -541,6 +541,13 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 		default:
 			t = c.checkExpr(e.X, nil, scope)
+			// Named and not called: the closure making one.
+			if meta, ok := t.(*types.Metatype); ok && !c.callees[e] {
+				want, _ := expected.(*types.Signature)
+				if rt, ok := c.initReference(e, e.X, e.Lparen.IsValid(), e.Names, meta.Instance, want, scope); ok {
+					return rt
+				}
+			}
 		}
 		return t
 
@@ -569,6 +576,17 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if kok && vok {
 				return &types.Metatype{Instance: &types.Dictionary{Key: k.Instance, Value: v.Instance}}
 			}
+		case *types.Tuple:
+			// `(Int, Int).self`: a tuple of types is the tuple type.
+			elems := make([]*types.TupleElement, 0, len(u.Elements))
+			for _, el := range u.Elements {
+				m, ok := el.Type.(*types.Metatype)
+				if !ok {
+					return t
+				}
+				elems = append(elems, &types.TupleElement{Name: el.Name, Type: m.Instance})
+			}
+			return &types.Metatype{Instance: &types.Tuple{Elements: elems}}
 		}
 		return t
 
@@ -666,6 +684,18 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			c.errorf(e.Name.Pos(), "cannot find '%s' in scope", name)
 			return types.Typ[types.Invalid]
 		}
+		// A name an `async let` bound is its child task's value,
+		// awaited: `a` reads as `a.value` on the Task it holds.
+		if v, ok := sym.(*VarSymbol); ok && c.asyncLets[v] && !c.asyncLetReads[e] {
+			at := ast.Span{Lo: e.Pos(), Hi: e.End()}
+			inner := &ast.IdentExpr{Span: at, Name: e.Name}
+			c.asyncLetReads[inner] = true
+			read := &ast.MemberExpr{Span: at, X: inner, Dot: e.Pos(), Name: &ast.Ident{Span: at, Synth: "value"}}
+			t := c.checkExpr(read, expected, scope)
+			c.info.ImplicitSelf[e] = read
+			c.info.Uses[e.Name] = sym
+			return t
+		}
 		if v, ok := sym.(*VarSymbol); ok {
 			if !v.IsInitialized() {
 				c.errorf(e.Name.Pos(), "'%s' used before being initialized", name)
@@ -692,7 +722,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					args[i] = c.resolveType(a, scope)
 				}
 				if c.isCoreTask(instance) {
-					instance = taskOf(instance, args[0])
+					instance = taskOfArgs(instance, args)
 				} else {
 					instance = &types.GenericInstance{Base: instance, Args: args}
 				}
@@ -785,6 +815,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 								c.errorf(e.Op.Pos(), "cannot assign to property: '%s' is a 'let' constant", propName)
 							}
 						}
+					}
+					if c.builtinGetOnly(baseType, propName) {
+						c.errorf(e.Op.Pos(), "cannot assign to property: '%s' is a get-only property", propName)
 					}
 				}
 			} else {
@@ -1099,7 +1132,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					c.info.Types[mem] = m.Sig
 				}
 				if isFunc && len(sig.Params) == 0 {
-					return taskOf(base, sig.Results)
+					return taskOf(base, sig.Results, sig.Throws)
 				}
 				return base
 			}
@@ -1205,8 +1238,18 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 		}
 
+		if c.callees == nil {
+			c.callees = map[ast.Expr]bool{}
+		}
+		c.callees[unparen(e.Fun)] = true
 		if t, ok := c.typeOf(e, scope); ok {
 			return t
+		}
+		// A function with parameter packs: the call is of its expansion.
+		if d := c.packDeclOf(e, scope); d != nil {
+			if t, ok := c.packCall(e, d, expected, scope); ok {
+				return t
+			}
 		}
 		var calleeWant types.Type
 		if _, ok := e.Fun.(*ast.ImplicitMemberExpr); ok {
@@ -1282,12 +1325,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				// would not be one. See core's Task.
 				want := &types.Signature{Results: nil, Async: true}
 				if sig, isFunc := c.checkExpr(args[0].X, want, scope).(*types.Signature); isFunc &&
-					!returnsNothing(sig.Results) && len(sig.Params) == 0 {
+					(!returnsNothing(sig.Results) || sig.Throws) && len(sig.Params) == 0 {
 					base := meta.Instance
 					if gi, isInst := base.(*types.GenericInstance); isInst {
 						base = gi.Base
 					}
-					return taskOf(base, sig.Results)
+					return taskOf(base, sig.Results, sig.Throws)
 				}
 			}
 			inst := c.inferInstance(meta.Instance, e, scope)
@@ -1324,10 +1367,32 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
 					return initResult(inst, sig)
 				}
+				if sig := c.pickInitializerFitting(st.Inits, args, scope); sig != nil {
+					c.info.Inits[e] = sig
+					c.checkImportedInit(e, inst, sig)
+					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+					return initResult(inst, sig)
+				}
 				if len(st.Inits) > 0 {
 					c.typeErrorf(e.Pos(),
 						"no initializer of '%s' takes these arguments", inst)
 				}
+			}
+			if en, ok := inst.Underlying().(*types.Enum); ok && len(en.Inits) > 0 {
+				for _, pick := range []func() *types.Signature{
+					func() *types.Signature { return c.pickInitializer(en.Inits, args) },
+					func() *types.Signature { return c.soleInitializerOfArity(en.Inits, len(args)) },
+					func() *types.Signature { return c.pickInitializerByType(en.Inits, args, scope) },
+					func() *types.Signature { return c.pickInitializerFitting(en.Inits, args, scope) },
+				} {
+					if sig := pick(); sig != nil {
+						c.info.Inits[e] = sig
+						c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+						return initResult(inst, sig)
+					}
+				}
+				c.typeErrorf(e.Pos(), "no initializer of '%s' takes these arguments", inst)
+				return inst
 			}
 			if cl, ok := inst.Underlying().(*types.Class); ok && len(cl.Inits) > 0 {
 				if sig := c.pickInitializer(cl.Inits, args); sig != nil {
@@ -1336,6 +1401,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					return initResult(inst, sig)
 				}
 				if sig := c.soleInitializerOfArity(cl.Inits, len(args)); sig != nil {
+					c.info.Inits[e] = sig
+					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+					return initResult(inst, sig)
+				}
+				if sig := c.pickInitializerFitting(cl.Inits, args, scope); sig != nil {
 					c.info.Inits[e] = sig
 					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
 					return initResult(inst, sig)
@@ -1416,6 +1486,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				c.typeErrorf(e.Pos(), "no initializer of '%s' takes these arguments", inst)
 				return inst
 			}
+		}
+		// A value of a type that declares callAsFunction is called
+		// through it (SE-0253): `p(2)` is `p.callAsFunction(2)`.
+		if t, ok := c.callAsFunction(e, calleeType, expected, scope); ok {
+			return t
 		}
 		for _, arg := range args {
 			c.checkExpr(arg.X, nil, scope)
@@ -1512,6 +1587,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 		chained := false
 
+		// A method or an initializer named and not called.
+		if t, ok := c.memberReference(e, baseType, expected, scope); ok {
+			return t
+		}
+
 		if cl, ok := baseType.Underlying().(*types.Class); ok && cl.IsActor && c.currActor != cl && !c.inAwait {
 			for _, f := range cl.Fields {
 				if f.Name == memberName {
@@ -1531,6 +1611,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					return &types.Optional{Wrapped: t}
 				}
 			}
+			return t
+		}
+		if t, ok := c.dynamicMember(e, baseType, expected, scope); ok {
 			return t
 		}
 		if !isInvalid(baseType) && c.membersKnown(baseType) {
@@ -1581,6 +1664,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return result
 
 	case *ast.ArrayLit:
+		if t, ok := c.collectionLiteralInit(e, expected, scope); ok {
+			return t
+		}
 		if setT, ok := expected.(*types.Set); ok {
 			for _, el := range e.Items {
 				c.checkExpr(el, setT.Elem, scope)
@@ -1603,6 +1689,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return &types.Array{Elem: elemType}
 
 	case *ast.DictLit:
+		if t, ok := c.collectionLiteralInit(e, expected, scope); ok {
+			return t
+		}
 		var keyType, valType types.Type
 		if dictT, ok := expected.(*types.Dictionary); ok {
 			keyType, valType = dictT.Key, dictT.Value
@@ -1827,6 +1916,8 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if e.Sig != nil && e.Sig.Result != nil {
 			retType = c.resolveType(e.Sig.Result.Type, scope)
 		}
+		// Nothing says what it returns: its returns do.
+		unstated := (expSig == nil || expSig.Results == nil) && (e.Sig == nil || e.Sig.Result == nil)
 
 		// A closure is async where it says so or where its body awaits.
 		// Where an async function is merely expected, one that does not
@@ -1834,7 +1925,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// among overloads as a synchronous function does: swiftc runs the
 		// blocking `load()` in `let f: () async -> Int = { load() }`.
 		// An await around the closure does not cover the calls in its body.
-		prevRet, prevAsync, prevAwait := c.currFuncRet, c.currAsync, c.inAwait
+		prevRet, prevAsync, prevAwait, prevInfer := c.currFuncRet, c.currAsync, c.inAwait, c.inferRet
+		defer func() { c.inferRet = prevInfer }()
+		c.inferRet = nil
 		c.currFuncRet = retType
 		c.currAsync = (e.Sig != nil && e.Sig.Async.IsValid()) || awaitsIn(e.Stmts)
 		c.inAwait = false
@@ -1848,7 +1941,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		c.currIsolated = c.currIsolated || c.hasAttr(e.Attrs, mainActorAttr) || (expSig != nil && expSig.Isolated)
 		defer func() { c.currIsolated = prevIsolated }()
 
-		if len(e.Stmts) == 1 {
+		_, oneExpr := func() (*ast.ExprStmt, bool) {
+			if len(e.Stmts) != 1 {
+				return nil, false
+			}
+			x, ok := e.Stmts[0].(*ast.ExprStmt)
+			return x, ok
+		}()
+		inferResult := unstated || retType == nil || mentionsTypeParam(retType)
+		if len(e.Stmts) == 1 && (oneExpr || !inferResult) {
 			if exprStmt, ok := e.Stmts[0].(*ast.ExprStmt); ok {
 				// A result still to be inferred -- the U of a call to
 				// map<U> -- is whatever the body gives.
@@ -1865,6 +1966,20 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				}
 			} else {
 				c.checkStmt(e.Stmts[0], closureScope)
+			}
+		} else if inferResult {
+			// A result still to be inferred is what the returns give
+			// (SE-0326), as for a closure of one expression.
+			var got []types.Type
+			c.inferRet, c.currFuncRet = &got, nil
+			for _, s := range e.Stmts {
+				c.checkStmt(s, closureScope)
+			}
+			c.inferRet = nil
+			if len(got) > 0 {
+				retType = literalDefault(got[0])
+			} else if retType != nil {
+				retType = types.Typ[types.Void]
 			}
 		} else {
 			for _, s := range e.Stmts {
@@ -1995,6 +2110,32 @@ func (c *checker) pickInitializer(inits []*types.Signature, args []*ast.CallArg)
 	return found
 }
 
+// pickInitializerFitting is the one initializer the arguments fit as a
+// call's do, leaving out parameters that have defaults:
+// `AsyncStream<Int> { c in ... }` is `init(_:_:)` given its closure.
+func (c *checker) pickInitializerFitting(inits []*types.Signature, args []*ast.CallArg, scope *Scope) *types.Signature {
+	if len(inits) == 0 {
+		return nil
+	}
+	quiet := len(c.info.Diagnostics)
+	argTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		argTypes[i] = c.checkExpr(arg.X, nil, scope)
+	}
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	var found *types.Signature
+	for _, sig := range inits {
+		if sig == nil || !c.sigFits(sig, args, argTypes, c.labelFits) {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = sig
+	}
+	return found
+}
+
 // initResult is what a call of the initializer sig makes: inst, or an
 // optional of it where the initializer is failable.
 func initResult(inst types.Type, sig *types.Signature) types.Type {
@@ -2036,11 +2177,8 @@ func (c *checker) pickInitializerByType(inits []*types.Signature, args []*ast.Ca
 		}
 	}
 	if len(fits) > 1 {
-		if keep := c.byLiteralDefaults(fits, args); len(keep) == 1 {
-			return fits[keep[0]]
-		}
-		// Swift's last preference: one that cannot fail, as
-		// `UnicodeScalar(65)` is its init(_: UInt8) beside init?(_: UInt32).
+		// One that cannot fail, as `UnicodeScalar(65)` is its
+		// init(_: UInt8) beside init?(_: UInt32) and init?(_: Int).
 		var sure []*types.Signature
 		for _, sig := range fits {
 			if !sig.Failable {
@@ -2049,6 +2187,9 @@ func (c *checker) pickInitializerByType(inits []*types.Signature, args []*ast.Ca
 		}
 		if len(sure) == 1 {
 			return sure[0]
+		}
+		if keep := c.byLiteralDefaults(fits, args); len(keep) == 1 {
+			return fits[keep[0]]
 		}
 	}
 	if len(fits) != 1 {
@@ -2062,7 +2203,7 @@ func (c *checker) pickInitializerByType(inits []*types.Signature, args []*ast.Ca
 // written for it, as `init(seconds: Int64, nanos: Int64 = 0)` is called
 // with `seconds:` only.
 func (c *checker) labelsFit(sig *types.Signature, args []*ast.CallArg) bool {
-	if len(args) > len(sig.Params) {
+	if len(args) > len(sig.Params) && !hasVariadic(sig) {
 		return false
 	}
 	next := 0
@@ -2436,6 +2577,20 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 			}
 		}
 		instSub = func(t types.Type) types.Type { return types.Substitute(t, subst) }
+	}
+	// Its own generic parameters are what the arguments say.
+	var own map[*types.TypeParam]types.Type
+	if len(chosen.Subscript.TypeParams) > 0 {
+		own = map[*types.TypeParam]types.Type{}
+		for i, arg := range e.Args {
+			got := c.checkExpr(arg.X, instSub(chosen.Subscript.Params[i].Type), scope)
+			if got != nil && !isInvalid(got) {
+				types.Unify(instSub(chosen.Subscript.Params[i].Type), got, own)
+			}
+		}
+		outer := instSub
+		instSub = func(t types.Type) types.Type { return types.Substitute(outer(t), own) }
+		chosen = &SubscriptRef{Recv: chosen.Recv, Subscript: chosen.Subscript, Subst: own}
 	}
 	for i, arg := range e.Args {
 		want := instSub(chosen.Subscript.Params[i].Type)
@@ -3347,4 +3502,27 @@ func (c *checker) keyPathSubscript(e *ast.SubscriptExpr, scope *Scope) (types.Ty
 	}
 	c.info.KeyPathReads[e] = kt
 	return gi.Args[1], true
+}
+
+// builtinGetOnly reports whether a property of a built-in type -- a
+// String's count, an Array's first -- is one only read: the runtime's
+// properties are, and one an extension declares is unless it has a setter.
+func (c *checker) builtinGetOnly(t types.Type, name string) bool {
+	switch u := t.Underlying().(type) {
+	case *types.Basic:
+		if u.Kind() != types.String {
+			return false
+		}
+	case *types.Array, *types.Dictionary, *types.Set:
+	default:
+		return false
+	}
+	if b := c.builtinOf(t); b != nil {
+		for _, f := range b.Computed {
+			if f != nil && f.Name == name {
+				return !f.HasSetter
+			}
+		}
+	}
+	return true
 }

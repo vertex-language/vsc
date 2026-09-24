@@ -529,20 +529,34 @@ func requirementOf(c types.Type, name string) (types.Type, *types.Method) {
 			return nil, nil
 		}
 	}
+	if found, m := declaredRequirement(p, name, map[*types.Protocol]bool{}); m != nil {
+		return found, m
+	}
+	// Not a requirement, but what an extension gives every conformer: the
+	// most refined protocol's first, so `Pet`'s `speak` hides `Animal`'s.
+	for _, static := range []bool{false, true} {
+		if q, m := p.ExtensionMethod(name, static); m != nil {
+			return q, m
+		}
+	}
+	return nil, nil
+}
+
+// declaredRequirement is the requirement named name that p or a protocol
+// it inherits declares, and which protocol declares it.
+func declaredRequirement(p *types.Protocol, name string, seen map[*types.Protocol]bool) (types.Type, *types.Method) {
+	if p == nil || seen[p] {
+		return nil, nil
+	}
+	seen[p] = true
 	for _, r := range p.Requirements {
 		if r != nil && r.Name == name && r.Sig != nil {
 			return p, &types.Method{Name: r.Name, Sig: r.Sig, IsStatic: r.IsStatic, IsMutating: r.IsMutating}
 		}
 	}
 	for _, up := range p.Inherited {
-		if found, m := requirementOf(up, name); m != nil {
+		if found, m := declaredRequirement(up, name, seen); m != nil {
 			return found, m
-		}
-	}
-	// Not a requirement, but what an extension gives every conformer.
-	for _, static := range []bool{false, true} {
-		if q, m := p.ExtensionMethod(name, static); m != nil {
-			return q, m
 		}
 	}
 	return nil, nil

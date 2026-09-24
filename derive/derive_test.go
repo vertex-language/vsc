@@ -62,9 +62,11 @@ func TestSource(t *testing.T) {
 			"struct N: Equatable { let n: Int; static func __derived_struct_equals(_ a: N, _ b: N) -> Bool }",
 			nil},
 
-		{"nor a generic struct, whose == needs its parameters to be Equatable",
+		{"a generic struct's == is where its parameters are Equatable",
 			"struct Box<T>: Equatable { let v: T }",
-			nil},
+			[]string{"extension Box where T: Equatable {",
+				"static func __derived_struct_equals(_ a: Box<T>, _ b: Box<T>) -> Bool {",
+				"if !(a.v == b.v) { return false }"}},
 
 		{"a Hashable struct hashes its stored properties",
 			"struct H: Hashable { let a: Int; var b: String }",

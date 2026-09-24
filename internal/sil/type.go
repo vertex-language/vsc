@@ -72,6 +72,10 @@ func trivial(t types.Type) bool {
 		// A function value holds its context, which it owns.
 		return false
 	case *types.Struct:
+		// One with a deinit has an end that does something.
+		if n.Deinit {
+			return false
+		}
 		for _, f := range n.Fields {
 			if !trivial(f.Type) {
 				return false

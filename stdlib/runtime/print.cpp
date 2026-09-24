@@ -2,6 +2,7 @@
 #include "vertex/abi.h"
 #include "vertex/platform.h"
 #include "text.h"
+#include "dtoa.h"
 
 using namespace vertex;
 
@@ -97,6 +98,17 @@ String vertex_string_debug_description(u64 countAndFlags, u64 object) {
   Text t;
   textInit(t);
   debugString(t, String{countAndFlags, object});
+  String s = makeString(t.bytes, t.count);
+  textFree(t);
+  return s;
+}
+
+// vertex_float16_description is a Float16's description: the shortest
+// digits that read back as the same half, as Swift prints one.
+String vertex_float16_description(u32 bits) {
+  Text t;
+  textInit(t);
+  describeFloat(t, bits & 0xFFFF, 11, 5);
   String s = makeString(t.bytes, t.count);
   textFree(t);
   return s;

@@ -51,6 +51,27 @@ type checker struct {
 	// currAsync is whether the function or closure being checked is
 	// async, which decides between overloads that differ only in that.
 	currAsync bool
+	// currThrown is the error type the function being checked declares
+	// with `throws(E)`: what `throw .refused` is read as. Nil where the
+	// function throws any Error, or inside a do body.
+	currThrown types.Type
+	// inferRet collects what the returns of a closure whose result is
+	// still to be inferred give, where it has more than one statement.
+	inferRet *[]types.Type
+	// builtClosures are the closures a result builder has rewritten.
+	builtClosures map[*ast.ClosureExpr]bool
+	// files are the module's files; packExpansions the expansions made of
+	// each function with parameter packs, by name. See packs.go.
+	files          []*ast.File
+	packExpansions map[*ast.FuncDecl]map[string]bool
+	// callees are the expressions called: `x.m` before `(...)` is a call
+	// of m, and anywhere else a reference to it. See refs.go.
+	callees map[ast.Expr]bool
+	// asyncLets are the names `async let` bound, each holding the Task
+	// its initializer runs as; asyncLetReads are the reads made of them
+	// that read the Task itself. See rewriteAsyncLet.
+	asyncLets     map[*VarSymbol]bool
+	asyncLetReads map[*ast.IdentExpr]bool
 	// currIsolated is whether the code being checked runs on the main
 	// thread: a @MainActor function or type's member, a closure made
 	// there, or top-level code. See isolation.go.
@@ -73,6 +94,11 @@ type checker struct {
 	// wrapped is the properties property wrappers give, finished once
 	// every type's members are read.
 	wrapped []wrappedProperty
+	// checkedEarly is the functions returning `some P` whose bodies were
+	// checked before the rest, so that callers anywhere know the type.
+	checkedEarly map[*ast.FuncDecl]bool
+	// opaqueParams is the generic parameter each `some P` parameter type is.
+	opaqueParams map[ast.Type]*types.TypeParam
 }
 
 // typeErrorf reports a type diagnostic unless one of the types is types.Invalid.
@@ -165,6 +191,7 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 	pkgScope := NewScope(importScope, token.NoPos, token.NoPos)
 
 	c := &checker{
+		files:     files,
 		pg:        pg,
 		info:      info,
 		negated:   make(map[ast.Expr]bool),
@@ -278,6 +305,39 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		c.declareModuleVars(declsOf(f.Stmts), pkgScope)
 	}
 
+	// Pass 4.9: The functions returning `some P`, whose bodies say what
+	// their callers get. One whose body does not check here yet -- it
+	// reads what top-level code has still to declare -- waits its turn.
+	for _, f := range files {
+		if f.Unit != nil {
+			c.file = f.Unit
+		}
+		c.currIsolated = !declarationsOnly(f.Stmts)
+		for _, stmt := range f.Stmts {
+			ds, ok := stmt.(*ast.DeclStmt)
+			if !ok {
+				continue
+			}
+			fd, ok := ds.D.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil || fd.Sig == nil || fd.Sig.Result == nil {
+				continue
+			}
+			if _, opaque := fd.Sig.Result.Type.(*ast.OpaqueType); !opaque {
+				continue
+			}
+			quiet := len(c.info.Diagnostics)
+			c.checkStmt(stmt, pkgScope)
+			if len(c.info.Diagnostics) > quiet {
+				c.info.Diagnostics = c.info.Diagnostics[:quiet]
+				continue
+			}
+			if c.checkedEarly == nil {
+				c.checkedEarly = map[*ast.FuncDecl]bool{}
+			}
+			c.checkedEarly[fd] = true
+		}
+	}
+
 	// Pass 5: Type-check all top-level statements and bodies. Top-level
 	// code runs on the main thread, as Swift's does.
 	c.currIsolated = true
@@ -286,9 +346,16 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 			c.file = f.Unit
 		}
 		info.Scopes[f] = pkgScope
+		// Top-level code that awaits is an async context: main.swift's
+		// statements run as the program's first task.
+		c.currAsync = TopLevelAwaits(f)
+		if c.currAsync {
+			info.AsyncTopLevel = true
+		}
 		for _, stmt := range f.Stmts {
 			c.checkStmt(stmt, pkgScope)
 		}
+		c.currAsync = false
 	}
 
 	token.SortDiagnostics(info.Diagnostics)

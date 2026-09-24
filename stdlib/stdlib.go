@@ -45,6 +45,9 @@ const (
 	TaskAssumeMain  = "vertex_task_assume_main"
 	TaskNeedsHop    = "vertex_task_needs_hop"
 	TaskJoin        = "vertex_task_join"
+	TaskSetError    = "vertex_task_set_error"
+	TaskError       = "vertex_task_error"
+	TaskFailed      = "vertex_task_failed"
 	TaskCell        = "vertex_task_cell"
 	TaskCellData    = "vertex_task_cell_contents"
 	TaskCellTyped   = "vertex_task_cell_typed"
@@ -171,17 +174,21 @@ const (
 
 	// Value witnesses every instance of a generic type shares. See
 	// runtime/generic.cpp.
-	WitnessOptionalCopy        = "vertex_vw_optional_copy"
-	WitnessOptionalDestroy     = "vertex_vw_optional_destroy"
-	WitnessOptionalAssignCopy  = "vertex_vw_optional_assign_copy"
-	WitnessOptionalAssignTake  = "vertex_vw_optional_assign_take"
-	WitnessReferenceCopy       = "vertex_vw_reference_copy"
-	WitnessReferenceDestroy    = "vertex_vw_reference_destroy"
-	WitnessReferenceAssignCopy = "vertex_vw_reference_assign_copy"
-	WitnessReferenceAssignTake = "vertex_vw_reference_assign_take"
-	WitnessTake                = "vertex_vw_take"
-	WitnessGetEnumTag          = "vertex_vw_get_enum_tag"
-	WitnessStoreEnumTag        = "vertex_vw_store_enum_tag"
+	WitnessOptionalCopy          = "vertex_vw_optional_copy"
+	WitnessOptionalDestroy       = "vertex_vw_optional_destroy"
+	WitnessOptionalAssignCopy    = "vertex_vw_optional_assign_copy"
+	WitnessOptionalAssignTake    = "vertex_vw_optional_assign_take"
+	WitnessReferenceCopy         = "vertex_vw_reference_copy"
+	WitnessReferenceDestroy      = "vertex_vw_reference_destroy"
+	WitnessReferenceAssignCopy   = "vertex_vw_reference_assign_copy"
+	WitnessReferenceAssignTake   = "vertex_vw_reference_assign_take"
+	WitnessExistentialCopy       = "vertex_vw_existential_copy"
+	WitnessExistentialDestroy    = "vertex_vw_existential_destroy"
+	WitnessExistentialAssignCopy = "vertex_vw_existential_assign_copy"
+	WitnessExistentialAssignTake = "vertex_vw_existential_assign_take"
+	WitnessTake                  = "vertex_vw_take"
+	WitnessGetEnumTag            = "vertex_vw_get_enum_tag"
+	WitnessStoreEnumTag          = "vertex_vw_store_enum_tag"
 
 	// The bridge to modules swiftc built. See runtime/swift.cpp.
 	SwiftStringToSwift   = "vertex_swift_string_to_swift"
@@ -240,12 +247,13 @@ const (
 	// FieldIndirect is set in the low bit of an enum case's payload
 	// record where the case is indirect: the value is a box, and the
 	// payload is inside it past the header.
-	FieldIndirect  = 1
-	KindMetatype   = 0x304
-	KindArray      = 0x800
-	KindClass      = 0x801
-	KindDictionary = 0x802
-	KindSet        = 0x803
+	FieldIndirect   = 1
+	KindMetatype    = 0x304
+	KindArray       = 0x800
+	KindClass       = 0x801
+	KindExistential = 0x303
+	KindDictionary  = 0x802
+	KindSet         = 0x803
 )
 
 // The object header, in words and in bytes: a metadata pointer and a

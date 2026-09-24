@@ -285,6 +285,24 @@ struct AnyExistential {
   const Metadata* type;
 };
 
+// An existential's metadata (kind 0x303): the protocols it stands for,
+// whose witness tables follow its type word in each value, in this order.
+// The runtime's own records -- Any, and the one every existential of one
+// protocol shares -- say none (count zero); a module's record for `any P`
+// or `any P & Q` names them, which is what a cast to one needs.
+struct ProtocolDescriptor;
+struct ExistentialMetadata : Metadata {
+  u64                       count;
+  const ProtocolDescriptor* protocols[1];
+};
+
+// existentialTables is how many witness tables follow the type word of an
+// existential of this metadata: one where the record does not say.
+inline u64 existentialTables(const Metadata* type) {
+  u64 n = static_cast<const ExistentialMetadata*>(type)->count;
+  return n == 0 ? 1 : n;
+}
+
 // ---- String ----
 
 // A String is two words, and which of three forms it is lives in the

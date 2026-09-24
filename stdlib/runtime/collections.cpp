@@ -1149,6 +1149,8 @@ namespace vertex {
 // reports whether it is one: what Swift's dynamic cast asks. An existential
 // is looked inside, an Optional unwrapped where it holds a value, and a
 // value wrapped into an Optional or an Any where that is what is wanted.
+void wrapInAny(AnyExistential* any, const void* src, const Metadata* from);
+
 bool castInto(void* dst, const void* src, const Metadata* from, const Metadata* to) {
   if (from == to) {
     witnesses(to)->initializeWithCopy(dst, const_cast<void*>(src), to);
@@ -1191,20 +1193,39 @@ bool castInto(void* dst, const void* src, const Metadata* from, const Metadata* 
     }
     return false;
   }
-  if (record(to, vertex_metadata_Any)) {
-    auto* any = static_cast<AnyExistential*>(dst);
-    const ValueWitnessTable* vw = witnesses(from);
-    any->type = from;
-    if (vw->flags & vwIsNonInline) {
-      HeapObject* box = vertex_box_allocate(from);
-      any->buffer[0] = reinterpret_cast<u64>(box);
-      vw->initializeWithCopy(reinterpret_cast<u8*>(box) + boxValueOffset(vw->flags), const_cast<void*>(src), from);
-    } else {
-      vw->initializeWithCopy(any->buffer, const_cast<void*>(src), from);
+  // `any P & Q`, where the record says which: the value is one where its
+  // type conforms to each, and is put in the container with a table each.
+  if (to->kind == kindExistential && static_cast<const ExistentialMetadata*>(to)->count > 0) {
+    auto* em = static_cast<const ExistentialMetadata*>(to);
+    auto* tables = reinterpret_cast<const void**>(static_cast<AnyExistential*>(dst) + 1);
+    for (u64 i = 0; i < em->count; i++) {
+      const void* const* table = vertex_conformance(from, em->protocols[i]);
+      if (table == nullptr)
+        return false;
+      tables[i] = table;
     }
+    wrapInAny(static_cast<AnyExistential*>(dst), src, from);
+    return true;
+  }
+  if (record(to, vertex_metadata_Any)) {
+    wrapInAny(static_cast<AnyExistential*>(dst), src, from);
     return true;
   }
   return false;
+}
+
+// wrapInAny puts a copy of the value at src, of type from, in an Any's
+// buffer -- or in a box the buffer holds, for one too wide for it.
+void wrapInAny(AnyExistential* any, const void* src, const Metadata* from) {
+  const ValueWitnessTable* vw = witnesses(from);
+  any->type = from;
+  if (vw->flags & vwIsNonInline) {
+    HeapObject* box = vertex_box_allocate(from);
+    any->buffer[0] = reinterpret_cast<u64>(box);
+    vw->initializeWithCopy(reinterpret_cast<u8*>(box) + boxValueOffset(vw->flags), const_cast<void*>(src), from);
+  } else {
+    vw->initializeWithCopy(any->buffer, const_cast<void*>(src), from);
+  }
 }
 
 }  // namespace vertex

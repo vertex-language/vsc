@@ -15,6 +15,7 @@ import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/derive"
+	"github.com/vertex-language/vsc/ifconfig"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/internal/sil/gen"
 	"github.com/vertex-language/vsc/internal/sil/pass"
@@ -156,9 +157,12 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	u := &Unit{}
 	var diags []Diagnostic
 
+	ifcfg := ifconfig.ForTarget(opts.Target.String())
 	for _, src := range srcs {
 		tf := token.NewFile(src.Name, src.Text)
 		file, ds := parser.ParseFile(tf, 0)
+		// `#if` is settled for the target before anything reads the file.
+		ifconfig.Resolve(file, ifcfg)
 		u.Files = append(u.Files, file)
 		u.Positions = append(u.Positions, tf)
 		diags = append(diags, attribute(ds, tf)...)
@@ -172,7 +176,7 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 		u.derived++
 	}
 
-	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages)
+	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg)
 	u.Packages = pkgs
 	diags = append(diags, importDiags...)
 	if Errors(diags) {
@@ -276,8 +280,8 @@ var errNoTarget = errors.New("no target: lowering needs a machine to lower for")
 
 // loadImports resolves and loads all transitive module and package imports.
 func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []string,
-	packages PackageResolver) ([]analyzer.Import, []Package, []Diagnostic) {
-	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}}
+	packages PackageResolver, ifcfg ifconfig.Config) ([]analyzer.Import, []Package, []Diagnostic) {
+	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, ifcfg: ifcfg}
 	for i, f := range files {
 		unit := f.Unit
 		if i < len(units) && units[i] != nil {
@@ -290,6 +294,8 @@ func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []strin
 
 // An importer resolves and loads imported modules and packages.
 type importer struct {
+	// ifcfg settles the `#if`s of what is imported, as of the program.
+	ifcfg    ifconfig.Config
 	paths    []string
 	pkgPaths []string
 	packages PackageResolver
@@ -386,6 +392,7 @@ func (l *importer) read(name string, at *ast.ImportDecl, unit *token.File, via s
 		fail("'" + name + "' has an interface this compiler cannot read: " + path)
 		return
 	}
+	ifconfig.Resolve(parsed, l.ifcfg)
 	l.readAll(parsed, tf, name)
 	l.out = append(l.out, analyzer.Import{
 		Name:  name,
@@ -607,6 +614,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 			fail("package '" + path + "' has a file this compiler cannot read: " + src)
 			return
 		}
+		ifconfig.Resolve(parsed, l.ifcfg)
 		files = append(files, parsed)
 		units = append(units, tf)
 		srcs = append(srcs, Source{Name: src, Text: text})

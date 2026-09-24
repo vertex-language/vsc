@@ -195,9 +195,11 @@ func awaitsIn(stmts []ast.Stmt) bool {
 	found := false
 	for _, s := range stmts {
 		ast.Inspect(s, func(n ast.Node) bool {
-			switch n.(type) {
+			switch x := n.(type) {
 			case *ast.AwaitExpr:
 				found = true
+			case *ast.ForInStmt:
+				found = found || x.Await.IsValid()
 			case *ast.ClosureExpr:
 				return false
 			}
@@ -205,6 +207,41 @@ func awaitsIn(stmts []ast.Stmt) bool {
 		})
 	}
 	return found
+}
+
+// TopLevelAwaits reports whether a file's top-level code -- not the
+// bodies of what it declares, nor its closures -- awaits, or starts an
+// `async let`.
+func TopLevelAwaits(f *ast.File) bool {
+	found := false
+	for _, s := range f.Stmts {
+		if ds, ok := s.(*ast.DeclStmt); ok {
+			vd, isVar := ds.D.(*ast.VarDecl)
+			if !isVar {
+				continue
+			}
+			for _, m := range vd.Mods {
+				if m != nil && m.Name != nil && f.Unit != nil && m.Name.Text(f.Unit) == "async" {
+					return true
+				}
+			}
+		}
+		ast.Inspect(s, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.AwaitExpr:
+				found = true
+			case *ast.ForInStmt:
+				found = found || x.Await.IsValid()
+			case *ast.ClosureExpr, *ast.FuncDecl:
+				return false
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // candidatesFitting returns candidate functions matching argument counts and types.
@@ -225,7 +262,7 @@ func (c *checker) candidatesFitting(candidates []*FuncSymbol, args []*ast.CallAr
 // implicit member, which needs the parameter's type -- fits by its label.
 func (c *checker) sigFits(sig *types.Signature, args []*ast.CallArg, argTypes []types.Type,
 	fitsLabel func(*ast.CallArg, *types.Param) bool) bool {
-	if sig == nil || len(args) > len(sig.Params) {
+	if sig == nil || (len(args) > len(sig.Params) && !hasVariadic(sig)) {
 		return false
 	}
 	next := 0
@@ -530,8 +567,10 @@ func (c *checker) inferFromInits(instance types.Type, params []*types.TypeParam,
 		inits = u.Inits
 	case *types.Class:
 		inits = u.Inits
+	case *types.Enum:
+		inits = u.Inits
 	}
-	if len(inits) == 0 {
+	if len(inits) == 0 || call.Args == nil {
 		return nil
 	}
 	args := call.Args.Args
@@ -555,6 +594,16 @@ func (c *checker) inferFromInits(instance types.Type, params []*types.TypeParam,
 					types.Unify(p.BodyType(), argTypes[next], subst)
 				}
 				next++
+			}
+		}
+		// A parameter no argument binds may be one the initializer's
+		// extension fixes: `Result(catching:)` is declared where
+		// `Failure == any Error`.
+		for _, cond := range c.info.conditions[sig] {
+			if cond.same != nil && cond.param != nil {
+				if _, ok := subst[cond.param]; !ok {
+					subst[cond.param] = cond.same
+				}
 			}
 		}
 		bound := make([]types.Type, len(params))
@@ -581,6 +630,13 @@ func (c *checker) inferInstance(instance types.Type, call *ast.CallExpr, scope *
 	}
 	fields := storedFieldsOf(instance)
 	params := typeParamsOf(instance)
+	if len(params) > 0 && len(fields) == 0 {
+		if _, isEnum := instance.Underlying().(*types.Enum); isEnum {
+			if inst := c.inferFromInits(instance, params, call, scope); inst != nil {
+				return inst
+			}
+		}
+	}
 	if len(params) == 0 || len(fields) == 0 {
 		return instance
 	}
@@ -662,6 +718,16 @@ func storedFieldsOf(t types.Type) []*types.Field {
 
 // checkCallArguments checks argument types and labels against a signature.
 func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, args []*ast.CallArg, scope *Scope) *types.Signature {
+	// A default of #line or #function is the call's: where it is, and
+	// the function it is in.
+	if call != nil && sig != nil {
+		for _, p := range sig.Params {
+			if p != nil && p.HasDefault {
+				c.info.CallSites[call] = CallSite{Func: c.currFuncName, Pos: call.Pos()}
+				break
+			}
+		}
+	}
 	c.checkAsyncCall(call, sig)
 	what, name := c.calleeWords(call, sig)
 	c.checkIsolatedCall(call, sig, what, name)
@@ -712,6 +778,9 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 			}
 			c.info.Autoclosures[arg.X] = fn
 			continue
+		}
+		if param.Builder != nil {
+			c.applyBuilder(arg.X, param.Builder)
 		}
 		argType := c.checkExpr(arg.X, param.Type, scope)
 		if !types.AssignableTo(argType, param.Type) {
@@ -770,7 +839,10 @@ func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args [
 	pi := 0
 	for _, arg := range args {
 		// Skip defaulted parameters that this argument does not match.
-		for pi < len(params) && !c.labelFits(arg, params[pi]) && params[pi].HasDefault {
+		// A closure written without a label skips a defaulted parameter
+		// that takes no function, as a trailing closure does in Swift.
+		for pi < len(params) && params[pi].HasDefault &&
+			(!c.labelFits(arg, params[pi]) || closureForNonFunction(arg, params[pi])) {
 			pi++
 		}
 		if pi >= len(params) {
@@ -789,6 +861,23 @@ func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args [
 		}
 	}
 	return out
+}
+
+// closureForNonFunction reports whether an argument is a closure written
+// without a label and the parameter takes something other than a function.
+func closureForNonFunction(arg *ast.CallArg, p *types.Param) bool {
+	if arg.Label != nil || p.Type == nil {
+		return false
+	}
+	if _, isClosure := unparen(arg.X).(*ast.ClosureExpr); !isClosure {
+		return false
+	}
+	t := p.Type.Underlying()
+	if o, ok := t.(*types.Optional); ok && o.Wrapped != nil {
+		t = o.Wrapped.Underlying()
+	}
+	_, isFunc := t.(*types.Signature)
+	return !isFunc
 }
 
 // labels reports whether a parameter matches an argument label.
@@ -829,7 +918,7 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 	}
 	subst := make(map[*types.TypeParam]types.Type, len(sig.TypeParams))
 	quiet := len(c.info.Diagnostics)
-	var closures []int
+	var closures, operators, literals []int
 	for i, arg := range args {
 		if i >= len(sig.Params) {
 			break
@@ -838,7 +927,42 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 			closures = append(closures, i)
 			continue
 		}
+		// A method or initializer named as a value is read as a closure
+		// is, against what the rest have said.
+		if c.isReference(arg.X) {
+			if _, isInit := c.initNamed(arg.X, scope); isInit {
+				closures = append(closures, i)
+				continue
+			}
+		}
+		// An operator named as a value, and a literal, say what they are
+		// once the others have: `xs.reduce(0, +)` over [T] is a T.
+		if _, isOp := unparen(arg.X).(*ast.OperatorExpr); isOp {
+			operators = append(operators, i)
+			continue
+		}
+		if literalOperand(arg.X) {
+			literals = append(literals, i)
+			continue
+		}
 		types.Unify(sig.Params[i].Type, c.checkExpr(arg.X, nil, scope), subst)
+	}
+	for _, i := range operators {
+		want := types.Substitute(sig.Params[i].Type, subst)
+		if fn, ok := want.(*types.Signature); ok {
+			want = alikeOperands(fn, sig.TypeParams, subst)
+		}
+		got := c.checkExpr(args[i].X, want, scope)
+		if !mentionsParamOf(got, sig.TypeParams) && !mentionsInvalid(got) {
+			types.Unify(sig.Params[i].Type, got, subst)
+		}
+	}
+	for _, i := range literals {
+		want := types.Substitute(sig.Params[i].Type, subst)
+		if mentionsParamOf(want, sig.TypeParams) {
+			want = nil
+		}
+		types.Unify(sig.Params[i].Type, c.checkExpr(args[i].X, want, scope), subst)
 	}
 	// A closure is read after the other arguments, against the function
 	// type it is passed as with what they have said already in place: its
@@ -848,7 +972,10 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 	for _, i := range closures {
 		want := types.Substitute(sig.Params[i].Type, subst)
 		got := c.checkExpr(args[i].X, want, scope)
-		if !mentionsTypeParam(got) {
+		// A type parameter of the code around the call -- the Element of
+		// an extension of Array -- is a type like any other there; only
+		// the call's own, still to be inferred, say nothing.
+		if !mentionsParamOf(got, sig.TypeParams) && !mentionsInvalid(got) {
 			types.Unify(sig.Params[i].Type, got, subst)
 		}
 	}
@@ -945,10 +1072,12 @@ func variadicParams(sig *types.Signature, vi int, args []*ast.CallArg,
 		next++
 	}
 	list := sig.Params[vi]
-	for ; next < len(args); next++ {
-		if !argLabelFits(args[next], list, file) {
+	for first := true; next < len(args); next++ {
+		// The first by the list's label, the rest by none.
+		if (first && !argLabelFits(args[next], list, file)) || (!first && args[next].Label != nil) {
 			break
 		}
+		first = false
 		out[next] = list
 	}
 	for i := vi + 1; i < len(sig.Params) && next < len(args); i++ {
@@ -1007,6 +1136,110 @@ func mentionsTypeParam(t types.Type) bool {
 			if mentionsTypeParam(a) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// mentionsParamOf reports whether t names one of params.
+func mentionsParamOf(t types.Type, params []*types.TypeParam) bool {
+	if len(params) == 0 || t == nil {
+		return false
+	}
+	sentinel := types.Typ[types.Invalid]
+	subst := make(map[*types.TypeParam]types.Type, len(params))
+	for _, p := range params {
+		subst[p] = sentinel
+	}
+	return mentionsInvalid(types.Substitute(t, subst)) && !mentionsInvalid(t)
+}
+
+// mentionsInvalid reports whether t is, or is built from, the invalid type.
+func mentionsInvalid(t types.Type) bool {
+	switch x := t.(type) {
+	case nil:
+		return false
+	case *types.Basic:
+		return x.Kind() == types.Invalid
+	case *types.Optional:
+		return mentionsInvalid(x.Wrapped)
+	case *types.Array:
+		return mentionsInvalid(x.Elem)
+	case *types.Set:
+		return mentionsInvalid(x.Elem)
+	case *types.Dictionary:
+		return mentionsInvalid(x.Key) || mentionsInvalid(x.Value)
+	case *types.Tuple:
+		for _, e := range x.Elements {
+			if e != nil && mentionsInvalid(e.Type) {
+				return true
+			}
+		}
+	case *types.Signature:
+		for _, p := range x.Params {
+			if p != nil && mentionsInvalid(p.Type) {
+				return true
+			}
+		}
+		return mentionsInvalid(x.Results)
+	case *types.GenericInstance:
+		for _, a := range x.Args {
+			if mentionsInvalid(a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// alikeOperands is the function type an operator named as a value is
+// wanted as, with the call's parameters still to infer taken to be the
+// type of an operand the call has settled: an operator's operands and
+// result are alike as a rule, so reduce's Result beside a T is a T.
+func alikeOperands(fn *types.Signature, open []*types.TypeParam, subst map[*types.TypeParam]types.Type) types.Type {
+	isOpen := func(t types.Type) bool {
+		tp, ok := t.(*types.TypeParam)
+		if !ok {
+			return false
+		}
+		for _, p := range open {
+			if p == tp {
+				_, bound := subst[p]
+				return !bound
+			}
+		}
+		return false
+	}
+	var known types.Type
+	for _, p := range fn.Params {
+		if p != nil && p.Type != nil && !isOpen(p.Type) && !mentionsParamOf(p.Type, open) {
+			known = p.Type
+			break
+		}
+	}
+	if known == nil {
+		return fn
+	}
+	out := *fn
+	out.Params = make([]*types.Param, len(fn.Params))
+	for i, p := range fn.Params {
+		q := *p
+		if isOpen(q.Type) {
+			q.Type = known
+		}
+		out.Params[i] = &q
+	}
+	if isOpen(out.Results) {
+		out.Results = known
+	}
+	return &out
+}
+
+// hasVariadic reports whether a signature has a variadic parameter.
+func hasVariadic(sig *types.Signature) bool {
+	for _, p := range sig.Params {
+		if p != nil && p.Variadic {
+			return true
 		}
 	}
 	return false

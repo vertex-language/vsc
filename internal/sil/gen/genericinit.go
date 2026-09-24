@@ -48,6 +48,8 @@ func genericInitDecls(files []*ast.File, info *analyzer.Info) map[types.Type][]*
 				add(declared(d.Name), d.Body)
 			case *ast.ClassDecl:
 				add(declared(d.Name), d.Body)
+			case *ast.EnumDecl:
+				add(declared(d.Name), d.Body)
 			case *ast.ExtensionDecl:
 				add(info.Extensions[d], d.Body)
 			}
@@ -167,7 +169,7 @@ func (g *gen) genericStructInit(e *ast.CallExpr, t types.Type, sig *types.Signat
 	if len(params) == 0 {
 		return nil, false
 	}
-	if _, isStruct := inst.Base.Underlying().(*types.Struct); !isStruct {
+	if !isStructType(inst.Base) && !isEnumType(inst.Base) {
 		return nil, false
 	}
 	if len(inst.Args) != len(params) {

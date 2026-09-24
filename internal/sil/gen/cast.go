@@ -68,6 +68,7 @@ func (g *gen) castTarget(e *ast.CastExpr) types.Type {
 // dynamicCast asks the runtime whether x is a `to`, with a copy of it as
 // one written where the answer is yes.
 func (g *gen) dynamicCast(e *ast.CastExpr, from, to types.Type, kind castKind) *sil.Value {
+	to = castableType(to)
 	if from == nil || to == nil {
 		g.refuse(e, "a cast whose types are not known")
 		return nil
@@ -76,7 +77,7 @@ func (g *gen) dynamicCast(e *ast.CastExpr, from, to types.Type, kind castKind) *
 	if !ok {
 		return nil
 	}
-	toMeta, ok := g.stdlibMetadata(e, to)
+	toMeta, ok := g.castTargetMetadata(e, to)
 	if !ok {
 		return nil
 	}
@@ -182,6 +183,7 @@ func loadQualifierTake(t sil.Type) string {
 // a copy of it as one is written to where it is. The caller takes that
 // copy out and deallocates the slot.
 func (g *gen) castValue(at ast.Node, v *sil.Value, from, to types.Type) (*sil.Value, *sil.Value, bool) {
+	to = castableType(to)
 	if from == nil || to == nil {
 		g.refuse(at, "a cast whose types are not known")
 		return nil, nil, false
@@ -190,7 +192,7 @@ func (g *gen) castValue(at ast.Node, v *sil.Value, from, to types.Type) (*sil.Va
 	if !ok {
 		return nil, nil, false
 	}
-	toMeta, ok := g.stdlibMetadata(at, to)
+	toMeta, ok := g.castTargetMetadata(at, to)
 	if !ok {
 		return nil, nil, false
 	}
@@ -222,4 +224,33 @@ func (g *gen) castValue(at ast.Node, v *sil.Value, from, to types.Type) (*sil.Va
 	bit := g.blk.Builtin("cmp_ne_Int64", sil.Object(sil.BuiltinInt1), matched,
 		g.blk.IntegerLiteral(sil.Object(sil.BuiltinInt64), 0))
 	return out, bit, true
+}
+
+// castTargetMetadata is the metadata a cast to `to` asks about: for an
+// existential of protocols a record that names them -- the runtime checks
+// the value conforms to each -- and otherwise to's own.
+func (g *gen) castTargetMetadata(at ast.Node, to types.Type) (*sil.Value, bool) {
+	if ex, ok := existentialOf(to); ok && len(ex.Protocols) > 0 {
+		sym, ok := g.structuralMetadata(at, to)
+		if !ok {
+			g.refuse(at, "a cast to '"+to.String()+"', whose metadata this compiler cannot make")
+			return nil, false
+		}
+		return g.blk.TypeMetadata(lowerType(to), sym+"Ma"), true
+	}
+	return g.stdlibMetadata(at, to)
+}
+
+// castableType is what a cast to t asks for: a protocol named bare --
+// `x is P`, `x as? P` -- is the existential `any P`, as Swift reads it.
+func castableType(t types.Type) types.Type {
+	if p, ok := t.(*types.Protocol); ok {
+		return &types.Existential{Protocols: []*types.Protocol{p}}
+	}
+	if o, ok := t.(*types.Optional); ok {
+		if p, ok := o.Wrapped.(*types.Protocol); ok {
+			return &types.Optional{Wrapped: &types.Existential{Protocols: []*types.Protocol{p}}}
+		}
+	}
+	return t
 }

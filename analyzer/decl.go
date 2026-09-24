@@ -94,7 +94,7 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			}
 			// Swift's Task<Success, Failure>: what it keeps is Success.
 			if c.isCoreTask(base) {
-				return taskOf(base, args[0])
+				return taskOfArgs(base, args)
 			}
 			return &types.GenericInstance{Base: base, Args: args}
 		}
@@ -178,12 +178,38 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 		if p, ok := inner.(*types.Protocol); ok {
 			return &types.Existential{Protocols: []*types.Protocol{p}}
 		}
+		// `any P & Q` is the composition's existential.
+		if ex, ok := inner.(*types.Existential); ok {
+			return ex
+		}
 		return &types.Existential{}
+
+	// `P & Q`: a value that is both, the existential of each protocol.
+	case *ast.CompositionType:
+		ex := &types.Existential{}
+		for _, part := range t.Types {
+			switch pt := c.resolveType(part, scope).(type) {
+			case *types.Protocol:
+				ex.Protocols = append(ex.Protocols, pt)
+			case *types.Existential:
+				ex.Protocols = append(ex.Protocols, pt.Protocols...)
+			default:
+				if !isInvalid(pt) {
+					c.errorf(part.Pos(), "cannot compose '%s', which is not a protocol, yet", pt)
+				}
+				return types.Typ[types.Invalid]
+			}
+		}
+		return ex
 
 	case *ast.OpaqueType:
 		inner := c.resolveType(t.Base, scope)
 		if p, ok := inner.(*types.Protocol); ok {
 			return &types.Opaque{Constraints: []*types.Protocol{p}}
+		}
+		// `some P & Q`: each of them.
+		if ex, ok := inner.(*types.Existential); ok && len(ex.Protocols) > 0 {
+			return &types.Opaque{Constraints: ex.Protocols}
 		}
 		return &types.Opaque{Base: inner}
 
@@ -361,7 +387,7 @@ func (c *checker) moduleMember(t *ast.MemberType, module, name string, scope *Sc
 		return base
 	}
 	if c.isCoreTask(base) {
-		return taskOf(base, args[0])
+		return taskOfArgs(base, args)
 	}
 	return &types.GenericInstance{Base: base, Args: args}
 }
@@ -471,6 +497,9 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 			if c.hasAttr(d.Attrs, "propertyWrapper") {
 				c.info.Wrappers[st] = true
 			}
+			if c.hasAttr(d.Attrs, "dynamicMemberLookup") {
+				c.info.DynamicMembers[st] = true
+			}
 
 		case *ast.ClassDecl:
 			name := d.Name.Text(c.file)
@@ -487,6 +516,9 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 			}
 			if c.hasAttr(d.Attrs, "propertyWrapper") {
 				c.info.Wrappers[cl] = true
+			}
+			if c.hasAttr(d.Attrs, "dynamicMemberLookup") {
+				c.info.DynamicMembers[cl] = true
 			}
 
 		case *ast.ActorDecl:
@@ -758,6 +790,11 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				c.memberIsolated = c.info.MainActor[n]
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
 				n.BodyInits = len(n.Inits)
+				for _, m := range d.Body.Members {
+					if _, ok := m.(*ast.DeinitDecl); ok {
+						n.Deinit = true
+					}
+				}
 				c.memberIsolated = false
 			}
 
@@ -786,7 +823,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n.RawType = c.rawTypeOf(d.Inherit, scope)
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
 				c.memberIsolated = c.info.MainActor[n]
-				c.readMembers(d.Body, inner, nil, &n.Methods, n, nil, &n.Computed, &n.Statics, &n.Subscripts)
+				c.readMembers(d.Body, inner, nil, &n.Methods, n, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
 				c.memberIsolated = false
 			}
 
@@ -1009,8 +1046,9 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			sig.Isolated = c.declIsolated(m.Attrs, m.Mods)
 			*methods = append(*methods, &types.Method{
 				Name: name, Sig: sig, IsStatic: isStatic(m.Mods),
-				IsMutating: c.isMutating(m.Mods),
-				Exported:   exported(c.accessOf(m.Mods)),
+				IsMutating:  c.isMutating(m.Mods),
+				IsConsuming: c.hasModifier(m.Mods, "consuming"),
+				Exported:    exported(c.accessOf(m.Mods)),
 			})
 			sym := NewFunc(name, sig, m.Name.Pos())
 			sym.SetDecl(m)
@@ -1028,6 +1066,19 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 // written with one name has no label -- `subscript(x: Int)` is used as
 // `s[1]` -- which is the other way round from a function's.
 func (c *checker) subscriptOf(m *ast.SubscriptDecl, typeScope *Scope) *types.Subscript {
+	// Its own generic parameters are in a scope of their own, where the
+	// body is checked too.
+	var tps []*types.TypeParam
+	if m.Generics != nil {
+		genScope := c.info.Scopes[m]
+		if genScope == nil {
+			genScope = NewScope(typeScope, m.Pos(), m.End())
+			c.info.Scopes[m] = genScope
+		}
+		tps = c.declareGenericParams(m.Generics, genScope)
+		c.applyWhere(m.Where, genScope)
+		typeScope = genScope
+	}
 	sig := c.buildFuncSig(&ast.FuncSig{Lparen: m.Lparen, Params: m.Params, Rparen: m.Rparen, Result: m.Result}, typeScope)
 	for i, p := range m.Params {
 		if i < len(sig.Params) && p.Name == nil {
@@ -1035,10 +1086,11 @@ func (c *checker) subscriptOf(m *ast.SubscriptDecl, typeScope *Scope) *types.Sub
 		}
 	}
 	sub := &types.Subscript{
-		Params:   sig.Params,
-		Result:   sig.Results,
-		IsStatic: isStatic(m.Mods),
-		Exported: exported(c.accessOf(m.Mods)),
+		TypeParams: tps,
+		Params:     sig.Params,
+		Result:     sig.Results,
+		IsStatic:   isStatic(m.Mods),
+		Exported:   exported(c.accessOf(m.Mods)),
 	}
 	if m.Accessors != nil {
 		for _, a := range m.Accessors.Accessors {
@@ -1155,7 +1207,7 @@ func (c *checker) buildGenericFuncSig(f *ast.FuncDecl, scope *Scope) *types.Sign
 	tps := c.declareGenericParams(f.Generics, genScope)
 	c.applyWhere(f.Where, genScope)
 	sig := c.buildFuncSig(f.Sig, genScope)
-	sig.TypeParams = tps
+	sig.TypeParams = append(tps, sig.TypeParams...)
 	return sig
 }
 
@@ -1164,6 +1216,7 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 		return &types.Signature{Results: types.Typ[types.Void]}
 	}
 	var params []*types.Param
+	var opaque []*types.TypeParam
 	if sig.Params != nil {
 		params = make([]*types.Param, len(sig.Params))
 		for i, p := range sig.Params {
@@ -1178,6 +1231,12 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 			}
 			ownership := c.ownershipOf(p.Mods)
 			pt := c.resolveType(p.Type, scope)
+			// `some P` as a parameter is a generic parameter of its own.
+			if o, ok := pt.(*types.Opaque); ok {
+				tp := c.opaqueParam(p.Type, o)
+				pt = tp
+				opaque = append(opaque, tp)
+			}
 			// A default is an expression and is checked like one, in
 			// the parameter's own type. Nothing did, so nothing knew
 			// what `= 3` was -- which matters at every call that
@@ -1194,6 +1253,7 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 				Variadic:    p.Ellipsis != token.NoPos,
 				HasDefault:  p.Default != nil,
 				Autoclosure: c.autoclosureType(p.Type),
+				Builder:     c.builderOf(p.Attrs, scope),
 			}
 			if p.Default != nil {
 				c.info.Defaults[params[i]] = p.Default
@@ -1207,13 +1267,31 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 	}
 	throws, thrown := c.throwsOf(sig.Throws, scope)
 	return &types.Signature{
-		Params:   params,
-		Results:  res,
-		Async:    sig.Async != token.NoPos,
-		Throws:   throws,
-		Thrown:   thrown,
-		Rethrows: sig.Throws != nil && sig.Throws.Kind == token.RETHROWS,
+		TypeParams: opaque,
+		Params:     params,
+		Results:    res,
+		Async:      sig.Async != token.NoPos,
+		Throws:     throws,
+		Thrown:     thrown,
+		Rethrows:   sig.Throws != nil && sig.Throws.Kind == token.RETHROWS,
 	}
+}
+
+// opaqueParam is the generic parameter `some P` written as a parameter's
+// type is -- one per place it is written, as Swift makes one.
+func (c *checker) opaqueParam(at ast.Type, o *types.Opaque) *types.TypeParam {
+	if tp := c.opaqueParams[at]; tp != nil {
+		return tp
+	}
+	tp := &types.TypeParam{Name: o.String()}
+	for _, p := range o.Constraints {
+		tp.Constraints = append(tp.Constraints, p)
+	}
+	if c.opaqueParams == nil {
+		c.opaqueParams = map[ast.Type]*types.TypeParam{}
+	}
+	c.opaqueParams[at] = tp
+	return tp
 }
 
 // declarePatternInit binds pattern variables into scope with an explicit initialized flag.
@@ -1323,9 +1401,12 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 			*conformances = append(*conformances, c.protocolsOf(ext.Inherit, scope, nil)...)
 		}
 		en, _ := extType.Underlying().(*types.Enum)
-		var methodsBefore, computedBefore int
+		var methodsBefore, computedBefore, initsBefore int
 		if methods != nil {
 			methodsBefore = len(*methods)
+		}
+		if inits != nil {
+			initsBefore = len(*inits)
 		}
 		if computed != nil {
 			computedBefore = len(*computed)
@@ -1375,6 +1456,11 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 			if computed != nil {
 				for _, f := range (*computed)[computedBefore:] {
 					c.info.setConditions(f, conds)
+				}
+			}
+			if inits != nil {
+				for _, sig := range (*inits)[initsBefore:] {
+					c.info.setConditions(sig, conds)
 				}
 			}
 		}
@@ -1611,7 +1697,7 @@ func sinksOf(t types.Type) (fields *[]*types.Field, methods *[]*types.Method, co
 	case *types.Class:
 		return &n.Fields, &n.Methods, &n.Conformances, &n.Inits, &n.Computed, &n.Statics
 	case *types.Enum:
-		return nil, &n.Methods, &n.Conformances, nil, &n.Computed, &n.Statics
+		return nil, &n.Methods, &n.Conformances, &n.Inits, &n.Computed, &n.Statics
 	// A protocol's extension adds members every conforming type has.
 	case *types.Protocol:
 		return nil, &n.ExtMethods, nil, nil, &n.ExtComputed, &n.ExtStatics
@@ -1666,6 +1752,16 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 	if proto.Self != nil && conformer != nil {
 		subst = map[*types.TypeParam]types.Type{proto.Self: conformer}
 	}
+	// A generic type's members name it as the instance of its own
+	// parameters -- Pair<T> -- which is the Self they meet requirements as.
+	var instSubst map[*types.TypeParam]types.Type
+	if tps := typeParamsOfDecl(conformer); len(tps) > 0 && proto.Self != nil {
+		args := make([]types.Type, len(tps))
+		for i, tp := range tps {
+			args[i] = tp
+		}
+		instSubst = map[*types.TypeParam]types.Type{proto.Self: &types.GenericInstance{Base: conformer, Args: args}}
+	}
 	for _, req := range proto.Requirements {
 		satisfied := false
 		if req.Sig != nil {
@@ -1673,8 +1769,17 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 			if want == nil {
 				want = req.Sig
 			}
+			var wantInst *types.Signature
+			if instSubst != nil {
+				wantInst, _ = types.Substitute(req.Sig, instSubst).(*types.Signature)
+			}
 			for _, m := range methods {
 				if m.Name == req.Name && (types.Identical(m.Sig, want) || meetsWithFewerEffects(m.Sig, want)) {
+					satisfied = true
+					break
+				}
+				if wantInst != nil && req.Name == "==" && (m.Name == derive.EqualsName || m.Name == derive.EnumEqualsName) &&
+					types.Identical(m.Sig, wantInst) {
 					satisfied = true
 					break
 				}
@@ -1982,6 +2087,19 @@ func wrapperMember(t types.Type, name string) *types.Field {
 		if f != nil && f.Name == name {
 			return f
 		}
+	}
+	return nil
+}
+
+// typeParamsOfDecl is a nominal type's own generic parameters.
+func typeParamsOfDecl(t types.Type) []*types.TypeParam {
+	switch u := t.(type) {
+	case *types.Struct:
+		return u.TypeParams
+	case *types.Class:
+		return u.TypeParams
+	case *types.Enum:
+		return u.TypeParams
 	}
 	return nil
 }

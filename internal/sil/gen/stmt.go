@@ -203,6 +203,34 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 	if g.chainedDestination(e, func() { g.compoundAssign(e, op) }) {
 		return
 	}
+	// An `op=` a program declares -- `static func += (a: inout Vec, b:
+	// Vec)` -- is called with the destination's address.
+	ref := g.info.OperatorMethods[e]
+	sym, _ := g.info.Operators[e].(*analyzer.FuncSymbol)
+	// A protocol's requirement on a built-in number -- `n /= 10` with
+	// n a BinaryInteger that is an Int here -- is that number's own op=,
+	// which is the operator and an assignment.
+	if ref != nil {
+		if _, abstract := ref.Recv.(*types.Protocol); abstract {
+			if _, basic := g.typeOf(e.X).Underlying().(*types.Basic); basic {
+				ref = nil
+			}
+		}
+	}
+	if (ref != nil && ref.Method.Name == op+"=") || (sym != nil && sym.Name() == op+"=") {
+		rhs := g.expr(e.Y)
+		addr := g.lvalue(e.X)
+		if addr == nil || rhs == nil {
+			if addr == nil {
+				g.refuse(e.X, "an assignment to "+g.exprKind(e.X))
+			}
+			return
+		}
+		access := g.blk.BeginAccess(addr, "modify", "unknown")
+		g.operatorApply(e, ref, sym, []ast.Expr{e.X, e.Y}, []*sil.Value{access, rhs})
+		g.blk.EndAccess(access)
+		return
+	}
 	// A computed property is read and written through its accessors,
 	// so `c.d += n` is a call, an operator and a call. The base is
 	// evaluated twice, which is what the note above says about every
@@ -318,6 +346,12 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 
 // assign lowers a store to a variable.
 func (g *gen) assign(e *ast.BinaryExpr) {
+	// A destination the checker read as another -- a dynamic member as
+	// its subscript -- is written as that one.
+	if to, ok := g.info.ImplicitSelf[e.X]; ok {
+		g.assign(&ast.BinaryExpr{Span: e.Span, X: to, Op: e.Op, Y: e.Y})
+		return
+	}
 	if g.chainedDestination(e, func() { g.assign(e) }) {
 		return
 	}
@@ -1697,6 +1731,21 @@ func (g *gen) patternTest(p ast.Pattern, subject *sil.Value, t types.Type) (*sil
 
 	switch pat := p.(type) {
 	case *ast.ExprPattern:
+		// Through a `~=` the program declares: its answer.
+		if fn := g.info.PatternMatches[pat]; fn != nil {
+			want := g.expr(pat.X)
+			if want == nil {
+				return nil, false
+			}
+			subj := &ast.IdentExpr{Span: pat.Span}
+			g.info.Types[subj] = t
+			v := g.operatorApply(pat.X, nil, fn, []ast.Expr{pat.X, subj}, []*sil.Value{want, subject})
+			if v == nil {
+				return nil, false
+			}
+			test = g.machine(v, types.Typ[types.Bool])
+			break
+		}
 		// `case 1...5` matches everything between its bounds, so it
 		// is two comparisons rather than one equality.
 		if eq := g.rangeMatch(pat, subject, t); eq != nil {
@@ -2167,11 +2216,7 @@ func (g *gen) matchElement(pat ast.Pattern, elem *loopElement, miss *sil.Block) 
 
 // forInStmt lowers for-in loops over ranges and collections as counted loops.
 func (g *gen) forInStmt(s *ast.ForInStmt) {
-	switch {
-	case s.Await.IsValid():
-		g.refuse(s, "an async for-in")
-		return
-	case s.Try.IsValid():
+	if s.Try.IsValid() && !s.Await.IsValid() {
 		g.refuse(s, "a throwing for-in")
 		return
 	}

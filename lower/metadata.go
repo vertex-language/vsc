@@ -66,7 +66,7 @@ func (l *lowerer) allMetadata(m *sil.Module) error {
 					What: "an enum this compiler cannot describe at run time"}
 			}
 			continue
-		case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple:
+		case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple, *types.Existential:
 			if _, ok := l.structuralFor(t.Layout); !ok {
 				return &Error{Err: ErrUnsupported, Func: t.Name,
 					What: "a type this compiler cannot describe at run time"}
@@ -558,6 +558,28 @@ func (l *lowerer) protocolDescriptors(m *sil.Module) {
 	}
 }
 
+// descriptorSymbol is a protocol's descriptor, by its symbol: this
+// module's own, or another's -- core's weakly, as conformances refer to
+// them.
+func (l *lowerer) descriptorSymbol(sym string) ir.Symbol {
+	name := l.sym(sym)
+	if g, ok := l.descriptors[name]; ok {
+		return g
+	}
+	if g, ok := l.importedDescriptors[name]; ok {
+		return g
+	}
+	ext := l.out.ImportGlobal(name, ir.StorePtr.FType())
+	if strings.HasPrefix(sym, "$ss") || strings.HasPrefix(sym, "$sS") {
+		ext.Weak()
+	}
+	if l.importedDescriptors == nil {
+		l.importedDescriptors = map[string]*ir.GlobalImport{}
+	}
+	l.importedDescriptors[name] = ext
+	return ext
+}
+
 // protocolDescriptor returns the symbol and indirect flag for a protocol descriptor referenced by a conformance.
 func (l *lowerer) protocolDescriptor(t *sil.WitnessTable) (ir.Symbol, bool, bool) {
 	if t.ProtocolSymbol == "" {
@@ -572,13 +594,10 @@ func (l *lowerer) protocolDescriptor(t *sil.WitnessTable) (ir.Symbol, bool, bool
 	if g, ok := l.descriptors[slot]; ok {
 		return g, true, true
 	}
-	ext := l.out.ImportGlobal(name, ir.StorePtr.FType())
 	// The standard library's are the runtime's, or Swift's: weak, so an
 	// object linked with neither -- a library driven from C -- still links,
-	// its conformances unfound rather than unresolved.
-	if strings.HasPrefix(t.ProtocolSymbol, "$ss") || strings.HasPrefix(t.ProtocolSymbol, "$sS") {
-		ext.Weak()
-	}
+	// its conformances unfound rather than unresolved. See descriptorSymbol.
+	ext := l.descriptorSymbol(t.ProtocolSymbol)
 	g := l.out.Global(slot, ir.RO, ir.StorePtr.FType()).
 		Init(ir.RelocInit(ext)).Align(8)
 	g.Internal()
@@ -1380,6 +1399,26 @@ func (l *lowerer) structuralFor(t types.Type) (*ir.Global, bool) {
 		}
 	case *types.Tuple:
 		return l.tupleMetadata(info, u, rec, size, align)
+	case *types.Existential:
+		// `any P & Q`: Any's four words and a table per protocol, which
+		// the witnesses copy as many of as the record says; then the
+		// protocols, which a cast to it checks the value against.
+		rows[vwInitBufferWithCopyOfBuffer] = fn(stdlib.WitnessExistentialCopy)
+		rows[vwDestroy] = fn(stdlib.WitnessExistentialDestroy)
+		rows[vwInitWithCopy] = fn(stdlib.WitnessExistentialCopy)
+		rows[vwAssignWithCopy] = fn(stdlib.WitnessExistentialAssignCopy)
+		rows[vwAssignWithTake] = fn(stdlib.WitnessExistentialAssignTake)
+		flags |= stdlib.WitnessIsNonPOD
+		rec.Field("count", ir.StoreI64.FType())
+		vals = []ir.FieldVal{
+			ir.Val("kind", ir.Lit(ir.Int(stdlib.KindExistential))),
+			ir.Val("count", ir.Lit(ir.Int(int64(len(info.Protocols))))),
+		}
+		for i, sym := range info.Protocols {
+			field := "protocol" + itoa(i)
+			rec.Field(field, ir.StorePtr.FType())
+			vals = append(vals, ir.Val(field, ir.RelocInit(l.descriptorSymbol(sym))))
+		}
 	default:
 		return nil, false
 	}

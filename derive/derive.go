@@ -43,6 +43,7 @@ type nominal struct {
 	isEnum    bool
 	public    bool
 	generic   bool
+	params    []string   // a generic type's parameters
 	fields    []string   // a struct's stored properties
 	cases     []enumCase // an enum's cases
 	payload   bool       // an enum case carries a value
@@ -79,12 +80,13 @@ func Source(files []*ast.File) []byte {
 		var body *ast.MemberBlock
 		var mods []*ast.Modifier
 		var inherit *ast.InheritanceClause
+		var generics *ast.GenericParams
 		generic, isEnum := false, false
 		switch x := n.(type) {
 		case *ast.StructDecl:
-			name, body, mods, inherit, generic = x.Name, x.Body, x.Mods, x.Inherit, x.Generics != nil
+			name, body, mods, inherit, generic, generics = x.Name, x.Body, x.Mods, x.Inherit, x.Generics != nil, x.Generics
 		case *ast.EnumDecl:
-			name, body, mods, inherit, generic, isEnum = x.Name, x.Body, x.Mods, x.Inherit, x.Generics != nil, true
+			name, body, mods, inherit, generic, isEnum, generics = x.Name, x.Body, x.Mods, x.Inherit, x.Generics != nil, true, x.Generics
 		case *ast.ClassDecl:
 			// A class derives nothing, but types nested in one may.
 			if x.Name != nil {
@@ -104,6 +106,16 @@ func Source(files []*ast.File) []byte {
 		}
 		t.public = hasModifier(unit, mods, "public") || hasModifier(unit, mods, "open")
 		t.generic = generic
+		t.params = nil
+		if generics != nil {
+			for _, gp := range generics.Params {
+				if gp.Name == nil || gp.Each.IsValid() || gp.Let.IsValid() {
+					t.generic, t.params = true, nil
+					break
+				}
+				t.params = append(t.params, gp.Name.Name(unit))
+			}
+		}
 		eq, hash := says(unit, inherit)
 		t.equatable, t.hashable = t.equatable || eq, t.hashable || hash
 		t.caseIterable = t.caseIterable || saysName(unit, inherit, "CaseIterable")
@@ -225,10 +237,28 @@ func Source(files []*ast.File) []byte {
 	var b strings.Builder
 	for _, path := range order {
 		t := found[path]
-		// A generic type's == and hash need its parameters to conform too,
-		// which a conditional extension says and this does not yet.
+		// A generic type's == and hash need its parameters to conform too:
+		// they are in an extension that says so, as Swift's are, so that
+		// Pair<T> is Equatable where T is -- and hash, where T is Hashable.
+		where := ""
 		if t.generic {
-			continue
+			if len(t.params) == 0 || t.hashable && !t.equatable {
+				continue
+			}
+			want := "Equatable"
+			if t.hashable && !t.hasHash {
+				want = "Hashable"
+			}
+			parts := make([]string, len(t.params))
+			for i, p := range t.params {
+				parts[i] = p + ": " + want
+			}
+			where = " where " + strings.Join(parts, ", ")
+		}
+		// The type as its members name it: Pair<T>, for a generic one.
+		self := path
+		if t.generic {
+			self = path + "<" + strings.Join(t.params, ", ") + ">"
 		}
 		access := ""
 		if t.public {
@@ -243,7 +273,7 @@ func Source(files []*ast.File) []byte {
 		}
 		var body strings.Builder
 		if !t.isEnum && t.equatable && !t.hasEquals {
-			fmt.Fprintf(&body, "    %sstatic func %s(_ a: %s, _ b: %s) -> Bool {\n", access, EqualsName, path, path)
+			fmt.Fprintf(&body, "    %sstatic func %s(_ a: %s, _ b: %s) -> Bool {\n", access, EqualsName, self, self)
 			for _, f := range t.fields {
 				fmt.Fprintf(&body, "        if !(a.%s == b.%s) { return false }\n", f, f)
 			}
@@ -252,7 +282,7 @@ func Source(files []*ast.File) []byte {
 		// An enum whose cases carry values compares case by case: the same
 		// case, and each value equal to the one beside it.
 		if t.isEnum && t.payload && t.equatable && !t.hasEquals {
-			fmt.Fprintf(&body, "    %sstatic func %s(_ a: %s, _ b: %s) -> Bool {\n", access, EnumEqualsName, path, path)
+			fmt.Fprintf(&body, "    %sstatic func %s(_ a: %s, _ b: %s) -> Bool {\n", access, EnumEqualsName, self, self)
 			body.WriteString("        switch a {\n")
 			for _, c := range t.cases {
 				if c.arity == 0 {
@@ -297,7 +327,7 @@ func Source(files []*ast.File) []byte {
 		if body.Len() == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "extension %s%s {\n%s}\n", path, implicit, body.String())
+		fmt.Fprintf(&b, "extension %s%s%s {\n%s}\n", path, implicit, where, body.String())
 	}
 	if b.Len() == 0 {
 		return nil

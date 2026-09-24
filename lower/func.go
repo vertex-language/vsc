@@ -262,6 +262,12 @@ func (c *fn) allocSlots() error {
 		// machine stack is gone at every suspension; the frame is not.
 		if c.plan != nil {
 			off, there := c.plan.storage[v]
+			if !there && size <= 0 {
+				// Storage of no bytes -- an empty struct's -- takes no
+				// room, and any address will do for it.
+				c.place(k, v, c.ctx)
+				return nil
+			}
 			if !there {
 				return c.fail(ErrIR, sil.Op(""), "a piece of storage the plan left no room for")
 			}

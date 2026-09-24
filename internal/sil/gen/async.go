@@ -126,6 +126,24 @@ func (g *gen) taskValue(e *ast.MemberExpr) (*sil.Value, bool) {
 	handle := g.blk.StructExtract(base, memberName(named, "handle"), ht)
 	g.runtimeResult(symbol, []sil.Param{{Type: ht, Convention: sil.ParamGuaranteed}},
 		lowerType(types.Typ[types.Void]), handle)
+	// A task that threw raises what it threw here.
+	if analyzer.TaskThrows(t) {
+		word := sil.Object(sil.BuiltinInt64)
+		failedFlag := g.runtimeResult(stdlib.TaskFailed,
+			[]sil.Param{{Type: ht, Convention: sil.ParamGuaranteed}}, word, handle)
+		bit := g.blk.Builtin("cmp_ne_Int64", sil.Object(sil.BuiltinInt1), failedFlag,
+			g.blk.IntegerLiteral(word, 0))
+		failed, fine := g.fn.Block(), g.fn.Block()
+		g.blk.CondBr(bit, failed, nil, fine, nil)
+		g.blk = failed
+		box := g.runtimeResult(stdlib.TaskError,
+			[]sil.Param{{Type: ht, Convention: sil.ParamGuaranteed}}, errorBoxType(), handle)
+		if base != v {
+			g.blk.EndBorrow(base)
+		}
+		g.raise(e, box)
+		g.blk = fine
+	}
 	out := g.void()
 	// What the operation returned is in the cell, now that it has.
 	if result := taskResultOf(t); result != nil {
@@ -150,7 +168,7 @@ func taskBase(t types.Type) types.Type {
 
 // taskResultOf is what a Task's operation returns, or nil for nothing.
 func taskResultOf(t types.Type) types.Type {
-	if gi, ok := t.(*types.GenericInstance); ok && len(gi.Args) > 0 {
+	if gi, ok := t.(*types.GenericInstance); ok && len(gi.Args) > 0 && !isVoid(gi.Args[0]) {
 		return gi.Args[0]
 	}
 	return nil
@@ -169,13 +187,15 @@ func (g *gen) startTask(e *ast.CallExpr, t types.Type, symbol string, sig *types
 	cellT := lowerType(field.Type)
 	result := taskResultOf(t)
 	size := int64(0)
-	var opSig *types.Signature
-	if result != nil {
-		opSig, _ = g.typeOf(e.Args.Args[0].X).Underlying().(*types.Signature)
-		if opSig == nil || opSig.Throws {
-			g.refuse(e, "a task whose operation throws")
+	opSig, _ := g.typeOf(e.Args.Args[0].X).Underlying().(*types.Signature)
+	throws := opSig != nil && opSig.Throws
+	if result != nil || throws {
+		if opSig == nil {
+			g.refuse(e, "a task whose operation is not a function")
 			return nil
 		}
+	}
+	if result != nil {
 		size = types.Sizeof(result, types.DefaultTarget64)
 	}
 	var cell *sil.Value
@@ -195,7 +215,7 @@ func (g *gen) startTask(e *ast.CallExpr, t types.Type, symbol string, sig *types
 			cellT, g.blk.IntegerLiteral(word, size))
 	}
 	var handle *sil.Value
-	if result == nil {
+	if result == nil && !throws {
 		handle = g.taskCall(e, symbol, sig, field.Type)
 	} else {
 		g.tryOn(e)
@@ -250,10 +270,41 @@ func (g *gen) taskResultThunk(opSig *types.Signature, result types.Type, cellT s
 
 	op := f.Param(lowerType(opSig), sil.ParamGuaranteed)
 	cell := f.Param(cellT, sil.ParamGuaranteed)
-	rt := lowerType(result)
-	v := g.blk.Apply(op, rt)
-	contents := g.taskCellContents(cell, cellT, result)
-	g.blk.Store(v, g.blk.PointerToAddress(contents, rt.Address()), storeQualifier(rt))
+	store := func(v *sil.Value) {
+		if result == nil {
+			return
+		}
+		rt := lowerType(result)
+		contents := g.taskCellContents(cell, cellT, result)
+		g.blk.Store(v, g.blk.PointerToAddress(contents, rt.Address()), storeQualifier(rt))
+	}
+	var rt sil.Type
+	if result != nil {
+		rt = lowerType(result)
+	} else {
+		rt = lowerType(types.Typ[types.Void])
+	}
+	if !opSig.Throws {
+		store(g.blk.Apply(op, rt))
+		g.blk.Return(g.void())
+		return f
+	}
+	// What a throwing operation throws is kept on the task, for its
+	// value to raise.
+	normal, failed := f.Block(), f.Block()
+	var v *sil.Value
+	if result != nil {
+		v = normal.Arg(rt, sil.Owned)
+	}
+	box := failed.Arg(errorBoxType(), sil.Owned)
+	g.blk.TryApply(op, normal, failed)
+	g.blk = failed
+	g.runtimeResult(stdlib.TaskSetError,
+		[]sil.Param{{Type: errorBoxType(), Convention: sil.ParamOwned}},
+		lowerType(types.Typ[types.Void]), box)
+	g.blk.Return(g.void())
+	g.blk = normal
+	store(v)
 	g.blk.Return(g.void())
 	return f
 }

@@ -292,6 +292,10 @@ func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
 				g.refuse(m, "a deinit of a generic class")
 				continue
 			}
+			if isStructType(sym.Type()) {
+				g.structDeinitializer(m, sym.Type())
+				continue
+			}
 			g.deinitializer(m, sym.Type())
 
 		// Nested type members.
@@ -430,12 +434,15 @@ type gen struct {
 	nodeFiles    map[ast.Node]*token.File // which file a node came from, as fileOf finds it
 	module       string
 
-	fn     *sil.Func
-	entry  bool // fn is the program's entry point
-	script bool // true if entry point is script file (main.swift) top-level statements
-	blk    *sil.Block
-	scopes []*scope
-	locals map[analyzer.Symbol]*local
+	fn    *sil.Func
+	entry bool // fn is the program's entry point
+	// topLevel is the function main.swift's top-level code is, which
+	// may throw: what reaches the top ends the program.
+	topLevel *sil.Func
+	script   bool // true if entry point is script file (main.swift) top-level statements
+	blk      *sil.Block
+	scopes   []*scope
+	locals   map[analyzer.Symbol]*local
 
 	loops   []loop
 	pending string
@@ -982,7 +989,7 @@ func (g *gen) emitCleanups(s *scope) {
 				g.blk.DestroyAddr(c.destroy)
 				continue
 			}
-			g.blk.DestroyValue(c.destroy)
+			g.endValue(c.destroy)
 		}
 	}
 }
@@ -996,6 +1003,11 @@ func (g *gen) function(d *ast.FuncDecl, recv types.Type) {
 func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	sym, _ := g.info.Defs[d.Name].(*analyzer.FuncSymbol)
 	if sym == nil {
+		return
+	}
+	// One with parameter packs is lowered as the expansions the checker
+	// made of it; see analyzer/packs.go.
+	if hasPack(d) {
 		return
 	}
 	sig, _ := g.substituted(sym.Signature()).(*types.Signature)
@@ -1144,6 +1156,10 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 		if mutates {
 			self = f.Param(t.Address(), sil.ParamInout)
 			g.self = &local{addr: self, typ: t}
+		} else if g.consumingSelf(d, recv, sym) && !t.Trivial() {
+			// A consuming method's self is its own, ended at its end.
+			self = f.Param(t, sil.ParamOwned)
+			g.destroyLater(self)
 		} else {
 			self = f.Param(t, selfConvention(t))
 		}
@@ -1307,10 +1323,7 @@ func (g *gen) typeOf(e ast.Expr) types.Type {
 	if g.chainActive[e] {
 		t = g.info.ChainInner[e]
 	}
-	if len(g.subst) == 0 || t == nil {
-		return t
-	}
-	return types.Substitute(t, g.subst)
+	return g.substituted(t)
 }
 
 // substituted is a type with the specialization in force applied.
@@ -1318,5 +1331,69 @@ func (g *gen) substituted(t types.Type) types.Type {
 	if len(g.subst) == 0 || t == nil {
 		return t
 	}
+	if inst := g.selfInstance(t); inst != nil {
+		return inst
+	}
+	switch x := t.(type) {
+	case *types.Optional:
+		if inst := g.selfInstance(x.Wrapped); inst != nil {
+			return &types.Optional{Wrapped: inst, Implicit: x.Implicit}
+		}
+	case *types.Metatype:
+		if inst := g.selfInstance(x.Instance); inst != nil {
+			return &types.Metatype{Instance: inst}
+		}
+	}
 	return types.Substitute(t, g.subst)
+}
+
+// selfInstance is a generic type named bare inside its own declaration --
+// `self` in `Box<T>`'s initializer, `.one(v)` there -- as the instance
+// being specialized: `Box<Int>`, where T is Int. Nil for anything else.
+func (g *gen) selfInstance(t types.Type) types.Type {
+	params := nominalTypeParams(t)
+	if len(params) == 0 {
+		return nil
+	}
+	switch t.(type) {
+	case *types.Struct, *types.Enum, *types.Class:
+	default:
+		return nil
+	}
+	args := make([]types.Type, len(params))
+	for i, p := range params {
+		a, ok := g.subst[p]
+		if !ok {
+			return nil
+		}
+		args[i] = a
+	}
+	return &types.GenericInstance{Base: t, Args: args}
+}
+
+// hasPack reports whether a function declares a parameter pack.
+func hasPack(d *ast.FuncDecl) bool {
+	if d == nil || d.Generics == nil {
+		return false
+	}
+	for _, p := range d.Generics.Params {
+		if p != nil && p.Each.IsValid() {
+			return true
+		}
+	}
+	return false
+}
+
+// consumingSelf reports whether a method declared on a value type is
+// `consuming`.
+func (g *gen) consumingSelf(d *ast.FuncDecl, recv types.Type, sym *analyzer.FuncSymbol) bool {
+	if recv == nil || isClass(recv) || d == nil {
+		return false
+	}
+	for _, m := range d.Mods {
+		if m != nil && m.Name != nil && g.text(m.Name) == "consuming" {
+			return true
+		}
+	}
+	return false
 }

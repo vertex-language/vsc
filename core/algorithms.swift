@@ -11,45 +11,45 @@
 
 extension Array {
     // A new array of what transform makes of each element, in order.
-    func map<T>(_ transform: (Element) -> T) -> [T] {
+    func map<T>(_ transform: (Element) throws -> T) rethrows -> [T] {
         var out: [T] = []
-        for x in self { out.append(transform(x)) }
+        for x in self { out.append(try transform(x)) }
         return out
     }
 
     // The elements isIncluded keeps, in order.
-    func filter(_ isIncluded: (Element) -> Bool) -> [Element] {
+    func filter(_ isIncluded: (Element) throws -> Bool) rethrows -> [Element] {
         var out: [Element] = []
-        for x in self where isIncluded(x) { out.append(x) }
+        for x in self where try isIncluded(x) { out.append(x) }
         return out
     }
 
     // The elements combined in order, starting from initialResult.
-    func reduce<Result>(_ initialResult: Result, _ nextPartialResult: (Result, Element) -> Result) -> Result {
+    func reduce<Result>(_ initialResult: Result, _ nextPartialResult: (Result, Element) throws -> Result) rethrows -> Result {
         var acc = initialResult
-        for x in self { acc = nextPartialResult(acc, x) }
+        for x in self { acc = try nextPartialResult(acc, x) }
         return acc
     }
 
     // What transform makes of each element, with nothing where it makes nil.
-    func compactMap<T>(_ transform: (Element) -> T?) -> [T] {
+    func compactMap<T>(_ transform: (Element) throws -> T?) rethrows -> [T] {
         var out: [T] = []
         for x in self {
-            if let y = transform(x) { out.append(y) }
+            if let y = try transform(x) { out.append(y) }
         }
         return out
     }
 
     // The arrays transform makes of each element, one after another.
-    func flatMap<T>(_ transform: (Element) -> [T]) -> [T] {
+    func flatMap<T>(_ transform: (Element) throws -> [T]) rethrows -> [T] {
         var out: [T] = []
-        for x in self { out.append(contentsOf: transform(x)) }
+        for x in self { out.append(contentsOf: try transform(x)) }
         return out
     }
 
     // body, called with each element in order.
-    func forEach(_ body: (Element) -> Void) {
-        for x in self { body(x) }
+    func forEach(_ body: (Element) throws -> Void) rethrows {
+        for x in self { try body(x) }
     }
 
     // Whether any element satisfies predicate.
@@ -586,6 +586,12 @@ extension ArraySlice: CustomStringConvertible, CustomDebugStringConvertible {
 }
 
 extension Array where Element: Equatable {
+    // Whether an element equals element. One the runtime hashes is
+    // answered by the runtime; this is the rest, compared with ==.
+    func contains(_ element: Element) -> Bool {
+        return firstIndex(of: element) != nil
+    }
+
     // Where the first element equal to element is, if any.
     func firstIndex(of element: Element) -> Int? {
         var i = 0
@@ -755,6 +761,53 @@ extension Optional {
     }
 }
 
+// ---- Result ----
+
+extension Result {
+    // The success value, or the failure thrown.
+    func get() throws -> Success {
+        switch self {
+        case .success(let value): return value
+        case .failure(let error): throw error
+        }
+    }
+
+    // A success transformed; a failure as it is.
+    func map<NewSuccess>(_ transform: (Success) -> NewSuccess) -> Result<NewSuccess, Failure> {
+        switch self {
+        case .success(let value): return .success(transform(value))
+        case .failure(let error): return .failure(error)
+        }
+    }
+
+    // A failure transformed; a success as it is.
+    func mapError<NewFailure>(_ transform: (Failure) -> NewFailure) -> Result<Success, NewFailure> {
+        switch self {
+        case .success(let value): return .success(value)
+        case .failure(let error): return .failure(transform(error))
+        }
+    }
+
+    // A success transformed into another result; a failure as it is.
+    func flatMap<NewSuccess>(_ transform: (Success) -> Result<NewSuccess, Failure>) -> Result<NewSuccess, Failure> {
+        switch self {
+        case .success(let value): return transform(value)
+        case .failure(let error): return .failure(error)
+        }
+    }
+}
+
+extension Result where Failure == any Error {
+    // What body returns, or the error it throws.
+    init(catching body: () throws -> Success) {
+        do {
+            self = .success(try body())
+        } catch {
+            self = .failure(error)
+        }
+    }
+}
+
 // ---- Character ----
 
 extension Character: ExpressibleByExtendedGraphemeClusterLiteral {
@@ -864,6 +917,11 @@ extension UnicodeScalar {
     init?(_ v: UInt32) {
         if v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF) { return nil }
         value = v
+    }
+
+    init?(_ v: Int) {
+        if v < 0 || v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF) { return nil }
+        value = UInt32(v)
     }
 
     var isASCII: Bool { return value < 0x80 }
@@ -2495,11 +2553,7 @@ extension UInt64 {
 
 // ---- Floating point ----
 
-// How rounded(_:) rounds, and which side of zero a value is on.
-enum FloatingPointRoundingRule {
-    case toNearestOrAwayFromZero, toNearestOrEven, up, down, towardZero, awayFromZero
-}
-
+// Which side of zero a value is on.
 enum FloatingPointSign: Int {
     case plus = 0, minus = 1
 }
@@ -2803,3 +2857,257 @@ func assert(_ condition: Bool, _ message: String = "") {
     if !condition { _fatalErrorMessage("Assertion failed: " + message) }
 }
 func assertionFailure(_ message: String = "") { _fatalErrorMessage("Assertion failed: " + message) }
+
+// ---- concurrency ----
+
+// Where an AsyncStream's elements wait for its iterator: what the build
+// closure yielded, in order, and whether it has finished.
+final class _AsyncStreamStorage<Element> {
+    var buffer: [Element]
+    var finished: Bool
+
+    init() {
+        buffer = []
+        finished = false
+    }
+}
+
+// What an AsyncStream's build closure yields elements to, and finishes:
+// AsyncStream<Element>.Continuation.
+struct _AsyncStreamContinuation<Element> {
+    let _storage: _AsyncStreamStorage<Element>
+
+    func yield(_ value: Element) {
+        _storage.buffer.append(value)
+    }
+
+    func finish() {
+        _storage.finished = true
+    }
+}
+
+// An AsyncStream's iterator: AsyncStream<Element>.AsyncIterator. It waits
+// -- yielding the thread -- until the next element is there, or the
+// stream has finished.
+struct _AsyncStreamIterator<Element>: AsyncIteratorProtocol {
+    let _storage: _AsyncStreamStorage<Element>
+    var _next: Int
+
+    mutating func next() async -> Element? {
+        while _next >= _storage.buffer.count {
+            if _storage.finished { return nil }
+            await Task.yield()
+        }
+        let value = _storage.buffer[_next]
+        _next += 1
+        return value
+    }
+}
+
+// A sequence of elements a closure yields over time, gone through with
+// `for await`.
+struct AsyncStream<Element>: AsyncSequence {
+    let _storage: _AsyncStreamStorage<Element>
+
+    init(_ build: (_AsyncStreamContinuation<Element>) -> Void) {
+        _storage = _AsyncStreamStorage<Element>()
+        build(_AsyncStreamContinuation<Element>(_storage: _storage))
+    }
+
+    init(_ elementType: Element.Type, _ build: (_AsyncStreamContinuation<Element>) -> Void) {
+        _storage = _AsyncStreamStorage<Element>()
+        build(_AsyncStreamContinuation<Element>(_storage: _storage))
+    }
+
+    func makeAsyncIterator() -> _AsyncStreamIterator<Element> {
+        _AsyncStreamIterator<Element>(_storage: _storage, _next: 0)
+    }
+}
+
+// A group of child tasks a withTaskGroup body adds, whose results it
+// goes through as they are asked for -- here, in the order the tasks were
+// added, which is one of the orders Swift may give them in.
+struct TaskGroup<ChildTaskResult>: AsyncSequence, AsyncIteratorProtocol {
+    var _tasks: [Task<ChildTaskResult, Never>]
+    var _next: Int
+
+    // Starts operation as a child task of the group.
+    mutating func addTask(operation: @escaping () async -> ChildTaskResult) {
+        _tasks.append(Task { await operation() })
+    }
+
+    // The next child's result, waited for; nil once there are none left.
+    mutating func next() async -> ChildTaskResult? {
+        if _next >= _tasks.count { return nil }
+        let task = _tasks[_next]
+        _next += 1
+        return await task.value
+    }
+
+    // Waits for every child still running.
+    mutating func waitForAll() async {
+        while _next < _tasks.count {
+            _ = await next()
+        }
+    }
+
+    var isEmpty: Bool { _next >= _tasks.count }
+
+    func makeAsyncIterator() -> TaskGroup<ChildTaskResult> { self }
+}
+
+// Runs body with a group it adds child tasks to, and waits for every one
+// of them before returning what body returns.
+func withTaskGroup<ChildTaskResult, GroupResult>(of childTaskResultType: ChildTaskResult.Type,
+                                                 body: (inout TaskGroup<ChildTaskResult>) async -> GroupResult) async -> GroupResult {
+    var group = TaskGroup<ChildTaskResult>(_tasks: [], _next: 0)
+    let result = await body(&group)
+    await group.waitForAll()
+    return result
+}
+
+extension Task {
+    // Whether the task this runs in has been cancelled.
+    static var isCancelled: Bool { _vertexTaskIsCancelled() }
+
+    // Asks the task to stop: it sees Task.isCancelled, and its sleeps
+    // end at once.
+    func cancel() { _vertexTaskCancel(handle) }
+}
+
+// ---- Float16 ----
+
+extension Float16 {
+    init(bitPattern: UInt16) { _bits = bitPattern }
+    var bitPattern: UInt16 { _bits }
+
+    // The half nearest a Float's value, ties to even; past the largest
+    // finite half, infinity.
+    static func _fromFloatBits(_ f: UInt32) -> UInt16 {
+        let sign = UInt16(truncatingIfNeeded: (f >> 16) & 0x8000)
+        let exp = Int((f >> 23) & 0xFF)
+        var mant = f & 0x7FFFFF
+        if exp == 0xFF {
+            return sign | 0x7C00 | (mant != 0 ? 0x200 : 0)
+        }
+        let e = exp - 127 + 15
+        if e >= 0x1F { return sign | 0x7C00 }
+        if e <= 0 {
+            if e < -10 { return sign }
+            mant |= 0x800000
+            let shift = UInt32(14 - e)
+            let half = mant >> shift
+            let rem = mant & ((UInt32(1) << shift) - 1)
+            let halfway = UInt32(1) << (shift - 1)
+            var r = half
+            if rem > halfway || (rem == halfway && (half & 1) != 0) { r += 1 }
+            return sign | UInt16(truncatingIfNeeded: r)
+        }
+        var h = (UInt32(e) << 10) | (mant >> 13)
+        let rem = mant & 0x1FFF
+        if rem > 0x1000 || (rem == 0x1000 && (h & 1) != 0) { h += 1 }
+        return sign | UInt16(truncatingIfNeeded: h)
+    }
+
+    // The half nearest a Double's value, rounded once.
+    static func _fromDoubleBits(_ d: UInt64) -> UInt16 {
+        let sign = UInt16(truncatingIfNeeded: (d >> 48) & 0x8000)
+        let exp = Int((d >> 52) & 0x7FF)
+        var mant = d & 0xFFFFFFFFFFFFF
+        if exp == 0x7FF {
+            return sign | 0x7C00 | (mant != 0 ? 0x200 : 0)
+        }
+        let e = exp - 1023 + 15
+        if e >= 0x1F { return sign | 0x7C00 }
+        if e <= 0 {
+            if e < -10 { return sign }
+            mant |= 0x10000000000000
+            let shift = UInt64(43 - e)
+            let half = mant >> shift
+            let rem = mant & ((UInt64(1) << shift) - 1)
+            let halfway = UInt64(1) << (shift - 1)
+            var r = half
+            if rem > halfway || (rem == halfway && (half & 1) != 0) { r += 1 }
+            return sign | UInt16(truncatingIfNeeded: r)
+        }
+        var h = (UInt64(e) << 10) | (mant >> 42)
+        let rem = mant & 0x3FFFFFFFFFF
+        if rem > 0x20000000000 || (rem == 0x20000000000 && (h & 1) != 0) { h += 1 }
+        return sign | UInt16(truncatingIfNeeded: h)
+    }
+
+    // The Float a half is, exactly.
+    static func _toFloatBits(_ h: UInt16) -> UInt32 {
+        let sign = UInt32(h & 0x8000) << 16
+        let exp = Int((h >> 10) & 0x1F)
+        let mant = UInt32(h & 0x3FF)
+        if exp == 0x1F { return sign | 0x7F800000 | (mant << 13) }
+        if exp == 0 {
+            if mant == 0 { return sign }
+            var m = mant
+            var e = -14
+            while (m & 0x400) == 0 {
+                m <<= 1
+                e -= 1
+            }
+            m &= 0x3FF
+            return sign | (UInt32(e + 127) << 23) | (m << 13)
+        }
+        return sign | (UInt32(exp - 15 + 127) << 23) | (mant << 13)
+    }
+
+    init(_ value: Float) { _bits = Float16._fromFloatBits(value.bitPattern) }
+    init(_ value: Double) { _bits = Float16._fromDoubleBits(value.bitPattern) }
+    init(_ value: Int) { _bits = Float16._fromDoubleBits(Double(value).bitPattern) }
+    init(_ value: Float16) { _bits = value._bits }
+
+    var _float: Float { Float(bitPattern: Float16._toFloatBits(_bits)) }
+
+    static var greatestFiniteMagnitude: Float16 { Float16(bitPattern: 0x7BFF) }
+    static var leastNormalMagnitude: Float16 { Float16(bitPattern: 0x0400) }
+    static var leastNonzeroMagnitude: Float16 { Float16(bitPattern: 0x0001) }
+    static var infinity: Float16 { Float16(bitPattern: 0x7C00) }
+    static var nan: Float16 { Float16(bitPattern: 0x7E00) }
+    static var ulpOfOne: Float16 { Float16(bitPattern: 0x1400) }
+
+    var isInfinite: Bool { (_bits & 0x7FFF) == 0x7C00 }
+    var isNaN: Bool { (_bits & 0x7C00) == 0x7C00 && (_bits & 0x3FF) != 0 }
+    var isFinite: Bool { (_bits & 0x7C00) != 0x7C00 }
+    var isZero: Bool { (_bits & 0x7FFF) == 0 }
+    var isNormal: Bool { (_bits & 0x7C00) != 0 && (_bits & 0x7C00) != 0x7C00 }
+    var isSubnormal: Bool { (_bits & 0x7C00) == 0 && (_bits & 0x3FF) != 0 }
+    var magnitude: Float16 { Float16(bitPattern: _bits & 0x7FFF) }
+
+    static func + (a: Float16, b: Float16) -> Float16 { Float16(a._float + b._float) }
+    static func - (a: Float16, b: Float16) -> Float16 { Float16(a._float - b._float) }
+    static func * (a: Float16, b: Float16) -> Float16 { Float16(a._float * b._float) }
+    static func / (a: Float16, b: Float16) -> Float16 { Float16(a._float / b._float) }
+    static prefix func - (a: Float16) -> Float16 { Float16(bitPattern: a._bits ^ 0x8000) }
+    static func += (a: inout Float16, b: Float16) { a = a + b }
+    static func -= (a: inout Float16, b: Float16) { a = a - b }
+    static func *= (a: inout Float16, b: Float16) { a = a * b }
+    static func /= (a: inout Float16, b: Float16) { a = a / b }
+}
+
+extension Float16: ExpressibleByFloatLiteral, ExpressibleByIntegerLiteral {
+    init(floatLiteral value: Double) { _bits = Float16._fromDoubleBits(value.bitPattern) }
+    init(integerLiteral value: Int) { _bits = Float16._fromDoubleBits(Double(value).bitPattern) }
+}
+
+extension Float16: Equatable, Comparable {
+    static func == (a: Float16, b: Float16) -> Bool { a._float == b._float }
+    static func < (a: Float16, b: Float16) -> Bool { a._float < b._float }
+}
+
+extension Float16: CustomStringConvertible, CustomDebugStringConvertible {
+    var description: String { _float16Description(UInt32(_bits)) }
+    var debugDescription: String { _float16Description(UInt32(_bits)) }
+}
+
+extension Float {
+    init(_ value: Float16) { self = Float(bitPattern: Float16._toFloatBits(value._bits)) }
+}
+
+extension Double {
+    init(_ value: Float16) { self = Double(Float(bitPattern: Float16._toFloatBits(value._bits))) }
+}

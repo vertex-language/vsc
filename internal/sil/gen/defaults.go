@@ -1,9 +1,12 @@
 package gen
 
 import (
+	"path/filepath"
+
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 )
 
@@ -30,7 +33,7 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 	out := make([]*sil.Value, 0, len(sig.Params))
 	next := 0
 	for i, p := range sig.Params {
-		if next < len(args) && g.argFits(args[next], p) {
+		if next < len(args) && g.argFits(args[next], p) && !(p.HasDefault && closureSkips(args[next], p)) {
 			v := g.expr(args[next].X)
 			if v == nil {
 				return nil, false
@@ -107,8 +110,28 @@ func (g *gen) argFits(a *ast.CallArg, p *types.Param) bool {
 	return written == label
 }
 
+// closureSkips reports whether an unlabelled closure passes over a
+// parameter that takes no function, as a trailing closure does.
+func closureSkips(a *ast.CallArg, p *types.Param) bool {
+	if a.Label != nil || p.Type == nil {
+		return false
+	}
+	if _, ok := unparen(a.X).(*ast.ClosureExpr); !ok {
+		return false
+	}
+	t := p.Type.Underlying()
+	if o, ok := t.(*types.Optional); ok && o.Wrapped != nil {
+		t = o.Wrapped.Underlying()
+	}
+	_, isFunc := t.(*types.Signature)
+	return !isFunc
+}
+
 // defaultValue lowers a constant default argument expression at the call site.
 func (g *gen) defaultValue(at ast.Node, e ast.Expr) *sil.Value {
+	if v, ok := g.callSiteMagic(at, e); ok {
+		return v
+	}
 	if v := g.constant(e); v != nil {
 		return v
 	}
@@ -176,10 +199,12 @@ func (g *gen) variadicArguments(e *ast.CallExpr, args []*ast.CallArg,
 	// own, which is what stops it before a `separator:`.
 	last := sig.Params[vi]
 	elems := make([]*sil.Value, 0, len(args)-next)
-	for ; next < len(args); next++ {
-		if !g.argFits(args[next], last) {
+	for first := true; next < len(args); next++ {
+		// The first by the list's label, the rest by none.
+		if (first && !g.argFits(args[next], last)) || (!first && args[next].Label != nil) {
 			break
 		}
+		first = false
 		from := g.typeOf(args[next].X)
 		var v *sil.Value
 		// print shows a CustomStringConvertible value by its description,
@@ -252,4 +277,43 @@ func (g *gen) defaultOf(p *types.Param) ast.Expr {
 		}
 	}
 	return nil
+}
+
+// callSiteMagic is a default of #line, #column, #function or a #file form
+// as the call leaving it out sees it: Swift evaluates those where the
+// call is, not where the parameter is declared.
+func (g *gen) callSiteMagic(at ast.Node, e ast.Expr) (*sil.Value, bool) {
+	m, ok := e.(*ast.MagicLit)
+	if !ok {
+		return nil, false
+	}
+	call, ok := at.(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	site, ok := g.info.CallSites[call]
+	if !ok {
+		return nil, false
+	}
+	switch m.Kind {
+	case token.POUND_LINE, token.POUND_COLUMN:
+		t := g.typeOf(m)
+		if t == nil || !types.Identical(t.Underlying(), types.Typ[types.Int]) {
+			return nil, false
+		}
+		p := g.file.Position(site.Pos)
+		n := p.Line
+		if m.Kind == token.POUND_COLUMN {
+			n = p.Column
+		}
+		raw := g.blk.IntegerLiteral(sil.Object(sil.BuiltinInt64), int64(n))
+		return g.blk.Struct(lowerType(t), raw), true
+	case token.POUND_FUNCTION:
+		return g.stringValue(m, site.Func), true
+	case token.POUND_FILEID:
+		return g.stringValue(m, g.module+"/"+filepath.Base(g.file.Name())), true
+	case token.POUND_FILE, token.POUND_FILEPATH:
+		return g.stringValue(m, g.file.Name()), true
+	}
+	return nil, false
 }
