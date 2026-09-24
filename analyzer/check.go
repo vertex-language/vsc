@@ -282,6 +282,16 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		c.declareFunctions(declsOf(f.Stmts), pkgScope)
 	}
 
+	// Pass 4.4: Derived conformances. Every conformance is known now, and
+	// none has been checked for its witnesses: what a type gets by
+	// conforming is made here, and checked with the module from here on.
+	if derived := c.deriveConformances(files, pkgScope); derived != nil {
+		c.info.Derived = derived
+		c.info.DerivedText = derived.Unit.Text()
+		files = append(files[:len(files):len(files)], derived)
+		c.files = files
+	}
+
 	// Pass 4.5: Validate protocol conformances
 	c.checkProtocolConformances(pkgScope)
 
@@ -419,6 +429,17 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 			c.resolveReceivers(decls, staging)
 			c.resolveAssociatedTypes(decls, staging)
 			c.declareFunctions(decls, staging)
+		}
+		// What its types get by conforming, where it does not say already:
+		// a source package's, or an interface's written before it did.
+		for i, f := range imp.Files {
+			if f.Unit == nil && i < len(imp.Units) {
+				f.Unit = imp.Units[i]
+			}
+		}
+		if derived := c.deriveConformances(imp.Files, staging); derived != nil {
+			imp.Files = append(imp.Files[:len(imp.Files):len(imp.Files)], derived)
+			imp.Units = append(imp.Units[:len(imp.Units):len(imp.Units)], derived.Unit)
 		}
 		// Stored module-scope variables, last, so that an initializer
 		// whose type has to be inferred sees every function it may call.

@@ -584,6 +584,9 @@ protocol BinaryInteger: Numeric, Hashable, Comparable, CustomStringConvertible {
     static func % (lhs: Self, rhs: Self) -> Self
     static func /= (lhs: inout Self, rhs: Self)
     static func %= (lhs: inout Self, rhs: Self)
+    static func & (lhs: Self, rhs: Self) -> Self
+    static func | (lhs: Self, rhs: Self) -> Self
+    static func ^ (lhs: Self, rhs: Self) -> Self
     static var isSigned: Bool { get }
     init(_ source: Int)
 }
@@ -595,6 +598,15 @@ protocol FixedWidthInteger: BinaryInteger {
 }
 
 protocol SignedInteger: BinaryInteger, SignedNumeric {}
+
+// A set of flags kept in the bits of one integer, its rawValue: each flag
+// a bit, a set of them the bits or'd together. OptionSet's extension in
+// algorithms.swift gives it the set operations.
+protocol OptionSet: Equatable, ExpressibleByArrayLiteral {
+    associatedtype RawValue: FixedWidthInteger
+    var rawValue: RawValue { get }
+    init(rawValue: RawValue)
+}
 protocol UnsignedInteger: BinaryInteger {}
 
 // How rounded(_:) rounds.

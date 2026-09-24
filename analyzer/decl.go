@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	"github.com/vertex-language/vsc/ast"
-	"github.com/vertex-language/vsc/derive"
 	"github.com/vertex-language/vsc/parser"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
@@ -1790,13 +1789,13 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 					satisfied = true
 					break
 				}
-				if wantInst != nil && req.Name == "==" && (m.Name == derive.EqualsName || m.Name == derive.EnumEqualsName) &&
+				if wantInst != nil && req.Name == "==" && (m.Name == DerivedStructEquals || m.Name == DerivedEnumEquals) &&
 					types.Identical(m.Sig, wantInst) {
 					satisfied = true
 					break
 				}
 				// Equatable's `==`, derived for a struct that writes none.
-				if req.Name == "==" && (m.Name == derive.EqualsName || m.Name == derive.EnumEqualsName) && types.Identical(m.Sig, want) {
+				if req.Name == "==" && (m.Name == DerivedStructEquals || m.Name == DerivedEnumEquals) && types.Identical(m.Sig, want) {
 					satisfied = true
 					break
 				}

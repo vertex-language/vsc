@@ -3384,3 +3384,58 @@ extension Float {
 extension Double {
     init(_ value: Float16) { self = Double(Float(bitPattern: Float16._toFloatBits(value._bits))) }
 }
+
+// ---- OptionSet ----
+
+extension OptionSet {
+    // The flags of every element, together: what an array literal written
+    // where an option set goes makes, as Swift's init(arrayLiteral:) does.
+    static func _union(_ elements: [Self]) -> Self {
+        var bits = RawValue(0)
+        for e in elements { bits = bits | e.rawValue }
+        return Self(rawValue: bits)
+    }
+
+    var isEmpty: Bool { return rawValue == RawValue(0) }
+
+    // Whether every flag of member is set.
+    func contains(_ member: Self) -> Bool { return rawValue & member.rawValue == member.rawValue }
+
+    func union(_ other: Self) -> Self { return Self(rawValue: rawValue | other.rawValue) }
+    func intersection(_ other: Self) -> Self { return Self(rawValue: rawValue & other.rawValue) }
+    func symmetricDifference(_ other: Self) -> Self { return Self(rawValue: rawValue ^ other.rawValue) }
+    func subtracting(_ other: Self) -> Self { return Self(rawValue: rawValue & (rawValue ^ other.rawValue)) }
+
+    func isSubset(of other: Self) -> Bool { return rawValue & other.rawValue == rawValue }
+    func isSuperset(of other: Self) -> Bool { return rawValue & other.rawValue == other.rawValue }
+    func isDisjoint(with other: Self) -> Bool { return (rawValue & other.rawValue) == RawValue(0) }
+
+    mutating func formUnion(_ other: Self) { self = union(other) }
+    mutating func formIntersection(_ other: Self) { self = intersection(other) }
+    mutating func formSymmetricDifference(_ other: Self) { self = symmetricDifference(other) }
+    mutating func subtract(_ other: Self) { self = subtracting(other) }
+
+    // Sets newMember's flags; whether any was not set already, and them.
+    @discardableResult
+    mutating func insert(_ newMember: Self) -> (inserted: Bool, memberAfterInsert: Self) {
+        let had = contains(newMember)
+        self = union(newMember)
+        return (!had, newMember)
+    }
+
+    // Clears member's flags; the ones that were set, or nil where none was.
+    @discardableResult
+    mutating func remove(_ member: Self) -> Self? {
+        let had = intersection(member)
+        self = subtracting(member)
+        return had.isEmpty ? nil : had
+    }
+
+    // Sets newMember's flags; what was set of them before, or nil.
+    @discardableResult
+    mutating func update(with newMember: Self) -> Self? {
+        let had = intersection(newMember)
+        self = union(newMember)
+        return had.isEmpty ? nil : had
+    }
+}

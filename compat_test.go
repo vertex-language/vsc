@@ -992,10 +992,9 @@ func use() -> int32 {
 	}
 }
 
-// TestStringRawValueRefused: a String raw value needs a string
-// constant to answer with, and there is no making one yet -- so it is
-// refused rather than answered with something else.
-func TestStringRawValueRefused(t *testing.T) {
+// TestStringRawValue: a String raw value is answered with the string
+// constant of its case.
+func TestStringRawValue(t *testing.T) {
 	const src = `
 enum Name: string {
     case a = "x"
@@ -1004,8 +1003,10 @@ enum Name: string {
 
 func use() -> string { return Name.a.rawValue }
 `
-	if _, diags := compile(t, src, vsc.Options{}); !vsc.Errors(diags) {
-		t.Error("a string rawValue was lowered")
+	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
 	}
 }
 

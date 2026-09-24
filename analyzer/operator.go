@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	"github.com/vertex-language/vsc/ast"
-	"github.com/vertex-language/vsc/derive"
 	"github.com/vertex-language/vsc/types"
 )
 
@@ -82,12 +81,12 @@ func (c *checker) operatorChoices(scope *Scope, op string, operands []types.Type
 		if seenType[recv] {
 			continue
 		}
-		// A struct's derived `==` is found as one; see package derive.
+		// A struct's derived `==` is found as one; see derived.go.
 		if op == "==" && len(methods) == 0 {
-			_, methods = methodsNamed(&types.Metatype{Instance: t}, derive.EqualsName)
+			_, methods = methodsNamed(&types.Metatype{Instance: t}, DerivedStructEquals)
 		}
 		if op == "==" && len(methods) == 0 {
-			_, methods = methodsNamed(&types.Metatype{Instance: t}, derive.EnumEqualsName)
+			_, methods = methodsNamed(&types.Metatype{Instance: t}, DerivedEnumEquals)
 		}
 		// On an instance of a generic type -- Pair<Int> -- the type's own
 		// are in terms of its parameters, which the instance says.

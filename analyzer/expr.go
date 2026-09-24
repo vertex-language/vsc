@@ -914,6 +914,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		} else if _, isClosure := unparen(e.X).(*ast.ClosureExpr); isClosure {
 			rhs = c.checkExpr(e.Y, operandCtx, scope)
 			lhs = c.checkExpr(e.X, c.closureOperandContext(scope, opName, rhs, 0), scope)
+		} else if _, lit := unparen(e.Y).(*ast.ArrayLit); lit && (opName == "==" || opName == "!=") {
+			// An array literal compared with what one makes -- an option
+			// set -- is one of those: `p == [.read, .write]`.
+			lhs = c.checkExpr(e.X, operandCtx, scope)
+			ctx := operandCtx
+			if takesArrayLiteral(lhs) && !isArrayType(lhs) {
+				ctx = lhs
+			}
+			rhs = c.checkExpr(e.Y, ctx, scope)
 		} else {
 			lhs = c.checkExpr(e.X, operandCtx, scope)
 			rhs = c.checkExpr(e.Y, operandCtx, scope)
@@ -934,10 +943,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// An array literal compared with or added to an array is an array
 		// of that array's elements: `bytes == [109, 115]` with bytes a
 		// [UInt8], `xs + []`.
+		// So is one compared with a type an array literal makes: an
+		// option set, `p == [.read, .write]`.
 		if opName == "==" || opName == "!=" || opName == "+" {
-			if _, lit := unparen(e.Y).(*ast.ArrayLit); lit && isArrayType(lhs) && !types.Identical(lhs, rhs) {
+			if _, lit := unparen(e.Y).(*ast.ArrayLit); lit && takesArrayLiteral(lhs) && !types.Identical(lhs, rhs) {
 				rhs = c.checkExpr(e.Y, lhs, scope)
-			} else if _, lit := unparen(e.X).(*ast.ArrayLit); lit && isArrayType(rhs) && !types.Identical(lhs, rhs) {
+			} else if _, lit := unparen(e.X).(*ast.ArrayLit); lit && takesArrayLiteral(rhs) && !types.Identical(lhs, rhs) {
 				lhs = c.checkExpr(e.X, rhs, scope)
 			}
 		}
@@ -3603,4 +3614,20 @@ func wildcardsTake(x ast.Expr, lhs, rhs types.Type) types.Type {
 		return &types.Tuple{Elements: elems}
 	}
 	return lhs
+}
+
+// takesArrayLiteral reports whether an array literal can be a t: an array,
+// or a type that is ExpressibleByArrayLiteral.
+func takesArrayLiteral(t types.Type) bool {
+	if isArrayType(t) {
+		return true
+	}
+	if t == nil || isInvalid(t) {
+		return false
+	}
+	switch t.Underlying().(type) {
+	case *types.Struct, *types.Class, *types.Enum:
+		return types.ConformsToNamed(t, "ExpressibleByArrayLiteral")
+	}
+	return false
 }

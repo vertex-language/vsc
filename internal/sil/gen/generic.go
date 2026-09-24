@@ -5,7 +5,6 @@ import (
 
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
-	"github.com/vertex-language/vsc/derive"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/mangle"
 	"github.com/vertex-language/vsc/types"
@@ -311,10 +310,10 @@ func (g *gen) requirementOperator(at ast.Expr, ref *analyzer.MethodRef, xs []ast
 	want := &types.Signature{Params: []*types.Param{{Label: "_", Type: concrete}, {Label: "_", Type: concrete}}, Results: results}
 	recv, methods := staticMethodsNamed(concrete, op)
 	if op == "==" && len(methods) == 0 {
-		recv, methods = staticMethodsNamed(concrete, derive.EqualsName)
+		recv, methods = staticMethodsNamed(concrete, analyzer.DerivedStructEquals)
 	}
 	if op == "==" && len(methods) == 0 {
-		recv, methods = staticMethodsNamed(concrete, derive.EnumEqualsName)
+		recv, methods = staticMethodsNamed(concrete, analyzer.DerivedEnumEquals)
 	}
 	for _, m := range methods {
 		if m.Sig != nil && len(m.Sig.Params) == 2 &&

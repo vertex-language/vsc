@@ -169,4 +169,3 @@ func erase(in *sil.Inst) {
 		b.Erase(in)
 	}
 }
-

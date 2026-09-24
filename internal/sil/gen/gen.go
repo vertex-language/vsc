@@ -450,9 +450,9 @@ type gen struct {
 	// an if or a switch being lowered as a value, where its value goes.
 	branchValues map[*ast.ExprStmt]*valueJoin
 
-	recv        types.Type                  // receiver type for method being lowered, or nil
-	closures    int                         // count of emitted closures (for unique names)
-	armOwned    map[*sil.Block][]*sil.Value // payloads a case arm owns, let go when its scope ends
+	recv     types.Type                  // receiver type for method being lowered, or nil
+	closures int                         // count of emitted closures (for unique names)
+	armOwned map[*sil.Block][]*sil.Value // payloads a case arm owns, let go when its scope ends
 	// joined are the names a case of several patterns binds, as its body
 	// has them: the arguments each pattern's arm passes it.
 	joined map[*sil.Block]map[analyzer.Symbol]*local
@@ -461,8 +461,8 @@ type gen struct {
 	recursive analyzer.Symbol
 	// opened is, in a specialization for an existential, the parameter
 	// whose value each such type parameter stands for the type of.
-	opened map[*types.TypeParam]analyzer.Symbol
-	loopCase    *loopElement                // the element a `for case` body matches, before it runs
+	opened      map[*types.TypeParam]analyzer.Symbol
+	loopCase    *loopElement // the element a `for case` body matches, before it runs
 	poly        map[*types.Class]bool
 	nested      map[analyzer.Symbol]string
 	stated      map[*sil.Func]bool

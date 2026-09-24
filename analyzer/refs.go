@@ -330,6 +330,25 @@ func (c *checker) collectionLiteralInit(e ast.Expr, expected types.Type, scope *
 		if !types.ConformsToNamed(target, "ExpressibleByArrayLiteral") {
 			return nil, false
 		}
+		// An option set's literal is its flags together: T._union([...]),
+		// the literal an array of T.
+		if types.ConformsToNamed(target, "OptionSet") && c.findInit(target, "arrayLiteral") == nil {
+			if tn, ok := scope.Lookup(name).(*TypeNameSymbol); ok && types.Identical(tn.Type(), target) {
+				fun := &ast.MemberExpr{Span: sp, X: &ast.IdentExpr{Span: sp, Name: &ast.Ident{Span: sp, Synth: name}},
+					Dot: sp.Lo, Name: &ast.Ident{Span: sp, Synth: "_union"}}
+				// The literal again, as the array it is: a node of its own,
+				// or the call would be its own argument.
+				inner := *lit
+				call := &ast.CallExpr{Span: sp, Fun: fun,
+					Args: &ast.CallArgs{Span: sp, Args: []*ast.CallArg{{Span: sp, X: &inner}}}}
+				c.info.ImplicitSelf[e] = call
+				t := c.checkExpr(call, target, scope)
+				if _, opt := expected.(*types.Optional); opt {
+					return expected, true
+				}
+				return t, true
+			}
+		}
 		label = "arrayLiteral"
 		for _, el := range lit.Items {
 			args = append(args, &ast.CallArg{Span: ast.Span{Lo: el.Pos(), Hi: el.End()}, X: el})
@@ -467,6 +486,26 @@ func payloadCaseNamed(t types.Type, name string) *types.EnumCase {
 	for _, k := range en.Cases {
 		if k != nil && k.Name == name && k.AssociatedType != nil {
 			return k
+		}
+	}
+	return nil
+}
+
+// findInit is the initializer of t whose first argument is labelled label,
+// or nil.
+func (c *checker) findInit(t types.Type, label string) *types.Signature {
+	var inits []*types.Signature
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		inits = u.Inits
+	case *types.Class:
+		inits = u.Inits
+	case *types.Enum:
+		inits = u.Inits
+	}
+	for _, sig := range inits {
+		if sig != nil && len(sig.Params) > 0 && sig.Params[0].Label == label {
+			return sig
 		}
 	}
 	return nil

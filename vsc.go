@@ -14,7 +14,6 @@ import (
 
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
-	"github.com/vertex-language/vsc/derive"
 	"github.com/vertex-language/vsc/ifconfig"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/internal/sil/gen"
@@ -134,7 +133,8 @@ type Unit struct {
 	// Packages are imported source packages in topological dependency order.
 	Packages []Package
 
-	// derived is how many of Files the compiler wrote itself; see derive.
+	// derived is how many of Files the compiler wrote itself: the checker's
+	// derived conformances; see analyzer/derived.go.
 	derived int
 }
 
@@ -170,12 +170,6 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	if opts.Stop == Parsed || Errors(diags) {
 		return u, diags
 	}
-	if file, unit := derived(u.Files); file != nil {
-		u.Files = append(u.Files, file)
-		u.Positions = append(u.Positions, unit)
-		u.derived++
-	}
-
 	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg)
 	u.Packages = pkgs
 	diags = append(diags, importDiags...)
@@ -184,6 +178,13 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	}
 	info, checks := analyzer.CheckModule(opts.Module, u.Files, imports)
 	u.Info = info
+	// What the module's types get by conforming, which the checker wrote:
+	// lowered, and described in an interface, with the module's own files.
+	if info.Derived != nil {
+		u.Files = append(u.Files, info.Derived)
+		u.Positions = append(u.Positions, info.Derived.Unit)
+		u.derived++
+	}
 	diags = append(diags, attribute(checks, u.only())...)
 	if opts.Stop == Checked || Errors(diags) {
 		return u, diags
@@ -232,22 +233,6 @@ func (u *Unit) only() *token.File {
 		return u.Positions[0]
 	}
 	return nil
-}
-
-// derived is the file of declarations Swift derives for the types in
-// files -- a struct's `==` where it says it is Equatable and writes none
-// -- parsed, or nil where there are none.
-func derived(files []*ast.File) (*ast.File, *token.File) {
-	text := derive.Source(files)
-	if text == nil {
-		return nil, nil
-	}
-	tf := token.NewFile("<derived conformances>", text)
-	file, ds := parser.ParseFile(tf, 0)
-	if len(ds) > 0 {
-		return nil, nil
-	}
-	return file, tf
 }
 
 // attribute pairs each diagnostic with the file it is about: the one it
@@ -618,11 +603,6 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		files = append(files, parsed)
 		units = append(units, tf)
 		srcs = append(srcs, Source{Name: src, Text: text})
-	}
-
-	if file, tf := derived(files); file != nil {
-		files = append(files, file)
-		units = append(units, tf)
 	}
 
 	name := packageNameOf(files, units)

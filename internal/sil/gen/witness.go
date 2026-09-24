@@ -5,7 +5,6 @@ import (
 
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
-	"github.com/vertex-language/vsc/derive"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/mangle"
 	"github.com/vertex-language/vsc/types"
@@ -1401,10 +1400,10 @@ func (g *gen) staticWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 	var ref *analyzer.MethodRef
 	recv, methods := staticMethodsNamed(concrete, r.Name)
 	if r.Name == "==" && len(methods) == 0 {
-		recv, methods = staticMethodsNamed(concrete, derive.EqualsName)
+		recv, methods = staticMethodsNamed(concrete, analyzer.DerivedStructEquals)
 	}
 	if r.Name == "==" && len(methods) == 0 {
-		recv, methods = staticMethodsNamed(concrete, derive.EnumEqualsName)
+		recv, methods = staticMethodsNamed(concrete, analyzer.DerivedEnumEquals)
 	}
 	for _, m := range methods {
 		if m.Sig != nil && types.Identical(m.Sig, want) {

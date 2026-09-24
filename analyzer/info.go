@@ -94,6 +94,14 @@ type Info struct {
 	// ImplicitSelf is, for a name used alone inside an extension of a
 	// built-in type that means a member of self, the `self.name` it means.
 	ImplicitSelf map[ast.Expr]ast.Expr
+	// Derived is the file of the members the module's types get by
+	// conforming -- a struct's `==` where it is Equatable and has none --
+	// which the checker wrote and checked, and which is lowered with the
+	// module's own files; nil where there are none. DerivedText is its
+	// source. See derived.go.
+	Derived     *ast.File
+	DerivedText []byte
+
 	// Splats are the closures that take one tuple and name its elements
 	// as their parameters -- `zip(a, b).map { $0 + $1 }` -- by the symbol
 	// each element is bound to.
@@ -249,11 +257,11 @@ type Info struct {
 	// Wrappers is the types declared @propertyWrapper; WrapperInits the
 	// call of a wrapper's initializer a wrapped property's storage starts
 	// as, by the property's binding: `Clamped(wrappedValue: 5, 0...10)`.
-	Wrappers     map[types.Type]bool
+	Wrappers map[types.Type]bool
 	// DynamicMembers is the types declared @dynamicMemberLookup, whose
 	// members nothing declares are subscripts with dynamicMember:.
 	DynamicMembers map[types.Type]bool
-	WrapperInits map[*ast.PatternBinding]*ast.CallExpr
+	WrapperInits   map[*ast.PatternBinding]*ast.CallExpr
 
 	// Diagnostics holds all warnings and errors produced during analysis.
 	Diagnostics []token.Diagnostic

@@ -1,25 +1,16 @@
-package derive
+package analyzer
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/vertex-language/vsc/ast"
-	"github.com/vertex-language/vsc/parser"
-	"github.com/vertex-language/vsc/token"
 )
 
-func parse(t *testing.T, src string) []*ast.File {
-	t.Helper()
-	tf := token.NewFile("main.swift", []byte(src))
-	f, ds := parser.ParseFile(tf, 0)
-	if len(ds) > 0 {
-		t.Fatalf("parse: %s", ds[0].Print(tf))
-	}
-	return []*ast.File{f}
-}
-
-func TestSource(t *testing.T) {
+// TestDerivedConformances holds the checker to the members swiftc derives:
+// a type's `==`, `hash(into:)` and allCases, where it conforms -- itself
+// or through a protocol that refines the one derived -- and has none.
+func TestDerivedConformances(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		src  string
@@ -31,8 +22,16 @@ func TestSource(t *testing.T) {
 				"if !(a.x == b.x) { return false }", "if !(a.y == b.y) { return false }"}},
 
 		{"Comparable and Hashable are Equatable too, and a public type's is public",
-			"public struct S: Comparable { let n: Int; static func < (a: S, b: S) -> Bool { return a.n < b.n } }",
+			"public struct S: Comparable { let n: Int; public static func < (a: S, b: S) -> Bool { return a.n < b.n } }",
 			[]string{"public static func __derived_struct_equals(_ a: S, _ b: S) -> Bool {"}},
+
+		{"so is a protocol of the program's own that refines Equatable",
+			"protocol Shape: Equatable {}\nstruct Sq: Shape { let side: Int }",
+			[]string{"extension Sq {", "if !(a.side == b.side) { return false }"}},
+
+		{"and an OptionSet",
+			"struct F: OptionSet { let rawValue: UInt8 }",
+			[]string{"static func __derived_struct_equals(_ a: F, _ b: F) -> Bool {", "if !(a.rawValue == b.rawValue)"}},
 
 		{"a struct with no stored properties is always equal",
 			"struct E: Hashable {}",
@@ -56,10 +55,6 @@ func TestSource(t *testing.T) {
 
 		{"nor one whose == is at the top level",
 			"struct M: Equatable { let n: Int }\nfunc == (a: M, b: M) -> Bool { return true }",
-			nil},
-
-		{"nor one read back from an interface that has the derived function",
-			"struct N: Equatable { let n: Int; static func __derived_struct_equals(_ a: N, _ b: N) -> Bool }",
 			nil},
 
 		{"a generic struct's == is where its parameters are Equatable",
@@ -93,7 +88,11 @@ func TestSource(t *testing.T) {
 			"enum D { case up, down }",
 			[]string{"extension D: Hashable {", "case .up: hasher.combine(0)"}},
 
-		{"but not one that already says so twice",
+		{"and CaseIterable lists its cases",
+			"enum K: CaseIterable { case a, b }",
+			[]string{"static var allCases: [K] { [.a, .b] }"}},
+
+		{"but not one that already hashes",
 			"enum D: Hashable { case up }\nextension D { func hash(into hasher: inout Hasher) { } }",
 			nil},
 
@@ -101,7 +100,9 @@ func TestSource(t *testing.T) {
 			"struct Plain { let n: Int }",
 			nil},
 	} {
-		got := string(Source(parse(t, c.src)))
+		file, _ := parseSnippet(t, c.src)
+		info, diags := Check([]*ast.File{file})
+		got := string(info.DerivedText)
 		if c.want == nil {
 			if got != "" {
 				t.Errorf("%s: derived\n%s", c.name, got)
@@ -113,7 +114,8 @@ func TestSource(t *testing.T) {
 				t.Errorf("%s: no %q in\n%s", c.name, line, got)
 			}
 		}
-		// What is derived has to parse, or it is dropped.
-		parse(t, got)
+		for _, d := range diags {
+			t.Errorf("%s: %s", c.name, d.Message)
+		}
 	}
 }
