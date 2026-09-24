@@ -880,6 +880,15 @@ func (g *gen) needMetadata(at ast.Node, t types.Type) bool {
 		Layout:    t,
 		Public:    g.publicTypes[typeNameOf(t)],
 	})
+	// An instance of a generic type has no conformances until one is
+	// asked for; printing asks the runtime for these two by its record.
+	if _, isInst := t.(*types.GenericInstance); isInst {
+		for _, p := range g.conformancesOf(t) {
+			if p != nil && (p.Name == "CustomStringConvertible" || p.Name == "CustomDebugStringConvertible") {
+				g.witnessTable(at, t, p)
+			}
+		}
+	}
 	// An enum's payloads are described as its fields are, where they can
 	// be: quietly, since a payload with no metadata leaves just the case.
 	if en, ok := t.Underlying().(*types.Enum); ok {
@@ -1031,6 +1040,12 @@ func (g *gen) structuralMetadata(at ast.Node, t types.Type) (string, bool) {
 		if len(u.Protocols) == 0 {
 			return "", false
 		}
+	case *types.Signature:
+		// A function value: its code and its context, which is all its
+		// record says. Its parameters need no records of their own.
+		if len(u.TypeParams) > 0 {
+			return "", false
+		}
 	default:
 		return "", false
 	}
@@ -1089,7 +1104,7 @@ func (g *gen) describable(at ast.Node, t types.Type) bool {
 		if _, ok := metadataRecords[u.Kind()]; ok {
 			return true
 		}
-	case *types.Optional, *types.Array, *types.Dictionary, *types.Set:
+	case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Signature:
 		_, ok := g.structuralMetadata(at, t)
 		return ok
 	case *types.Tuple:
@@ -1232,6 +1247,18 @@ func (g *gen) getterWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
 		return name, true
 	}
+	resultType := field.Type
+	// An instance of a generic type has its getter specialized for it,
+	// lowered here the first time, as a call to it would.
+	if _, isInst := concrete.(*types.GenericInstance); isInst && computed != nil {
+		spec, t, generic := g.genericAccessor(nil, concrete, computed, false)
+		if generic {
+			if spec == "" {
+				return "", false
+			}
+			getter, resultType = spec, t
+		}
+	}
 	f := g.m.Func(name).SetSourceName(r.Name).SetLinkage(sil.Private).SetAttr("ossa")
 
 	outerFn, outerEntry, outerBlk := g.fn, g.entry, g.blk
@@ -1241,7 +1268,7 @@ func (g *gen) getterWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 	g.blk = f.Entry()
 
 	ct := lowerType(concrete)
-	rt := lowerType(field.Type)
+	rt := lowerType(resultType)
 	selfAddr := f.Param(ct.Address(), sil.ParamInGuaranteed)
 	f.Type().Convention = sil.ConvWitness
 	f.SetResult(rt, resultConvention(rt))

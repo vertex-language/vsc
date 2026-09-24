@@ -325,6 +325,15 @@ func Unify(param, arg Type, subst map[*TypeParam]Type) bool {
 		return Unify(p.Results, a.Results, subst)
 	case *GenericInstance:
 		a, ok := arg.(*GenericInstance)
+		// A generic type written bare inside itself is its instance
+		// over its own parameters.
+		if params := typeParamsOfType(arg); !ok && len(params) > 0 && Identical(p.Base, arg) {
+			args := make([]Type, len(params))
+			for i, tp := range params {
+				args[i] = tp
+			}
+			a, ok = &GenericInstance{Base: arg, Args: args}, true
+		}
 		if !ok || len(p.Args) != len(a.Args) || !Identical(p.Base, a.Base) {
 			return false
 		}
@@ -414,6 +423,26 @@ func AssocOf(t Type, name string) Type {
 		return n.Assoc[name]
 	case *Enum:
 		return n.Assoc[name]
+	// The built-in collections' element types, as Swift names them.
+	case *Array:
+		if name == "Element" {
+			return n.Elem
+		}
+	case *Set:
+		if name == "Element" {
+			return n.Elem
+		}
+	case *Optional:
+		if name == "Wrapped" {
+			return n.Wrapped
+		}
+	case *Dictionary:
+		switch name {
+		case "Key":
+			return n.Key
+		case "Value":
+			return n.Value
+		}
 	}
 	return nil
 }
@@ -439,6 +468,15 @@ func typeParamsOf(t Type) []*TypeParam {
 // And where neither has, the answer still depends on the parameter,
 // which is what a Dependent is for.
 func DependentOn(base Type, name string) Type {
+	// A path a protocol says is another of its associated types is that
+	// one: a Sequence's Iterator.Element is its Element.
+	if d, ok := base.(*Dependent); ok {
+		if tp, ok := d.Base.(*TypeParam); ok {
+			if other, ok := sameTypeOf(tp, d.Name+"."+name); ok {
+				return DependentOn(tp, other)
+			}
+		}
+	}
 	if tp, ok := base.(*TypeParam); ok {
 		if bound := tp.Bound[name]; bound != nil {
 			return bound
@@ -449,4 +487,34 @@ func DependentOn(base Type, name string) Type {
 		return answer
 	}
 	return &Dependent{Base: base, Name: name}
+}
+
+// sameTypeOf is the associated type a protocol tp is constrained to says
+// the path is, where one says so.
+func sameTypeOf(tp *TypeParam, path string) (string, bool) {
+	seen := map[*Protocol]bool{}
+	var walk func(p *Protocol) (string, bool)
+	walk = func(p *Protocol) (string, bool) {
+		if p == nil || seen[p] {
+			return "", false
+		}
+		seen[p] = true
+		if other, ok := p.SameTypes[path]; ok {
+			return other, true
+		}
+		for _, up := range p.Inherited {
+			if other, ok := walk(up); ok {
+				return other, true
+			}
+		}
+		return "", false
+	}
+	for _, c := range tp.Constraints {
+		if p, ok := c.(*Protocol); ok {
+			if other, ok := walk(p); ok {
+				return other, true
+			}
+		}
+	}
+	return "", false
 }

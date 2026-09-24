@@ -127,14 +127,15 @@ func (g *gen) rangeTest(pat ast.Expr, subject *sil.Value, t types.Type) (*sil.Va
 	default:
 		return nil, false
 	}
+	// The bounds are compared, not kept: they end with the test's scope.
 	var lo, hi, atLeast, atMost *sil.Value
 	if lower != nil {
-		if lo = g.rvalue(lower); lo == nil {
+		if lo = g.expr(lower); lo == nil {
 			return nil, true
 		}
 	}
 	if upper != nil {
-		if hi = g.rvalue(upper); hi == nil {
+		if hi = g.expr(upper); hi == nil {
 			return nil, true
 		}
 	}

@@ -62,14 +62,31 @@ func main() -> Int32 {
 	}
 }
 
+// TestATupleAssignmentIsTakenApart: `(a, b) = (b, a)` evaluates the
+// right side whole, then stores each part.
+func TestATupleAssignmentIsTakenApart(t *testing.T) {
+	got, diags := generate(t, "main", `
+func main() -> Int32 {
+    var a = 1
+    var b = 2
+    (a, b) = (b, a)
+    return 0
+}`)
+	for _, d := range diags {
+		t.Fatalf("gen: %s", d.Message)
+	}
+	if !strings.Contains(got, "destructure_tuple") {
+		t.Errorf("the tuple was not taken apart:\n%s", got)
+	}
+}
+
 // TestAnAssignmentThatCannotBeLoweredIsReported: silence here is the
 // dangerous case, so it is the one under test.
 func TestAnAssignmentThatCannotBeLoweredIsReported(t *testing.T) {
 	_, diags := generate(t, "main", `
 func main() -> Int32 {
-    var a = 1
-    var b = 2
-    (a, b) = (b, a)
+    var a: [Int] = [1, 2]
+    a[0...0] = a[1...1]
     return 0
 }`)
 	if len(diags) == 0 {

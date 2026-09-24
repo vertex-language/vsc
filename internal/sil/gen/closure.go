@@ -258,7 +258,7 @@ func (g *gen) closureCaptures(e ast.Node) ([]closureCapture, string) {
 // closureBody emits the closure's statements as a private SIL function.
 func (g *gen) closureBody(e *ast.ClosureExpr, sig *types.Signature, caps []closureCapture) *sil.Func {
 	x, implicit := implicitResult(e, sig)
-	return g.captureBody(sig, caps, g.closureParams(e, sig), e.Stmts, x, implicit, e.Lbrace, e.Rbrace, "closure")
+	return g.captureBody(sig, caps, g.closureParams(e, sig), e.Stmts, x, implicit, e.Lbrace, e.Rbrace, "closure", g.info.Splats[e]...)
 }
 
 // captureBody emits a function that runs stmts with its parameters bound
@@ -266,7 +266,7 @@ func (g *gen) closureBody(e *ast.ClosureExpr, sig *types.Signature, caps []closu
 // nested function's. Where implicit, the body is the one expression x and
 // returns it.
 func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []analyzer.Symbol,
-	stmts []ast.Stmt, x ast.Expr, implicit bool, start, end token.Pos, kind string) *sil.Func {
+	stmts []ast.Stmt, x ast.Expr, implicit bool, start, end token.Pos, kind string, splat ...analyzer.Symbol) *sil.Func {
 	f := g.m.Func(g.closureSymbol()).SetLinkage(sil.Private).SetAttr("ossa")
 
 	outer := struct {
@@ -367,6 +367,21 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 	if sig.Results != nil && !isVoid(sig.Results) {
 		f.SetResult(lowerType(sig.Results), resultConvention(lowerType(sig.Results)))
 	}
+	// A nested function that calls itself: its name, inside, is itself
+	// over the captures just bound.
+	if self := g.recursive; self != nil {
+		g.recursive = nil
+		inner := make([]closureCapture, len(caps))
+		for i, c := range caps {
+			inner[i] = closureCapture{sym: c.sym, loc: g.locals[c.sym]}
+		}
+		g.locals[self] = &local{value: g.closureValue(f, sig, inner), typ: lowerType(sig)}
+	}
+	// A closure that names the elements of the one tuple it takes has
+	// them as its own lets.
+	if len(splat) > 0 && len(sig.Params) == 1 {
+		g.bindSplat(splat, f.Entry().Args()[0], sig.Params[0].Type)
+	}
 
 	body := stmts
 	if implicit {
@@ -376,6 +391,12 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 	// Single-expression closures return their value implicitly.
 	if implicit {
 		v := g.rvalue(x)
+		// Wrapped where the closure returns an optional, as `return` does.
+		if v != nil {
+			if rs := f.Type().Results; len(rs) == 1 && rs[0].Type.IsValid() {
+				v = g.optionalFor(x, v, g.typeOf(x), rs[0].Type.Formal())
+			}
+		}
 		g.unwind()
 		if v == nil {
 			g.blk.Unreachable()
@@ -400,6 +421,28 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 		}
 	}
 	return f
+}
+
+// bindSplat binds the names a closure gives the elements of its tuple
+// parameter v, each a let of its own copy.
+func (g *gen) bindSplat(syms []analyzer.Symbol, v *sil.Value, t types.Type) {
+	tu, ok := t.Underlying().(*types.Tuple)
+	if !ok || len(tu.Elements) != len(syms) {
+		return
+	}
+	if v.Type().IsAddress() {
+		v = g.blk.Load(v, "copy")
+		g.destroyLater(v)
+	}
+	for i, el := range tu.Elements {
+		lt := lowerType(el.Type)
+		part := g.blk.TupleExtract(v, i, lt)
+		if !lt.Trivial() {
+			part = g.blk.CopyValue(part)
+			g.destroyLater(part)
+		}
+		g.locals[syms[i]] = &local{value: part, typ: lt}
+	}
 }
 
 // implicitResult is the expression a single-expression closure returns
@@ -536,15 +579,27 @@ func (g *gen) capturingNestedFunc(d *ast.FuncDecl) {
 		g.refuse(d, "a generic nested function that captures")
 		return
 	}
-	sig := sym.Signature()
-	if callsItself(d.Body, sym, g.info) {
-		g.refuse(d, "a nested function that captures and calls itself")
+	// Inside a specialization, its types are the specialization's.
+	sig, ok := g.substituted(sym.Signature()).(*types.Signature)
+	if !ok {
+		g.refuse(d, "a nested function whose type this compiler cannot specialize")
 		return
 	}
 	caps, refused := g.closureCaptures(d.Body)
 	if refused != "" {
 		g.refuse(d, "a nested function that captures '"+refused+"'")
 		return
+	}
+	// One that calls itself names, inside, the function value it is:
+	// its body over the captures it was given.
+	if callsItself(d.Body, sym, g.info) {
+		for _, c := range caps {
+			if c.self {
+				g.refuse(d, "a nested function that captures self and calls itself")
+				return
+			}
+		}
+		g.recursive = sym
 	}
 	syms := paramSymbols(d, g.info, g.file)
 	var x ast.Expr

@@ -223,6 +223,13 @@ func (g *gen) rawEquals(at ast.Node, en *types.Enum, k *types.EnumCase, x *sil.V
 	if op, ok := core.Lower("==", rawT); ok && op.Result == "Int1" {
 		return g.blk.Builtin(op.Name, sil.Object(sil.BuiltinInt1), g.machine(x, rawT), g.machine(v, rawT))
 	}
+	// A raw type with an == of its own -- the core's Character.
+	if bit := g.operatorCompare("==", x, v, rawT); bit != nil {
+		if !v.Type().Trivial() {
+			g.blk.DestroyValue(v)
+		}
+		return bit
+	}
 	g.refuse(at, "init(rawValue:) of '"+en.Name+"', whose raw type this cannot compare")
 	return nil
 }

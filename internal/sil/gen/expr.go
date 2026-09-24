@@ -72,6 +72,9 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 
 	// `Int.self`, and a type written where a value goes: its metatype.
 	case *ast.PostfixSelfExpr, *ast.TypeExpr:
+		if v, ok := g.openedType(n); ok {
+			return v
+		}
 		if meta, ok := g.typeOf(n).(*types.Metatype); ok {
 			return g.metatypeValue(n, meta.Instance)
 		}
@@ -323,6 +326,13 @@ func (g *gen) consume(v *sil.Value) *sil.Value {
 		return nil
 	}
 	if v.Ownership() == sil.Guaranteed {
+		// Memory that is borrowed -- an existential parameter -- is
+		// copied into memory of its own.
+		if v.Type().IsAddress() {
+			slot := g.blk.AllocStack(v.Type().Object())
+			g.blk.CopyAddr(v, slot, "init")
+			return slot
+		}
 		return g.blk.CopyValue(v)
 	}
 	g.forget(v)
@@ -855,6 +865,12 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 
 	sym, _ := g.info.Uses[id.Name].(*analyzer.FuncSymbol)
 	if sym == nil {
+		// A stored closure of self's, named alone: its value, called.
+		if t := g.typeOf(id); t != nil {
+			if _, isFunc := t.Underlying().(*types.Signature); isFunc {
+				return g.applyValue(e, id)
+			}
+		}
 		g.unsupported(e)
 		return nil
 	}
@@ -2660,14 +2676,7 @@ func (g *gen) typeOfValue(e *ast.CallExpr, static types.Type) *sil.Value {
 		if addr == nil {
 			return nil
 		}
-		f := g.m.Func(stdlib.ExistentialType).SetSourceName(stdlib.ExistentialType)
-		if g.needsType(f) {
-			f.SetLinkage(sil.PublicExternal)
-			f.Type().Convention = sil.Thin
-			f.Type().Params = []sil.Param{{Type: rawPointerType(), Convention: sil.ParamUnowned}}
-			f.SetResult(meta, sil.ResultUnowned)
-		}
-		return g.blk.Apply(g.blk.FunctionRef(f), meta, g.blk.AddressToPointer(addr, rawPointerType()))
+		return g.dynamicType(addr, meta)
 	}
 	if isClass(static) {
 		obj := g.rvalue(arg)
@@ -2778,4 +2787,40 @@ func (g *gen) specializedIntegerBound(e *ast.MemberExpr) (*sil.Value, bool) {
 	}
 	raw := g.blk.IntegerLiteral(sil.Object(builtinFor(t)), int64(v))
 	return g.blk.Struct(lowerType(t), raw), true
+}
+
+// dynamicType is the type of what the existential at addr holds.
+func (g *gen) dynamicType(addr *sil.Value, meta sil.Type) *sil.Value {
+	f := g.m.Func(stdlib.ExistentialType).SetSourceName(stdlib.ExistentialType)
+	if g.needsType(f) {
+		f.SetLinkage(sil.PublicExternal)
+		f.Type().Convention = sil.Thin
+		f.Type().Params = []sil.Param{{Type: rawPointerType(), Convention: sil.ParamUnowned}}
+		f.SetResult(meta, sil.ResultUnowned)
+	}
+	return g.blk.Apply(g.blk.FunctionRef(f), meta, g.blk.AddressToPointer(addr, rawPointerType()))
+}
+
+// openedType is `T.self` in a specialization for an existential, as
+// Swift opens one: the type of the value the parameter T was bound by
+// holds, not the existential's.
+func (g *gen) openedType(n ast.Expr) (*sil.Value, bool) {
+	if len(g.opened) == 0 {
+		return nil, false
+	}
+	m, ok := g.info.Types[n].(*types.Metatype)
+	if !ok {
+		return nil, false
+	}
+	tp, ok := m.Instance.(*types.TypeParam)
+	if !ok {
+		return nil, false
+	}
+	sym := g.opened[tp]
+	loc := g.locals[sym]
+	if sym == nil || loc == nil || loc.addr == nil {
+		return nil, false
+	}
+	meta := lowerType(&types.Metatype{Instance: g.substituted(tp)})
+	return g.dynamicType(loc.addr, meta), true
 }

@@ -844,6 +844,8 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if t, ok := c.adopt(e.Y, lhs); ok {
 				rhs = t
 			}
+			// `(a, _) = pair`: the `_` takes whatever is there.
+			lhs = wildcardsTake(e.X, lhs, rhs)
 			if !types.AssignableTo(rhs, lhs) {
 				c.typeErrorf(e.Op.Pos(), "cannot assign value of type '%s' to type '%s'", rhs, lhs)
 			}
@@ -916,7 +918,19 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			lhs = c.checkExpr(e.X, operandCtx, scope)
 			rhs = c.checkExpr(e.Y, operandCtx, scope)
 		}
+		ownL, ownR := lhs, rhs
 		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs, scope)
+		// A literal read as the other operand's type where no operator
+		// takes two of those is its own type again, where one takes that:
+		// `"set " + name.dropFirst(4)` is a String and a Substring.
+		if (lhs != ownL || rhs != ownR) && !c.hasOperator(scope, opName, []ast.Expr{e.X, e.Y}, []types.Type{lhs, rhs}) {
+			if ch, ok := c.pickOperator(scope, opName, []ast.Expr{e.X, e.Y}, []types.Type{ownL, ownR}); ok && len(ch.subst) == 0 {
+				delete(c.info.LiteralInits, unparen(e.X))
+				delete(c.info.LiteralInits, unparen(e.Y))
+				lhs = c.checkExpr(e.X, ch.sig().Params[0].Type, scope)
+				rhs = c.checkExpr(e.Y, ch.sig().Params[1].Type, scope)
+			}
+		}
 		// An array literal compared with or added to an array is an array
 		// of that array's elements: `bytes == [109, 115]` with bytes a
 		// [UInt8], `xs + []`.
@@ -1677,6 +1691,26 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if arrT, ok := expected.(*types.Array); ok {
 			elemType = arrT.Elem
 		}
+		// `[nil, 0, -3]` with nothing to say what it is: an array of
+		// optionals of what its other elements are.
+		if elemType == nil && len(e.Items) > 1 {
+			var sawNil bool
+			var other types.Type
+			for _, el := range e.Items {
+				if lit, ok := unparen(el).(*ast.BasicLit); ok && lit.Kind == token.NIL {
+					sawNil = true
+				} else if other == nil {
+					other = c.checkExpr(el, nil, scope)
+				}
+			}
+			if sawNil && other != nil && !isInvalid(other) {
+				if _, isOpt := other.(*types.Optional); isOpt {
+					elemType = other
+				} else {
+					elemType = &types.Optional{Wrapped: literalDefault(other)}
+				}
+			}
+		}
 		for _, el := range e.Items {
 			et := c.checkExpr(el, elemType, scope)
 			if elemType == nil {
@@ -1879,7 +1913,26 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 
 		var params []*types.Param
-		if e.Sig != nil && e.Sig.Params != nil {
+		if tu := c.splatTuple(e, expSig); tu != nil {
+			// One tuple wanted, its elements named: the closure takes the
+			// tuple, and its names are the elements.
+			var syms []Symbol
+			for i, el := range tu.Elements {
+				name, pos := fmt.Sprintf("$%d", i), e.Pos()
+				if e.Sig != nil && e.Sig.Params != nil {
+					p := e.Sig.Params.Params[i]
+					name, pos = p.Name.Text(c.file), p.Name.Pos()
+				}
+				v := NewVar(name, el.Type, pos, true, types.DefaultOwnership)
+				closureScope.Insert(v)
+				if e.Sig != nil && e.Sig.Params != nil {
+					c.info.Defs[e.Sig.Params.Params[i].Name] = v
+				}
+				syms = append(syms, v)
+			}
+			c.info.Splats[e] = syms
+			params = []*types.Param{{Type: expSig.Params[0].Type, Ownership: expSig.Params[0].Ownership}}
+		} else if e.Sig != nil && e.Sig.Params != nil {
 			for i, p := range e.Sig.Params.Params {
 				name := p.Name.Text(c.file)
 				var paramType types.Type
@@ -1948,12 +2001,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			x, ok := e.Stmts[0].(*ast.ExprStmt)
 			return x, ok
 		}()
-		inferResult := unstated || retType == nil || mentionsTypeParam(retType)
+		// A result the closure writes is its result, whatever type
+		// parameters it names: the enclosing function's, not a callee's.
+		stated := e.Sig != nil && e.Sig.Result != nil
+		inferResult := !stated && (unstated || retType == nil || c.mentionsOpenParam(retType, scope))
 		if len(e.Stmts) == 1 && (oneExpr || !inferResult) {
 			if exprStmt, ok := e.Stmts[0].(*ast.ExprStmt); ok {
 				// A result still to be inferred -- the U of a call to
 				// map<U> -- is whatever the body gives.
-				open := mentionsTypeParam(retType)
+				open := !stated && c.mentionsOpenParam(retType, scope)
 				want := retType
 				if open {
 					want = nil
@@ -3525,4 +3581,26 @@ func (c *checker) builtinGetOnly(t types.Type, name string) bool {
 		}
 	}
 	return true
+}
+
+// wildcardsTake is the type a tuple of destinations takes, each `_` in it
+// the type of what is assigned there.
+func wildcardsTake(x ast.Expr, lhs, rhs types.Type) types.Type {
+	switch x := unparen(x).(type) {
+	case *ast.WildcardExpr:
+		return rhs
+	case *ast.TupleExpr:
+		lt, ok1 := lhs.(*types.Tuple)
+		rt, ok2 := rhs.(*types.Tuple)
+		if !ok1 || !ok2 || len(lt.Elements) != len(x.Elems) || len(rt.Elements) != len(x.Elems) {
+			return lhs
+		}
+		elems := make([]*types.TupleElement, len(x.Elems))
+		for i, el := range x.Elems {
+			elems[i] = &types.TupleElement{Name: lt.Elements[i].Name,
+				Type: wildcardsTake(el.X, lt.Elements[i].Type, rt.Elements[i].Type)}
+		}
+		return &types.Tuple{Elements: elems}
+	}
+	return lhs
 }

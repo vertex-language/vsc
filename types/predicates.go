@@ -53,6 +53,15 @@ func Identical(x, y Type) bool {
 		return Identical(x, n.Underlying())
 	}
 
+	// A generic type named bare inside itself -- the type of `self` in
+	// S<E> -- is S<E>, its instance over its own parameters.
+	if g, ok := y.(*GenericInstance); ok && OwnInstance(g, x) {
+		return true
+	}
+	if g, ok := x.(*GenericInstance); ok && OwnInstance(g, y) {
+		return true
+	}
+
 	switch xt := x.(type) {
 	case *Basic:
 		if yt, ok := y.(*Basic); ok {
@@ -446,6 +455,16 @@ func AssignableTo(from, to Type) bool {
 		if AssignableTo(from, toOpt.Wrapped) {
 			return true
 		}
+		// And T? to U? where a T is a U by erasure or upcast: an
+		// optional class to an optional of a protocol it conforms to.
+		if fromOpt, ok := from.(*Optional); ok {
+			switch toOpt.Wrapped.Underlying().(type) {
+			case *Existential, *Protocol, *Class:
+				if AssignableTo(fromOpt.Wrapped, toOpt.Wrapped) {
+					return true
+				}
+			}
+		}
 	}
 
 	// GenericInstance compatibility
@@ -618,6 +637,25 @@ func selfInstance(bare, inst Type) bool {
 	}
 	for i, p := range params {
 		if tp, ok := gi.Args[i].(*TypeParam); !ok || tp != p {
+			return false
+		}
+	}
+	return true
+}
+
+// OwnInstance reports whether g is the generic type bare instantiated
+// over its own type parameters: S<E> in the declaration of S<E>.
+func OwnInstance(g *GenericInstance, bare Type) bool {
+	if _, isInst := bare.(*GenericInstance); isInst || g.Base == nil || g.Base == g {
+		return false
+	}
+	params := typeParamsOfType(bare)
+	if len(params) == 0 || len(params) != len(g.Args) || !Identical(g.Base, bare) {
+		return false
+	}
+	for i, a := range g.Args {
+		tp, ok := a.(*TypeParam)
+		if !ok || tp != params[i] {
 			return false
 		}
 	}

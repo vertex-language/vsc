@@ -551,6 +551,11 @@ void describe(Text& t, const void* value, const Metadata* type) {
     describeTuple(t, value, static_cast<const TupleMetadata*>(type));
     return;
   }
+  // A function says only that it is one, as Swift's does.
+  if (type->kind == kindFunction) {
+    textString(t, "(Function)");
+    return;
+  }
   if (describeConforming(t, value, type))
     return;
   if (type->kind == kindClass) {

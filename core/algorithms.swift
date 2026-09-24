@@ -282,6 +282,24 @@ extension Array {
         return out
     }
 
+    // How many elements predicate is true of.
+    func count(where predicate: (Element) -> Bool) -> Int {
+        var n = 0
+        for x in self where predicate(x) { n += 1 }
+        return n
+    }
+
+    // Whether the elements are other's, in order, by areEquivalent.
+    func elementsEqual(_ other: [Element], by areEquivalent: (Element, Element) -> Bool) -> Bool {
+        if count != other.count { return false }
+        var i = 0
+        while i < count {
+            if !areEquivalent(self[i], other[i]) { return false }
+            i += 1
+        }
+        return true
+    }
+
     // The elements from the first one that fails predicate.
     func drop(while predicate: (Element) -> Bool) -> [Element] {
         var out: [Element] = []
@@ -582,10 +600,53 @@ extension ArraySlice {
 
 extension ArraySlice: CustomStringConvertible, CustomDebugStringConvertible {
     var description: String { return "\(Array(self))" }
-    var debugDescription: String { return "\(Array(self))" }
+    var debugDescription: String { return "ArraySlice(\(Array(self)))" }
 }
 
 extension Array where Element: Equatable {
+    // Whether the elements are other's, in order.
+    func elementsEqual(_ other: [Element]) -> Bool {
+        if count != other.count { return false }
+        var i = 0
+        while i < count {
+            if self[i] != other[i] { return false }
+            i += 1
+        }
+        return true
+    }
+
+    // Whether the first elements are possiblePrefix's.
+    func starts(with possiblePrefix: [Element]) -> Bool {
+        if possiblePrefix.count > count { return false }
+        var i = 0
+        while i < possiblePrefix.count {
+            if self[i] != possiblePrefix[i] { return false }
+            i += 1
+        }
+        return true
+    }
+
+    // The runs of elements between those equal to separator, the empty
+    // ones left out unless omittingEmptySubsequences is false.
+    func split(separator: Element, maxSplits: Int = Int.max, omittingEmptySubsequences: Bool = true) -> [ArraySlice<Element>] {
+        var out: [ArraySlice<Element>] = []
+        var start = 0
+        var i = 0
+        while i < count {
+            if self[i] == separator && out.count < maxSplits {
+                if i > start || !omittingEmptySubsequences {
+                    out.append(ArraySlice(base: self, startIndex: start, endIndex: i))
+                }
+                start = i + 1
+            }
+            i += 1
+        }
+        if count > start || !omittingEmptySubsequences {
+            out.append(ArraySlice(base: self, startIndex: start, endIndex: count))
+        }
+        return out
+    }
+
     // Whether an element equals element. One the runtime hashes is
     // answered by the runtime; this is the rest, compared with ==.
     func contains(_ element: Element) -> Bool {
@@ -624,6 +685,17 @@ extension Array where Element: Comparable {
         self = sorted()
     }
 
+    // Whether the elements come before other's in dictionary order.
+    func lexicographicallyPrecedes(_ other: [Element]) -> Bool {
+        var i = 0
+        while i < count && i < other.count {
+            if self[i] < other[i] { return true }
+            if other[i] < self[i] { return false }
+            i += 1
+        }
+        return count < other.count
+    }
+
     // The least element, if any.
     func min() -> Element? {
         if isEmpty { return nil }
@@ -638,6 +710,26 @@ extension Array where Element: Comparable {
         var best = self[0]
         for x in self where best < x { best = x }
         return best
+    }
+}
+
+// What an array is to an extension of arrays of arrays: its elements,
+// by their type.
+protocol _ArrayProtocol {
+    associatedtype Element
+    var _elements: [Element] { get }
+}
+
+extension Array: _ArrayProtocol {
+    var _elements: [Element] { return self }
+}
+
+extension Array where Element: _ArrayProtocol {
+    // The elements of the arrays, one array after another.
+    func joined() -> [Element.Element] {
+        var out: [Element.Element] = []
+        for xs in self { out.append(contentsOf: xs._elements) }
+        return out
     }
 }
 
@@ -956,6 +1048,11 @@ extension _UnicodeScalarIterator: IteratorProtocol {
 }
 
 extension _UnicodeScalarView {
+    // scalar, after the others.
+    mutating func append(_ scalar: UnicodeScalar) {
+        _string.append(Character(scalar))
+    }
+
     func makeIterator() -> _UnicodeScalarIterator {
         return _UnicodeScalarIterator(_string: _string, _at: 0)
     }
@@ -1193,7 +1290,10 @@ extension String {
     // Whether the String holds c.
     func contains(_ c: Character) -> Bool { return firstIndex(of: c) != nil }
 
-    var unicodeScalars: _UnicodeScalarView { return _UnicodeScalarView(_string: self) }
+    var unicodeScalars: _UnicodeScalarView {
+        get { return _UnicodeScalarView(_string: self) }
+        set { self = newValue._string }
+    }
     var utf16: _UTF16View { return _UTF16View(_string: self) }
 
     // The one scalar, as a String.
@@ -1218,6 +1318,37 @@ extension String {
         }
         self = out
     }
+
+    // The digits of an unsigned value in radix.
+    init(_ value: UInt64, radix: Int, uppercase: Bool = false) {
+        if radix < 2 || radix > 36 { fatalError("Radix must be between 2 and 36") }
+        let digits = Array(uppercase ? "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789abcdefghijklmnopqrstuvwxyz")
+        let base = UInt64(radix)
+        var reversed: [Character] = []
+        var n = value
+        repeat {
+            reversed.append(digits[Int(n % base)])
+            n /= base
+        } while n != 0
+        var out = ""
+        var i = reversed.count - 1
+        while i >= 0 {
+            out.append(reversed[i])
+            i -= 1
+        }
+        self = out
+    }
+
+    // The other integer types' digits, as Swift's generic initializer
+    // gives them.
+    init(_ value: UInt, radix: Int, uppercase: Bool = false) { self = String(UInt64(value), radix: radix, uppercase: uppercase) }
+    init(_ value: UInt32, radix: Int, uppercase: Bool = false) { self = String(Int(value), radix: radix, uppercase: uppercase) }
+    init(_ value: UInt16, radix: Int, uppercase: Bool = false) { self = String(Int(value), radix: radix, uppercase: uppercase) }
+    init(_ value: UInt8, radix: Int, uppercase: Bool = false) { self = String(Int(value), radix: radix, uppercase: uppercase) }
+    init(_ value: Int64, radix: Int, uppercase: Bool = false) { self = String(Int(value), radix: radix, uppercase: uppercase) }
+    init(_ value: Int32, radix: Int, uppercase: Bool = false) { self = String(Int(value), radix: radix, uppercase: uppercase) }
+    init(_ value: Int16, radix: Int, uppercase: Bool = false) { self = String(Int(value), radix: radix, uppercase: uppercase) }
+    init(_ value: Int8, radix: Int, uppercase: Bool = false) { self = String(Int(value), radix: radix, uppercase: uppercase) }
 
     // Every scalar in its uppercase, or lowercase, form.
     func uppercased() -> String { return _uppercased(self) }
@@ -1336,6 +1467,12 @@ extension Substring {
     func hasPrefix(_ prefix: String) -> Bool { return _string.hasPrefix(prefix) }
     func hasSuffix(_ suffix: String) -> Bool { return _string.hasSuffix(suffix) }
 }
+
+// A string and the characters of a substring after it.
+func + (lhs: String, rhs: Substring) -> String { return lhs + String(rhs) }
+
+// The characters of a substring and a string after them.
+func + (lhs: Substring, rhs: String) -> String { return String(lhs) + rhs }
 
 extension Substring: ExpressibleByStringLiteral {
     init(stringLiteral value: String) {
@@ -1750,6 +1887,142 @@ func zip<A, B>(_ first: [A], _ second: [B]) -> [(A, B)] {
     var i = 0
     while i < first.count && i < second.count {
         out.append((first[i], second[i]))
+        i += 1
+    }
+    return out
+}
+
+// A sequence whose map and filter run only as its elements are asked
+// for: Swift's lazy views of a collection, as one type. Its elements are
+// what _at makes of the base's positions _lo..<_hi, where a filter has
+// left one out _at answers nil. Walking its positions evaluates what
+// Swift's LazyFilterCollection evaluates, so a closure runs as often.
+struct LazySequence<Element>: Sequence {
+    let _lo: Int
+    let _hi: Int
+    let _filtered: Bool
+    let _at: (Int) -> Element?
+
+    func makeIterator() -> _LazyIterator<Element> {
+        return _LazyIterator(_seq: self, _i: _lo)
+    }
+
+    var lazy: LazySequence<Element> { return self }
+
+    // What transform makes of each element, made as each is asked for.
+    func map<T>(_ transform: @escaping (Element) -> T) -> LazySequence<T> {
+        let at = _at
+        return LazySequence<T>(_lo: _lo, _hi: _hi, _filtered: _filtered, _at: { (i: Int) -> T? in
+            if let x = at(i) { return transform(x) }
+            return nil
+        })
+    }
+
+    // The elements isIncluded keeps, found as each is asked for.
+    func filter(_ isIncluded: @escaping (Element) -> Bool) -> LazySequence<Element> {
+        let at = _at
+        return LazySequence<Element>(_lo: _lo, _hi: _hi, _filtered: true, _at: { (i: Int) -> Element? in
+            if let x = at(i) {
+                if isIncluded(x) { return x }
+            }
+            return nil
+        })
+    }
+
+    // The first position holding an element.
+    func _start() -> Int {
+        if !_filtered { return _lo }
+        var i = _lo
+        while i < _hi {
+            if let _ = _at(i) { break }
+            i += 1
+        }
+        return i
+    }
+
+    // The position after i holding an element.
+    func _after(_ i: Int) -> Int {
+        if !_filtered { return i + 1 }
+        var j = i + 1
+        while j < _hi {
+            if let _ = _at(j) { break }
+            j += 1
+        }
+        return j
+    }
+
+    // At most the first maxLength elements.
+    func prefix(_ maxLength: Int) -> LazySequence<Element> {
+        let start = _start()
+        var end = _start()
+        var k = 0
+        while k < maxLength && end < _hi {
+            end = _after(end)
+            k += 1
+        }
+        return LazySequence<Element>(_lo: start, _hi: end, _filtered: _filtered, _at: _at)
+    }
+
+    // The first element, or nil where there is none.
+    var first: Element? {
+        let i = _start()
+        if i < _hi { return _at(i) }
+        return nil
+    }
+}
+
+struct _LazyIterator<Element>: IteratorProtocol {
+    let _seq: LazySequence<Element>
+    var _i: Int
+    mutating func next() -> Element? {
+        while _i < _seq._hi {
+            let i = _i
+            _i += 1
+            if let x = _seq._at(i) { return x }
+        }
+        return nil
+    }
+}
+
+extension Array {
+    // The array as a lazy sequence.
+    var lazy: LazySequence<Element> {
+        let items = self
+        return LazySequence<Element>(_lo: 0, _hi: count, _filtered: false, _at: { (i: Int) -> Element? in items[i] })
+    }
+}
+
+extension Range where Bound == Int {
+    // The integers as a lazy sequence.
+    var lazy: LazySequence<Int> {
+        return LazySequence<Int>(_lo: lowerBound, _hi: upperBound, _filtered: false, _at: { (i: Int) -> Int? in i })
+    }
+}
+
+extension ClosedRange where Bound == Int {
+    // The integers as a lazy sequence.
+    var lazy: LazySequence<Int> {
+        return LazySequence<Int>(_lo: lowerBound, _hi: upperBound + 1, _filtered: false, _at: { (i: Int) -> Int? in i })
+    }
+}
+
+// The integers counted up from a start, beside the elements of an array.
+func zip<B>(_ first: PartialRangeFrom<Int>, _ second: [B]) -> [(Int, B)] {
+    var out: [(Int, B)] = []
+    var i = 0
+    while i < second.count {
+        out.append((first.lowerBound + i, second[i]))
+        i += 1
+    }
+    return out
+}
+
+// The elements of an array beside the integers counted up from a start.
+func zip<A>(_ first: [A], _ second: PartialRangeFrom<Int>) -> [(A, Int)] {
+    var out: [(A, Int)] = []
+    var i = 0
+    while i < first.count {
+        out.append((first[i], second.lowerBound + i))
         i += 1
     }
     return out

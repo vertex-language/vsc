@@ -308,6 +308,11 @@ func (g *gen) subscriptAssign(target ast.Expr, value collArg) bool {
 	}
 	switch u := g.typeOf(sub.X).Underlying().(type) {
 	case *types.Array:
+		// `a[1...2] = s` replaces a range, which is not one element.
+		if !types.Identical(g.typeOf(sub.Args[0].X), types.Typ[types.Int]) {
+			g.refuse(sub, "an assignment to a range of an array")
+			return true
+		}
 		g.collectionCall(sub, core.ArraySet(u), sub.X, []collArg{{expr: sub.Args[0].X}, value})
 		return true
 	case *types.Dictionary:

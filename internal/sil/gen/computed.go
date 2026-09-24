@@ -117,6 +117,17 @@ func (g *gen) getterCall(at ast.Node, recv types.Type, f *types.Field,
 // first time a module reads it. It is lowered privately where it is used,
 // as the core's functions are; see emitCoreInit.
 func (g *gen) emitCoreGetter(recv types.Type, f *types.Field, symbol string, static bool) {
+	g.emitCoreAccessor(recv, f, symbol, static, false)
+}
+
+// emitCoreSetter is emitCoreGetter for the setter: String's
+// unicodeScalars written through.
+func (g *gen) emitCoreSetter(recv types.Type, f *types.Field, symbol string) {
+	g.emitCoreAccessor(recv, f, symbol, false, true)
+}
+
+// emitCoreAccessor emits a core computed property's getter, or setter.
+func (g *gen) emitCoreAccessor(recv types.Type, f *types.Field, symbol string, static, setter bool) {
 	b := builtinOf(g.info, recv)
 	core := g.info.CoreAlgorithms
 	if b == nil || core == nil || b.Modules[f] != "Swift" || len(b.Params) > 0 {
@@ -145,6 +156,12 @@ func (g *gen) emitCoreGetter(recv types.Type, f *types.Field, symbol string, sta
 			for _, bnd := range v.Bindings {
 				if g.computedName(bnd) != f.Name {
 					continue
+				}
+				if setter {
+					if set := g.setterAccessor(bnd); set != nil {
+						g.emitSetterNamed(symbol, recv, f.Name, f.Type, set, sil.Private)
+					}
+					return
 				}
 				if body := g.getterBody(bnd); body != nil {
 					g.emitGetterNamed(symbol, recv, f.Name, f.Type, body, static, sil.Private)
@@ -716,6 +733,7 @@ func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Fie
 			g.errorAt(mem, "cannot name the setter of '"+f.Name+"': "+err.Error())
 			return
 		}
+		g.emitCoreSetter(recv, f, name)
 	}
 	var self *sil.Value
 	if isClass(recv) {

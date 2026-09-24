@@ -243,6 +243,10 @@ func (c *checker) resolveMemberType(t *ast.MemberType, scope *Scope) types.Type 
 			}
 			return &types.Dependent{Base: tp, Name: name}
 		}
+		// An associated type of an associated type: C.Iterator.Element.
+		if _, ok := base.(*types.Dependent); ok {
+			return types.DependentOn(base, name)
+		}
 		// Associated type on concrete conformer or nested type.
 		if answer := types.AssocOf(base, name); answer != nil {
 			return answer
@@ -1429,7 +1433,15 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 			subscripts = &u.Subscripts
 		}
 		c.memberIsolated = c.info.MainActor[extType.Underlying()]
+		// The where clause holds in the members' signatures as in their
+		// bodies: `-> [Element.Element]` where Element: _ArrayProtocol.
+		restore := func() {}
+		if ext.Where != nil {
+			restore = c.restoreTypeParams(c.typeParamsOf(extType))
+			c.applyWhere(ext.Where, typeScope)
+		}
 		c.readMembers(ext.Body, typeScope, fields, methods, en, inits, computed, statics, subscripts)
+		restore()
 		c.memberIsolated = false
 		if isBuiltin && builtin != nil && c.importing != "" {
 			if builtin.Modules == nil {
@@ -2102,4 +2114,48 @@ func typeParamsOfDecl(t types.Type) []*types.TypeParam {
 		return u.TypeParams
 	}
 	return nil
+}
+
+// conditionsMet reports whether what an extension's where clause asks of
+// the parameters of the type it extends -- the member m's conditions --
+// holds of base's arguments.
+func (c *checker) conditionsMet(m any, base types.Type) bool {
+	conds := c.info.conditions[m]
+	if len(conds) == 0 {
+		return true
+	}
+	if meta, ok := base.(*types.Metatype); ok {
+		base = meta.Instance
+	}
+	inst, ok := base.(*types.GenericInstance)
+	if !ok {
+		b := c.builtinOf(base)
+		if b == nil || len(b.Params) == 0 {
+			return true
+		}
+		inst = &types.GenericInstance{Base: b.Type, Args: b.Args(base)}
+	}
+	params := c.typeParamsOf(inst.Base)
+	for _, cond := range conds {
+		var arg types.Type
+		for i, p := range params {
+			if p == cond.param && i < len(inst.Args) {
+				arg = inst.Args[i]
+			}
+		}
+		if arg == nil || isInvalid(arg) {
+			continue
+		}
+		if _, open := arg.(*types.TypeParam); open {
+			continue
+		}
+		if cond.same != nil {
+			if !types.Identical(arg, cond.same) {
+				return false
+			}
+		} else if !c.conformsTo(arg, cond.proto) {
+			return false
+		}
+	}
+	return true
 }

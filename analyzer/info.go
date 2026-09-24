@@ -94,6 +94,10 @@ type Info struct {
 	// ImplicitSelf is, for a name used alone inside an extension of a
 	// built-in type that means a member of self, the `self.name` it means.
 	ImplicitSelf map[ast.Expr]ast.Expr
+	// Splats are the closures that take one tuple and name its elements
+	// as their parameters -- `zip(a, b).map { $0 + $1 }` -- by the symbol
+	// each element is bound to.
+	Splats map[*ast.ClosureExpr][]Symbol
 
 	// Receivers maps receiver methods to their receiver types.
 	Receivers map[*ast.FuncDecl]types.Type
@@ -320,6 +324,7 @@ func NewInfo() *Info {
 		Extensions:       make(map[*ast.ExtensionDecl]types.Type),
 		Builtins:         make(map[string]*BuiltinMembers),
 		ImplicitSelf:     make(map[ast.Expr]ast.Expr),
+		Splats:           make(map[*ast.ClosureExpr][]Symbol),
 		Receivers:        make(map[*ast.FuncDecl]types.Type),
 		FieldDefaults:    make(map[*types.Field]ast.Expr),
 		Specializations:  make(map[*ast.CallExpr]Specialization),

@@ -362,6 +362,16 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 			return
 		}
 	}
+	// `(a, b) = (b, a)`: the whole value first, then each part to its
+	// own destination.
+	if tu, ok := unparenExpr(e.X).(*ast.TupleExpr); ok {
+		v := g.rvalue(e.Y)
+		if v == nil {
+			return
+		}
+		g.assignTuple(tu, v, g.substituted(g.typeOf(e.Y)))
+		return
+	}
 	// `_ = v` evaluates v and discards the result.
 	if _, discard := e.X.(*ast.WildcardExpr); discard {
 		if v := g.expr(e.Y); v != nil {
@@ -453,6 +463,54 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 	g.blk.EndAccess(access)
 }
 
+// assignTuple stores the parts of an owned tuple v in the destinations a
+// tuple expression names, `_` letting its part go.
+func (g *gen) assignTuple(dst *ast.TupleExpr, v *sil.Value, t types.Type) {
+	tu, ok := t.Underlying().(*types.Tuple)
+	if !ok || len(tu.Elements) != len(dst.Elems) {
+		g.refuse(dst, "an assignment to a tuple of another shape")
+		return
+	}
+	elems := make([]sil.Type, len(tu.Elements))
+	for i, el := range tu.Elements {
+		elems[i] = lowerType(el.Type)
+	}
+	parts := g.blk.DestructureTuple(v, elems...)
+	for i, el := range dst.Elems {
+		x := unparenExpr(el.X)
+		switch x := x.(type) {
+		case *ast.WildcardExpr:
+			if !elems[i].Trivial() {
+				g.blk.DestroyValue(parts[i])
+			}
+			continue
+		case *ast.TupleExpr:
+			g.assignTuple(x, parts[i], tu.Elements[i].Type)
+			continue
+		}
+		addr := g.lvalue(x)
+		if addr == nil {
+			g.refuse(x, "an assignment to "+g.exprKind(x)+" in a tuple")
+			return
+		}
+		part := g.optionalFor(x, parts[i], tu.Elements[i].Type, g.typeOf(x))
+		access := g.blk.BeginAccess(addr, "modify", "unknown")
+		g.blk.Assign(part, access)
+		g.blk.EndAccess(access)
+	}
+}
+
+// unparenExpr is e without the parentheses around it.
+func unparenExpr(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
 // lvalue lowers an expression to its destination address for assignment.
 func (g *gen) lvalue(e ast.Expr) *sil.Value {
 	switch n := e.(type) {
@@ -494,11 +552,11 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 		if recv, f, ok := g.staticProperty(n); ok && !f.IsComputed {
 			return g.staticAddr(n, recv, f)
 		}
-		// Computed properties have no storage address; writes go via setter.
+		// A computed property has no storage: what is written through it
+		// -- `s.unicodeScalars.append(u)` -- is a temporary the getter
+		// fills, handed to the setter when the statement ends.
 		if g.isComputedMember(g.typeOf(n.X), n.Name.Text(g.file)) {
-			g.refuse(n, "an assignment to a computed property, which is a call to "+
-				"its setter and not a write to storage")
-			return nil
+			return g.computedAddr(n)
 		}
 		t := lowerType(g.typeOf(n))
 		name := memberName(g.typeOf(n.X), n.Name.Text(g.file))
@@ -527,13 +585,89 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 		if ref := g.info.Subscripts[n]; ref != nil {
 			return g.declaredSubscriptAddr(n, ref)
 		}
+		if _, isDict := g.typeOf(n.X).Underlying().(*types.Dictionary); isDict {
+			return g.dictionaryValueAddr(n)
+		}
 		return g.elementAddr(n)
 
 	// `a?.x = v` writes into a's payload where a is some.
 	case *ast.OptionalExpr:
 		return g.chainStepAddr(n)
+
+	// `d[k]!.x = v` writes into the payload, which has to be there.
+	case *ast.ForceExpr:
+		return g.forcedAddr(n)
 	}
 	return nil
+}
+
+// forcedAddr is the payload of the optional x names, as a destination:
+// trapping where x holds nothing, as reading it with `!` does.
+func (g *gen) forcedAddr(e *ast.ForceExpr) *sil.Value {
+	o, ok := optionalOf(g.typeOf(e.X))
+	if !ok {
+		g.refuse(e, "'!' on something that is not an optional")
+		return nil
+	}
+	addr := g.lvalue(e.X)
+	if addr == nil {
+		return nil
+	}
+	wrapped := lowerType(o.Wrapped)
+	access := g.blk.BeginAccess(addr, "read", "unknown")
+	v := g.blk.Load(access, loadQualifier(access.Type()))
+	g.blk.EndAccess(access)
+	own := sil.Owned
+	if wrapped.Trivial() {
+		own = sil.Unowned
+	}
+	some, none := g.fn.Block(), g.fn.Block()
+	payload := some.Arg(wrapped, own)
+	g.blk.SwitchEnum(v,
+		sil.Case{Member: optionalSome, Dest: some},
+		sil.Case{Member: optionalNone, Dest: none})
+	g.blk = none
+	g.blk.CondFail(g.blk.IntegerLiteral(sil.Object(sil.BuiltinInt1), -1),
+		"Unexpectedly found nil while unwrapping an Optional value")
+	g.blk.Unreachable()
+	g.blk = some
+	// The copy told the tag; the payload written is the one in storage.
+	if own == sil.Owned {
+		g.blk.DestroyValue(payload)
+	}
+	return g.blk.UncheckedTakeEnumDataAddr(addr, optionalSome, wrapped)
+}
+
+// dictionaryValueAddr is `d[k]`, or `d[k, default: v]`, as a destination
+// written through -- `d[k]!.n += 1`, `d[k, default: []].append(x)`: what
+// the dictionary holds for k, read into a temporary that is stored back
+// under k once the statement ends.
+func (g *gen) dictionaryValueAddr(e *ast.SubscriptExpr) *sil.Value {
+	d := g.typeOf(e.X).Underlying().(*types.Dictionary)
+	if len(e.Args) != 1 && !g.defaultSubscript(e) {
+		return nil
+	}
+	set, ok := core.DictionarySet(d)
+	if !ok {
+		g.refuse(e, "a dictionary whose key type '"+d.Key.String()+"' the runtime does not hash yet")
+		return nil
+	}
+	cur := g.rvalue(e)
+	if cur == nil {
+		return nil
+	}
+	held := g.typeOf(e)
+	t := lowerType(held)
+	slot := g.blk.AllocStack(t)
+	g.blk.Store(cur, slot, storeQualifier(t))
+	optional := &types.Optional{Wrapped: d.Value}
+	g.writebacks = append(g.writebacks, func() {
+		v := g.blk.Load(slot, loadQualifierTake(t))
+		v = g.optionalFor(e, v, held, optional)
+		g.collectionCall(e, set, e.X, []collArg{{expr: e.Args[0].X}, {value: v}})
+		g.blk.DeallocStack(slot)
+	})
+	return slot
 }
 
 // implicitSelfAddr returns the address of a stored property accessed via implicit self.
@@ -1220,8 +1354,8 @@ func (g *gen) switchOnEnum(s *ast.SwitchStmt, subject *sil.Value, t types.Type,
 				g.refuse(item.Pat, "this pattern in a switch over an enum")
 				return false
 			}
-			if len(cs.Items) > 1 && pat.Args != nil && g.bindsNames(pat.Args) {
-				g.refuse(item.Pat, "a case of several patterns that binds names")
+			if len(cs.Items) > 1 && pat.Args != nil && g.bindsNames(pat.Args) && g.refutablePayload(pat) {
+				g.refuse(item.Pat, "a case of several patterns that binds names and matches values")
 				return false
 			}
 			if len(cs.Items) > 1 && item.Where != nil {
@@ -1309,6 +1443,9 @@ type enumPart struct {
 // where clause, lets go of the kept subject, and joins the body.
 func (g *gen) enumItemArm(t types.Type, it enumItem, body *sil.Block, part enumPart) (*sil.Block, bool) {
 	pat := it.pat
+	if it.several && pat.Args != nil && g.bindsNames(pat.Args) {
+		return g.joinBindings(t, it, body, part)
+	}
 	// A clause of several patterns -- `case .resized(_), .moved(_):` --
 	// has one body and a payload of a different type from each case. Each
 	// case goes through an arm of its own that takes what it carries, lets
@@ -1924,10 +2061,51 @@ func (g *gen) compare(op string, a, b *sil.Value, t types.Type) *sil.Value {
 	}
 	bi, ok := core.Lower(op, t)
 	if !ok {
-		return nil
+		return g.operatorCompare(op, a, b, t)
 	}
 	return g.blk.Builtin(bi.Name, sil.Object(builtinNamed(bi.Result)),
 		g.machine(a, t), g.machine(b, t))
+}
+
+// operatorCompare compares through the type's own operator -- a
+// Character's static == or < -- with !=, >, <= and >= made from those as
+// Equatable and Comparable make them.
+func (g *gen) operatorCompare(op string, a, b *sil.Value, t types.Type) *sil.Value {
+	base, swap, negate := op, false, false
+	switch op {
+	case "!=":
+		base, negate = "==", true
+	case ">":
+		base, swap = "<", true
+	case "<=":
+		base, swap, negate = "<", true, true
+	case ">=":
+		base, negate = "<", true
+	}
+	recv, methods := staticMethodsNamed(t, base)
+	for _, m := range methods {
+		if m.Sig == nil || len(m.Sig.Params) != 2 ||
+			!types.Identical(m.Sig.Params[0].Type, t) || !types.Identical(m.Sig.Params[1].Type, t) {
+			continue
+		}
+		x, y := &ast.IdentExpr{}, &ast.IdentExpr{}
+		g.info.Types[x], g.info.Types[y] = t, t
+		vals := []*sil.Value{a, b}
+		if swap {
+			vals = []*sil.Value{b, a}
+		}
+		v := g.operatorApply(x, &analyzer.MethodRef{Recv: recv, Method: m}, nil, []ast.Expr{x, y}, vals)
+		if v == nil {
+			return nil
+		}
+		bit := g.machine(v, types.Typ[types.Bool])
+		if negate {
+			bit = g.blk.Builtin("xor_Int1", sil.Object(sil.BuiltinInt1), bit,
+				g.blk.IntegerLiteral(sil.Object(sil.BuiltinInt1), -1))
+		}
+		return bit
+	}
+	return nil
 }
 
 // increment returns v + 1 with overflow checking.
@@ -2031,7 +2209,29 @@ func (g *gen) labeled(s *ast.LabeledStmt) {
 	}
 	saved := g.pending
 	g.pending = g.text(s.Label)
-	g.stmtBody(s.Stmt)
+	switch s.Stmt.(type) {
+	case *ast.DoStmt, *ast.IfStmt:
+		// `name: do { … break name … }`: a break naming it goes to
+		// what follows.
+		var exit *sil.Block
+		g.loops = append(g.loops, loop{label: g.takeLabel(), depth: len(g.scopes), isBlock: true,
+			lazyExit: func() *sil.Block {
+				if exit == nil {
+					exit = g.fn.Block()
+				}
+				return exit
+			}})
+		g.stmtBody(s.Stmt)
+		g.loops = g.loops[:len(g.loops)-1]
+		if exit != nil {
+			if g.blk != nil && g.blk.Term() == nil {
+				g.blk.Br(exit)
+			}
+			g.blk = exit
+		}
+	default:
+		g.stmtBody(s.Stmt)
+	}
 	g.pending = saved
 }
 
@@ -2054,7 +2254,7 @@ func (g *gen) breakStmt(s *ast.BreakStmt) {
 func (g *gen) fallthroughStmt(s *ast.FallthroughStmt) {
 	for i := len(g.loops) - 1; i >= 0; i-- {
 		l := g.loops[i]
-		if !l.isSwitch {
+		if !l.isSwitch || l.isBlock {
 			continue
 		}
 		if l.next == nil {
@@ -2492,6 +2692,93 @@ func (g *gen) destroyArmOwned(arm *sil.Block) {
 		g.destroyLater(v)
 	}
 	delete(g.armOwned, arm)
+	for sym, loc := range g.joined[arm] {
+		g.locals[sym] = loc
+	}
+	delete(g.joined, arm)
+}
+
+// joinBindings is the arm of one pattern of a case of several that bind
+// names: it binds what the case carries, and passes the body what the
+// names are bound to, as the body's arguments, owned.
+func (g *gen) joinBindings(t types.Type, it enumItem, body *sil.Block, part enumPart) (*sil.Block, bool) {
+	var syms []analyzer.Symbol
+	ast.Inspect(it.pat.Args, func(n ast.Node) bool {
+		if p, ok := n.(*ast.IdentPattern); ok && p.Name != nil {
+			if sym := g.info.Defs[p.Name]; sym != nil {
+				syms = append(syms, sym)
+			}
+		}
+		return true
+	})
+	arm := g.fn.Block()
+	if !g.bindCasePayload(t, it.pat, arm) {
+		return nil, false
+	}
+	owned := g.armOwned[arm]
+	delete(g.armOwned, arm)
+	if g.joined == nil {
+		g.joined = map[*sil.Block]map[analyzer.Symbol]*local{}
+	}
+	// The body's arguments, made by the first arm to reach it, in the
+	// order of that arm's names.
+	args := g.joined[body]
+	if args == nil {
+		args = map[analyzer.Symbol]*local{}
+		for _, sym := range syms {
+			lt := lowerType(g.substituted(sym.Type()))
+			own := sil.Unowned
+			if !lt.Trivial() {
+				own = sil.Owned
+			}
+			a := body.Arg(lt, own)
+			args[sym] = &local{value: a, typ: lt}
+			if own == sil.Owned {
+				if g.armOwned == nil {
+					g.armOwned = map[*sil.Block][]*sil.Value{}
+				}
+				g.armOwned[body] = append(g.armOwned[body], a)
+			}
+		}
+		g.joined[body] = args
+	}
+	var order []analyzer.Symbol
+	for _, a := range body.Args() {
+		for sym, loc := range args {
+			if loc.value == a {
+				order = append(order, sym)
+			}
+		}
+	}
+	var pass []*sil.Value
+	for _, sym := range order {
+		loc := g.locals[sym]
+		if loc == nil || loc.value == nil {
+			g.refuse(it.pat, "a case of several patterns that binds a name in only some")
+			return nil, false
+		}
+		v := loc.value
+		handed := false
+		for i, o := range owned {
+			if o == v {
+				owned = append(owned[:i:i], owned[i+1:]...)
+				handed = true
+				break
+			}
+		}
+		if !handed && !v.Type().Trivial() {
+			v = arm.CopyValue(v)
+		}
+		pass = append(pass, v)
+	}
+	for _, v := range owned {
+		arm.DestroyValue(v)
+	}
+	if part.dropKeep {
+		arm.DestroyValue(part.keep)
+	}
+	arm.Br(body, pass...)
+	return arm, true
 }
 
 // bindsNames reports whether a case's argument patterns bind a name.
@@ -2596,4 +2883,29 @@ func (g *gen) neverBlock() *sil.Block {
 	b := g.fn.Block()
 	b.Unreachable()
 	return b
+}
+
+// computedAddr is a computed property as a destination written through:
+// the getter's value in a temporary, set back through the setter once the
+// statement ends, as a declared subscript's is.
+func (g *gen) computedAddr(n *ast.MemberExpr) *sil.Value {
+	recv := g.typeOf(n.X)
+	f, ok := g.computedField(recv, n.Name.Text(g.file))
+	if !ok || f == nil || !f.HasSetter {
+		g.refuse(n, "a write through a computed property that has no setter")
+		return nil
+	}
+	cur := g.getterOn(n, recv, f, n.X)
+	if cur == nil {
+		return nil
+	}
+	t := lowerType(g.typeOf(n))
+	slot := g.blk.AllocStack(t)
+	g.blk.Store(g.consume(cur), slot, storeQualifier(t))
+	g.writebacks = append(g.writebacks, func() {
+		v := g.blk.Load(slot, loadQualifierTake(t))
+		g.setterCallValue(n, recv, f, v)
+		g.blk.DeallocStack(slot)
+	})
+	return slot
 }

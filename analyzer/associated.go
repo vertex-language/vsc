@@ -87,11 +87,15 @@ func (c *checker) resolveProtocol(d *ast.ProtocolDecl, scope *Scope) {
 	for _, mem := range d.Body.Members {
 		switch m := mem.(type) {
 		case *ast.AssociatedTypeDecl:
-			if m.Name == nil || m.Inherit == nil {
+			if m.Name == nil {
 				continue
 			}
 			assoc := byName[m.Name.Text(c.file)]
 			if assoc == nil {
+				continue
+			}
+			c.associatedSameTypes(pr, m)
+			if m.Inherit == nil {
 				continue
 			}
 			for _, item := range m.Inherit.Items {
@@ -452,4 +456,36 @@ func (c *checker) dependentOf(t ast.Type, scope *Scope) (*types.TypeParam, strin
 		return nil, "", false
 	}
 	return tp, mem.Name.Text(c.file), true
+}
+
+// associatedSameTypes records what an associated type's where clause
+// says of its own associated types: Sequence's `associatedtype Iterator:
+// IteratorProtocol where Iterator.Element == Element`.
+func (c *checker) associatedSameTypes(pr *types.Protocol, m *ast.AssociatedTypeDecl) {
+	if m.Where == nil {
+		return
+	}
+	name := m.Name.Text(c.file)
+	for _, req := range m.Where.Reqs {
+		r, ok := req.(*ast.SameTypeReq)
+		if !ok {
+			continue
+		}
+		left, ok := r.Left.(*ast.MemberType)
+		if !ok || left.Name == nil {
+			continue
+		}
+		base, ok := left.X.(*ast.IdentType)
+		if !ok || base.Name == nil || base.Name.Text(c.file) != name {
+			continue
+		}
+		right, ok := r.Right.(*ast.IdentType)
+		if !ok || right.Name == nil {
+			continue
+		}
+		if pr.SameTypes == nil {
+			pr.SameTypes = map[string]string{}
+		}
+		pr.SameTypes[name+"."+left.Name.Text(c.file)] = right.Name.Text(c.file)
+	}
 }

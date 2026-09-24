@@ -285,6 +285,14 @@ func (c *checker) implicitSelfMember(expr ast.Expr, scope *Scope) ast.Expr {
 	if proto := protocolOfSelf(c.currType); proto != nil {
 		return c.protocolSelfMember(expr, scope, proto)
 	}
+	// `rawValue` alone in a raw-valued enum, which declares no property
+	// of the name for a scope to find: self's.
+	if en, ok := c.currType.Underlying().(*types.Enum); ok && en.RawType != nil {
+		if id, ok := expr.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil &&
+			id.Name.Text(c.file) == "rawValue" && c.lookupValue(scope, "rawValue") == nil {
+			return &ast.MemberExpr{Span: id.Span, X: &ast.SelfExpr{Span: id.Span}, Dot: id.Pos(), Name: id.Name}
+		}
+	}
 	if BuiltinKey(c.currType) == "" {
 		return nil
 	}

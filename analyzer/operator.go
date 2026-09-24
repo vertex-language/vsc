@@ -485,3 +485,12 @@ func (c *checker) fitsQuietly(e ast.Expr, want types.Type, scope *Scope) bool {
 	c.info.Diagnostics = c.info.Diagnostics[:quiet]
 	return ok
 }
+
+// hasOperator reports whether an operator takes operands of these types,
+// without recording anything.
+func (c *checker) hasOperator(scope *Scope, op string, xs []ast.Expr, operands []types.Type) bool {
+	quiet := len(c.info.Diagnostics)
+	defer func() { c.info.Diagnostics = c.info.Diagnostics[:quiet] }()
+	_, ok := c.pickOperator(scope, op, xs, operands)
+	return ok
+}

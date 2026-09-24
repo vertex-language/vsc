@@ -372,6 +372,10 @@ func (g *gen) elementAddr(e *ast.SubscriptExpr) *sil.Value {
 	if !ok || len(e.Args) != 1 || e.Args[0].Label != nil {
 		return nil
 	}
+	if !types.Identical(g.typeOf(e.Args[0].X), types.Typ[types.Int]) {
+		g.refuse(e, "a write through a range of an array")
+		return nil
+	}
 	base := g.lvalue(e.X)
 	if base == nil {
 		return nil

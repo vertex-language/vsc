@@ -208,14 +208,18 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 					hasDefault = true
 				}
 
-				for _, item := range cs.Items {
+				for k, item := range cs.Items {
 					// `case 0 as Int` reads as the expression `0 as Int`;
 					// it is the pattern 0 under a cast to Int.
 					if item.Pat != nil {
 						item.Pat = castPattern(item.Pat)
 					}
 					// Declare pattern bindings before checking where clause condition.
-					if item.Pat != nil {
+					// The patterns after the first bind the first's names:
+					// `case .a(let n), .b(let n)` has one n.
+					if item.Pat != nil && k > 0 {
+						c.shareCaseBindings(item.Pat, subjectType, caseScope)
+					} else if item.Pat != nil {
 						c.declareCasePattern(item.Pat, subjectType, caseScope)
 					}
 					if item.Where != nil {
@@ -1584,4 +1588,33 @@ func (c *checker) patternMatchOperator(p *ast.ExprPattern, subject types.Type, s
 		}
 	}
 	return nil
+}
+
+// shareCaseBindings declares what a later pattern of a case binds as the
+// names the case's first pattern bound, which each of its patterns binds
+// alike: same names, same types.
+func (c *checker) shareCaseBindings(pat ast.Pattern, subjectType types.Type, caseScope *Scope) {
+	own := NewScope(caseScope, pat.Pos(), pat.End())
+	c.declareCasePattern(pat, subjectType, own)
+	ast.Inspect(pat, func(n ast.Node) bool {
+		p, ok := n.(*ast.IdentPattern)
+		if !ok || p.Name == nil {
+			return true
+		}
+		name := p.Name.Text(c.file)
+		mine := own.LookupLocal(name)
+		first := caseScope.LookupLocal(name)
+		if mine == nil {
+			return true
+		}
+		if first == nil {
+			c.errorf(p.Name.Pos(), "'%s' must be bound in every pattern", name)
+			return true
+		}
+		if !types.Identical(mine.Type(), first.Type()) && !isInvalid(mine.Type()) {
+			c.typeErrorf(p.Name.Pos(), "pattern variable bound to type '%s', expected type '%s'", mine.Type(), first.Type())
+		}
+		c.info.Defs[p.Name] = first
+		return true
+	})
 }

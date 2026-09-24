@@ -453,6 +453,15 @@ type gen struct {
 	recv        types.Type                  // receiver type for method being lowered, or nil
 	closures    int                         // count of emitted closures (for unique names)
 	armOwned    map[*sil.Block][]*sil.Value // payloads a case arm owns, let go when its scope ends
+	// joined are the names a case of several patterns binds, as its body
+	// has them: the arguments each pattern's arm passes it.
+	joined map[*sil.Block]map[analyzer.Symbol]*local
+	// recursive is the nested function whose body captureBody is about
+	// to lower, where that body calls it.
+	recursive analyzer.Symbol
+	// opened is, in a specialization for an existential, the parameter
+	// whose value each such type parameter stands for the type of.
+	opened map[*types.TypeParam]analyzer.Symbol
 	loopCase    *loopElement                // the element a `for case` body matches, before it runs
 	poly        map[*types.Class]bool
 	nested      map[analyzer.Symbol]string
@@ -921,6 +930,9 @@ type loop struct {
 	// next is, for a switch's case, the body of the case after it, where
 	// `fallthrough` goes; nil in the last case.
 	next *sil.Block
+	// isBlock marks a labelled `do` or `if`, which only a `break` naming
+	// its label leaves.
+	isBlock bool
 }
 
 // exitBlock returns or lazily instantiates the loop exit block.
@@ -945,6 +957,9 @@ func (g *gen) enclosing(label string) (loop, bool) {
 func (g *gen) enclosingFor(label string, continuing bool) (loop, bool) {
 	for i := len(g.loops) - 1; i >= 0; i-- {
 		if continuing && g.loops[i].isSwitch {
+			continue
+		}
+		if g.loops[i].isBlock && (continuing || label != g.loops[i].label) {
 			continue
 		}
 		if label == "" || g.loops[i].label == label {
@@ -1123,6 +1138,28 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 
 	// Parameters in declaration order.
 	params := paramSymbols(d, g.info, g.file)
+	// A specialization for an existential opens it: T is the type of the
+	// value passed for the first parameter of type T. See openedType.
+	prevOpened := g.opened
+	defer func() { g.opened = prevOpened }()
+	g.opened = nil
+	if g.specializing {
+		for i, p := range sym.Signature().Params {
+			tp, ok := p.Type.(*types.TypeParam)
+			if !ok || i >= len(params) || params[i] == nil {
+				continue
+			}
+			if _, isEx := existentialOf(g.substituted(tp)); !isEx {
+				continue
+			}
+			if g.opened == nil {
+				g.opened = map[*types.TypeParam]analyzer.Symbol{}
+			}
+			if _, seen := g.opened[tp]; !seen {
+				g.opened[tp] = params[i]
+			}
+		}
+	}
 	for i, p := range sig.Params {
 		t := lowerType(p.BodyType())
 		conv := paramConvention(p, t)

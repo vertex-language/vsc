@@ -49,6 +49,29 @@ func (c *checker) memberReference(e *ast.MemberExpr, base types.Type, expected t
 		if name == "init" {
 			return c.initReference(e, e.X, e.Lparen.IsValid(), e.Names, inst, want, scope)
 		}
+		// A case that carries a value, named on its enum: the function
+		// that makes the case, `Token.number` an (Int) -> Token.
+		if k := payloadCaseNamed(inst, name); k != nil {
+			var params []*types.Param
+			var labels []string
+			if tu, ok := k.AssociatedType.(*types.Tuple); ok && len(tu.Elements) > 1 {
+				for _, el := range tu.Elements {
+					params = append(params, &types.Param{Type: el.Type})
+					labels = append(labels, el.Name)
+				}
+			} else {
+				params = []*types.Param{{Type: k.AssociatedType}}
+				labels = []string{k.Label}
+			}
+			if want != nil && len(want.Params) != len(params) {
+				return nil, false
+			}
+			sig := &types.Signature{Params: params, Results: inst}
+			cl := c.referenceClosure(e.X, name, params, labels, e)
+			t := c.checkExpr(cl, sig, scope)
+			c.info.ImplicitSelf[e] = cl
+			return t, true
+		}
 		// An instance method named on its type: a function of an
 		// instance, answering the method bound to it.
 		if sig := c.instanceMethodSig(inst, name); sig != nil {
@@ -379,4 +402,72 @@ func (c *checker) hasProperty(t types.Type, name string) bool {
 		}
 	}
 	return false
+}
+
+// splatTuple is the tuple a closure takes apart as its parameters, where
+// the function wanted takes one tuple of two or more elements and the
+// closure names as many -- `{ a, b in }`, or `$1` in its body -- or nil.
+func (c *checker) splatTuple(e *ast.ClosureExpr, want *types.Signature) *types.Tuple {
+	if want == nil || len(want.Params) != 1 || want.Params[0].Ownership == types.InOut {
+		return nil
+	}
+	tu, ok := want.Params[0].Type.Underlying().(*types.Tuple)
+	if !ok || len(tu.Elements) < 2 {
+		return nil
+	}
+	if e.Sig != nil && e.Sig.Params != nil {
+		ps := e.Sig.Params.Params
+		if len(ps) != len(tu.Elements) {
+			return nil
+		}
+		for _, p := range ps {
+			if p.Type != nil {
+				return nil
+			}
+		}
+		return tu
+	}
+	if c.shorthandCount(e) != len(tu.Elements) {
+		return nil
+	}
+	return tu
+}
+
+// shorthandCount is one more than the highest `$n` a closure's body
+// names, not counting closures inside it: how many parameters it takes.
+func (c *checker) shorthandCount(e *ast.ClosureExpr) int {
+	n := 0
+	for _, st := range e.Stmts {
+		ast.Inspect(st, func(x ast.Node) bool {
+			switch x := x.(type) {
+			case *ast.ClosureExpr:
+				return false
+			case *ast.IdentExpr:
+				if x.Name != nil {
+					if name := x.Name.Text(c.file); len(name) > 1 && name[0] == '$' {
+						if k, err := strconv.Atoi(name[1:]); err == nil && k+1 > n {
+							n = k + 1
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	return n
+}
+
+// payloadCaseNamed is the case of enum t named name that carries a value,
+// or nil.
+func payloadCaseNamed(t types.Type, name string) *types.EnumCase {
+	en, ok := t.Underlying().(*types.Enum)
+	if !ok {
+		return nil
+	}
+	for _, k := range en.Cases {
+		if k != nil && k.Name == name && k.AssociatedType != nil {
+			return k
+		}
+	}
+	return nil
 }

@@ -487,6 +487,10 @@ type Protocol struct {
 	Requirements []*Requirement
 	Associated   []*Associated
 	Self         *TypeParam
+	// SameTypes are the protocol's own same-type requirements between
+	// its associated types: Sequence's `Iterator.Element == Element` is
+	// "Iterator.Element" to "Element".
+	SameTypes map[string]string
 	// What the protocol's extensions add: members every conforming type
 	// has, written in terms of Self, which is the conforming type where
 	// one is used.

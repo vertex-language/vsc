@@ -309,6 +309,19 @@ func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) b
 	if tp, ok := p.Type.(*types.TypeParam); ok {
 		return c.meetsConstraints(t, tp)
 	}
+	// One whose type holds type parameters -- `[B]` -- takes an argument
+	// of its shape, each parameter bound to what stands in its place.
+	if mentionsTypeParam(p.Type) {
+		subst := map[*types.TypeParam]types.Type{}
+		if types.Unify(p.Type, literalDefaults(t), subst) {
+			for tp, bound := range subst {
+				if !c.meetsConstraints(bound, tp) {
+					return false
+				}
+			}
+			return true
+		}
+	}
 	// A closure written at the call takes its parameters' types from the
 	// parameter it is passed as, so it fits any function parameter of its
 	// arity -- and one with `$0`, `$1` any function parameter at all.
@@ -389,6 +402,18 @@ func (c *checker) resolveMethodOverload(mem *ast.MemberExpr, args []*ast.CallArg
 	if len(methods) < 2 {
 		return nil
 	}
+	// Those an extension gives only where the arguments are something
+	// this instance's are not -- joined() of an array of arrays, on an
+	// array of strings -- are not among them.
+	var held []*types.Method
+	for _, m := range methods {
+		if c.conditionsMet(m, base) {
+			held = append(held, m)
+		}
+	}
+	if len(held) > 0 {
+		methods = held
+	}
 	candidates := methods
 	if len(subst) > 0 {
 		candidates = make([]*types.Method, len(methods))
@@ -401,6 +426,9 @@ func (c *checker) resolveMethodOverload(mem *ast.MemberExpr, args []*ast.CallArg
 		}
 	}
 	m := c.methodByArguments(candidates, args, scope)
+	if m == nil && len(candidates) == 1 {
+		m = candidates[0]
+	}
 	if m == nil {
 		return nil
 	}
@@ -1105,11 +1133,28 @@ func argLabelFits(a *ast.CallArg, p *types.Param, file *token.File) bool {
 // mentionsTypeParam reports whether a type still has a generic parameter
 // in it: one no call has given an argument for yet.
 func mentionsTypeParam(t types.Type) bool {
+	return mentionsParamWhere(t, func(*types.TypeParam) bool { return true })
+}
+
+// mentionsOpenParam reports whether t mentions a type parameter that is
+// not in scope here: a callee's, still to be inferred, rather than the
+// enclosing generic function's own.
+func (c *checker) mentionsOpenParam(t types.Type, scope *Scope) bool {
+	return mentionsParamWhere(t, func(tp *types.TypeParam) bool {
+		tn := scope.LookupType(tp.Name)
+		return tn == nil || tn.Type() != tp
+	})
+}
+
+// mentionsParamWhere reports whether t mentions a type parameter open is
+// true of.
+func mentionsParamWhere(t types.Type, open func(*types.TypeParam) bool) bool {
+	mentionsTypeParam := func(t types.Type) bool { return mentionsParamWhere(t, open) }
 	switch x := t.(type) {
 	case nil:
 		return false
 	case *types.TypeParam:
-		return true
+		return open(x)
 	case *types.Optional:
 		return mentionsTypeParam(x.Wrapped)
 	case *types.Array:

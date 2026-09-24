@@ -465,7 +465,7 @@ protocol IteratorProtocol {
 // one, and its Element is what next() answers.
 protocol Sequence {
     associatedtype Element
-    associatedtype Iterator: IteratorProtocol
+    associatedtype Iterator: IteratorProtocol where Iterator.Element == Element
     func makeIterator() -> Iterator
 }
 
@@ -548,6 +548,13 @@ protocol CaseIterable {
 }
 
 protocol ExpressibleByIntegerLiteral {}
+
+// A type whose values say which one they are by an id that stays the
+// same while what else they hold changes.
+protocol Identifiable {
+    associatedtype ID: Hashable
+    var id: ID { get }
+}
 
 // The numbers' protocols. Every integer and floating-point type is
 // AdditiveArithmetic and Numeric; the integers are BinaryInteger and
@@ -987,7 +994,7 @@ struct UnicodeScalar {
 // A String's scalars, and its UTF-16 code units: its unicodeScalars and
 // utf16. `String.UnicodeScalarView` and `String.UTF16View` name them.
 struct _UnicodeScalarView {
-    let _string: String
+    var _string: String
 }
 
 struct _UTF16View {

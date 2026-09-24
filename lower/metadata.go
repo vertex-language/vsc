@@ -66,7 +66,7 @@ func (l *lowerer) allMetadata(m *sil.Module) error {
 					What: "an enum this compiler cannot describe at run time"}
 			}
 			continue
-		case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple, *types.Existential:
+		case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple, *types.Existential, *types.Signature:
 			if _, ok := l.structuralFor(t.Layout); !ok {
 				return &Error{Err: ErrUnsupported, Func: t.Name,
 					What: "a type this compiler cannot describe at run time"}
@@ -651,7 +651,7 @@ func (l *lowerer) fieldDescriptor(info sil.TypeMetadata, st *types.Struct) *ir.G
 // declared here or an Optional or Array of something.
 func (l *lowerer) fieldTypeRecord(t types.Type) (ir.Symbol, bool) {
 	switch t.Underlying().(type) {
-	case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple:
+	case *types.Optional, *types.Array, *types.Dictionary, *types.Set, *types.Tuple, *types.Signature:
 		if _, known := l.module.MetadataFor(sil.StructuralKey(t)); !known {
 			return nil, false
 		}
@@ -686,15 +686,15 @@ func (l *lowerer) fieldTypeRecord(t types.Type) (ir.Symbol, bool) {
 		return l.metadataRecord(stdlib.Metadata(name)), true
 	}
 	// Another module's type: the record that module exports.
-	if info, known := l.module.MetadataFor(typeNameOfType(sil.Object(t))); known && info.Imported {
+	if info, known := l.module.MetadataFor(metadataName(t)); known && info.Imported {
 		return l.metadataRecord(info.Mangled + "Mf"), true
 	}
 	if _, isClass := t.Underlying().(*types.Class); isClass {
-		g, ok := l.classMetadataFor(typeNameOfType(sil.Object(t)))
+		g, ok := l.classMetadataFor(metadataName(t))
 		return g, ok
 	}
 	if e, isEnum := t.Underlying().(*types.Enum); isEnum {
-		name := typeNameOfType(sil.Object(t))
+		name := metadataName(t)
 		if _, known := l.module.MetadataFor(name); !known {
 			return nil, false
 		}
@@ -704,7 +704,7 @@ func (l *lowerer) fieldTypeRecord(t types.Type) (ir.Symbol, bool) {
 	if !ok {
 		return nil, false
 	}
-	name := typeNameOfType(sil.Object(t))
+	name := metadataName(t)
 	if _, known := l.module.MetadataFor(name); !known {
 		return nil, false
 	}
@@ -1399,6 +1399,8 @@ func (l *lowerer) structuralFor(t types.Type) (*ir.Global, bool) {
 		}
 	case *types.Tuple:
 		return l.tupleMetadata(info, u, rec, size, align)
+	case *types.Signature:
+		return l.functionMetadata(info, t, rec, size, align)
 	case *types.Existential:
 		// `any P & Q`: Any's four words and a table per protocol, which
 		// the witnesses copy as many of as the record says; then the
@@ -1547,7 +1549,8 @@ func optionalEmptyCase(o *types.Optional) (offset, bytes, none int64, ok bool) {
 			return 8, 8, 0, true
 		}
 		return 0, 0, 0, false
-	case *types.Class, *types.Array, *types.Dictionary, *types.Set:
+	// A function's empty case is a null code pointer; see isFuncOptional.
+	case *types.Class, *types.Array, *types.Dictionary, *types.Set, *types.Signature:
 		return 0, 8, 0, true
 	case *types.Struct, *types.Tuple:
 		// A struct that spares a representation: its never-zero word zero.
@@ -1720,4 +1723,33 @@ func (l *lowerer) enumDescriptor(info sil.TypeMetadata, e *types.Enum) *ir.Globa
 		ir.Lit(ir.Int(payloadArea(e))),
 	))
 	return g
+}
+
+// metadataName is the name gen registers t's record under: an instance
+// of a generic type by its arguments too, as each instance has its own.
+func metadataName(t types.Type) string {
+	if _, ok := t.(*types.GenericInstance); ok {
+		return t.String()
+	}
+	return typeNameOfType(sil.Object(t))
+}
+
+// functionMetadata is a function type's record: kind 0x302, as Swift's,
+// and value witnesses that copy the function's two words and count the
+// second, its context, which is a reference or null.
+func (l *lowerer) functionMetadata(info sil.TypeMetadata, t types.Type, rec *ir.Type, size, align int64) (*ir.Global, bool) {
+	key := sil.StructuralKey(t)
+	if size != 16 {
+		return nil, false
+	}
+	vwt := l.ownedValueWitnessTable(info, size, align, []ownedWord{{offset: 8}})
+	g := l.out.Global(l.sym(info.Mangled+"Mf"), ir.RO, rec.FType()).
+		Init(ir.Fields(
+			ir.Val("vwt", ir.RelocInit(vwt)),
+			ir.Val("kind", ir.Lit(ir.Int(stdlib.KindFunction))),
+		)).Align(8)
+	l.meta[key] = g
+	l.metadataAccessorName(info)
+	l.metadataAccessorFor(info.Mangled+"Ma", g)
+	return g, true
 }

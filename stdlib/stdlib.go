@@ -243,6 +243,7 @@ const (
 	// nowhere.
 	KindOptional = 0x202
 	KindTuple    = 0x301
+	KindFunction = 0x302
 
 	// FieldIndirect is set in the low bit of an enum case's payload
 	// record where the case is indirect: the value is a box, and the
