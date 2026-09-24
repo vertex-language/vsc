@@ -1,13 +1,18 @@
 package build_test
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/vertex-language/ir"
 
@@ -15,69 +20,37 @@ import (
 	"github.com/vertex-language/vsc/build"
 )
 
-// The compiler corpus: whole programs, compiled and run.
+// The corpus: tests/NNN-*.swift, one small thing per file, numbered in
+// the order they climb (see tests/README.md).
 //
-// tests/syntax asks whether a file parses and checks. This asks the
-// only question after that one -- whether the program does what it
-// says -- and it asks it the way the rest of this repo asks every
-// question, by putting the same source through swiftc and comparing.
+// Every file is built twice -- once by this compiler, once by swiftc --
+// run, and the stdout and the way each run ended compared. Nothing here
+// writes down an expected value: swiftc's answer is the oracle, and a
+// disagreement with it is a bug in vsc by definition.
 //
-// Nothing here states an expected value. A number written down beside
-// a program is a claim about Swift that has to be maintained by hand
-// and is wrong the moment it drifts; swiftc's answer cannot drift,
-// because it is Swift's answer. So each file is compiled twice and run
-// twice, and the two outcomes have to agree -- exit status for a
-// program that returns, and the same signal for one that traps.
-//
-// Each file is a whole program with `func main() -> Int32`, which is
-// this compiler's entry point. swiftc has no such convention, so for
-// its half the function is renamed and called from top-level code;
-// that rewrite is the only difference between what the two compilers
-// are given.
-//
-// The files are numbered in the order they get harder. The early ones
-// are deliberately one idea each -- a loop, a struct, an override --
-// so that a failure names the thing that broke rather than the last
-// thing added.
+// Each file is a main.swift of top-level code, and both compilers are
+// given it unchanged.
 
 // outcome is how a process ended.
 type outcome struct {
 	status   int
 	signal   syscall.Signal
 	signaled bool
-	// stdout is what the program printed. Two programs that exit alike
-	// and print differently are not alike: a check written as a print
-	// is still a check.
-	stdout string
+	timedOut bool
+	stdout   string
 }
 
 func (o outcome) String() string {
-	if o.signaled {
-		return "killed by " + o.signal.String() + " (signal " + itoa(int(o.signal)) + ")"
+	switch {
+	case o.timedOut:
+		return "timed out after 10s"
+	case o.signaled:
+		return "killed by " + o.signal.String() + " (signal " + strconv.Itoa(int(o.signal)) + ")"
 	}
-	return "exit " + itoa(o.status)
+	return "exit " + strconv.Itoa(o.status)
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	if neg {
-		return "-" + string(b)
-	}
-	return string(b)
-}
-
-func TestCompilerCorpus(t *testing.T) {
+func TestCorpus(t *testing.T) {
 	if runtime.GOARCH != "arm64" || runtime.GOOS != "darwin" {
 		t.Skip("not on Apple Silicon; skipping the compile-and-run corpus")
 	}
@@ -93,43 +66,41 @@ func TestCompilerCorpus(t *testing.T) {
 		t.Skip("no backend for this machine")
 	}
 
-	files, err := filepath.Glob("../tests/compiler/*.swift")
+	files, err := filepath.Glob("../tests/*.swift")
 	if err != nil || len(files) == 0 {
-		t.Fatal("no programs found in tests/compiler/*.swift")
+		t.Fatal("no programs found in tests/*.swift")
 	}
+	sort.Strings(files)
 
 	for _, file := range files {
-		name := strings.TrimSuffix(filepath.Base(file), ".swift")
-		t.Run(name, func(t *testing.T) {
+		t.Run(strings.TrimSuffix(filepath.Base(file), ".swift"), func(t *testing.T) {
 			src, err := os.ReadFile(file)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := runSwiftc(t, swiftc, string(src))
-			got := runVsc(t, target, string(src))
-			if got.status != want.status || got.signaled != want.signaled || got.signal != want.signal {
-				t.Errorf("vsc gave %s, swiftc gave %s", got, want)
+			want := runSwiftc(t, swiftc, src)
+			got := runVsc(t, target, src)
+			if got.String() != want.String() {
+				t.Errorf("vsc's build ended with %s; swiftc's with %s", got, want)
 			}
 			// A program killed by a trap may lose what it buffered, and
 			// the two runtimes buffer differently, so output is compared
 			// where both ran to the end.
 			if !got.signaled && !want.signaled && got.stdout != want.stdout {
-				t.Errorf("vsc printed:\n%s\nswiftc printed:\n%s", got.stdout, want.stdout)
+				t.Errorf("output differs from swiftc's\n--- vsc ---\n%s\n--- swiftc ---\n%s", clip(got.stdout), clip(want.stdout))
 			}
 		})
 	}
 }
 
 // runVsc compiles the program with this compiler and runs it.
-func runVsc(t *testing.T, target ir.Target, src string) outcome {
+func runVsc(t *testing.T, target ir.Target, src []byte) outcome {
 	t.Helper()
-	u, diags := vsc.Compile([]vsc.Source{{Name: "main.swift", Text: []byte(src)}},
+	u, diags := vsc.Compile([]vsc.Source{{Name: "main.swift", Text: src}},
 		vsc.Options{Module: "main", Target: target})
 	if len(diags) > 0 {
-		// A refusal is a failure here. Every program in this corpus is
-		// one this compiler is expected to handle; a diagnostic means
-		// it no longer does, or never did and the file was added too
-		// early.
+		// A refusal is a failure: every rung is Swift, and the ladder
+		// is what the compiler has to build.
 		var b strings.Builder
 		for _, d := range diags {
 			b.WriteString("\n  ")
@@ -164,45 +135,11 @@ func runVsc(t *testing.T, target ir.Target, src string) outcome {
 }
 
 // runSwiftc compiles the same program with the real compiler.
-//
-// The entry point is the one thing that has to be rewritten: this
-// compiler runs `func main() -> Int32`, and swiftc has no such rule.
-// Renaming it and calling it from top-level code gives swiftc a
-// program with the same body and the same result.
-func runSwiftc(t *testing.T, swiftc, src string) outcome {
+func runSwiftc(t *testing.T, swiftc string, src []byte) outcome {
 	t.Helper()
-	// An async main is awaited from top-level code, which may await.
-	const entry = "func main() -> Int32 {"
-	const asyncEntry = "func main() async -> Int32 {"
-	// A throwing main is tried from top-level code, where an error it
-	// lets out ends the program, as it does this compiler's.
-	const throwingEntry = "func main() throws -> Int32 {"
-	const asyncThrowingEntry = "func main() async throws -> Int32 {"
-	var rewritten string
-	switch {
-	case strings.Contains(src, asyncThrowingEntry):
-		rewritten = "import Darwin\n" +
-			strings.Replace(src, asyncThrowingEntry, "func vsMain() async throws -> Int32 {", 1) +
-			"\nexit(try await vsMain())\n"
-	case strings.Contains(src, entry):
-		rewritten = "import Darwin\n" +
-			strings.Replace(src, entry, "func vsMain() -> Int32 {", 1) +
-			"\nexit(vsMain())\n"
-	case strings.Contains(src, asyncEntry):
-		rewritten = "import Darwin\n" +
-			strings.Replace(src, asyncEntry, "func vsMain() async -> Int32 {", 1) +
-			"\nexit(await vsMain())\n"
-	case strings.Contains(src, throwingEntry):
-		rewritten = "import Darwin\n" +
-			strings.Replace(src, throwingEntry, "func vsMain() throws -> Int32 {", 1) +
-			"\nexit(try vsMain())\n"
-	default:
-		t.Fatalf("the program has no %q, %q, %q or %q to rewrite for swiftc", entry, asyncEntry, throwingEntry, asyncThrowingEntry)
-	}
-
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "main.swift")
-	if err := os.WriteFile(srcPath, []byte(rewritten), 0o644); err != nil {
+	if err := os.WriteFile(srcPath, src, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(dir, "oracle")
@@ -214,16 +151,23 @@ func runSwiftc(t *testing.T, swiftc, src string) outcome {
 	return run(t, bin)
 }
 
-// run executes a built program and reports how it ended. A trap is an
-// outcome like any other: `Int32(bigValue)` is supposed to kill the
-// process, and a compiler that returned a number instead would be
-// wrong in a way an exit status alone would hide.
+// run executes a built program and reports how it ended, with a time
+// limit and a cap on its output: a miscompiled loop must fail its own
+// test, not take the whole run down with it. A trap is an outcome like
+// any other: `UInt8(300)` is supposed to kill the process, and a
+// compiler that returned a number instead would be wrong in a way an
+// exit status alone would hide.
 func run(t *testing.T, bin string) outcome {
 	t.Helper()
-	cmd := exec.Command(bin)
-	var stdout strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	var stdout capped
 	cmd.Stdout = &stdout
 	err := cmd.Run()
+	if ctx.Err() != nil {
+		return outcome{timedOut: true, stdout: stdout.String()}
+	}
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); !ok {
 			t.Fatalf("run %s: %v", bin, err)
@@ -234,4 +178,26 @@ func run(t *testing.T, bin string) outcome {
 		return outcome{signal: ws.Signal(), signaled: true, stdout: stdout.String()}
 	}
 	return outcome{status: cmd.ProcessState.ExitCode(), stdout: stdout.String()}
+}
+
+// capped is a buffer that keeps the first megabyte written to it.
+type capped struct{ bytes.Buffer }
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := 1<<20 - c.Len(); room < len(p) {
+		if room > 0 {
+			c.Buffer.Write(p[:room])
+		}
+		return len(p), nil
+	}
+	return c.Buffer.Write(p)
+}
+
+// clip shortens a long output for a failure message.
+func clip(s string) string {
+	const max = 4000
+	if len(s) > max {
+		return s[:max] + "\n... (" + strconv.Itoa(len(s)-max) + " more bytes)"
+	}
+	return s
 }

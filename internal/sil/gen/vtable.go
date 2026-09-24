@@ -3,6 +3,7 @@ package gen
 import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/mangle"
 	"github.com/vertex-language/vsc/types"
 )
 
@@ -73,7 +74,13 @@ func (g *gen) slots(cl *types.Class) []slot {
 			if m == nil || m.Sig == nil {
 				continue
 			}
-			impl := g.methodSymbol(&analyzer.MethodRef{Recv: c, Method: m})
+			ref := &analyzer.MethodRef{Recv: c, Method: m}
+			impl := g.methodSymbol(ref)
+			// A class method is reached through a metatype's table, and
+			// is the static function it is.
+			if m.IsStatic {
+				impl = g.staticSymbol(ref, c)
+			}
 			if impl == "" {
 				continue
 			}
@@ -85,8 +92,111 @@ func (g *gen) slots(cl *types.Class) []slot {
 			at[key] = len(out)
 			out = append(out, slot{member: c.Name + "." + m.Name, impl: impl})
 		}
+		// A required initializer is called through a metatype --
+		// `type.init(id:)` -- and each class's own makes that class, so
+		// its allocating entry is a row too.
+		for _, sig := range c.Inits {
+			if sig == nil || !sig.Required {
+				continue
+			}
+			made := *sig
+			made.Results = c
+			impl := g.initSymbol(c, &made)
+			if impl == "" {
+				continue
+			}
+			key := initSlotKey(sig)
+			if i, ok := at[key]; ok {
+				out[i].impl = impl
+				continue
+			}
+			at[key] = len(out)
+			out = append(out, slot{member: c.Name + "." + key, impl: impl})
+		}
+		// A computed property's getter and setter are overridable as a
+		// method is, and are rows of the table after the methods.
+		for _, f := range c.Computed {
+			if f == nil {
+				continue
+			}
+			accessors := []string{"getter"}
+			if f.HasSetter {
+				accessors = append(accessors, "setter")
+			}
+			for _, kind := range accessors {
+				impl := g.accessorSymbol(c, f, kind)
+				if impl == "" {
+					continue
+				}
+				key := f.Name + "!" + kind
+				if i, ok := at[key]; ok {
+					out[i].impl = impl
+					continue
+				}
+				at[key] = len(out)
+				out = append(out, slot{member: c.Name + "." + key, impl: impl})
+			}
+		}
 	}
 	return out
+}
+
+// initSlotKey names a required initializer's row by its parameters.
+func initSlotKey(sig *types.Signature) string {
+	key := "init("
+	for _, p := range sig.Params {
+		key += p.Label + ":" + p.Type.String() + ","
+	}
+	return key + ")!allocator"
+}
+
+// initIntroducer is the base-most class declaring required initializer sig.
+func initIntroducer(cl *types.Class, sig *types.Signature) *types.Class {
+	key := initSlotKey(sig)
+	for _, c := range classChain(cl) {
+		for _, own := range c.Inits {
+			if own != nil && own.Required && initSlotKey(own) == key {
+				return c
+			}
+		}
+	}
+	return cl
+}
+
+// accessorSymbol is the symbol of a class's computed property's getter
+// or setter, or "".
+func (g *gen) accessorSymbol(cl *types.Class, f *types.Field, kind string) string {
+	d := mangle.Decl{
+		Module:    g.memberModule(cl, f),
+		Context:   memberChain(cl),
+		Name:      f.Name,
+		Signature: &types.Signature{Results: f.Type},
+		ModuleOf:  g.moduleOfType,
+	}
+	var name string
+	var err error
+	if kind == "setter" {
+		name, err = mangle.Setter(d)
+	} else {
+		name, err = mangle.Getter(d)
+	}
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// propertyIntroducer is the base-most class declaring computed property
+// name: the class its table rows are named for.
+func propertyIntroducer(cl *types.Class, name string) *types.Class {
+	for _, c := range classChain(cl) {
+		for _, f := range c.Computed {
+			if f != nil && f.Name == name {
+				return c
+			}
+		}
+	}
+	return cl
 }
 
 // classChain returns the inheritance chain from root base class to cl.

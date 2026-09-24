@@ -171,6 +171,11 @@ func (g *gen) stdlibMetadata(at ast.Node, t types.Type) (*sil.Value, bool) {
 			return g.blk.MetadataGlobal(lowerType(t), stdlib.Metadata("Existential1"), stdlib.MetadataOffset), true
 		}
 	}
+	// Every metatype is the metadata of the type it names, one word, so
+	// one record serves every metatype.
+	if _, ok := t.(*types.Metatype); ok {
+		return g.blk.MetadataGlobal(lowerType(t), stdlib.Metadata("Metatype"), stdlib.MetadataOffset), true
+	}
 	// Every function value is a code pointer and a counted context, so
 	// one record serves every function type.
 	if _, ok := t.Underlying().(*types.Signature); ok {
@@ -228,6 +233,10 @@ var metadataRecords = map[types.BasicKind]string{
 
 // subscript lowers an array or dictionary element read.
 func (g *gen) subscript(e *ast.SubscriptExpr) *sil.Value {
+	// `x[keyPath: k]`: through k.
+	if g.info.KeyPathReads[e] != nil {
+		return g.keyPathRead(e)
+	}
 	// One a type declares: its getter.
 	if ref := g.info.Subscripts[e]; ref != nil {
 		return g.declaredSubscriptRead(e, ref)

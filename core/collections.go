@@ -205,7 +205,9 @@ func LowerCollectionMethod(recv types.Type, name string, labels []string) (Metho
 			return Method{}, false
 		}
 		switch {
-		case name == "insert" && is(""):
+		// The runtime's insert answers nothing; Set.insert, which answers
+		// whether it did, is the core's, over this.
+		case name == "_insert" && is(""):
 			return Method{Symbol: stdlib.SetInsert, Params: []*types.Param{param("", elem)},
 				Result: voidType, Mutating: true,
 				Operands: []Operand{{Kind: OpReceiverSlot}, {Kind: OpArgBorrow, Arg: 0}, meta(elem)}}, true

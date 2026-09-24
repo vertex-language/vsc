@@ -73,6 +73,10 @@ func (c *fn) inst(in *sil.Inst) error {
 		return c.initExistential(in)
 	case sil.CopyAddr:
 		return c.copyAddr(in)
+	// A subclass's instance is its superclass's at the same address.
+	case sil.Upcast:
+		c.forward(in.Result(), in.Args()[0])
+		return nil
 	case sil.PointerToAddress, sil.AddressToPointer:
 		// An address and a pointer are one register. No bits move in
 		// either direction: what changes is what the type system will
@@ -642,11 +646,19 @@ func (c *fn) classMethod(in *sil.Inst) error {
 	if !ok {
 		return c.fail(ErrType, in.Op(), "the receiver is not a reference")
 	}
-	cl, ok := classOf(in.Args()[0].Type())
+	// A metatype -- a class method's receiver, a required initializer's
+	// -- reaches the table through its metadata, whose fourth word it is
+	// (the metadata pointer is at the kind, the second).
+	formal := in.Args()[0].Type().Formal()
+	viaMetatype := false
+	if meta, isMeta := formal.(*types.Metatype); isMeta {
+		formal, viaMetatype = meta.Instance, true
+	}
+	cl, ok := formal.Underlying().(*types.Class)
 	if !ok {
 		return c.fail(ErrUnsupported, in.Op(), "a method on something that is not a class")
 	}
-	rows, ok := c.l.slots[classTableName(in.Args()[0].Type().Formal(), cl)]
+	rows, ok := c.l.slots[classTableName(formal, cl)]
 	if !ok {
 		return c.fail(ErrUnsupported, in.Op(), cl.Name+" has no dispatch table")
 	}
@@ -660,7 +672,12 @@ func (c *fn) classMethod(in *sil.Inst) error {
 	if i < 0 {
 		return c.fail(ErrUnsupported, in.Op(), "no slot "+in.Aux().Member+" in "+cl.Name+"'s table")
 	}
-	table := c.b.Ptr.Load(obj)
+	var table ir.Ptr
+	if viaMetatype {
+		table = c.b.Ptr.Load(c.fieldAddr(obj, 16))
+	} else {
+		table = c.b.Ptr.Load(obj)
+	}
 	c.def(res, c.b.Ptr.Load(c.fieldAddr(table, int64(i+vtableFirstMethod)*8)))
 	return nil
 }

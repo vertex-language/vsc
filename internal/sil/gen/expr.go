@@ -10,6 +10,7 @@ import (
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 	"math"
+	"strconv"
 )
 
 // expr lowers an expression to a value.
@@ -25,6 +26,12 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 	}
 	if opt, ok := g.info.Unwrapped[e]; ok {
 		return g.implicitUnwrap(e, opt)
+	}
+	if li := g.info.LiteralInits[e]; li != nil {
+		return g.literalInit(e, li)
+	}
+	if sig := g.info.Autoclosures[e]; sig != nil {
+		return g.autoclosure(e, sig)
 	}
 	switch n := e.(type) {
 	case *ast.StringLit:
@@ -47,6 +54,29 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 
 	case *ast.MemberExpr:
 		return g.member(n)
+
+	// A key path used as a function is the closure the checker read it as;
+	// one used as a value, the KeyPath of its closures.
+	case *ast.KeyPathExpr:
+		if kv := g.info.KeyPathValues[n]; kv != nil {
+			return g.keyPathValue(kv)
+		}
+		if cl := g.info.KeyPathClosures[n]; cl != nil {
+			return g.expr(cl)
+		}
+		g.unsupported(n)
+		return nil
+
+	// `Int.self`, and a type written where a value goes: its metatype.
+	case *ast.PostfixSelfExpr, *ast.TypeExpr:
+		if meta, ok := g.typeOf(n).(*types.Metatype); ok {
+			return g.metatypeValue(n, meta.Instance)
+		}
+		if ps, ok := n.(*ast.PostfixSelfExpr); ok {
+			return g.expr(ps.X)
+		}
+		g.unsupported(n)
+		return nil
 
 	case *ast.SubscriptExpr:
 		return g.subscript(n)
@@ -108,6 +138,10 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		if t, ok := g.info.OptionalNones[n]; ok {
 			return g.blk.Enum(lowerType(g.substituted(t)), optionalNone, nil)
 		}
+		// `.max` where an integer is wanted is a constant, as `Int.max` is.
+		if v := g.constant(n); v != nil {
+			return v
+		}
 		ec, ok := g.info.Uses[n.Name].(*analyzer.EnumCaseSymbol)
 		if !ok {
 			// A static property of the contextual type, read as
@@ -141,6 +175,12 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		return g.expr(n.X)
 
 	case *ast.SelfExpr:
+		// `[weak self]`'s self, inside the closure that took it.
+		if sym := g.info.SelfVars[n]; sym != nil {
+			if l := g.locals[sym]; l != nil && l.cell != "" {
+				return g.cellRead(l)
+			}
+		}
 		if g.self != nil && g.self.addr != nil {
 			return g.loaded(g.blk.Load(g.self.addr, loadQualifier(g.self.typ)), g.self.typ)
 		}
@@ -159,6 +199,12 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 
 	case *ast.PrefixExpr:
 		return g.prefix(n)
+
+	case *ast.PostfixExpr:
+		return g.postfix(n)
+
+	case *ast.StmtExpr:
+		return g.stmtExpr(n)
 	}
 	g.unsupported(e)
 	return nil
@@ -172,6 +218,9 @@ func (g *gen) prefix(e *ast.PrefixExpr) *sil.Value {
 	sym, _ := g.info.Operators[e].(*analyzer.FuncSymbol)
 	if ref := g.info.OperatorMethods[e]; ref != nil || (sym != nil && !g.coreOperator(sym)) {
 		return g.operatorCall(e, ref, sym, e.X)
+	}
+	if v, isRange := g.partialRange(e, e.X); isRange {
+		return v
 	}
 	if sym == nil {
 		g.expr(e.X)
@@ -394,6 +443,9 @@ func (g *gen) ident(e *ast.IdentExpr) *sil.Value {
 		g.unsupported(e)
 		return nil
 	}
+	if l.cell != "" {
+		return g.cellRead(l)
+	}
 	// Storage that is not a value in the first place: the use gets
 	// where it lives, because there is no loading it out.
 	if l.mem {
@@ -411,6 +463,14 @@ func (g *gen) ident(e *ast.IdentExpr) *sil.Value {
 	}
 	if l.value.Ownership() == sil.Owned {
 		return g.borrow(l.value)
+	}
+	// A parameter passed by address -- an existential, @in_guaranteed --
+	// is the caller's storage, which a use reads and never ends.
+	if l.value.Type().IsAddress() {
+		if g.storage == nil {
+			g.storage = map[*sil.Value]bool{}
+		}
+		g.storage[l.value] = true
 	}
 	return l.value
 }
@@ -441,6 +501,9 @@ func (g *gen) implicitSelf(e *ast.IdentExpr, sym analyzer.Symbol) (*sil.Value, b
 	}
 	if isClass(g.recv) {
 		addr := g.blk.RefElementAddr(self, member, t)
+		if field.Ref != "" {
+			return g.refLoad(addr, field), true
+		}
 		access := g.blk.BeginAccess(addr, "read", "dynamic")
 		v := g.blk.Load(access, loadQualifier(t))
 		g.blk.EndAccess(access)
@@ -478,6 +541,21 @@ func (g *gen) member(e *ast.MemberExpr) *sil.Value {
 	// A constant the checker worked out: `Int64.max`.
 	if v := g.constant(e); v != nil {
 		return v
+	}
+	// MemoryLayout<T>.size, now that T is known.
+	if l, ok := g.info.Layouts[e]; ok {
+		t := g.substituted(l.Of)
+		var n int64
+		switch l.Kind {
+		case "size":
+			n = types.Sizeof(t, types.DefaultTarget64)
+		case "stride":
+			n = types.Strideof(t, types.DefaultTarget64)
+		case "alignment":
+			n = types.Alignof(t, types.DefaultTarget64)
+		}
+		intT := types.Typ[types.Int]
+		return g.blk.Struct(lowerType(intT), g.blk.IntegerLiteral(sil.Object(builtinFor(intT)), n))
 	}
 	// A property an existential's protocol requires: its getter witness.
 	if ex, ok := existentialOf(g.typeOf(e.X)); ok {
@@ -571,6 +649,9 @@ func (g *gen) member(e *ast.MemberExpr) *sil.Value {
 		return g.blk.StructExtract(base, name, t)
 	}
 	addr := g.blk.RefElementAddr(base, name, t)
+	if _, f, ok := storedField(g.typeOf(e.X), e.Name.Text(g.file)); ok && f.Ref != "" {
+		return g.refLoad(addr, f)
+	}
 	access := g.blk.BeginAccess(addr, "read", "dynamic")
 	v := g.blk.Load(access, loadQualifier(t))
 	g.blk.EndAccess(access)
@@ -587,6 +668,13 @@ func (g *gen) loaded(v *sil.Value, t sil.Type) *sil.Value {
 
 // call lowers a call expression to a resolved callee.
 func (g *gen) call(e *ast.CallExpr) *sil.Value {
+	// A call the checker read as one of a core function's.
+	if call := g.info.CoreCalls[e]; call != nil {
+		return g.expr(call)
+	}
+	if t, ok := g.info.TypeOfs[e]; ok {
+		return g.typeOfValue(e, t)
+	}
 	if t, ok := g.info.EmptyCollections[e]; ok {
 		return g.emptyCollection(e, t)
 	}
@@ -599,6 +687,10 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 		}
 		return g.optionalFor(from, v, g.typeOf(from), g.substituted(t))
 	}
+	// Array(s) of any other sequence: its elements, appended in order.
+	if it := g.info.ArraySequences[e]; it != nil {
+		return g.arrayOfSequence(e, it)
+	}
 	// Array(xs) of an array is the array: a copy, as a value is.
 	if _, ok := g.info.ArrayCopies[e]; ok {
 		v := g.rvalue(e.Args.Args[0].X)
@@ -606,6 +698,17 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 			g.destroyLater(v)
 		}
 		return v
+	}
+	if ref, ok := e.Fun.(*ast.InitRefExpr); ok {
+		if v, ok := g.delegatingInit(e, ref); ok {
+			return v
+		}
+		if v, ok := g.superInit(e, ref); ok {
+			return v
+		}
+		if v, ok := g.metatypeInit(e, ref); ok {
+			return v
+		}
 	}
 	if mem, ok := e.Fun.(*ast.MemberExpr); ok {
 		// Module-qualified calls.
@@ -650,6 +753,10 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 		if ref := g.info.ImplicitMethods[im]; ref != nil {
 			return g.staticCall(e, ref, ref.Recv)
 		}
+	}
+	// `Array(repeating:count:)`, as `[T](repeating:count:)` below.
+	if g.info.ArrayRepeats[e] {
+		return g.arrayInit(e)
 	}
 	// `[T](...)`, which makes an array.
 	if lit, ok := e.Fun.(*ast.ArrayLit); ok && len(lit.Items) == 1 {
@@ -747,6 +854,10 @@ func (g *gen) callFunc(e *ast.CallExpr, sym *analyzer.FuncSymbol) *sil.Value {
 
 // callFuncTry lowers a call, handling try? optional failure if specified.
 func (g *gen) callFuncTry(e *ast.CallExpr, sym *analyzer.FuncSymbol, optional bool) *sil.Value {
+	// A core function that is one instruction.
+	if op, ok := g.builtinOp(sym); ok && op != "" {
+		return g.callBuiltinOp(e, sym, op)
+	}
 	// Refuse unimported existential return functions.
 	if _, isEx := existentialOf(sym.Signature().Results); isEx {
 		if _, imported := g.info.Imported[sym]; !imported {
@@ -873,6 +984,24 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *sil.Value
 		return g.rawInit(e, en)
 	}
 	t := g.typeOf(e)
+	// An init? call is typed as the optional it makes; the type it makes
+	// one of is what is constructed.
+	if sig := g.info.Inits[e]; sig != nil && sig.Failable {
+		if o, ok := t.(*types.Optional); ok {
+			t = o.Wrapped
+		}
+	}
+	// An initializer an extension of Int or String declares.
+	if sig := g.info.Inits[e]; sig != nil && isBasicValue(t) {
+		var args []*ast.CallArg
+		if e.Args != nil {
+			args = e.Args.Args
+		}
+		out := *sig
+		out.Results = t
+		g.emitCoreInit(t, &out)
+		return g.applyInit(e, t, &out, args)
+	}
 	// Int("42") and String(decoding:as:): the runtime reads the text.
 	if v, ok := g.basicInit(e, t); ok {
 		return v
@@ -906,11 +1035,18 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *sil.Value
 		g.unsupported(e)
 		return nil
 	}
-	// Custom initializers take precedence over memberwise construction.
-	if st.Memberwise() == nil {
+	// Custom initializers take precedence over memberwise construction:
+	// all of them where the body declares one, and where only extensions
+	// do, the one the checker chose.
+	if st.Memberwise() == nil || g.info.Inits[e] != nil {
 		return g.callInit(e, t, st)
 	}
+	return g.memberwise(e, t, st)
+}
 
+// memberwise lowers a call of a struct's memberwise initializer: one value
+// per stored property, the argument for it or its default.
+func (g *gen) memberwise(e *ast.CallExpr, t types.Type, st *types.Struct) *sil.Value {
 	var args []*ast.CallArg
 	if e.Args != nil {
 		args = e.Args.Args
@@ -1011,6 +1147,10 @@ func (g *gen) argIsFor(a *ast.CallArg, f *types.Field) bool {
 	}
 	if a.Label == nil {
 		return true
+	}
+	// A lazy property's storage is labelled as the property is.
+	if f.LazyOf != "" {
+		return g.text(a.Label) == f.LazyOf
 	}
 	return g.text(a.Label) == f.Name
 }
@@ -1132,6 +1272,10 @@ func (g *gen) classDefaults(t types.Type) map[string]ast.Expr {
 func (g *gen) implicitlyNil(owner types.Type, f *types.Field) bool {
 	if _, ok := optionalOf(f.Type); !ok {
 		return false
+	}
+	// A lazy property's storage: nil until it is first read.
+	if f.LazyOf != "" {
+		return true
 	}
 	body := classBody(g.classDecl(owner))
 	if body == nil {
@@ -1285,7 +1429,24 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *sil.Value {
 	}
 	// Static method call.
 	if ref.Method.IsStatic {
+		if v, ok := g.classMethodCall(e, mem, ref, recv); ok {
+			return v
+		}
 		return g.staticCall(e, ref, recv)
+	}
+	// A method a protocol's extension adds is the extension's, lowered
+	// for the receiver's type; see protocolExtensionMethod.
+	if p, ok := ref.Recv.(*types.Protocol); ok && p.IsExtensionMethod(ref.Method) {
+		if _, isEx := existentialOf(g.substituted(recv)); isEx {
+			g.refuse(e, "a method of "+p.Name+"'s extension called on an existential")
+			return nil
+		}
+		return g.methodCall(e, ref, func() *sil.Value {
+			if mutatingRef(ref) {
+				return g.lvalue(mem.X)
+			}
+			return g.expr(mem.X)
+		})
 	}
 	// Witness table resolution for generic requirements.
 	if resolved, ok := g.witness(ref, recv); ok {
@@ -1300,6 +1461,10 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *sil.Value {
 			g.lateReceivers = map[*ast.CallExpr]bool{}
 		}
 		g.lateReceivers[e] = true
+	}
+	// `super.m()`: the superclass's implementation, called directly.
+	if _, isSuper := mem.X.(*ast.SuperExpr); isSuper {
+		return g.superMethodCall(e, ref)
 	}
 	var copied *sil.Value
 	v := g.methodCall(e, ref, func() *sil.Value {
@@ -1381,6 +1546,59 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 	}
 	result := lowerType(ref.Method.Sig.Results)
 	v := g.blk.Apply(fnRef, result, args...)
+	g.destroyLater(v)
+	return v
+}
+
+// superMethodCall is `super.m(...)` in a method of a class: the
+// implementation the superclass has -- its own, or the nearest one above
+// it -- called on self directly, not through the table, which would find
+// the override making the call.
+func (g *gen) superMethodCall(e *ast.CallExpr, ref *analyzer.MethodRef) *sil.Value {
+	cl, ok := receiverClass(g.recv)
+	if !ok || cl.Superclass == nil || ref.Method.Sig == nil {
+		g.refuse(e, "a super call outside a subclass's method")
+		return nil
+	}
+	super, ok := cl.Superclass.Underlying().(*types.Class)
+	if !ok {
+		g.refuse(e, "a super call on a superclass this cannot read")
+		return nil
+	}
+	key := ref.Method.Name + ref.Method.Sig.String()
+	var impl *analyzer.MethodRef
+	chain := classChain(super)
+	for i := len(chain) - 1; i >= 0 && impl == nil; i-- {
+		for _, m := range chain[i].Methods {
+			if m != nil && m.Sig != nil && m.Name+m.Sig.String() == key {
+				impl = &analyzer.MethodRef{Recv: chain[i], Method: m}
+				break
+			}
+		}
+	}
+	if impl == nil {
+		g.refuse(e, "a super call of a method no superclass implements")
+		return nil
+	}
+	callee := g.m.Func(g.methodSymbol(impl)).SetSourceName(impl.Method.Name)
+	if g.needsType(callee) {
+		g.declareMethod(callee, impl)
+	}
+	implClass := impl.Recv.(*types.Class)
+	self, args, ok := g.methodArgs(e, impl.Method.Sig, func() *sil.Value {
+		return g.blk.Upcast(g.selfValue(), lowerType(implClass))
+	})
+	if !ok {
+		return nil
+	}
+	args = append(args, self)
+	fnRef := g.blk.FunctionRef(callee)
+	if impl.Method.Sig.Throws {
+		optional, trap := g.tryOn(e)
+		g.tryBang = trap
+		return g.tryApply(e, fnRef, args, impl.Method.Sig.Results, optional, false)
+	}
+	v := g.blk.Apply(fnRef, lowerType(impl.Method.Sig.Results), args...)
 	g.destroyLater(v)
 	return v
 }
@@ -1681,7 +1899,14 @@ func (g *gen) declareSignature(f *sil.Func, sig *types.Signature) {
 
 // binary lowers an operator expression.
 func (g *gen) binary(e *ast.BinaryExpr) *sil.Value {
+	// A generic operator is the call of it the checker made.
+	if call := g.info.OperatorCalls[e]; call != nil {
+		return g.expr(call)
+	}
 	if v, isArray := g.arrayConcat(e); isArray {
+		return v
+	}
+	if v, isRange := g.rangeFormation(e); isRange {
 		return v
 	}
 	// An optional compared: the operator recorded is the payloads'.
@@ -1698,6 +1923,9 @@ func (g *gen) binary(e *ast.BinaryExpr) *sil.Value {
 		return g.derivedOperator(e, d)
 	}
 	if sym == nil {
+		if v, handled := g.identity(e, g.text(e.Op)); handled {
+			return v
+		}
 		if v, handled := g.enumEquality(e, g.text(e.Op)); handled {
 			return v
 		}
@@ -1933,6 +2161,10 @@ func (g *gen) selfValue() *sil.Value {
 	if g.fn == nil {
 		return nil
 	}
+	// A convenience initializer's self is what its self.init made.
+	if g.convenience {
+		return g.convSelf
+	}
 	args := g.fn.Entry().Args()
 	if len(args) == 0 {
 		return nil
@@ -1952,6 +2184,13 @@ func loadQualifier(t sil.Type) string {
 func memberName(base types.Type, name string) string {
 	if base == nil {
 		return name
+	}
+	// A labelled tuple's element is named by its label, however it is
+	// written: r.0 of a (min: Int, max: Int) is its min.
+	if tu, ok := base.Underlying().(*types.Tuple); ok {
+		if i, err := strconv.Atoi(name); err == nil && i >= 0 && i < len(tu.Elements) && tu.Elements[i].Name != "" {
+			name = tu.Elements[i].Name
+		}
 	}
 	return typeName(base) + "." + name
 }
@@ -1998,7 +2237,15 @@ func (g *gen) staticCall(e *ast.CallExpr, ref *analyzer.MethodRef, recv types.Ty
 		}
 		ref, symbol = spec, name
 	} else {
-		symbol = g.staticSymbol(ref, recv)
+		// A class's static method a superclass declares is the
+		// superclass's function.
+		owner := recv
+		if _, isClass := receiverClass(recv); isClass {
+			if _, declared := receiverClass(ref.Recv); declared {
+				owner = ref.Recv
+			}
+		}
+		symbol = g.staticSymbol(ref, owner)
 	}
 	callee := g.m.Func(symbol).SetSourceName(ref.Method.Name)
 	if g.needsType(callee) {
@@ -2024,6 +2271,65 @@ func (g *gen) staticCall(e *ast.CallExpr, ref *analyzer.MethodRef, recv types.Ty
 	return v
 }
 
+// classMethodCall is a class method of a class with subclasses called
+// through a metatype that may be a subclass's -- `type(of: x).kind()`, or
+// `Self.kind()` in an instance method -- which the metatype's table
+// dispatches. One called through the class's name is its own, and false.
+func (g *gen) classMethodCall(e *ast.CallExpr, mem *ast.MemberExpr, ref *analyzer.MethodRef, recv types.Type) (*sil.Value, bool) {
+	meta, ok := recv.(*types.Metatype)
+	if !ok {
+		return nil, false
+	}
+	cl, ok := receiverClass(meta.Instance)
+	if !ok || !g.poly[cl] {
+		return nil, false
+	}
+	var self *sil.Value
+	if id, ok := mem.X.(*ast.IdentExpr); ok && id.Name != nil {
+		if g.text(id.Name) != "Self" || g.recv == nil || g.selfValue() == nil || !isClass(g.recv) {
+			return nil, false
+		}
+		// Self in an instance method is the instance's dynamic type.
+		self = g.blk.Builtin("vertexObjectType_NativeObject", lowerType(meta), g.selfValue())
+	} else {
+		self = g.expr(mem.X)
+	}
+	if self == nil {
+		return nil, true
+	}
+	intro := introducer(cl, ref.Method)
+	sig := ref.Method.Sig
+	ft := &sil.FuncType{Convention: sil.Thin}
+	for _, p := range sig.Params {
+		t := lowerType(p.BodyType())
+		conv := paramConvention(p, t)
+		if byAddress(conv) {
+			t = t.Address()
+		}
+		ft.Params = append(ft.Params, sil.Param{Type: t, Convention: conv})
+	}
+	if sig.Results != nil && !isVoid(sig.Results) {
+		t := lowerType(sig.Results)
+		ft.Results = append(ft.Results, sil.Result{Type: t, Convention: resultConvention(t)})
+	}
+	if sig.Throws {
+		ft.ErrorType = sil.Object(sil.BuiltinNativeObj)
+	}
+	method := g.blk.ClassMethod(self, intro.Name+"."+ref.Method.Name, sil.Object(ft))
+	args, ok := g.arguments(e, sig)
+	if !ok {
+		return nil, true
+	}
+	if sig.Throws {
+		optional, trap := g.tryOn(e)
+		g.tryBang = trap
+		return g.tryApply(e, method, args, sig.Results, optional, false), true
+	}
+	v := g.blk.Apply(method, lowerType(sig.Results), args...)
+	g.destroyLater(v)
+	return v, true
+}
+
 // staticSymbol names a static method of the type (mangled with Z suffix).
 func (g *gen) staticSymbol(ref *analyzer.MethodRef, recv types.Type) string {
 	d := mangle.Decl{
@@ -2046,7 +2352,9 @@ func (g *gen) staticSymbol(ref *analyzer.MethodRef, recv types.Type) string {
 // coreOperator reports whether an operator is one of core's, which lower
 // to builtins rather than to a call.
 func (g *gen) coreOperator(sym *analyzer.FuncSymbol) bool {
-	return g.info.Imported[sym] == "Swift"
+	// One the core writes in source -- == on two metatypes -- is a
+	// function like any other, called as a program's own operator is.
+	return g.info.Imported[sym] == "Swift" && !hasBody(sym)
 }
 
 // operatorCall lowers an operator that means a function of the program's
@@ -2073,6 +2381,18 @@ func (g *gen) derivedOperator(e *ast.BinaryExpr, d *analyzer.DerivedOperator) *s
 	xs, vals := []ast.Expr{e.X, e.Y}, []*sil.Value{lhs, rhs}
 	if d.Swap {
 		xs, vals = []ast.Expr{e.Y, e.X}, []*sil.Value{rhs, lhs}
+	}
+	// One of the core's comparisons, which are instructions or runtime
+	// calls rather than functions with bodies: `a >= b` on Strings is
+	// `!(a < b)` compared in place.
+	if d.Method == nil && d.Fn != nil && g.coreOperator(d.Fn) && !hasBody(d.Fn) && len(d.Fn.Signature().Params) == 2 {
+		if bit := g.compare(d.Fn.Name(), vals[0], vals[1], d.Fn.Signature().Params[0].Type); bit != nil {
+			v := g.blk.Struct(lowerType(types.Typ[types.Bool]), bit)
+			if !d.Negate {
+				return v
+			}
+			return g.notBool(e, v)
+		}
 	}
 	v := g.operatorApply(e, d.Method, d.Fn, xs, vals)
 	if v == nil || !d.Negate {
@@ -2106,10 +2426,16 @@ func (g *gen) operatorApply(at ast.Expr, ref *analyzer.MethodRef, sym *analyzer.
 	if g.needsType(callee) {
 		g.declareSignature(callee, sig)
 	}
+	if sym != nil {
+		g.emitCoreBody(sym, callee)
+	}
 	fnRef := g.blk.FunctionRef(callee)
 	want := existentialParams(sig)
 	args := make([]*sil.Value, len(vals))
 	for i, v := range vals {
+		if i < len(sig.Params) {
+			v = g.optionalFor(xs[i], v, g.typeOf(xs[i]), sig.Params[i].Type)
+		}
 		args[i] = g.boxArg(xs[i], v, want, i)
 	}
 	v := g.blk.Apply(fnRef, lowerType(sig.Results), args...)
@@ -2238,4 +2564,98 @@ func extendedBuiltin(recv types.Type) types.Type {
 		return nil
 	}
 	return recv
+}
+
+// metatypeValue is t's metatype as a value: the metadata of t, which is
+// what every metatype value is here.
+func (g *gen) metatypeValue(at ast.Node, t types.Type) *sil.Value {
+	t = g.substituted(t)
+	v, ok := g.stdlibMetadata(at, t)
+	if !ok {
+		return nil
+	}
+	v.SetType(lowerType(&types.Metatype{Instance: t}))
+	return v
+}
+
+// typeOfValue lowers `type(of: x)`: for a class instance its dynamic type,
+// which its header says; for anything else the type it statically is. x
+// is evaluated either way.
+func (g *gen) typeOfValue(e *ast.CallExpr, static types.Type) *sil.Value {
+	arg := e.Args.Args[0].X
+	static = g.substituted(static)
+	meta := lowerType(&types.Metatype{Instance: static})
+	// An existential says what it holds, which the runtime reads.
+	if isExistentialType(static) {
+		addr := g.existentialPlace(arg)
+		if addr == nil {
+			return nil
+		}
+		f := g.m.Func(stdlib.ExistentialType).SetSourceName(stdlib.ExistentialType)
+		if g.needsType(f) {
+			f.SetLinkage(sil.PublicExternal)
+			f.Type().Convention = sil.Thin
+			f.Type().Params = []sil.Param{{Type: rawPointerType(), Convention: sil.ParamUnowned}}
+			f.SetResult(meta, sil.ResultUnowned)
+		}
+		return g.blk.Apply(g.blk.FunctionRef(f), meta, g.blk.AddressToPointer(addr, rawPointerType()))
+	}
+	if isClass(static) {
+		obj := g.rvalue(arg)
+		if obj == nil {
+			return nil
+		}
+		g.destroyTemp(obj)
+		return g.blk.Builtin("vertexObjectType_NativeObject", meta, obj)
+	}
+	v := g.rvalue(arg)
+	if v == nil {
+		return nil
+	}
+	g.destroyTemp(v)
+	return g.metatypeValue(e, static)
+}
+
+// identity lowers `===` and `!==`: whether two references are to the one
+// object. Each side is a class reference, an optional one -- nil is the
+// null pointer -- or an AnyObject, whose container holds the reference
+// in its first word.
+func (g *gen) identity(e *ast.BinaryExpr, op string) (*sil.Value, bool) {
+	if op != "===" && op != "!==" {
+		return nil, false
+	}
+	a, b := g.objectPointer(e.X), g.objectPointer(e.Y)
+	if a == nil || b == nil {
+		return nil, true
+	}
+	boolT := types.Typ[types.Bool]
+	verb := "cmp_eq_RawPointer"
+	if op == "!==" {
+		verb = "cmp_ne_RawPointer"
+	}
+	bit := g.blk.Builtin(verb, sil.Object(sil.BuiltinInt1), a, b)
+	return g.blk.Struct(lowerType(boolT), bit), true
+}
+
+// objectPointer is the address of the object a reference expression refers
+// to, as a raw pointer: null for a nil optional.
+func (g *gen) objectPointer(x ast.Expr) *sil.Value {
+	t := g.typeOf(x)
+	if o, ok := optionalOf(t); ok {
+		t = o.Wrapped
+	}
+	if isExistentialType(t) {
+		addr := g.existentialPlace(x)
+		if addr == nil {
+			return nil
+		}
+		word := g.blk.PointerToAddress(g.blk.AddressToPointer(addr, rawPointerType()), rawPointerType().Address())
+		return g.blk.Load(word, loadQualifier(rawPointerType()))
+	}
+	v := g.rvalue(x)
+	if v == nil {
+		return nil
+	}
+	g.destroyTemp(v)
+	return v
 }

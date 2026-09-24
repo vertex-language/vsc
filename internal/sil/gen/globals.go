@@ -23,6 +23,10 @@ type moduleVar struct {
 	// static is a type's static stored property.
 	static bool
 	recv   types.Type // the type a static stored property belongs to
+	// script is a variable main.swift's top-level code declares: storage
+	// the code fills where the declaration is, in order, as Swift runs a
+	// script, and which every function reaches directly.
+	script bool
 }
 
 // A moduleGetter is a computed variable declared at the top level of a file:
@@ -108,6 +112,77 @@ func (g *gen) declareModuleVars(f *ast.File) {
 				value:     b.Value,
 			}
 		}
+	}
+}
+
+// declareScriptVars makes each variable main.swift's top-level code
+// declares a global, as Swift's are: a function in the file reads and
+// writes it where it is, not a copy. A binding to a pattern, one without a
+// value, and an existential stay the top-level code's own.
+func (g *gen) declareScriptVars(f *ast.File) {
+	for _, stmt := range f.Stmts {
+		decl, ok := stmt.(*ast.DeclStmt)
+		if !ok {
+			continue
+		}
+		d, ok := decl.D.(*ast.VarDecl)
+		if !ok {
+			continue
+		}
+		for _, b := range d.Bindings {
+			if b.Value == nil || b.Accessors != nil || b.Body != nil {
+				continue
+			}
+			if _, ok := untyped(b.Pat).(*ast.IdentPattern); !ok {
+				continue
+			}
+			name, sym := g.binding(b)
+			if sym == nil || isExistentialType(sym.Type()) {
+				continue
+			}
+			addressor, err := mangle.Addressor(mangle.Decl{
+				Module:    g.module,
+				ModuleOf:  g.moduleOfType,
+				Name:      name,
+				Signature: &types.Signature{Results: sym.Type()},
+			})
+			if err != nil {
+				continue
+			}
+			g.vars[sym] = &moduleVar{
+				name:    name,
+				storage: strings.TrimSuffix(addressor, "au") + "p",
+				typ:     sym.Type(),
+				binding: b,
+				value:   b.Value,
+				script:  true,
+			}
+		}
+	}
+}
+
+// scriptVarDecl lowers a declaration of main.swift's top-level code: a
+// variable made a global is given its value where it is declared, and any
+// other binding is the code's own, as in a function.
+func (g *gen) scriptVarDecl(d *ast.VarDecl) {
+	for _, b := range d.Bindings {
+		_, sym := g.binding(b)
+		v, ok := g.vars[sym]
+		if !ok || !v.script || v.binding != b {
+			one := *d
+			one.Bindings = []*ast.PatternBinding{b}
+			g.varDecl(&one)
+			continue
+		}
+		g.push()
+		value := g.consume(g.rvalue(b.Value))
+		if value != nil {
+			value = g.optionalFor(b.Value, value, g.typeOf(b.Value), v.typ)
+			t := lowerType(v.typ)
+			addr, _, _ := g.moduleVarAddr(sym)
+			g.blk.Store(value, addr, storeQualifier(t))
+		}
+		g.popReachable()
 	}
 }
 
@@ -234,6 +309,10 @@ func (g *gen) moduleVarAddr(sym analyzer.Symbol) (*sil.Value, sil.Type, bool) {
 	v, ok := g.vars[sym]
 	if !ok || g.blk == nil {
 		return nil, sil.Type{}, false
+	}
+	if v.script {
+		t := lowerType(v.typ)
+		return g.blk.GlobalAddr(g.m.Global(v.storage, t, sil.Private)), t, true
 	}
 	callee := g.m.Func(v.addressor).SetSourceName(v.name)
 	if g.needsType(callee) {

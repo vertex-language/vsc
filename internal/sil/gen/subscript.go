@@ -1,6 +1,8 @@
 package gen
 
 import (
+	"strings"
+
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/internal/sil"
@@ -88,6 +90,13 @@ func (g *gen) emitSubscriptAccessor(m *ast.SubscriptDecl, recv types.Type, sub *
 	if symbol == "" {
 		return
 	}
+	g.emitSubscriptAccessorNamed(m, recv, sub, body, set, linkage, symbol)
+}
+
+// emitSubscriptAccessorNamed is emitSubscriptAccessor under a symbol the
+// caller says: a generic type's subscript specialized for an instance.
+func (g *gen) emitSubscriptAccessorNamed(m *ast.SubscriptDecl, recv types.Type, sub *types.Subscript,
+	body *ast.CodeBlock, set *ast.Accessor, linkage sil.Linkage, symbol string) {
 	f := g.m.Func(symbol).SetSourceName("subscript").SetLinkage(linkage).SetAttr("ossa")
 	g.fn = f
 	g.recv = recv
@@ -179,6 +188,11 @@ func (g *gen) subscriptCallee(at ast.Node, recv types.Type, sub *types.Subscript
 	if symbol == "" {
 		return nil
 	}
+	return g.subscriptCalleeNamed(recv, sub, setter, symbol)
+}
+
+// subscriptCalleeNamed is subscriptCallee under a symbol the caller says.
+func (g *gen) subscriptCalleeNamed(recv types.Type, sub *types.Subscript, setter bool, symbol string) *sil.Func {
 	callee := g.m.Func(symbol).SetSourceName("subscript")
 	if !g.needsType(callee) {
 		return callee
@@ -253,7 +267,10 @@ func (g *gen) subscriptReceiver(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef
 
 // declaredSubscriptRead lowers `s[i]` through the subscript's getter.
 func (g *gen) declaredSubscriptRead(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef) *sil.Value {
-	callee := g.subscriptCallee(e, ref.Recv, ref.Subscript, false)
+	ref, callee, handled := g.genericSubscript(e, ref, false)
+	if !handled {
+		callee = g.subscriptCallee(e, ref.Recv, ref.Subscript, false)
+	}
 	if callee == nil {
 		return nil
 	}
@@ -277,7 +294,10 @@ func (g *gen) declaredSubscriptRead(e *ast.SubscriptExpr, ref *analyzer.Subscrip
 // declaredSubscriptWrite lowers `s[i] = v` through the subscript's
 // setter, which borrows v: v is the caller's to end.
 func (g *gen) declaredSubscriptWrite(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef, v *sil.Value) bool {
-	callee := g.subscriptCallee(e, ref.Recv, ref.Subscript, true)
+	ref, callee, handled := g.genericSubscript(e, ref, true)
+	if !handled {
+		callee = g.subscriptCallee(e, ref.Recv, ref.Subscript, true)
+	}
 	if callee == nil {
 		return false
 	}
@@ -335,4 +355,122 @@ func (g *gen) flushWritebacks() {
 		}
 		pending[i]()
 	}
+}
+
+// genericSubscript is a subscript of a generic type, specialized for the
+// instance it is used on, as a generic type's methods are: the reference
+// with the subscript substituted, and its accessor, lowered once per
+// instance under the method's symbol with Tv and the instance's
+// arguments after it. It reports false for any other subscript.
+func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef, setter bool) (*analyzer.SubscriptRef, *sil.Func, bool) {
+	base := ref.Recv
+	if gi, ok := base.(*types.GenericInstance); ok {
+		base = gi.Base
+	}
+	params := nominalTypeParams(base)
+	if len(params) == 0 {
+		return ref, nil, false
+	}
+	inst, _ := g.typeOf(e.X).(*types.GenericInstance)
+	if meta, ok := g.typeOf(e.X).(*types.Metatype); ok {
+		inst, _ = meta.Instance.(*types.GenericInstance)
+	}
+	if inst == nil {
+		inst, _ = g.recv.(*types.GenericInstance)
+	}
+	if inst == nil || len(inst.Args) != len(params) {
+		g.refuse(e, "a subscript of a generic type on something whose type arguments are not known")
+		return ref, nil, true
+	}
+	decl := g.subscriptDecl(ref.Subscript)
+	if decl == nil {
+		g.refuse(e, "a subscript of a generic type whose declaration this cannot find")
+		return ref, nil, true
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+len(params))
+	for k, v := range g.subst {
+		subst[k] = v
+	}
+	for i, p := range params {
+		subst[p] = inst.Args[i]
+	}
+	sub := *ref.Subscript
+	sub.Params = make([]*types.Param, len(ref.Subscript.Params))
+	for i, p := range ref.Subscript.Params {
+		q := *p
+		q.Type = types.Substitute(p.Type, subst)
+		sub.Params[i] = &q
+	}
+	sub.Result = types.Substitute(ref.Subscript.Result, subst)
+	mangled := g.subscriptSymbol(e, base, &sub, setter)
+	if mangled == "" {
+		return ref, nil, true
+	}
+	var b strings.Builder
+	b.WriteString(mangled)
+	b.WriteString("Tv")
+	for _, a := range inst.Args {
+		b.WriteString(identifierSafe(a.String()))
+	}
+	name := b.String()
+	out := &analyzer.SubscriptRef{Recv: inst, Subscript: &sub}
+	// The accessor's body, once, read in the file it was written in, with
+	// the type's parameters the instance's.
+	if !g.specialized[name] {
+		if existing := g.m.Lookup(name); existing == nil || existing.IsDeclaration() {
+			if g.specialized == nil {
+				g.specialized = map[string]bool{}
+			}
+			g.specialized[name] = true
+			if body, set := subscriptAccessor(g, decl, setter); body != nil {
+				restore := g.apart()
+				if f := g.fileOf(decl); f != nil {
+					g.file = f
+				}
+				g.subst = subst
+				done := g.asSpecialization()
+				g.emitSubscriptAccessorNamed(decl, inst, &sub, body, set, sil.Private, name)
+				done()
+				restore()
+			}
+		}
+	}
+	return out, g.subscriptCalleeNamed(inst, &sub, setter, name), true
+}
+
+// subscriptDecl is the declaration a subscript was read from.
+func (g *gen) subscriptDecl(sub *types.Subscript) *ast.SubscriptDecl {
+	for d, s := range g.info.SubscriptDecls {
+		if s == sub {
+			return d
+		}
+	}
+	return nil
+}
+
+// subscriptAccessor is a subscript declaration's getter body, or its
+// setter's with the setter, where setter asks for that.
+func subscriptAccessor(g *gen, m *ast.SubscriptDecl, setter bool) (*ast.CodeBlock, *ast.Accessor) {
+	getter := m.Body
+	var set *ast.Accessor
+	if m.Accessors != nil {
+		for _, a := range m.Accessors.Accessors {
+			if a == nil || a.Keyword == nil || a.Body == nil {
+				continue
+			}
+			switch g.text(a.Keyword) {
+			case "get":
+				getter = a.Body
+			case "set":
+				set = a
+			}
+		}
+	}
+	if setter {
+		if set == nil {
+			return nil, nil
+		}
+		return set.Body, set
+	}
+	return getter, nil
 }

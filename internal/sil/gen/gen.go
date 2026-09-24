@@ -73,6 +73,11 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 		}
 		diags = append(diags, pre.diags...)
 	}
+	if script != nil {
+		pre := &gen{m: m, info: info, file: script.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes}
+		pre.declareScriptVars(script)
+		diags = append(diags, pre.diags...)
+	}
 	for _, f := range files {
 		g := &gen{m: m, info: info, file: f.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes, script: script != nil}
 		reportedTopLevel := false
@@ -152,6 +157,9 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 	}
 	tg.vtables(files)
 	tg.witnessTables(files)
+	// What the module uses of the core's own types, now that everything
+	// that could call for it has been lowered.
+	tg.coreTypeMembers()
 	diags = append(diags, tg.diags...)
 
 	// Validate entry point existence for main module.
@@ -212,6 +220,11 @@ func (g *gen) extension(d *ast.ExtensionDecl) {
 	if recv == nil || d.Body == nil {
 		return
 	}
+	// A protocol's extension is written for whatever conforms, and is
+	// lowered for each conforming type it is used with.
+	if _, isProtocol := recv.(*types.Protocol); isProtocol {
+		return
+	}
 	// A generic built-in type's are lowered where they are used, as a
 	// generic type's are.
 	if builtinParams(g.info, recv) != nil {
@@ -258,6 +271,9 @@ func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
 		g.emitSubscripts(body, sym.Type())
 	}
 	g.emitStatics(sym.Type())
+	if len(nominalTypeParams(sym.Type())) == 0 {
+		g.inheritedInitializers(sym.Type())
+	}
 	for _, mem := range body.Members {
 		switch m := mem.(type) {
 		case *ast.FuncDecl:
@@ -353,6 +369,7 @@ func (g *gen) symbol(sym *analyzer.FuncSymbol) string {
 		Name:      sym.Name(),
 		Signature: sym.Signature(),
 		ModuleOf:  g.moduleOfType,
+		Postfix:   sym.Postfix(),
 	}
 	// Private symbols include filename discriminator.
 	switch sym.Access() {
@@ -422,6 +439,9 @@ type gen struct {
 
 	loops   []loop
 	pending string
+	// branchValues is, for each expression statement that is a branch of
+	// an if or a switch being lowered as a value, where its value goes.
+	branchValues map[*ast.ExprStmt]*valueJoin
 
 	recv        types.Type                  // receiver type for method being lowered, or nil
 	closures    int                         // count of emitted closures (for unique names)
@@ -438,6 +458,12 @@ type gen struct {
 	tables      map[string]bool
 	self        *local // receiver storage for mutating initializers
 	initReturn  func() // early return handler for initializers
+	initFail    func() // `return nil` in a failable initializer
+	// convenience is set in a class's convenience initializer, and
+	// convSelf is the instance its `self.init(...)` made, which self is
+	// from there on.
+	convenience bool
+	convSelf    *sil.Value
 
 	throws  bool          // the function being lowered is declared throws
 	catches []catchTarget // enclosing do/catch statements, innermost last
@@ -472,6 +498,9 @@ type gen struct {
 	// lateReceivers are the calls whose receiver is evaluated after their
 	// arguments: a mutating method on an array element. See elementAddr.
 	lateReceivers map[*ast.CallExpr]bool
+	// refSlots is the addresses lvalue made of weak and unowned
+	// properties, which an assignment writes through the runtime.
+	refSlots map[*sil.Value]*types.Field
 	// payloadTests collects, while a case's payload is bound, the parts
 	// its pattern matches rather than binds. See enumItemArm.
 	payloadTests *[]payloadTest
@@ -664,7 +693,7 @@ func (g *gen) moduleOfType(t types.Type) string {
 	}
 	// Error is the universe's and the others core's: all the standard
 	// library's, as Swift spells them.
-	if p, ok := t.(*types.Protocol); ok && (p == types.ErrorProtocol || g.isCoreType(p)) {
+	if p, ok := t.(*types.Protocol); ok && (p == types.ErrorProtocol || p == types.AnyObjectProtocol || g.isCoreType(p)) {
 		return "Swift"
 	}
 	if m, ok := g.info.ImportedTypes[t]; ok && m != "" {
@@ -727,6 +756,11 @@ type local struct {
 	box   *sil.Value // var: box (if boxed)
 	typ   sil.Type
 	mem   bool // true for memory-only storage (e.g. existentials)
+	// cell is "weak" or "unowned" for a closure's `[weak x]` capture:
+	// value is the weak cell, and a read is the strong reference the cell
+	// gives, of type held.
+	cell string
+	held sil.Type
 }
 
 // scope collects cleanups (destroys, end_borrow, end_access) to emit on exit.
@@ -877,6 +911,9 @@ type loop struct {
 	// it: `continue` looks past it to the loop it is in, whose depth is
 	// where the unwinding has to reach.
 	isSwitch bool
+	// next is, for a switch's case, the body of the case after it, where
+	// `fallthrough` goes; nil in the last case.
+	next *sil.Block
 }
 
 // exitBlock returns or lazily instantiates the loop exit block.

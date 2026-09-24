@@ -56,17 +56,15 @@ func (g *gen) computedOf(t types.Type) []*types.Field {
 
 // getter lowers `v.magnitude` as a call to the property's getter.
 func (g *gen) getter(e *ast.MemberExpr, recv types.Type, f *types.Field) *sil.Value {
-	return g.getterCall(e, recv, f, func() *sil.Value { return g.expr(e.X) })
+	return g.getterOn(e, recv, f, e.X)
 }
 
 // getterCall lowers a getter call for a supplied receiver.
 func (g *gen) getterCall(at ast.Node, recv types.Type, f *types.Field,
 	receiver func() *sil.Value) *sil.Value {
 
-	if cl, ok := receiverClass(recv); ok && g.poly[cl] {
-		g.refuse(at, "a computed property of a class with a subclass, whose getter is "+
-			"reached through the table the instance carries")
-		return nil
+	if cl, ok := receiverClass(recv); ok && g.poly[cl] && f.LazyStorage == "" {
+		return g.dynamicGetter(cl, f, receiver)
 	}
 	resultType := f.Type
 	name, spec, generic := g.genericAccessor(at, recv, f, false)
@@ -92,6 +90,9 @@ func (g *gen) getterCall(at ast.Node, recv types.Type, f *types.Field,
 			return nil
 		}
 	}
+	if !generic {
+		g.emitCoreGetter(recv, f, name, false)
+	}
 	// The receiver is passed @guaranteed.
 	self := receiver()
 	if self == nil {
@@ -109,6 +110,49 @@ func (g *gen) getterCall(at ast.Node, recv types.Type, f *types.Field,
 	v := g.blk.Apply(ref, lowerType(resultType), self)
 	g.destroyLater(v)
 	return v
+}
+
+// emitCoreGetter emits, under symbol, the getter of a computed property the
+// core's source gives a built-in type -- Double.pi, Double.isNaN -- the
+// first time a module reads it. It is lowered privately where it is used,
+// as the core's functions are; see emitCoreInit.
+func (g *gen) emitCoreGetter(recv types.Type, f *types.Field, symbol string, static bool) {
+	b := builtinOf(g.info, recv)
+	core := g.info.CoreAlgorithms
+	if b == nil || core == nil || b.Modules[f] != "Swift" || len(b.Params) > 0 {
+		return
+	}
+	if fn := g.m.Lookup(symbol); fn != nil && !fn.IsDeclaration() {
+		return
+	}
+	restore := g.apart()
+	defer restore()
+	g.file, g.specializing = core.Unit, true
+	for _, st := range core.Stmts {
+		decl, ok := st.(*ast.DeclStmt)
+		if !ok {
+			continue
+		}
+		ext, ok := decl.D.(*ast.ExtensionDecl)
+		if !ok || ext.Body == nil || !types.Identical(g.info.Extensions[ext], recv) {
+			continue
+		}
+		for _, mem := range ext.Body.Members {
+			v, ok := mem.(*ast.VarDecl)
+			if !ok || isStaticDecl(v.Mods) != static {
+				continue
+			}
+			for _, bnd := range v.Bindings {
+				if g.computedName(bnd) != f.Name {
+					continue
+				}
+				if body := g.getterBody(bnd); body != nil {
+					g.emitGetterNamed(symbol, recv, f.Name, f.Type, body, static, sil.Private)
+				}
+				return
+			}
+		}
+	}
 }
 
 // emitGetters lowers the getter functions for a type's computed properties.
@@ -136,6 +180,18 @@ func (g *gen) emitGetters(body *ast.MemberBlock, recv types.Type) {
 					g.emitObservedSetter(recv, name, ftype, b, linkage)
 					continue
 				}
+			}
+			if f, ok := g.computedField(recv, name); ok && f.LazyStorage != "" && !static && b.Value != nil {
+				g.emitLazyAccessors(recv, f, b.Value, linkage)
+				continue
+			}
+			// A wrapped property, and its projection where it has one.
+			if f, ok := g.computedField(recv, name); ok && f.Wrapper != "" && !static {
+				g.emitWrapperAccessors(recv, f, linkage)
+				if p, ok := g.computedField(recv, "$"+name); ok && p.Projected {
+					g.emitWrapperAccessors(recv, p, linkage)
+				}
+				continue
 			}
 			block := g.getterBody(b)
 			if block == nil {
@@ -436,6 +492,7 @@ func (g *gen) staticGetter(e *ast.MemberExpr, recv types.Type, f *types.Field) *
 		g.errorAt(e, "cannot name the getter of '"+f.Name+"': "+err.Error())
 		return nil
 	}
+	g.emitCoreGetter(recv, f, name, true)
 	callee := g.m.Func(name).SetSourceName(f.Name)
 	if g.needsType(callee) {
 		callee.Type().Params = nil
@@ -479,6 +536,12 @@ func (g *gen) implicitComputed(e *ast.IdentExpr) (*sil.Value, bool) {
 	for _, f := range g.computedOf(g.recv) {
 		if f == nil || f.Name != name {
 			continue
+		}
+		if lazyInPlace(g.recv, f) {
+			if g.self != nil && g.self.addr != nil {
+				return g.lazyGetterCall(e, g.recv, f, g.self.addr), true
+			}
+			return g.getterOn(e, g.recv, f, &ast.SelfExpr{Span: ast.Span{Lo: e.Pos(), Hi: e.Pos()}}), true
 		}
 		return g.getterCall(e, g.recv, f, func() *sil.Value {
 			// Storage where the receiver is one -- an initializer's,
@@ -616,11 +679,6 @@ func (g *gen) computedField(t types.Type, name string) (*types.Field, bool) {
 
 // setterCall lowers an assignment to a computed property via its setter.
 func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, value ast.Expr) {
-	if cl, ok := receiverClass(recv); ok && g.poly[cl] {
-		g.refuse(mem, "a computed property of a class with a subclass, whose setter is "+
-			"reached through the table the instance carries")
-		return
-	}
 	v := g.rvalue(value)
 	if v == nil {
 		return
@@ -632,9 +690,8 @@ func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, v
 // is what a compound assignment has: it read the property, applied
 // the operator, and has the answer in hand.
 func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Field, v *sil.Value) {
-	if cl, ok := receiverClass(recv); ok && g.poly[cl] {
-		g.refuse(mem, "a computed property of a class with a subclass, whose setter is "+
-			"reached through the table the instance carries")
+	if cl, ok := receiverClass(recv); ok && g.poly[cl] && f.LazyStorage == "" {
+		g.dynamicSetter(mem, cl, f, v)
 		return
 	}
 	valueType := f.Type
@@ -689,6 +746,13 @@ func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Fie
 	}
 	ref := g.blk.FunctionRef(callee)
 	g.blk.Apply(ref, sil.Object(types.Typ[types.Void]), v, self)
+	// The setter borrows the new value; one this side owns, and nothing
+	// else will end, ends here.
+	vt := lowerType(valueType)
+	if !vt.Trivial() && v.Ownership() == sil.Owned &&
+		paramConvention(&types.Param{Type: valueType}, vt) == sil.ParamGuaranteed && !g.pendingDestroy(v) {
+		g.blk.DestroyValue(v)
+	}
 }
 
 // observedField returns the stored property if it has willSet or didSet observers.
@@ -833,4 +897,411 @@ func (g *gen) setterField(t types.Type, name string) (*types.Field, bool) {
 		return f, true
 	}
 	return observedField(t, name)
+}
+
+// lazyInPlace reports whether f is a lazy property of a value type,
+// whose getter writes the receiver and so is handed its storage.
+func lazyInPlace(recv types.Type, f *types.Field) bool {
+	return f != nil && f.LazyStorage != "" && !isClass(recv)
+}
+
+// getterOn reads property f of the value x lowers to: through its getter,
+// which for a lazy property of a value type is handed x's storage -- or,
+// where x is not storage, a copy's, which it fills and lets go.
+func (g *gen) getterOn(at ast.Node, recv types.Type, f *types.Field, x ast.Expr) *sil.Value {
+	if !lazyInPlace(recv, f) {
+		return g.getterCall(at, recv, f, func() *sil.Value { return g.expr(x) })
+	}
+	said := len(g.diags)
+	if addr := g.lvalue(x); addr != nil {
+		return g.lazyGetterCall(at, recv, f, addr)
+	}
+	g.diags = g.diags[:said]
+	v := g.rvalue(x)
+	if v == nil {
+		return nil
+	}
+	st := lowerType(recv)
+	tmp := g.blk.AllocStack(st)
+	g.blk.Store(v, tmp, storeQualifier(st))
+	out := g.lazyGetterCall(at, recv, f, tmp)
+	g.blk.DestroyAddr(tmp)
+	g.blk.DeallocStack(tmp)
+	return out
+}
+
+// lazyGetterCall calls a value type's lazy getter on the receiver's
+// storage, as a mutating method is called.
+func (g *gen) lazyGetterCall(at ast.Node, recv types.Type, f *types.Field, addr *sil.Value) *sil.Value {
+	d := mangle.Decl{
+		Module:    g.memberModule(recv, f),
+		Context:   memberChain(recv),
+		Extended:  extendedBuiltin(recv),
+		Name:      f.Name,
+		Signature: &types.Signature{Results: f.Type},
+		ModuleOf:  g.moduleOfType,
+	}
+	name, err := mangle.Getter(d)
+	if err != nil {
+		g.errorAt(at, "cannot name the getter of '"+f.Name+"': "+err.Error())
+		return nil
+	}
+	t := lowerType(f.Type)
+	callee := g.m.Func(name).SetSourceName(f.Name)
+	if g.needsType(callee) {
+		st := lowerType(recv)
+		callee.Type().Params = append(callee.Type().Params,
+			sil.Param{Type: st.Address(), Convention: sil.ParamInout})
+		callee.Type().Convention = sil.Method
+		callee.SetResult(t, resultConvention(t))
+	}
+	access := g.blk.BeginAccess(addr, "modify", "unknown")
+	v := g.blk.Apply(g.blk.FunctionRef(callee), t, access)
+	g.blk.EndAccess(access)
+	g.destroyLater(v)
+	return v
+}
+
+// emitLazyAccessors lowers a lazy property's getter and setter, which
+// Swift's `lazy var x: T = e` is: its storage is an optional, nil until
+// the getter first runs; the getter answers what the storage holds, or
+// runs e with self in scope, keeps it and answers it; the setter keeps
+// what it is given.
+func (g *gen) emitLazyAccessors(recv types.Type, f *types.Field, value ast.Expr, linkage sil.Linkage) {
+	d := mangle.Decl{
+		Module:    g.memberModule(recv, nil),
+		Context:   memberChain(recv),
+		Extended:  extendedBuiltin(recv),
+		Name:      f.Name,
+		Signature: &types.Signature{Results: f.Type},
+		ModuleOf:  g.moduleOfType,
+	}
+	getter, err := mangle.Getter(d)
+	if err != nil {
+		g.errorAt(value, "cannot name the getter of '"+f.Name+"': "+err.Error())
+		return
+	}
+	setter, err := mangle.Setter(d)
+	if err != nil {
+		g.errorAt(value, "cannot name the setter of '"+f.Name+"': "+err.Error())
+		return
+	}
+	t := lowerType(f.Type)
+	optType := &types.Optional{Wrapped: f.Type}
+	opt := lowerType(optType)
+	st := lowerType(recv)
+	member := memberName(recv, f.LazyStorage)
+
+	// begin opens the function and its self; storage is the optional's
+	// place in self, accessed for kind.
+	begin := func(symbol string) *sil.Func {
+		fn := g.m.Func(symbol).SetSourceName(f.Name).SetLinkage(linkage).SetAttr("ossa")
+		g.fn, g.recv, g.entry = fn, recv, false
+		fn.Type().Params = nil
+		g.locals = map[analyzer.Symbol]*local{}
+		g.scopes = nil
+		g.loops, g.pending = nil, ""
+		g.self = nil
+		g.push()
+		g.blk = fn.Entry()
+		return fn
+	}
+	self := func(fn *sil.Func) {
+		if isClass(recv) {
+			fn.Param(st, selfConvention(st))
+		} else {
+			g.self = &local{addr: fn.Param(st.Address(), sil.ParamInout), typ: st}
+		}
+		fn.Type().Convention = sil.Method
+	}
+	storage := func(kind string) *sil.Value {
+		if isClass(recv) {
+			return g.blk.BeginAccess(g.blk.RefElementAddr(g.selfValue(), member, opt), kind, "dynamic")
+		}
+		return g.blk.BeginAccess(g.blk.StructElementAddr(g.self.addr, member, opt.Address()), kind, "unknown")
+	}
+	end := func() {
+		g.pop()
+		g.fn, g.blk, g.recv, g.self = nil, nil, nil, nil
+	}
+
+	// The getter.
+	fn := begin(getter)
+	self(fn)
+	fn.SetResult(t, resultConvention(t))
+	access := storage("read")
+	held := g.blk.Load(access, loadQualifier(opt))
+	g.blk.EndAccess(access)
+	own := sil.Owned
+	if t.Trivial() {
+		own = sil.Unowned
+	}
+	some, none := fn.Block(), fn.Block()
+	payload := some.Arg(t, own)
+	g.blk.SwitchEnum(held,
+		sil.Case{Member: optionalSome, Dest: some},
+		sil.Case{Member: optionalNone, Dest: none})
+	g.blk = some
+	g.unwind()
+	g.blk.Return(payload)
+	g.blk = none
+	v := g.rvalue(value)
+	if v == nil {
+		end()
+		return
+	}
+	v = g.optionalFor(value, v, g.typeOf(value), f.Type)
+	kept := v
+	if !t.Trivial() {
+		kept = g.blk.CopyValue(v)
+	}
+	access = storage("modify")
+	g.blk.Assign(g.blk.Enum(opt, optionalSome, kept), access)
+	g.blk.EndAccess(access)
+	g.unwind()
+	g.blk.Return(v)
+	end()
+
+	// The setter: the new value first, then self.
+	fn = begin(setter)
+	nv := fn.Param(t, paramConvention(&types.Param{Type: f.Type}, t))
+	self(fn)
+	if !t.Trivial() && nv.Ownership() != sil.Owned {
+		nv = g.blk.CopyValue(nv)
+	}
+	access = storage("modify")
+	g.blk.Assign(g.blk.Enum(opt, optionalSome, nv), access)
+	g.blk.EndAccess(access)
+	g.unwind()
+	g.blk.Return(g.void())
+	_ = optType
+	end()
+}
+
+// dynamicGetter reads a computed property of a class with subclasses
+// through the table the instance carries, where an override is found.
+func (g *gen) dynamicGetter(cl *types.Class, f *types.Field, receiver func() *sil.Value) *sil.Value {
+	self := receiver()
+	if self == nil {
+		return nil
+	}
+	intro := propertyIntroducer(cl, f.Name)
+	t := lowerType(f.Type)
+	st := lowerType(intro)
+	ft := &sil.FuncType{Convention: sil.Method}
+	ft.Params = append(ft.Params, sil.Param{Type: st, Convention: selfConvention(st)})
+	ft.Results = append(ft.Results, sil.Result{Type: t, Convention: resultConvention(t)})
+	method := g.blk.ClassMethod(self, intro.Name+"."+f.Name+"!getter", sil.Object(ft))
+	v := g.blk.Apply(method, t, self)
+	g.destroyLater(v)
+	return v
+}
+
+// dynamicSetter writes a computed property of a class with subclasses
+// through the table the instance carries.
+func (g *gen) dynamicSetter(mem *ast.MemberExpr, cl *types.Class, f *types.Field, v *sil.Value) {
+	self := g.expr(mem.X)
+	if self == nil {
+		return
+	}
+	intro := propertyIntroducer(cl, f.Name)
+	t := lowerType(f.Type)
+	st := lowerType(intro)
+	conv := paramConvention(&types.Param{Type: f.Type}, t)
+	ft := &sil.FuncType{Convention: sil.Method}
+	ft.Params = append(ft.Params, sil.Param{Type: t, Convention: conv}, sil.Param{Type: st, Convention: selfConvention(st)})
+	method := g.blk.ClassMethod(self, intro.Name+"."+f.Name+"!setter", sil.Object(ft))
+	g.blk.Apply(method, sil.Object(types.Typ[types.Void]), v, self)
+	if !t.Trivial() && v.Ownership() == sil.Owned && conv == sil.ParamGuaranteed && !g.pendingDestroy(v) {
+		g.blk.DestroyValue(v)
+	}
+}
+
+// emitWrapperAccessors lowers the getter and setter of a property a
+// property wrapper gives -- `level` of `@Clamped(0...10) var level`, or
+// its projection `$level` -- which read and write the wrapper's
+// wrappedValue (projectedValue) in the storage holding it, `_level`.
+func (g *gen) emitWrapperAccessors(recv types.Type, f *types.Field, linkage sil.Linkage) {
+	_, storage, ok := storedField(recv, f.Wrapper)
+	if !ok {
+		return
+	}
+	wt := storage.Type
+	inner := "wrappedValue"
+	if f.Projected {
+		inner = "projectedValue"
+	}
+	wf := wrapperField(wt, inner)
+	if wf == nil {
+		return
+	}
+	d := mangle.Decl{
+		Module:    g.memberModule(recv, nil),
+		Context:   memberChain(recv),
+		Extended:  extendedBuiltin(recv),
+		Name:      f.Name,
+		Signature: &types.Signature{Results: f.Type},
+		ModuleOf:  g.moduleOfType,
+	}
+	getter, err := mangle.Getter(d)
+	if err != nil {
+		return
+	}
+	t := lowerType(f.Type)
+	st := lowerType(recv)
+	wlt := lowerType(wt)
+	member := memberName(recv, f.Wrapper)
+	begin := func(symbol string) *sil.Func {
+		fn := g.m.Func(symbol).SetSourceName(f.Name).SetLinkage(linkage).SetAttr("ossa")
+		g.fn, g.recv, g.entry = fn, recv, false
+		fn.Type().Params = nil
+		g.locals = map[analyzer.Symbol]*local{}
+		g.scopes = nil
+		g.loops, g.pending = nil, ""
+		g.self = nil
+		g.push()
+		g.blk = fn.Entry()
+		return fn
+	}
+	end := func() {
+		g.pop()
+		g.fn, g.blk, g.recv, g.self = nil, nil, nil, nil
+	}
+
+	// The getter: the wrapper out of self, and its property out of that.
+	fn := begin(getter)
+	self := fn.Param(st, selfConvention(st))
+	fn.Type().Convention = sil.Method
+	fn.SetResult(t, resultConvention(t))
+	var wrapper *sil.Value
+	if isClass(recv) {
+		access := g.blk.BeginAccess(g.blk.RefElementAddr(self, member, wlt), "read", "dynamic")
+		wrapper = g.blk.Load(access, loadQualifier(wlt))
+		g.blk.EndAccess(access)
+		g.destroyLater(wrapper)
+	} else {
+		wrapper = g.blk.StructExtract(self, member, wlt)
+	}
+	var out *sil.Value
+	if wf.IsComputed {
+		out = g.getterCall(nil, wt, wf, func() *sil.Value { return wrapper })
+		out = g.consume(out)
+	} else {
+		v := g.blk.StructExtract(wrapper, memberName(wt, inner), t)
+		if !t.Trivial() {
+			v = g.blk.CopyValue(v)
+		}
+		out = v
+	}
+	g.unwind()
+	g.blk.Return(out)
+	end()
+
+	if !f.HasSetter {
+		return
+	}
+	setter, err := mangle.Setter(d)
+	if err != nil {
+		return
+	}
+	// The setter: the new value into the wrapper's property, in place.
+	fn = begin(setter)
+	nv := fn.Param(t, paramConvention(&types.Param{Type: f.Type}, t))
+	var place *sil.Value
+	if isClass(recv) {
+		obj := fn.Param(st, selfConvention(st))
+		place = g.blk.RefElementAddr(obj, member, wlt)
+	} else {
+		selfAddr := fn.Param(st.Address(), sil.ParamInout)
+		place = g.blk.StructElementAddr(selfAddr, member, wlt.Address())
+	}
+	fn.Type().Convention = sil.Method
+	owned := nv
+	if !t.Trivial() && nv.Ownership() != sil.Owned {
+		owned = g.blk.CopyValue(nv)
+	}
+	if wf.IsComputed {
+		g.setterOnAddr(wt, wf, owned, place)
+	} else {
+		access := g.blk.BeginAccess(g.blk.StructElementAddr(place, memberName(wt, inner), t.Address()), "modify", "unknown")
+		g.blk.Assign(owned, access)
+		g.blk.EndAccess(access)
+	}
+	g.unwind()
+	g.blk.Return(g.void())
+	end()
+}
+
+// wrapperField is a wrapper type's property of a name, stored or computed.
+func wrapperField(t types.Type, name string) *types.Field {
+	if f, ok := storedFieldOf(t, name); ok {
+		return f
+	}
+	var computed []*types.Field
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		computed = u.Computed
+	case *types.Class:
+		computed = u.Computed
+	}
+	for _, f := range computed {
+		if f != nil && f.Name == name {
+			return f
+		}
+	}
+	return nil
+}
+
+// storedFieldOf is t's stored property of a name.
+func storedFieldOf(t types.Type, name string) (*types.Field, bool) {
+	_, f, ok := storedField(t, name)
+	return f, ok
+}
+
+// setterOnAddr calls computed property f's setter on the value of type
+// recv held at addr -- a struct's through its storage, a class's through
+// the reference held there -- with v, which the caller owns.
+func (g *gen) setterOnAddr(recv types.Type, f *types.Field, v, addr *sil.Value) {
+	d := mangle.Decl{
+		Module:    g.memberModule(recv, f),
+		Context:   memberChain(recv),
+		Extended:  extendedBuiltin(recv),
+		Name:      f.Name,
+		Signature: &types.Signature{Results: f.Type},
+		ModuleOf:  g.moduleOfType,
+	}
+	name, err := mangle.Setter(d)
+	if err != nil {
+		return
+	}
+	vt := lowerType(f.Type)
+	st := lowerType(recv)
+	conv := paramConvention(&types.Param{Type: f.Type}, vt)
+	callee := g.m.Func(name).SetSourceName(f.Name)
+	if g.needsType(callee) {
+		callee.Type().Params = append(callee.Type().Params, sil.Param{Type: vt, Convention: conv})
+		if isClass(recv) {
+			callee.Type().Params = append(callee.Type().Params, sil.Param{Type: st, Convention: selfConvention(st)})
+		} else {
+			callee.Type().Params = append(callee.Type().Params, sil.Param{Type: st.Address(), Convention: sil.ParamInout})
+		}
+		callee.Type().Convention = sil.Method
+	}
+	var self *sil.Value
+	if isClass(recv) {
+		self = g.blk.Load(addr, loadQualifier(st))
+	} else {
+		self = g.blk.BeginAccess(addr, "modify", "unknown")
+	}
+	g.blk.Apply(g.blk.FunctionRef(callee), sil.Object(types.Typ[types.Void]), v, self)
+	if isClass(recv) {
+		if !st.Trivial() {
+			g.blk.DestroyValue(self)
+		}
+	} else {
+		g.blk.EndAccess(self)
+	}
+	if !vt.Trivial() && conv == sil.ParamGuaranteed {
+		g.blk.DestroyValue(v)
+	}
 }

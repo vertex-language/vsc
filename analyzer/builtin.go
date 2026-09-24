@@ -31,6 +31,7 @@ type BuiltinMembers struct {
 	Statics      []*types.Field
 	Inits        []*types.Signature
 	Fields       []*types.Field
+	Subscripts   []*types.Subscript
 	Conformances []*types.Protocol
 	// Modules is the module that declared each member an imported
 	// module's extension added: a *types.Method or *types.Field. A member
@@ -276,7 +277,15 @@ func (c *checker) conformsTo(t types.Type, p *types.Protocol) bool {
 // name and the type has the member; nil otherwise. A member the extensions
 // declare is in the extension's scope already, and found the ordinary way.
 func (c *checker) implicitSelfMember(expr ast.Expr, scope *Scope) ast.Expr {
-	if c.currType == nil || BuiltinKey(c.currType) == "" {
+	if c.currType == nil {
+		return nil
+	}
+	// In a protocol's extension a member named alone is self's too:
+	// what the protocol requires, or another member its extensions add.
+	if proto := protocolOfSelf(c.currType); proto != nil {
+		return c.protocolSelfMember(expr, scope, proto)
+	}
+	if BuiltinKey(c.currType) == "" {
 		return nil
 	}
 	selfAt := func(id *ast.IdentExpr) *ast.MemberExpr {
@@ -324,10 +333,6 @@ func (c *checker) implicitSelfMember(expr ast.Expr, scope *Scope) ast.Expr {
 		if !ok {
 			return nil
 		}
-		name, ok := unbound(id)
-		if !ok {
-			return nil
-		}
 		var labels []string
 		if e.Args != nil {
 			for _, a := range e.Args.Args {
@@ -338,12 +343,76 @@ func (c *checker) implicitSelfMember(expr ast.Expr, scope *Scope) ast.Expr {
 				labels = append(labels, label)
 			}
 		}
+		name, ok := unbound(id)
+		if !ok {
+			// A name bound to the extensions' own methods -- contains(where:)
+			// -- where the type has a runtime method of it too -- contains(_:)
+			// -- is self's, chosen among them all by the arguments, as
+			// self.contains(x) is.
+			if id == nil || id.Name == nil || id.Args != nil {
+				return nil
+			}
+			name = id.Name.Text(c.file)
+			found, sym := scope.LookupParent(name)
+			if _, isFunc := sym.(*FuncSymbol); !isFunc || found == nil || !found.members {
+				return nil
+			}
+			if _, isCore := core.LowerCollectionMethod(c.currType, name, labels); !isCore {
+				return nil
+			}
+			return &ast.CallExpr{Span: e.Span, Fun: selfAt(id), Args: e.Args, Trailing: e.Trailing}
+		}
 		if _, isCore := core.LowerCollectionMethod(c.currType, name, labels); !isCore {
 			if _, m := c.findMethod(c.currType, name); m == nil {
 				return nil
 			}
 		}
 		return &ast.CallExpr{Span: e.Span, Fun: selfAt(id), Args: e.Args, Trailing: e.Trailing}
+	}
+	return nil
+}
+
+// protocolOfSelf is the protocol t is the Self of, where it is one.
+func protocolOfSelf(t types.Type) *types.Protocol {
+	tp, ok := t.(*types.TypeParam)
+	if !ok || tp.Name != "Self" || len(tp.Constraints) != 1 {
+		return nil
+	}
+	p, _ := tp.Constraints[0].(*types.Protocol)
+	if p == nil || p.Self != tp {
+		return nil
+	}
+	return p
+}
+
+// protocolSelfMember is `self.name` for a name alone, or called, inside an
+// extension of p, where name is a member of p's and nothing nearer -- a
+// local or a parameter -- has it.
+func (c *checker) protocolSelfMember(expr ast.Expr, scope *Scope, p *types.Protocol) ast.Expr {
+	selfAt := func(id *ast.IdentExpr) *ast.MemberExpr {
+		return &ast.MemberExpr{Span: id.Span, X: &ast.SelfExpr{Span: id.Span}, Dot: id.Pos(), Name: id.Name}
+	}
+	// A name is self's unless something that is not a member -- a local,
+	// a parameter, a function of the module -- has it first.
+	selfs := func(id *ast.IdentExpr) bool {
+		if id == nil || id.Name == nil || id.Args != nil {
+			return false
+		}
+		name := id.Name.Text(c.file)
+		if found, sym := scope.LookupParent(name); sym != nil && !found.members {
+			return false
+		}
+		return c.requirementType(p, name) != nil
+	}
+	switch e := expr.(type) {
+	case *ast.IdentExpr:
+		if selfs(e) {
+			return selfAt(e)
+		}
+	case *ast.CallExpr:
+		if id, ok := e.Fun.(*ast.IdentExpr); ok && selfs(id) {
+			return &ast.CallExpr{Span: e.Span, Fun: selfAt(id), Args: e.Args, Trailing: e.Trailing}
+		}
 	}
 	return nil
 }

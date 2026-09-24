@@ -67,6 +67,21 @@ func ParseFile(f *token.File, mode Mode) (*ast.File, []token.Diagnostic) {
 	return file, p.diags
 }
 
+// ParseAttrArgs reads an attribute's argument tokens -- the `0...10` of
+// `@Clamped(0...10)` -- as a call's arguments, positioned in f as they
+// were written: a property wrapper's attribute is a call of its
+// initializer.
+func ParseAttrArgs(f *token.File, a *ast.Attr) ([]*ast.CallArg, []token.Diagnostic) {
+	if a == nil || !a.Lparen.IsValid() {
+		return nil, nil
+	}
+	toks := append([]token.Token(nil), a.Tokens...)
+	toks = append(toks, token.Token{Kind: token.EOF, Pos: a.Rparen, End: a.Rparen})
+	p := &parser{f: f, toks: toks}
+	args := p.parseCallArgList(token.EOF)
+	return args, p.diags
+}
+
 // arena implements ast.Releaser for memory reclamation after parsing.
 type arena struct{}
 

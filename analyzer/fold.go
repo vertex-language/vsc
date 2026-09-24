@@ -111,7 +111,7 @@ func FoldSequence(f *token.File, seq *ast.SequenceExpr, pg *PrecedenceGraph) (as
 	for _, elem := range seq.Elements {
 		switch e := elem.(type) {
 		case *ast.OperatorExpr:
-			opName := string(f.Slice(e.Lo, e.Hi))
+			opName := e.Text(f)
 			grp := pg.OperatorGroup(opName)
 			item := opItem{node: e, group: grp}
 

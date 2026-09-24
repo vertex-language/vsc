@@ -12,7 +12,7 @@ import (
 
 // resolveOverload selects the matching overload among multiple candidates.
 // Returns nil if resolution fails or is unambiguous without selection.
-func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scope) *types.Signature {
+func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, expected types.Type, scope *Scope) *types.Signature {
 	// A function named alone, or through its module: `tcp.Listen`.
 	var name *ast.Ident
 	switch f := fun.(type) {
@@ -55,6 +55,7 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 		fits = lax
 	}
 	fits = c.byContext(fits)
+	fits = byResult(fits, expected)
 	if len(fits) > 1 {
 		var sigs []*types.Signature
 		for _, f := range fits {
@@ -73,6 +74,32 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 	}
 	c.info.Uses[name] = fits[0]
 	return fits[0].Signature()
+}
+
+// byResult is which of several functions that fit the arguments return
+// what the call is wanted to be -- `let s: String = make()` beside an
+// Int-returning make -- the one returning exactly that first; all of them
+// where nothing is wanted or none returns it.
+func byResult(fits []*FuncSymbol, expected types.Type) []*FuncSymbol {
+	if len(fits) < 2 || expected == nil {
+		return fits
+	}
+	for _, exact := range []bool{true, false} {
+		var suited []*FuncSymbol
+		for _, f := range fits {
+			sig := f.Signature()
+			if sig == nil || sig.Results == nil {
+				continue
+			}
+			if exact && types.Identical(sig.Results, expected) || !exact && types.AssignableTo(sig.Results, expected) {
+				suited = append(suited, f)
+			}
+		}
+		if len(suited) > 0 {
+			return suited
+		}
+	}
+	return fits
 }
 
 // meetsConstraints reports whether t conforms to every protocol the
@@ -203,6 +230,21 @@ func (c *checker) sigFits(sig *types.Signature, args []*ast.CallArg, argTypes []
 	}
 	next := 0
 	for _, p := range sig.Params {
+		// A variadic parameter takes none or any number of arguments:
+		// the first by the parameter's label, the others by none.
+		if p.Variadic {
+			for first := true; next < len(args); first = false {
+				fits := fitsLabel(args[next], p)
+				if !first {
+					fits = args[next].Label == nil
+				}
+				if !fits || !c.argFitsParam(args[next], argTypes[next], p) {
+					break
+				}
+				next++
+			}
+			continue
+		}
 		if next < len(args) && fitsLabel(args[next], p) && c.argFitsParam(args[next], argTypes[next], p) {
 			next++
 			continue
@@ -219,10 +261,15 @@ func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) b
 	if t == nil || isInvalid(t) || types.AssignableTo(t, p.Type) {
 		return true
 	}
+	if fn, ok := p.Type.Underlying().(*types.Signature); ok && p.Autoclosure {
+		return types.AssignableTo(t, fn.Results)
+	}
 	// A parameter whose type is a type parameter takes any argument that
 	// meets its constraints: `Count<R: AsyncReader>(_: inout R)` fits a
 	// Net that is an AsyncReader, and a Reader-constrained twin does not.
-	if tp, ok := p.BodyType().(*types.TypeParam); ok && !p.Variadic {
+	// (A variadic parameter's Type is its element's, which each of its
+	// arguments is.)
+	if tp, ok := p.Type.(*types.TypeParam); ok {
 		return c.meetsConstraints(t, tp)
 	}
 	// A closure written at the call takes its parameters' types from the
@@ -285,6 +332,17 @@ func (c *checker) resolveMethodOverload(mem *ast.MemberExpr, args []*ast.CallArg
 	// answers an Int?, not an Element?, and its arguments are matched
 	// against Int too.
 	var subst map[*types.TypeParam]types.Type
+	// The same for a generic type of the program's own: Box<Int>'s f
+	// takes a P<Int> where it was declared taking a P<T>.
+	if inst := genericInstanceOf(base); inst != nil {
+		params := typeParamsOf(inst.Base)
+		subst = make(map[*types.TypeParam]types.Type, len(params))
+		for i, p := range params {
+			if i < len(inst.Args) {
+				subst[p] = inst.Args[i]
+			}
+		}
+	}
 	if len(methods) == 0 {
 		recv, methods = c.builtinMethods(base, mem.Name.Text(c.file))
 		if b := c.builtinOf(base); b != nil {
@@ -400,6 +458,15 @@ func methodsNamed(t types.Type, name string) (types.Type, []*types.Method) {
 		}
 	}
 	return t, out
+}
+
+// genericInstanceOf is the instance t is, or the metatype of, or nil.
+func genericInstanceOf(t types.Type) *types.GenericInstance {
+	if meta, ok := t.(*types.Metatype); ok {
+		t = meta.Instance
+	}
+	inst, _ := t.(*types.GenericInstance)
+	return inst
 }
 
 // candidateLabels formats candidate parameter labels for ambiguity error diagnostics.
@@ -636,6 +703,16 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 				arg.Label.Text(c.file), paramName(param))
 		}
 
+		// What is written for an @autoclosure parameter is the value the
+		// function it becomes returns.
+		if fn, ok := param.Type.Underlying().(*types.Signature); ok && param.Autoclosure {
+			argType := c.checkExpr(arg.X, fn.Results, scope)
+			if !types.AssignableTo(argType, fn.Results) {
+				c.typeErrorf(arg.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", argType, fn.Results)
+			}
+			c.info.Autoclosures[arg.X] = fn
+			continue
+		}
 		argType := c.checkExpr(arg.X, param.Type, scope)
 		if !types.AssignableTo(argType, param.Type) {
 			if isString(argType) && cStringParam(param.Type) {

@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// TestResolveMixedPackage lays out tests/packages/001-mixed: SwiftPM's
+// TestResolveMixedPackage lays out build/testdata/packages/001-mixed: SwiftPM's
 // directories, each target's files and language, the public headers, the
 // settings, and an order that builds every target after what it needs.
 func TestResolveMixedPackage(t *testing.T) {
-	dir := "../tests/packages/001-mixed"
+	dir := "../build/testdata/packages/001-mixed"
 	m, diags, err := Load(dir)
 	if err != nil || len(diags) > 0 {
 		t.Fatalf("load: %v %v", err, diags)

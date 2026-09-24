@@ -150,7 +150,12 @@ whose `destroy` is null, is freed with nothing released. An immortal
 object is never counted and never freed.
 
 A class's dispatch table is its heap metadata: row 0 is `destroy`, row 1
-the class's metadata, and the methods follow from row 2. The destroyer
+the class's metadata, and the methods follow from row 2 -- then its
+required initializers' allocating entries and its computed properties'
+accessors, each class's rows after its superclass's. The class's metadata
+points back at the table (the word after its descriptor, kind + 16), which is how a
+metatype -- `type(of: x)`, a `T.Type` -- reaches the class methods and
+required initializers of the class it is. The destroyer
 runs the class's `deinit` and each superclass's, in that order, then
 releases the stored references. `vertex_release` marks the object
 immortal before calling it, so nothing the deinit does with `self` can
@@ -196,7 +201,7 @@ instance (`runtime/generic.cpp`):
 | --- | --- | --- |
 | `0x202` | `Optional<T>` | payload metadata; u32 tag offset; u32 tag bytes; u64 value of the empty case |
 | `0x800` | `Array<T>` | element metadata |
-| `0x801` | a class | nominal descriptor; the value is one reference |
+| `0x801` | a class | nominal descriptor; the class's dispatch table, or null where the module has none; the superclass's metadata, or null (a root class, or a superclass another module declares), which a cast down walks; the value is one reference |
 
 An Optional's empty case is a tag byte of 1 after the payload, or the
 payload's spare representation: a null word for a reference or pointer,

@@ -1173,6 +1173,24 @@ bool castInto(void* dst, const void* src, const Metadata* from, const Metadata* 
     markSome(dst, o);
     return true;
   }
+  // A class instance is a `to` where its dynamic type is that class or
+  // one below it.
+  if (from->kind == kindClass && to->kind == kindClass) {
+    HeapObject* object = *static_cast<HeapObject* const*>(src);
+    if (object == nullptr)
+      return false;
+    const Metadata* dynamic = from;
+    if (object->metadata != nullptr && object->metadata->type != nullptr)
+      dynamic = object->metadata->type;
+    for (auto* c = static_cast<const ClassMetadata*>(dynamic); c != nullptr; c = c->superclass) {
+      if (c == to) {
+        vertex_retain(object);
+        *static_cast<HeapObject**>(dst) = object;
+        return true;
+      }
+    }
+    return false;
+  }
   if (record(to, vertex_metadata_Any)) {
     auto* any = static_cast<AnyExistential*>(dst);
     const ValueWitnessTable* vw = witnesses(from);

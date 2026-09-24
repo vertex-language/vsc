@@ -91,7 +91,7 @@ func resultOwnership(op Op, aux Aux, t Type, args []*Value) Ownership {
 		return Owned
 	case BeginBorrow, OpenExistentialRef:
 		return Guaranteed
-	case StructExtract, TupleExtract, UncheckedEnumData:
+	case StructExtract, TupleExtract, UncheckedEnumData, Upcast:
 		if len(args) > 0 {
 			return args[0].own
 		}

@@ -4,6 +4,7 @@ import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/stdlib"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 )
@@ -15,11 +16,8 @@ func (g *gen) closure(e *ast.ClosureExpr) *sil.Value {
 		g.refuse(e, "a closure whose type is not known")
 		return nil
 	}
-	// A capture list of self alone says what capturing self already
-	// does; anything else in one -- a weak reference, a value copied
-	// when the closure is made -- is not lowered yet.
-	if e.Sig != nil && e.Sig.Captures != nil && !g.selfCaptureList(e.Sig.Captures) {
-		g.refuse(e, "a closure with a capture list")
+	listed, ok := g.captureList(e)
+	if !ok {
 		return nil
 	}
 	caps, refused := g.closureCaptures(e)
@@ -27,6 +25,7 @@ func (g *gen) closure(e *ast.ClosureExpr) *sil.Value {
 		g.refuse(e, "a closure that captures '"+refused+"'")
 		return nil
 	}
+	caps = append(listed, caps...)
 
 	f := g.closureBody(e, sig, caps)
 	if f == nil {
@@ -76,15 +75,91 @@ type closureCapture struct {
 	self bool // the receiver, which follows every other capture
 }
 
-// selfCaptureList reports whether a capture list names only self,
-// strongly.
-func (g *gen) selfCaptureList(list *ast.CaptureList) bool {
-	for _, item := range list.Items {
-		if _, ok := item.X.(*ast.SelfExpr); !ok || item.Spec != nil || g.recv == nil {
-			return false
-		}
+// captureList evaluates what a closure's capture list binds, here where
+// the closure is made, as captures of the closure: `[x]` is x's value now,
+// not x. `[self]` says what capturing self already does. A weak or unowned
+// capture is not lowered yet.
+func (g *gen) captureList(e *ast.ClosureExpr) ([]closureCapture, bool) {
+	if e.Sig == nil || e.Sig.Captures == nil {
+		return nil, true
 	}
-	return true
+	var out []closureCapture
+	for _, item := range e.Sig.Captures.Items {
+		if item.Spec != nil {
+			c, ok := g.weakCapture(item)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, c)
+			continue
+		}
+		if _, isSelf := item.X.(*ast.SelfExpr); isSelf && g.recv != nil {
+			continue
+		}
+		cp := g.info.Captures[item]
+		if cp == nil {
+			g.refuse(item, "this capture")
+			return nil, false
+		}
+		v := g.consume(g.rvalue(cp.Value))
+		if v == nil {
+			return nil, false
+		}
+		v = g.optionalFor(cp.Value, v, g.typeOf(cp.Value), cp.Sym.Type())
+		g.destroyLater(v)
+		out = append(out, closureCapture{sym: cp.Sym, loc: &local{value: v, typ: lowerType(cp.Sym.Type())}})
+	}
+	return out, true
+}
+
+// weakCapture is a `[weak x]` or `[unowned x]` of a capture list: a weak
+// cell holding x, made where the closure is, which the closure captures
+// as it captures any value, and which a read of x inside asks for x.
+func (g *gen) weakCapture(item *ast.CaptureItem) (closureCapture, bool) {
+	cp := g.info.Captures[item]
+	if cp == nil || item.Spec.Name == nil {
+		g.refuse(item, "this capture")
+		return closureCapture{}, false
+	}
+	kind := g.text(item.Spec.Name)
+	if kind != "weak" && kind != "unowned" {
+		g.refuse(item, "an '"+kind+"' capture")
+		return closureCapture{}, false
+	}
+	v := g.expr(cp.Value)
+	if v == nil {
+		return closureCapture{}, false
+	}
+	cell := g.m.Func(stdlib.WeakCell).SetSourceName(stdlib.WeakCell)
+	if g.needsType(cell) {
+		cell.SetLinkage(sil.PublicExternal)
+		cell.Type().Convention = sil.Thin
+		cell.Type().Params = []sil.Param{{Type: v.Type(), Convention: sil.ParamGuaranteed}}
+		cell.SetResult(sil.Object(sil.BuiltinNativeObj), sil.ResultOwned)
+	}
+	made := g.blk.Apply(g.blk.FunctionRef(cell), sil.Object(sil.BuiltinNativeObj), v)
+	g.destroyLater(made)
+	loc := &local{value: made, typ: made.Type(), cell: kind, held: lowerType(cp.Sym.Type())}
+	return closureCapture{sym: cp.Sym, loc: loc}, true
+}
+
+// cellRead is what a closure's `[weak x]` capture reads: a strong
+// reference from its cell, owned by the statement, or nil where x has
+// ended -- or a trap, for an unowned one.
+func (g *gen) cellRead(l *local) *sil.Value {
+	symbol := stdlib.WeakCellLoad
+	if l.cell == "unowned" {
+		symbol = stdlib.UnownedCellLoad
+	}
+	callee := g.m.Func(symbol).SetSourceName(symbol)
+	if g.needsType(callee) {
+		callee.SetLinkage(sil.PublicExternal)
+		callee.Type().Convention = sil.Thin
+		callee.Type().Params = []sil.Param{{Type: sil.Object(sil.BuiltinNativeObj), Convention: sil.ParamGuaranteed}}
+		callee.SetResult(l.held, sil.ResultOwned)
+	}
+	v := g.blk.Apply(g.blk.FunctionRef(callee), l.held, l.value)
+	return g.loaded(v, l.held)
 }
 
 // boxed reports whether the capture is a variable's box.
@@ -107,6 +182,17 @@ func (g *gen) closureCaptures(e ast.Node) ([]closureCapture, string) {
 		if self != nil {
 			return
 		}
+		// A value type's self that is a place -- a mutating method's,
+		// a lazy getter's -- is captured as it is now: a closure that may
+		// capture it does not escape, and one that writes it is refused
+		// where it writes, as a write to any value's is.
+		if g.self != nil && g.self.addr != nil && g.recv != nil && !isClass(g.recv) && !g.self.typ.IsAddress() {
+			access := g.blk.BeginAccess(g.self.addr, "read", "unknown")
+			v := g.blk.Load(access, loadQualifier(g.self.typ))
+			g.blk.EndAccess(access)
+			self = g.loaded(v, g.self.typ)
+			return
+		}
 		v := g.selfValue()
 		if g.self != nil || v == nil || v.Type().IsAddress() {
 			refused = name
@@ -119,7 +205,15 @@ func (g *gen) closureCaptures(e ast.Node) ([]closureCapture, string) {
 			return false
 		}
 		switch x := n.(type) {
+		case *ast.CaptureList:
+			// What a capture list names is taken where the closure is
+			// made; see captureList.
+			return false
 		case *ast.SelfExpr:
+			// A self the capture list took weakly is that capture.
+			if g.info.SelfVars[x] != nil {
+				return true
+			}
 			if g.recv != nil {
 				useSelf("self")
 			}
@@ -188,13 +282,15 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 		catches []catchTarget
 		tryBang bool
 		tryCall *ast.CallExpr
+		self    *local
 	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv,
-		g.throws, g.catches, g.tryBang, g.tryCall}
+		g.throws, g.catches, g.tryBang, g.tryCall, g.self}
 	defer func() {
 		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
 		g.scopes, g.locals = outer.scopes, outer.locals
 		g.loops, g.pending, g.recv = outer.loops, outer.pending, outer.recv
 		g.throws, g.catches, g.tryBang, g.tryCall = outer.throws, outer.catches, outer.tryBang, outer.tryCall
+		g.self = outer.self
 	}()
 
 	g.fn = f
@@ -203,6 +299,9 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 	g.scopes = nil
 	g.loops, g.pending = nil, ""
 	g.recv = nil
+	// The receiver's storage is the enclosing function's; a closure that
+	// captures self has it as a value, its last argument.
+	g.self = nil
 	// The closure's own errors leave it, whatever catches the code
 	// around it: a catch outside a closure is not on its path.
 	g.throws, g.catches, g.tryBang, g.tryCall = sig.Throws, nil, false, nil
@@ -220,7 +319,21 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 
 	for i, p := range sig.Params {
 		t := lowerType(p.Type)
-		v := f.Param(t, paramConvention(p, t))
+		conv := paramConvention(p, t)
+		// An existential or inout parameter is passed by address, as a
+		// declared function's is: its storage is the caller's.
+		if byAddress(conv) {
+			v := f.Param(t.Address(), conv)
+			if i < len(syms) && syms[i] != nil {
+				_, isEx := existentialOf(p.Type)
+				g.locals[syms[i]] = &local{addr: v, typ: t, mem: isEx}
+			}
+			if p.Name != "" {
+				g.blk.DebugValue(v, p.Name, "let", "argno "+itoa(i+1))
+			}
+			continue
+		}
+		v := f.Param(t, conv)
 		if i < len(syms) && syms[i] != nil {
 			g.locals[syms[i]] = &local{value: v, typ: t}
 		}
@@ -249,7 +362,7 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 			g.recv = outer.recv
 			continue
 		}
-		g.locals[c.sym] = &local{value: v, typ: c.loc.typ}
+		g.locals[c.sym] = &local{value: v, typ: c.loc.typ, cell: c.loc.cell, held: c.loc.held}
 	}
 	if sig.Results != nil && !isVoid(sig.Results) {
 		f.SetResult(lowerType(sig.Results), resultConvention(lowerType(sig.Results)))
@@ -503,4 +616,22 @@ func (g *gen) registerNested(body *ast.CodeBlock, enclosing string) {
 		}
 		g.nested[sym] = enclosing
 	}
+}
+
+// autoclosure lowers an argument passed for an @autoclosure parameter as
+// the function it is: a closure whose body is the expression, evaluated
+// when, and each time, the function is called.
+func (g *gen) autoclosure(e ast.Expr, sig *types.Signature) *sil.Value {
+	caps, refused := g.closureCaptures(e)
+	if refused != "" {
+		g.refuse(e, "an @autoclosure argument that captures '"+refused+"'")
+		return nil
+	}
+	delete(g.info.Autoclosures, e)
+	f := g.captureBody(sig, caps, nil, nil, e, true, e.Pos(), e.End(), "closure")
+	g.info.Autoclosures[e] = sig
+	if f == nil {
+		return nil
+	}
+	return g.closureValue(f, sig, caps)
 }

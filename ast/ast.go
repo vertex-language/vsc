@@ -50,12 +50,19 @@ type Ident struct {
 	Span
 	// Escaped indicates whether the identifier was written with backticks.
 	Escaped bool
+	// Synth is the name of an identifier the compiler wrote rather than
+	// read -- the `$0` of the closure a key path used as a function is --
+	// whose span is only where it stands in the source.
+	Synth string
 }
 
 // Name returns the identifier's spelling, backticks included.
 func (id *Ident) Name(f *token.File) string {
 	if id == nil {
 		return ""
+	}
+	if id.Synth != "" {
+		return id.Synth
 	}
 	return string(f.Slice(id.Lo, id.Hi))
 }

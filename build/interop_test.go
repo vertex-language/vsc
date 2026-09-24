@@ -20,7 +20,7 @@ import (
 // The interop corpus: programs this compiler builds that call Swift
 // libraries swiftc builds.
 //
-// tests/compiler asks whether a program this compiler builds by itself
+// The ladder in tests/ asks whether a program this compiler builds by itself
 // does what it says. This asks the other question -- whether what it
 // builds is the same thing swiftc builds -- and it asks it the only
 // way that cannot be fudged, by putting both compilers' output in one
@@ -51,7 +51,7 @@ import (
 // A program returns 42 when it is satisfied, and the number of the
 // check that failed otherwise. There is no oracle to compare against
 // here -- the program is this compiler's alone -- so it checks itself,
-// which is the convention tests/compiler uses for the same reason.
+// which is the convention the ladder in tests/ uses for the same reason.
 func TestInteropCorpus(t *testing.T) {
 	if runtime.GOARCH != "arm64" || runtime.GOOS != "darwin" {
 		t.Skip("not on Apple Silicon")
@@ -68,9 +68,9 @@ func TestInteropCorpus(t *testing.T) {
 		t.Skip("no backend for this machine")
 	}
 
-	dirs, err := filepath.Glob("../tests/interop/*")
+	dirs, err := filepath.Glob("testdata/interop/*")
 	if err != nil || len(dirs) == 0 {
-		t.Fatal("no cases found in tests/interop")
+		t.Fatal("no cases found in testdata/interop")
 	}
 	for _, dir := range dirs {
 		info, err := os.Stat(dir)

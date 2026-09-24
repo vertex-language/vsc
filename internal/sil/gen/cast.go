@@ -84,12 +84,9 @@ func (g *gen) dynamicCast(e *ast.CastExpr, from, to types.Type, kind castKind) *
 	// else is put in a temporary.
 	var src *sil.Value
 	if _, isEx := existentialOf(from); isEx || isOptionalExistential(from) {
-		src = g.expr(e.X)
+		src = g.existentialPlace(e.X)
 		if src == nil {
 			return nil
-		}
-		if !g.storage[src] {
-			g.destroyAddrLater(src)
 		}
 	} else {
 		v := g.rvalue(e.X)
@@ -178,4 +175,51 @@ func loadQualifierTake(t sil.Type) string {
 		return "trivial"
 	}
 	return "take"
+}
+
+// castValue asks the runtime whether v, of type from -- a value, or an
+// existential's storage -- is a `to`, answering the bit and the stack slot
+// a copy of it as one is written to where it is. The caller takes that
+// copy out and deallocates the slot.
+func (g *gen) castValue(at ast.Node, v *sil.Value, from, to types.Type) (*sil.Value, *sil.Value, bool) {
+	if from == nil || to == nil {
+		g.refuse(at, "a cast whose types are not known")
+		return nil, nil, false
+	}
+	fromMeta, ok := g.stdlibMetadata(at, from)
+	if !ok {
+		return nil, nil, false
+	}
+	toMeta, ok := g.stdlibMetadata(at, to)
+	if !ok {
+		return nil, nil, false
+	}
+	src := v
+	var temp *sil.Value
+	if !v.Type().IsAddress() {
+		lt := lowerType(from)
+		temp = g.blk.AllocStack(lt)
+		held := v
+		if !lt.Trivial() {
+			held = g.blk.CopyValue(v)
+		}
+		g.blk.Store(held, temp, storeQualifier(lt))
+		src = temp
+	}
+	out := g.blk.AllocStack(lowerType(to))
+	raw := rawPointerType()
+	matched := g.runtimeResult(stdlib.DynamicCast,
+		[]sil.Param{{Type: raw, Convention: sil.ParamUnowned}, {Type: raw, Convention: sil.ParamUnowned},
+			{Type: raw, Convention: sil.ParamUnowned}, {Type: raw, Convention: sil.ParamUnowned}},
+		sil.Object(sil.BuiltinInt64),
+		g.blk.AddressToPointer(out, raw), g.blk.AddressToPointer(src, raw), fromMeta, toMeta)
+	if temp != nil {
+		if lt := lowerType(from); !lt.Trivial() {
+			g.blk.DestroyAddr(temp)
+		}
+		g.blk.DeallocStack(temp)
+	}
+	bit := g.blk.Builtin("cmp_ne_Int64", sil.Object(sil.BuiltinInt1), matched,
+		g.blk.IntegerLiteral(sil.Object(sil.BuiltinInt64), 0))
+	return out, bit, true
 }

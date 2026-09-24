@@ -50,6 +50,10 @@ type nominal struct {
 	hashable  bool
 	hasEquals bool // a `==` taking it, or the derived function, is declared
 	hasHash   bool // a hash(into:) is declared
+	// caseIterable is an enum that says it is CaseIterable, and
+	// hasAllCases one that declares its own allCases.
+	caseIterable bool
+	hasAllCases  bool
 }
 
 // enumCase is one case of an enum: its name, and how many values it
@@ -102,6 +106,7 @@ func Source(files []*ast.File) []byte {
 		t.generic = generic
 		eq, hash := says(unit, inherit)
 		t.equatable, t.hashable = t.equatable || eq, t.hashable || hash
+		t.caseIterable = t.caseIterable || saysName(unit, inherit, "CaseIterable")
 		visitMembers(unit, body, t, path)
 	}
 
@@ -124,6 +129,9 @@ func Source(files []*ast.File) []byte {
 					}
 				}
 			case *ast.VarDecl:
+				if owner != nil && declaresAllCases(unit, x) {
+					owner.hasAllCases = true
+				}
 				if owner == nil || owner.isEnum || hasModifier(unit, x.Mods, "static") || hasModifier(unit, x.Mods, "class") {
 					continue
 				}
@@ -183,10 +191,14 @@ func Source(files []*ast.File) []byte {
 		}
 		eq, hash := says(e.unit, e.d.Inherit)
 		t.equatable, t.hashable = t.equatable || eq, t.hashable || hash
+		t.caseIterable = t.caseIterable || saysName(e.unit, e.d.Inherit, "CaseIterable")
 		if e.d.Body == nil {
 			continue
 		}
 		for _, m := range e.d.Body.Members {
+			if v, ok := m.(*ast.VarDecl); ok && declaresAllCases(e.unit, v) {
+				t.hasAllCases = true
+			}
 			fn, ok := m.(*ast.FuncDecl)
 			if !ok {
 				continue
@@ -273,6 +285,15 @@ func Source(files []*ast.File) []byte {
 			}
 			body.WriteString("    }\n")
 		}
+		// An enum of cases alone that says it is CaseIterable lists them,
+		// in the order they are declared.
+		if t.isEnum && t.caseIterable && !t.payload && !t.hasAllCases {
+			names := make([]string, len(t.cases))
+			for i, c := range t.cases {
+				names[i] = "." + c.name
+			}
+			fmt.Fprintf(&body, "    %sstatic var allCases: [%s] { [%s] }\n", access, path, strings.Join(names, ", "))
+		}
 		if body.Len() == 0 {
 			continue
 		}
@@ -328,6 +349,38 @@ func says(unit *token.File, in *ast.InheritanceClause) (equatable, hashable bool
 		hashable = hashable || name == "Hashable"
 	}
 	return equatable, hashable
+}
+
+// saysName reports whether an inheritance clause names the protocol name,
+// alone or as Swift's.
+func saysName(unit *token.File, in *ast.InheritanceClause, name string) bool {
+	if in == nil {
+		return false
+	}
+	for _, item := range in.Items {
+		got := typePath(unit, item.Type)
+		if got == name || got == "Swift."+name {
+			return true
+		}
+	}
+	return false
+}
+
+// declaresAllCases reports whether a declaration is a static allCases.
+func declaresAllCases(unit *token.File, v *ast.VarDecl) bool {
+	if !hasModifier(unit, v.Mods, "static") {
+		return false
+	}
+	for _, b := range v.Bindings {
+		pat := b.Pat
+		if tp, ok := pat.(*ast.TypedPattern); ok {
+			pat = tp.Pat
+		}
+		if id, ok := pat.(*ast.IdentPattern); ok && id.Name != nil && id.Name.Name(unit) == "allCases" {
+			return true
+		}
+	}
+	return false
 }
 
 // declaresHash reports whether a function is a hash(into:).

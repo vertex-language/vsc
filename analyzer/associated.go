@@ -124,10 +124,11 @@ func (c *checker) resolveProtocol(d *ast.ProtocolDecl, scope *Scope) {
 					continue
 				}
 				pr.Requirements = append(pr.Requirements, &types.Requirement{
-					Name:    id.Name.Text(c.file),
-					Type:    c.resolveType(tp.Type, inner),
-					IsVar:   m.Kind == token.VAR,
-					IsConst: m.Kind == token.LET,
+					Name:     id.Name.Text(c.file),
+					Type:     c.resolveType(tp.Type, inner),
+					IsVar:    m.Kind == token.VAR,
+					IsConst:  m.Kind == token.LET,
+					IsStatic: isStatic(m.Mods),
 				})
 			}
 		}

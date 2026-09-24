@@ -15,14 +15,14 @@ func TestFiles(t *testing.T) {
 	if env := os.Getenv("VSC_FILES"); env != "" {
 		files = strings.Split(env, ",")
 	} else {
-		var err error
-		files, err = filepath.Glob("../tests/syntax/*.swift")
-		if err != nil || len(files) == 0 {
-			files, err = filepath.Glob("tests/syntax/*.swift")
-			if err != nil || len(files) == 0 {
-				t.Fatal("no test files found in tests/syntax/*.swift or ../tests/syntax/*.swift")
-			}
+		// The grammar corpus, and the ladder: every rung is a program
+		// swiftc builds, so every rung has to parse before it can run.
+		syntax, _ := filepath.Glob("testdata/syntax/*.swift")
+		ladder, _ := filepath.Glob("../tests/*.swift")
+		if len(syntax) == 0 || len(ladder) == 0 {
+			t.Fatal("no test files found in testdata/syntax/*.swift or ../tests/*.swift")
 		}
+		files = append(syntax, ladder...)
 	}
 	for _, name := range files {
 		t.Run(filepath.Base(name), func(t *testing.T) {

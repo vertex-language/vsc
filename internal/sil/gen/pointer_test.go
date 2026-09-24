@@ -91,7 +91,7 @@ func main() -> Int32 { return 0 }`)
 // `const T *`, and a write through one is refused.
 //
 // `p.pointee` on a raw or an opaque pointer is refused too, and by
-// the checker rather than here -- see tests/check, where the
+// the checker rather than here -- see analyzer/testdata/check, where the
 // diagnostic is compared against swiftc's.
 func TestWritingThroughAnImmutablePointer(t *testing.T) {
 	_, said := refusals(t, `

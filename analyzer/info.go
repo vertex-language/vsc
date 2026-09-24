@@ -30,6 +30,41 @@ type Info struct {
 	// T of `is T` and `let e as T`, and the enum of `E.case`.
 	PatternTypes map[ast.Pattern]types.Type
 
+	// ArrayRepeats are the calls `Array(repeating:count:)`.
+	ArrayRepeats map[*ast.CallExpr]bool
+
+	// CoreCalls are the calls that mean a function of the core's --
+	// Dictionary(grouping:by:) is _dictionaryGrouping -- each as the call
+	// of it the checker checked.
+	CoreCalls map[*ast.CallExpr]*ast.CallExpr
+
+	// OperatorSpecs are the operators named as values that mean a generic
+	// function, each with what its parameters stand for there.
+	OperatorSpecs map[ast.Expr]Specialization
+
+	// OperatorCalls are the operators that mean a generic function --
+	// Swift's `==` on tuples -- each as the specialized call it is.
+	OperatorCalls map[ast.Expr]*ast.CallExpr
+
+	// ArraySequences are the calls `Array(s)` of a sequence that is not
+	// an array -- a String's Characters, a Sequence of the program's own
+	// -- each an array of the elements an iteration of s gives.
+	ArraySequences map[*ast.CallExpr]*Iteration
+
+	// Autoclosures are the arguments passed for an @autoclosure
+	// parameter, each the body of the function it is passed as.
+	Autoclosures map[ast.Expr]*types.Signature
+
+	// Captures are the names a closure's capture list binds: `[x]` and
+	// `[y = x * 100]` each a constant of the closure's, whose value is
+	// taken when the closure is made.
+	Captures map[*ast.CaptureItem]*Capture
+
+	// LiteralInits are the literals written where a type that is
+	// expressible by them is wanted -- `let m: Money = 12`, a Character's
+	// "a" -- each made by that type's literal initializer.
+	LiteralInits map[ast.Expr]*LiteralInit
+
 	// CoreTypes are the types core.swift declares: Task, whose members are
 	// calls into the runtime rather than code of their own.
 	CoreTypes map[types.Type]bool
@@ -102,6 +137,25 @@ type Info struct {
 	OptionalSomes map[*ast.CallExpr]types.Type
 	OptionalNones map[ast.Expr]types.Type
 
+	// RawValues is the literal each enum case declares as its raw value,
+	// where it declares one: `case spades = "S"`, `case high = 2.25`.
+	RawValues map[*types.EnumCase]ast.Expr
+
+	// KeyPathClosures is the closure a key path used as a function is:
+	// `\.name` where a (T) -> U is wanted is `{ $0.name }`.
+	KeyPathClosures map[*ast.KeyPathExpr]*ast.ClosureExpr
+
+	// KeyPathValues is each key path used as a value: its KeyPath type,
+	// and the closures that read and -- where the path can be written --
+	// write through it. KeyPathReads is each `x[keyPath: k]`, with k's
+	// type.
+	KeyPathValues map[*ast.KeyPathExpr]*KeyPathValue
+	KeyPathReads  map[*ast.SubscriptExpr]types.Type
+
+	// SelfVars is each `self` written in a closure that captured
+	// `[weak self]` or `[unowned self]`: the closure's own self it names.
+	SelfVars map[*ast.SelfExpr]*VarSymbol
+
 	// CoreAlgorithms is the core's source with bodies, checked in this
 	// Info: what the program uses of it is lowered from here.
 	CoreAlgorithms *ast.File
@@ -122,6 +176,15 @@ type Info struct {
 
 	// CastTargets is the type each `x is T` names.
 	CastTargets map[*ast.CastExpr]types.Type
+
+	// Layouts are the reads of MemoryLayout<T>.size, .stride and
+	// .alignment. T may be a generic parameter here, so the number is
+	// the lowering's to work out, once T is known.
+	Layouts map[*ast.MemberExpr]Layout
+
+	// TypeOfs are the `type(of: x)` calls, mapped to x's static type: the
+	// type's metatype, or for a class the object's dynamic one.
+	TypeOfs map[*ast.CallExpr]types.Type
 
 	// ChainRoots are the outermost steps of optional chains, whose Types
 	// are the optionals they answer; ChainInner is what each gives when the
@@ -168,6 +231,11 @@ type Info struct {
 	// underlying type: every member of one is isolated to the main
 	// thread, in the declaration and in its extensions.
 	MainActor map[types.Type]bool
+	// Wrappers is the types declared @propertyWrapper; WrapperInits the
+	// call of a wrapper's initializer a wrapped property's storage starts
+	// as, by the property's binding: `Clamped(wrappedValue: 5, 0...10)`.
+	Wrappers     map[types.Type]bool
+	WrapperInits map[*ast.PatternBinding]*ast.CallExpr
 
 	// Diagnostics holds all warnings and errors produced during analysis.
 	Diagnostics []token.Diagnostic
@@ -208,7 +276,17 @@ func NewInfo() *Info {
 		Operators:        make(map[ast.Expr]Symbol),
 		PatternTypes:     make(map[ast.Pattern]types.Type),
 		CoreTypes:        make(map[types.Type]bool),
+		LiteralInits:     make(map[ast.Expr]*LiteralInit),
+		Captures:         make(map[*ast.CaptureItem]*Capture),
+		Autoclosures:     make(map[ast.Expr]*types.Signature),
+		ArraySequences:   make(map[*ast.CallExpr]*Iteration),
+		OperatorCalls:    make(map[ast.Expr]*ast.CallExpr),
+		OperatorSpecs:    make(map[ast.Expr]Specialization),
+		ArrayRepeats:     make(map[*ast.CallExpr]bool),
+		CoreCalls:        make(map[*ast.CallExpr]*ast.CallExpr),
 		MainActor:        make(map[types.Type]bool),
+		Wrappers:         make(map[types.Type]bool),
+		WrapperInits:     make(map[*ast.PatternBinding]*ast.CallExpr),
 		Values:           make(map[ast.Node]Value),
 		Methods:          make(map[*ast.MemberExpr]*MethodRef),
 		Extensions:       make(map[*ast.ExtensionDecl]types.Type),
@@ -219,6 +297,8 @@ func NewInfo() *Info {
 		Specializations:  make(map[*ast.CallExpr]Specialization),
 		Defaults:         make(map[*types.Param]ast.Expr),
 		CStrings:         make(map[ast.Expr]types.Type),
+		Layouts:          make(map[*ast.MemberExpr]Layout),
+		TypeOfs:          make(map[*ast.CallExpr]types.Type),
 		Unwrapped:        make(map[ast.Expr]types.Type),
 		RawInits:         make(map[*ast.CallExpr]*types.Enum),
 		Inits:            make(map[*ast.CallExpr]*types.Signature),
@@ -229,6 +309,11 @@ func NewInfo() *Info {
 		ArrayCopies:      make(map[*ast.CallExpr]types.Type),
 		OptionalSomes:    make(map[*ast.CallExpr]types.Type),
 		OptionalNones:    make(map[ast.Expr]types.Type),
+		RawValues:        make(map[*types.EnumCase]ast.Expr),
+		KeyPathClosures:  make(map[*ast.KeyPathExpr]*ast.ClosureExpr),
+		SelfVars:         make(map[*ast.SelfExpr]*VarSymbol),
+		KeyPathValues:    make(map[*ast.KeyPathExpr]*KeyPathValue),
+		KeyPathReads:     make(map[*ast.SubscriptExpr]types.Type),
 		Iterations:       make(map[*ast.ForInStmt]*Iteration),
 		Subscripts:       make(map[*ast.SubscriptExpr]*SubscriptRef),
 		SubscriptDecls:   make(map[*ast.SubscriptDecl]*types.Subscript),
@@ -272,6 +357,72 @@ func (info *Info) ScopeOf(n ast.Node) *Scope {
 	return info.Scopes[n]
 }
 
+// RangeOf is the bound type of t where t is one of the core's ranges,
+// Range<Bound> or ClosedRange<Bound>, and which of the two it is.
+func (info *Info) RangeOf(t types.Type) (bound types.Type, closed, ok bool) {
+	bound, name, ok := info.AnyRangeOf(t)
+	switch name {
+	case "Range":
+		return bound, false, ok
+	case "ClosedRange":
+		return bound, true, ok
+	}
+	return nil, false, false
+}
+
+// AnyRangeOf is the bound type of t where t is any of the core's ranges,
+// one-sided ones too, and the range's name: "Range", "ClosedRange",
+// "PartialRangeUpTo", "PartialRangeThrough" or "PartialRangeFrom".
+// Inside the core's own extensions of them, self is the range of Bound.
+func (info *Info) AnyRangeOf(t types.Type) (bound types.Type, name string, ok bool) {
+	base := t
+	if inst, isInst := t.(*types.GenericInstance); isInst {
+		if len(inst.Args) != 1 {
+			return nil, "", false
+		}
+		base, bound = inst.Base, inst.Args[0]
+	}
+	if base == nil || !info.CoreTypes[base] {
+		return nil, "", false
+	}
+	st, isStruct := base.Underlying().(*types.Struct)
+	if !isStruct || len(st.TypeParams) != 1 {
+		return nil, "", false
+	}
+	if bound == nil {
+		bound = st.TypeParams[0]
+	}
+	switch st.Name {
+	case "Range", "ClosedRange", "PartialRangeUpTo", "PartialRangeThrough", "PartialRangeFrom":
+		return bound, st.Name, true
+	}
+	return nil, "", false
+}
+
+// A Capture is a name a capture list binds and the value it is bound to,
+// evaluated where the closure is made.
+// A KeyPathValue is a key path used as a value.
+type KeyPathValue struct {
+	Type     types.Type
+	Get, Set *ast.ClosureExpr
+}
+
+type Capture struct {
+	Sym   *VarSymbol
+	Value ast.Expr
+}
+
+// A LiteralInit is how a literal becomes a value of a type expressible by
+// it: the literal, as the type the initializer takes, is passed to Init.
+type LiteralInit struct {
+	// Type is the type made; the literal's own type may be an optional
+	// of it, which the value made is then wrapped in.
+	Type types.Type
+	// Init is the initializer: init(integerLiteral:), init(stringLiteral:)
+	// and the rest. Its one parameter's type is what the literal is.
+	Init *types.Signature
+}
+
 // FoldedOf returns the folded tree for a SequenceExpr, or the sequence itself if not folded.
 func (info *Info) FoldedOf(seq *ast.SequenceExpr) ast.Expr {
 	if f, ok := info.Folded[seq]; ok {
@@ -307,4 +458,11 @@ func (info *Info) setConditions(member any, conds []memberCondition) {
 		info.conditions = map[any][]memberCondition{}
 	}
 	info.conditions[member] = conds
+}
+
+// A Layout is one read of MemoryLayout<Of>: its size, stride or
+// alignment, named by Kind.
+type Layout struct {
+	Of   types.Type
+	Kind string
 }

@@ -84,6 +84,8 @@ type FuncSymbol struct {
 	pos    token.Pos
 	decl   ast.Decl
 	access Access
+	// postfix is an operator declared `postfix func`.
+	postfix bool
 
 	// others holds alternate function declarations sharing the same identifier.
 	others []*FuncSymbol
@@ -99,6 +101,11 @@ func (f *FuncSymbol) Signature() *types.Signature { return f.sig }
 func (f *FuncSymbol) Pos() token.Pos              { return f.pos }
 func (f *FuncSymbol) Decl() ast.Decl              { return f.decl }
 func (f *FuncSymbol) SetDecl(d ast.Decl)          { f.decl = d }
+
+// Postfix reports whether the function is declared `postfix func`,
+// which its symbol says apart from a prefix operator of the same name.
+func (f *FuncSymbol) Postfix() bool     { return f.postfix }
+func (f *FuncSymbol) SetPostfix(p bool) { f.postfix = p }
 
 // Access returns the declaration visibility.
 func (f *FuncSymbol) Access() Access     { return f.access }

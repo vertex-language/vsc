@@ -140,6 +140,8 @@ inline constexpr usize kindOptional    = 0x202;
 inline constexpr usize kindTuple       = 0x301;
 inline constexpr usize kindFunction    = 0x302;
 inline constexpr usize kindExistential = 0x303;
+// A metatype: the value is a pointer to the metadata of the type it is.
+inline constexpr usize kindMetatype    = 0x304;
 // Vertex's own kinds, in a range Swift's metadata does not use.
 inline constexpr usize kindArray       = 0x800;
 inline constexpr usize kindClass       = 0x801;
@@ -170,6 +172,15 @@ struct StructMetadata : Metadata {
 };
 
 inline constexpr usize structFieldOffsets = 16;
+
+// A class's metadata: its descriptor, then its dispatch table -- how a
+// metatype reaches its class methods -- and its superclass's metadata, or
+// null for a root class or one whose superclass another module declares.
+struct ClassMetadata : Metadata {
+  const NominalTypeDescriptor* description;
+  const void* table;
+  const ClassMetadata* superclass;
+};
 
 // What a struct's fields are called and what their types are: the
 // descriptor's `fields` points here. A count, then a name and a metadata

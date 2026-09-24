@@ -116,6 +116,11 @@ func CoreDiagnostics() []token.Diagnostic {
 	c.declareTypes(decls, coreScope)
 	c.resolveTypeMembers(decls, coreScope)
 	c.declareFunctions(decls, coreScope)
+	for _, sym := range coreScope.Symbols() {
+		if tn, ok := sym.(*TypeNameSymbol); ok && tn.Type() != nil {
+			info.CoreTypes[tn.Type()] = true
+		}
+	}
 	c.modules["Swift"] = coreScope
 	alg, algUnit, algDiags := core.Algorithms()
 	if alg == nil || len(algDiags) > 0 {

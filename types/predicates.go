@@ -193,6 +193,20 @@ func ConformsTo(t Type, proto *Protocol) bool {
 	if proto.Name == "Any" {
 		return true
 	}
+	// Every class is AnyObject, and so is an existential of one.
+	if proto == AnyObjectProtocol {
+		switch u := t.Underlying().(type) {
+		case *Class:
+			return true
+		case *Existential:
+			for _, p := range u.Protocols {
+				if ConformsTo(p, proto) {
+					return true
+				}
+			}
+			return false
+		}
+	}
 
 	containsProto := func(list []*Protocol) bool {
 		for _, p := range list {
@@ -310,6 +324,34 @@ func AssignableTo(from, to Type) bool {
 	if from == Typ[Never] {
 		return true
 	}
+	// A tuple is one of the same elements with labels added or taken
+	// away: (x: Int, y: Int) and (Int, Int) are each other's, as in
+	// Swift. Labels both written must agree.
+	if ft, ok := from.(*Tuple); ok {
+		if tt, ok := to.(*Tuple); ok && len(ft.Elements) == len(tt.Elements) && len(ft.Elements) > 1 {
+			for i, el := range ft.Elements {
+				other := tt.Elements[i]
+				if el.Name != "" && other.Name != "" && el.Name != other.Name {
+					return false
+				}
+				if !Identical(el.Type, other.Type) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+
+	// A metatype is assignable to the existential metatype of what its
+	// instance is assignable to: Double.Type to Any.Type, and a
+	// conforming type's to P.Type.
+	if fm, ok := from.(*Metatype); ok {
+		if tm, ok := to.(*Metatype); ok {
+			if _, isEx := tm.Instance.(*Existential); isEx {
+				return AssignableTo(fm.Instance, tm.Instance)
+			}
+		}
+	}
 
 	// Any / Existential conformance
 	if ex, ok := to.(*Existential); ok {
@@ -349,8 +391,21 @@ func AssignableTo(from, to Type) bool {
 			}
 		}
 		if bFrom.kind == UntypedNil {
-			_, isOpt := to.(*Optional)
-			return isOpt
+			if _, isOpt := to.(*Optional); isOpt {
+				return true
+			}
+		}
+		// A type of a program's own, or the core's Character, takes the
+		// literals it says it is expressible by.
+		if _, isBasic := to.Underlying().(*Basic); !isBasic {
+			for _, p := range LiteralProtocols(bFrom.kind) {
+				if ConformsToNamed(to, p) {
+					return true
+				}
+			}
+		}
+		if bFrom.kind == UntypedNil {
+			return false
 		}
 	}
 
@@ -495,4 +550,25 @@ func ConformsToNamed(t Type, name string) bool {
 		return false
 	}
 	return walk(declared)
+}
+
+// LiteralProtocols are the protocols by which a type may be written as an
+// untyped literal of this kind, the most particular first: a string
+// literal is an ExpressibleByStringLiteral's, or a Character's through
+// ExpressibleByExtendedGraphemeClusterLiteral.
+func LiteralProtocols(kind BasicKind) []string {
+	switch kind {
+	case UntypedInt:
+		return []string{"ExpressibleByIntegerLiteral"}
+	case UntypedFloat:
+		return []string{"ExpressibleByFloatLiteral"}
+	case UntypedBool:
+		return []string{"ExpressibleByBooleanLiteral"}
+	case UntypedString:
+		return []string{"ExpressibleByStringLiteral", "ExpressibleByExtendedGraphemeClusterLiteral",
+			"ExpressibleByUnicodeScalarLiteral"}
+	case UntypedNil:
+		return []string{"ExpressibleByNilLiteral"}
+	}
+	return nil
 }

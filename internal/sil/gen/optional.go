@@ -42,7 +42,34 @@ func (g *gen) optionalFor(at ast.Node, v *sil.Value, from, to types.Type) *sil.V
 	if v == nil {
 		return v
 	}
+	if relabeled, ok := g.relabel(v, from, to); ok {
+		return relabeled
+	}
 	levels := optionalDepth(to) - optionalDepth(from)
+	// A metatype given where an existential metatype goes -- Double.self
+	// for an Any.Type -- is the same metadata, retyped.
+	if fm, ok := from.(*types.Metatype); ok {
+		inner := to
+		for i := 0; i < levels; i++ {
+			o, _ := optionalOf(inner)
+			inner = o.Wrapped
+		}
+		if tm, ok := inner.(*types.Metatype); ok && !types.Identical(fm, tm) {
+			v = g.blk.Builtin("bitcast_RawPointer_RawPointer", lowerType(g.substituted(tm)), v)
+		}
+	}
+	// A subclass's instance where its superclass is wanted is the same
+	// reference, upcast -- inside the optionals it is wrapped in below.
+	if levels >= 0 {
+		inner := to
+		for i := 0; i < levels; i++ {
+			o, _ := optionalOf(inner)
+			inner = o.Wrapped
+		}
+		if isSubclass(from, inner) {
+			v = g.upcast(v, g.substituted(inner))
+		}
+	}
 	if levels <= 0 {
 		return v
 	}
@@ -58,6 +85,28 @@ func (g *gen) optionalFor(at ast.Node, v *sil.Value, from, to types.Type) *sil.V
 		v = g.blk.Enum(lowerType(g.substituted(wraps[i])), optionalSome, v)
 	}
 	return v
+}
+
+// relabel is a tuple as the same elements under other labels -- (x: 1,
+// y: 2) where an (Int, Int) is wanted, or the other way -- taken apart and
+// put together again, which is all the conversion is.
+func (g *gen) relabel(v *sil.Value, from, to types.Type) (*sil.Value, bool) {
+	ft, ok := g.substituted(from).(*types.Tuple)
+	if !ok {
+		return nil, false
+	}
+	tt, ok := g.substituted(to).(*types.Tuple)
+	if !ok || len(ft.Elements) != len(tt.Elements) || types.Identical(ft, tt) || !types.AssignableTo(ft, tt) {
+		return nil, false
+	}
+	elems := make([]sil.Type, len(tt.Elements))
+	for i, el := range tt.Elements {
+		elems[i] = lowerType(el.Type)
+	}
+	parts := g.blk.DestructureTuple(g.consume(v), elems...)
+	out := g.blk.Tuple(lowerType(tt), parts...)
+	g.destroyLater(out)
+	return out, true
 }
 
 // optionalDepth is how many optionals deep a type is: 0 for an Int, 1
@@ -222,7 +271,10 @@ func (g *gen) unwrapOrTrap(at ast.Node, x ast.Expr) *sil.Value {
 	g.blk.Unreachable()
 
 	g.blk = some
-	g.destroyLater(payload)
+	// A temporary: it ends with the statement, as Swift ends it. Held to
+	// the end of the block, `p!.x = y` kept p's object alive after
+	// `p = nil`, and its deinit ran late.
+	g.destroyTemp(payload)
 	return payload
 }
 
@@ -689,4 +741,49 @@ func (g *gen) runtimeEquality(e *ast.BinaryExpr, x, y ast.Expr, t types.Type, op
 		return v
 	}
 	return g.notBool(e, v)
+}
+
+// isSubclass reports whether from is a class that inherits, at some
+// remove, from the class to.
+func isSubclass(from, to types.Type) bool {
+	if from == nil || to == nil || types.Identical(from, to) {
+		return false
+	}
+	target, ok := to.Underlying().(*types.Class)
+	if !ok {
+		return false
+	}
+	seen := map[*types.Class]bool{}
+	for cur := from; cur != nil; {
+		cl, ok := cur.Underlying().(*types.Class)
+		if !ok || seen[cl] {
+			return false
+		}
+		if cl == target {
+			return true
+		}
+		seen[cl] = true
+		cur = cl.Superclass
+	}
+	return false
+}
+
+// upcast is v, an instance of a subclass, as the superclass to: borrowed
+// and copied where v is owned, so what comes back is owned as v was.
+func (g *gen) upcast(v *sil.Value, to types.Type) *sil.Value {
+	t := lowerType(to)
+	if v.Ownership() != sil.Owned {
+		return g.blk.Upcast(v, t)
+	}
+	pending := g.pendingDestroy(v)
+	b := g.blk.BeginBorrow(v)
+	out := g.blk.CopyValue(g.blk.Upcast(b, t))
+	g.blk.EndBorrow(b)
+	if pending {
+		// v's cleanup ends it later; the copy is the caller's, as v was.
+		g.destroyLater(out)
+		return out
+	}
+	g.blk.DestroyValue(v)
+	return out
 }

@@ -490,6 +490,12 @@ func (l *lowerer) funcSig(sig *types.Signature) (*ir.Sig, error) {
 		s.Param(ir.TypePtr, ir.SwiftAsync)
 	}
 	for _, p := range sig.Params {
+		// An inout parameter is the address of the caller's storage,
+		// whatever it holds, as the closure it calls takes it.
+		if p.Ownership == types.InOut {
+			s.Param(ir.TypePtr)
+			continue
+		}
 		if empty(sil.Object(p.Type)) {
 			continue
 		}
@@ -548,6 +554,9 @@ func funcTypeName(sig *types.Signature) string {
 	b.WriteString("fn")
 	for _, p := range sig.Params {
 		b.WriteByte('_')
+		if p.Ownership == types.InOut {
+			b.WriteString("inout_")
+		}
 		b.WriteString(identSafe(p.Type.String()))
 	}
 	b.WriteString("__")
@@ -606,7 +615,9 @@ func (l *lowerer) vtables(m *sil.Module) error {
 	if len(tables) == 0 {
 		return nil
 	}
-	l.vtable = make(map[string]*ir.Global, len(tables))
+	if l.vtable == nil {
+		l.vtable = make(map[string]*ir.Global, len(tables))
+	}
 	l.slots = make(map[string][]string, len(tables))
 	for _, t := range tables {
 		destroy := l.classDestroyer(t)
@@ -644,12 +655,27 @@ func (l *lowerer) vtables(m *sil.Module) error {
 			rows = append(rows, ir.RelocInit(impl))
 			members = append(members, e.Member)
 		}
-		g := l.out.Global(l.sym(vtableSymbol(t.Class)), ir.RO,
-			ir.Array(uint64(len(rows)), ir.StorePtr.FType())).Init(ir.List(rows...))
-		l.vtable[t.Class] = g
+		g := l.vtableGlobal(t)
+		g.Init(ir.List(rows...))
 		l.slots[t.Class] = members
 	}
 	return nil
+}
+
+// vtableGlobal is a class's dispatch table, declared the first time it is
+// asked for -- by the class's metadata, which points at it, or by vtables,
+// which fills it in.
+func (l *lowerer) vtableGlobal(t *sil.VTable) *ir.Global {
+	if g, ok := l.vtable[t.Class]; ok {
+		return g
+	}
+	if l.vtable == nil {
+		l.vtable = map[string]*ir.Global{}
+	}
+	g := l.out.Global(l.sym(vtableSymbol(t.Class)), ir.RO,
+		ir.Array(uint64(len(t.Entries)+vtableFirstMethod), ir.StorePtr.FType()))
+	l.vtable[t.Class] = g
+	return g
 }
 
 // vtableFirstMethod is the row of a class's table its first method is
@@ -912,6 +938,9 @@ func (l *lowerer) classDestroyer(t *sil.VTable) *ir.Func {
 		return nil
 	}
 	var owned []ownedWord
+	// A weak or unowned property's word holds a weak reference, let go
+	// of as one.
+	var weak []int64
 	header := int64(stdlib.HeaderBytes)
 	for _, f := range types.ClassFields(cl) {
 		if f == nil || f.Type == nil {
@@ -920,6 +949,10 @@ func (l *lowerer) classDestroyer(t *sil.VTable) *ir.Func {
 		off, ok := types.Offsetof(t.Layout, f.Name, types.DefaultTarget64)
 		if !ok {
 			return nil
+		}
+		if f.Ref != "" {
+			weak = append(weak, header+off)
+			continue
 		}
 		words, ok := ownedWords(&types.Struct{Fields: []*types.Field{f}}, header+off)
 		if !ok {
@@ -947,7 +980,7 @@ func (l *lowerer) classDestroyer(t *sil.VTable) *ir.Func {
 		}
 		c = next
 	}
-	if len(owned) == 0 && len(deinits) == 0 {
+	if len(owned) == 0 && len(deinits) == 0 && len(weak) == 0 {
 		return nil
 	}
 	f := l.out.Func(l.sym("$sVSCdestroy_" + identSafe(t.Class)))
@@ -960,6 +993,12 @@ func (l *lowerer) classDestroyer(t *sil.VTable) *ir.Func {
 	release := l.runtimeFunc(stdlib.Release, ir.NewSig().Param(ir.TypePtr))
 	releaseString := l.runtimeFunc(stdlib.StringRelease, ir.NewSig().Param(ir.TypePtr))
 	b = countOwned(f, b, obj, owned, releaseString, release, "d")
+	if len(weak) > 0 {
+		weakRelease := l.runtimeFunc(stdlib.WeakRelease, ir.NewSig().Param(ir.TypePtr))
+		for _, at := range weak {
+			b.Call(weakRelease, b.Ptr.Load(b.Ptr.Add(obj, b.I64.Const(at))))
+		}
+	}
 	b.Call(l.runtimeFunc(stdlib.Dealloc, ir.NewSig().Param(ir.TypePtr)), obj)
 	b.Return()
 	return f

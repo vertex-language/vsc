@@ -11,7 +11,7 @@ import (
 	"github.com/vertex-language/vsc/pkg"
 )
 
-// TestPackagesMatchSwiftPM builds every package in tests/packages twice --
+// TestPackagesMatchSwiftPM builds every package in testdata/packages twice --
 // with `swift build`, and with this compiler's package build -- runs each
 // program both produce, and compares what they print.
 //
@@ -31,7 +31,7 @@ func TestPackagesMatchSwiftPM(t *testing.T) {
 	if !ok {
 		t.Skip("no backend for this machine")
 	}
-	dirs, _ := filepath.Glob("../tests/packages/*")
+	dirs, _ := filepath.Glob("testdata/packages/*")
 	ran := 0
 	for _, dir := range dirs {
 		if _, err := os.Stat(filepath.Join(dir, pkg.ManifestName)); err != nil {
@@ -83,6 +83,6 @@ func TestPackagesMatchSwiftPM(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no packages in tests/packages")
+		t.Fatal("no packages in testdata/packages")
 	}
 }

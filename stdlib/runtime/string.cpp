@@ -3,6 +3,7 @@
 #include "vertex/platform.h"
 #include "mem.h"
 #include "unicode.h"
+#include "text.h"
 
 extern "C" {
 void vertex_retain(vertex::HeapObject* obj);
@@ -149,6 +150,196 @@ i64 vertex_string_count(u64 countAndFlags, u64 object) {
   return static_cast<i64>(graphemeCount(b.bytes, b.count));
 }
 
+// ---- Characters, by byte offset ----
+//
+// A String's indices are byte offsets into its UTF-8, each the first byte
+// of a Character. These say where the Character at an index ends and
+// where the one before it starts, which is all that walking a String by
+// Characters needs; the core's String.Index is built on them.
+
+} // extern "C"
+
+namespace vertex {
+
+// characterEnd is where the extended grapheme cluster starting at byte at
+// ends: the next boundary, or count.
+inline usize characterEnd(const u8* bytes, usize count, usize at) {
+  if (at >= count)
+    return count;
+  // ASCII other than CR, with ASCII after it, is a Character alone: no
+  // rule joins two ASCII scalars but CR LF.
+  if (bytes[at] < 0x80 && bytes[at] != '\r' && (at + 1 == count || bytes[at + 1] < 0x80))
+    return at + 1;
+  usize i = at;
+  GraphemeState state{0, 0, 0};
+  GraphemeProperty prev = graphemeProperty(decodeScalar(bytes, count, &i));
+  advance(state, prev);
+  while (i < count) {
+    usize here = i;
+    GraphemeProperty next = graphemeProperty(decodeScalar(bytes, count, &i));
+    if (breaksBetween(prev, next, state))
+      return here;
+    advance(state, next);
+    prev = next;
+  }
+  return count;
+}
+
+// characterStart is where the Character that ends at byte at starts. A
+// boundary depends on what came before it, so this reads from the start;
+// ASCII before an ASCII scalar other than LF is the fast way out.
+inline usize characterStart(const u8* bytes, usize count, usize at) {
+  if (at == 0)
+    return 0;
+  if (at > count)
+    at = count;
+  if (bytes[at - 1] < 0x80 && bytes[at - 1] != '\n' && (at == 1 || bytes[at - 2] < 0x80))
+    return at - 1;
+  usize start = 0;
+  while (start < at) {
+    usize end = characterEnd(bytes, count, start);
+    if (end >= at)
+      return start;
+    start = end;
+  }
+  return start;
+}
+
+} // namespace vertex
+
+extern "C" {
+
+// vertex_string_character_end is String.index(after:): where the Character
+// at byte offset at ends.
+i64 vertex_string_character_end(u64 s0, u64 s1, i64 at) {
+  u8 scratch[16];
+  StringBytes b = bytesOf(String{s0, s1}, scratch);
+  return static_cast<i64>(characterEnd(b.bytes, b.count, at < 0 ? 0 : static_cast<usize>(at)));
+}
+
+// vertex_string_character_start is String.index(before:): where the
+// Character that ends at byte offset at starts.
+i64 vertex_string_character_start(u64 s0, u64 s1, i64 at) {
+  u8 scratch[16];
+  StringBytes b = bytesOf(String{s0, s1}, scratch);
+  return static_cast<i64>(characterStart(b.bytes, b.count, at < 0 ? 0 : static_cast<usize>(at)));
+}
+
+// vertex_string_slice is the String of bytes from up to to: a Character,
+// or the text of a Substring. The offsets are boundaries the caller found.
+String vertex_string_slice(u64 s0, u64 s1, i64 from, i64 to) {
+  u8 scratch[16];
+  StringBytes b = bytesOf(String{s0, s1}, scratch);
+  usize lo = from < 0 ? 0 : static_cast<usize>(from);
+  usize hi = to < 0 ? 0 : static_cast<usize>(to);
+  if (hi > b.count)
+    hi = b.count;
+  if (lo > hi)
+    lo = hi;
+  return makeString(b.bytes + lo, hi - lo);
+}
+
+} // extern "C"
+
+namespace vertex {
+
+// caseMapped is s with each scalar replaced by its full mapping in table,
+// as Swift's uppercased() and lowercased() are: scalar by scalar, without
+// regard to what is around it. ASCII maps by arithmetic.
+inline String caseMapped(const String& s, const u32* table, u32 count, bool upper) {
+  u8 scratch[16];
+  StringBytes b = bytesOf(s, scratch);
+  if (allASCII(b.bytes, b.count)) {
+    Text t;
+    textInit(t);
+    for (usize i = 0; i < b.count; i++) {
+      u8 c = b.bytes[i];
+      if (upper && c >= 'a' && c <= 'z')
+        c = static_cast<u8>(c - 32);
+      else if (!upper && c >= 'A' && c <= 'Z')
+        c = static_cast<u8>(c + 32);
+      textByte(t, c);
+    }
+    String out = makeString(t.bytes, t.count);
+    textFree(t);
+    return out;
+  }
+  Text t;
+  textInit(t);
+  usize i = 0;
+  u8 enc[4];
+  while (i < b.count) {
+    u32 c = decodeScalar(b.bytes, b.count, &i);
+    u32 n = 0;
+    const u32* mapped = caseMapping(table, count, c, &n);
+    if (mapped == nullptr) {
+      textAppend(t, enc, encodeScalar(c, enc));
+      continue;
+    }
+    for (u32 k = 0; k < n; k++)
+      textAppend(t, enc, encodeScalar(mapped[k], enc));
+  }
+  String out = makeString(t.bytes, t.count);
+  textFree(t);
+  return out;
+}
+
+} // namespace vertex
+
+extern "C" {
+
+// vertex_string_scalar reads the scalar at byte offset at of s: its value
+// in the low 21 bits, the offset after it above them. unicodeScalars walks
+// a String with it.
+i64 vertex_string_scalar(u64 s0, u64 s1, i64 at) {
+  u8 scratch[16];
+  StringBytes b = bytesOf(String{s0, s1}, scratch);
+  usize i = at < 0 ? 0 : static_cast<usize>(at);
+  if (i >= b.count)
+    return static_cast<i64>(b.count) << 21;
+  u32 c = decodeScalar(b.bytes, b.count, &i);
+  return static_cast<i64>(i) << 21 | static_cast<i64>(c);
+}
+
+// vertex_scalar_string is the String of one scalar.
+String vertex_scalar_string(u32 c) {
+  u8 enc[4];
+  return makeString(enc, encodeScalar(c, enc));
+}
+
+// vertex_string_uppercased is String.uppercased().
+String vertex_string_uppercased(u64 s0, u64 s1) {
+  return caseMapped(String{s0, s1}, ucd::uppercaseMappings, ucd::uppercaseMappingsCount, true);
+}
+
+// vertex_string_lowercased is String.lowercased().
+String vertex_string_lowercased(u64 s0, u64 s1) {
+  return caseMapped(String{s0, s1}, ucd::lowercaseMappings, ucd::lowercaseMappingsCount, false);
+}
+
+// vertex_scalar_properties is what Unicode.Scalar.Properties reads: the
+// flags in the low byte, the general category in the next, the numeric
+// type in the one after.
+u32 vertex_scalar_properties(u32 c) {
+  return static_cast<u32>(flagsOf(c)) | static_cast<u32>(generalCategoryOf(c)) << 8 |
+         static_cast<u32>(numericTypeOf(c)) << 16;
+}
+
+// vertex_scalar_whole_number is a scalar's numeric value where it is a
+// whole number, or -1 where it has none or one with a fraction.
+i64 vertex_scalar_whole_number(u32 c) {
+  u64 n = 0;
+  if (!wholeNumberOf(c, &n))
+    return -1;
+  return static_cast<i64>(n);
+}
+
+// vertex_string_utf8_count is how many bytes a String's UTF-8 is:
+// utf8.count, and the offset of its endIndex.
+i64 vertex_string_utf8_count(u64 s0, u64 s1) {
+  return static_cast<i64>(countOf(String{s0, s1}));
+}
+
 String vertex_string_concat(u64 a0, u64 a1, u64 b0, u64 b1) {
   u8 sa[16], sb[16];
   StringBytes a = bytesOf(String{a0, a1}, sa);
@@ -171,6 +362,20 @@ String vertex_string_concat(u64 a0, u64 a1, u64 b0, u64 b1) {
   copyBytes(dest + a.count, b.bytes, b.count);
   u64 flags = allASCII(dest, n) ? stringFlagASCII : 0;
   return {static_cast<u64>(n) | flags, reinterpret_cast<u64>(storage)};
+}
+
+// vertex_fatal_error is fatalError: what was printed is flushed, the
+// message goes to standard error after Swift's prefix, and the process
+// traps.
+[[noreturn]] void vertex_fatal_error(u64 m0, u64 m1) {
+  u8 scratch[16];
+  StringBytes m = bytesOf(String{m0, m1}, scratch);
+  vertex_pal_flush();
+  static const char prefix[] = "Fatal error: ";
+  vertex_pal_write(2, reinterpret_cast<const u8*>(prefix), sizeof(prefix) - 1);
+  vertex_pal_write(2, m.bytes, m.count);
+  vertex_pal_write(2, reinterpret_cast<const u8*>("\n"), 1);
+  __builtin_trap();
 }
 
 // Equality is canonical equivalence, as Swift's is: "é" precomposed and

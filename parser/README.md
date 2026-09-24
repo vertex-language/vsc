@@ -25,7 +25,7 @@ Two tests keep this file honest, in `oracle_test.go`:
 - `TestSDKInterfaces` parses every module interface in every installed
   SDK — about 4,600 files and 50MB of Swift — and requires that none
   of them produces a diagnostic.
-- `TestSwiftcAgreement` runs the corpus in `tests/` and a table of
+- `TestSwiftcAgreement` runs the corpus in `testdata/syntax` and a table of
   malformed sources past both parsers and compares the verdicts.
 
 Both skip themselves where no toolchain is installed.

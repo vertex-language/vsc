@@ -146,6 +146,9 @@ func machineOf(t types.Type) (repr, bool) {
 		return repr{reg: ir.TypePtr}, true
 	case *sil.MetatypeType:
 		return repr{reg: ir.TypePtr}, true
+	// A metatype held as a value is the type's metadata.
+	case *types.Metatype:
+		return repr{reg: ir.TypePtr}, true
 	}
 	return repr{}, false
 }

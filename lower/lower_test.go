@@ -154,14 +154,14 @@ func TestRefusesTheOwnershipForm(t *testing.T) {
 // lowered one that is wrong, and the refusal has to name a function
 // and a reason or it is no use to whoever reads it.
 //
-// The example is a struct with a Character? in it. A Character? is a
-// type this package has no representation for, and a struct holding
-// one has no layout -- so the parameter cannot be passed, and saying so
-// is the only honest thing left.
+// The example is a struct with an Error? in it, which makes it wider
+// than a struct this package lays out -- Swift passes one by address --
+// so the parameter cannot be passed, and saying so is the only honest
+// thing left.
 func TestRefusalsNameWhatTheyRefuse(t *testing.T) {
 	_, err := lowerSrc(t, `
 struct Wrapper {
-    var flag: Character?
+    var flag: Error?
 }
 func first(_ w: Wrapper) -> Int { return 0 }
 `)

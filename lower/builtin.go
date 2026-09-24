@@ -34,6 +34,16 @@ func (c *fn) builtin(name string, args []ir.Value) ([]ir.Value, error) {
 		return []ir.Value{c.b.I64.Load(c.b.Ptr.Add(storage, c.b.I64.Const(stdlib.ArrayCountWord)))}, nil
 	}
 	switch r.reg {
+	case ir.TypeI32, ir.TypeI64:
+		if out, ok, err := c.intUnary(name, verb, r, args); ok {
+			return out, err
+		}
+	case ir.TypeF32, ir.TypeF64:
+		if out, ok, err := c.floatUnary(name, verb, r, args); ok {
+			return out, err
+		}
+	}
+	switch r.reg {
 	case ir.TypeI1:
 		return c.boolBuiltin(name, verb, args)
 	case ir.TypeI32, ir.TypeI64:
@@ -56,6 +66,16 @@ func (c *fn) ptrBuiltin(name, verb string, args []ir.Value) ([]ir.Value, error) 
 			return nil, c.fail(ErrBuiltin, "builtin", name+": operand is not an array's storage")
 		}
 		return []ir.Value{c.b.Ptr.Add(storage, c.b.I64.Const(stdlib.ArrayElements))}, nil
+	}
+	// An object's dynamic type: the metadata its header's metadata word
+	// points at names it. See stdlib.HeapMetadataType.
+	if verb == "vertexObjectType" {
+		object, ok := args[0].(ir.Ptr)
+		if len(args) != 1 || !ok {
+			return nil, c.fail(ErrBuiltin, "builtin", name+": operand is not an object")
+		}
+		heap := c.b.Ptr.Load(object)
+		return []ir.Value{c.b.Ptr.Load(c.b.Ptr.Add(heap, c.b.I64.Const(stdlib.HeapMetadataType)))}, nil
 	}
 	if len(args) < 2 {
 		return nil, c.fail(ErrBuiltin, "builtin", name+": too few operands")
@@ -202,6 +222,32 @@ func (c *fn) floatConvertBuiltin(verb string, from, to repr, a ir.Value) ([]ir.V
 				return []ir.Value{c.b.F32.SCvtI64(n)}, true, nil
 			}
 			return []ir.Value{c.b.F32.UCvtI64(n)}, true, nil
+		}
+		return fail()
+
+	case "bitcast":
+		// Within one class nothing moves: a metatype read as Any.Type.
+		if from.reg == to.reg && !from.narrow() && !to.narrow() {
+			return []ir.Value{a}, true, nil
+		}
+		// The same bits read as the other class: a Double's bitPattern.
+		switch v := a.(type) {
+		case ir.F64:
+			if to.reg == ir.TypeI64 {
+				return []ir.Value{c.b.I64.BitcastF64(v)}, true, nil
+			}
+		case ir.F32:
+			if to.reg == ir.TypeI32 {
+				return []ir.Value{c.b.I32.BitcastF32(v)}, true, nil
+			}
+		case ir.I64:
+			if to.reg == ir.TypeF64 {
+				return []ir.Value{c.b.F64.BitcastI64(v)}, true, nil
+			}
+		case ir.I32:
+			if to.reg == ir.TypeF32 && !from.narrow() {
+				return []ir.Value{c.b.F32.BitcastI32(v)}, true, nil
+			}
 		}
 		return fail()
 

@@ -56,6 +56,17 @@ const (
 	Dealloc     = "vertex_dealloc"
 	Retain      = "vertex_retain"
 	Release     = "vertex_release"
+	// Weak and unowned references: counted apart from strong ones, keeping
+	// the memory and not the object; a weak one reads nil once the object
+	// has ended, an unowned one traps.
+	WeakRelease = "vertex_weak_release"
+	WeakLoad    = "vertex_weak_load"
+	UnownedLoad = "vertex_unowned_load"
+	WeakAssign  = "vertex_weak_assign"
+	// A weak cell holds a closure's `[weak x]` / `[unowned x]` capture.
+	WeakCell        = "vertex_weak_cell"
+	WeakCellLoad    = "vertex_weak_cell_load"
+	UnownedCellLoad = "vertex_unowned_cell_load"
 
 	StringLiteral = "vertex_string_literal"
 	StringRetain  = "vertex_string_retain"
@@ -181,6 +192,10 @@ const (
 	SwiftRelease         = "vertex_swift_release"
 )
 
+// ExistentialType is `type(of: x)` for an existential x: the dynamic type
+// of what the container at the argument holds. See runtime/metadata.cpp.
+const ExistentialType = "vertex_existential_type"
+
 // Metadata is the symbol of the record the runtime exports for a type
 // the core declares, by the type's name: "Int", "String", "Any". The
 // metadata itself is MetadataOffset bytes into the record, past the
@@ -226,6 +241,7 @@ const (
 	// record where the case is indirect: the value is a box, and the
 	// payload is inside it past the header.
 	FieldIndirect  = 1
+	KindMetatype   = 0x304
 	KindArray      = 0x800
 	KindClass      = 0x801
 	KindDictionary = 0x802
@@ -239,6 +255,10 @@ const (
 	HeaderWords = 2
 	HeaderBytes = HeaderWords * 8
 )
+
+// HeapMetadataType is where, in what an object's metadata word points at,
+// the object's dynamic type is: HeapMetadata's second word, after destroy.
+const HeapMetadataType = 8
 
 // An async context's header, before the frame the compiler lays out: the
 // caller's context, and where to go when this function returns.

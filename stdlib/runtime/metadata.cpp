@@ -215,4 +215,23 @@ extern const FullMetadata vertex_metadata_Any    = {&anyWitnesses, {kindExistent
 // them all: what is inside says the rest.
 extern const FullMetadata vertex_metadata_Existential1 = {&existential1Witnesses, {kindExistential, nullptr}};
 extern const FullMetadata vertex_metadata_Function = {&functionWitnesses, {kindFunction, nullptr}};
+// Every metatype is one word, the metadata of the type it names, so one
+// record serves them all: the value says which type.
+extern const FullMetadata vertex_metadata_Metatype = {&trivial8, {kindMetatype, nullptr}};
+}
+
+// vertex_existential_type is `type(of: x)` for an existential x: the type
+// of what it holds, and for a class instance the object's own dynamic
+// type rather than the one it was boxed as. Every existential starts with
+// the three-word buffer and the metadata word; see AnyExistential.
+extern "C" const vertex::Metadata* vertex_existential_type(const void* container) {
+  using namespace vertex;
+  auto* any = static_cast<const AnyExistential*>(container);
+  const Metadata* type = any->type;
+  if (type != nullptr && type->kind == kindClass) {
+    auto* object = reinterpret_cast<const HeapObject*>(any->buffer[0]);
+    if (object != nullptr && object->metadata != nullptr && object->metadata->type != nullptr)
+      return object->metadata->type;
+  }
+  return type;
 }

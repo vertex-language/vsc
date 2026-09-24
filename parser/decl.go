@@ -218,6 +218,23 @@ func (p *parser) parseVarDecl(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modif
 		}
 		p.next()
 	}
+	// `let b, h: Double`: a name with neither a type nor a value has the
+	// type written after it, as Swift reads the list.
+	var carried ast.Type
+	for i := len(d.Bindings) - 1; i >= 0; i-- {
+		b := d.Bindings[i]
+		if tp, ok := b.Pat.(*ast.TypedPattern); ok {
+			carried = tp.Type
+			continue
+		}
+		if b.Value != nil || b.Body != nil || b.Accessors != nil {
+			carried = nil
+			continue
+		}
+		if _, named := b.Pat.(*ast.IdentPattern); named && carried != nil {
+			b.Pat = &ast.TypedPattern{Span: ast.Span{Lo: b.Pat.Pos(), Hi: b.Pat.End()}, Pat: b.Pat, Type: carried}
+		}
+	}
 	d.Span = p.span(lo)
 	return d
 }

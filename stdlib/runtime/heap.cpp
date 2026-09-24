@@ -21,6 +21,57 @@ namespace vertex {
   __builtin_trap();
 }
 
+// The count word, beside the immortal bit: the strong count in the low 32
+// bits; the weak count -- weak and unowned references both -- above it;
+// dead once the strong count has reached zero and the object is ending or
+// ended, when a weak reference reads nil and an unowned one traps; and
+// deallocated once its destroyer is done with the memory, which is freed
+// then or, while weak references remain, by the last of them.
+inline constexpr u64 strongMask = 0xffffffffull;
+inline constexpr u64 weakUnit = 1ull << 32;
+inline constexpr u64 weakMask = ((1ull << 29) - 1) << 32;
+inline constexpr u64 deallocated = 1ull << 61;
+inline constexpr u64 dead = 1ull << 62;
+
+// orCount sets bits in an object's count, answering what it was.
+inline u64 orCount(HeapObject* obj, u64 bits) {
+  u64 was = __builtin_atomic_load(&obj->refcount);
+  for (;;) {
+    u64 seen = __builtin_atomic_cas(&obj->refcount, was, was | bits);
+    if (seen == was)
+      return was;
+    was = seen;
+  }
+}
+
+// counted reports whether an object's references are counted: it is
+// there, and not a literal's immortal storage. One that is ending is
+// immortal too, but dead, and its weak references are still counted.
+inline bool counted(HeapObject* obj) {
+  if (obj == nullptr)
+    return false;
+  u64 c = __builtin_atomic_load(&obj->refcount);
+  return (c & immortal) == 0 || (c & dead) != 0;
+}
+
+// strongFromWeak is a strong reference to what a weak or unowned one
+// names, or null where the object has ended or is ending.
+inline HeapObject* strongFromWeak(HeapObject* obj) {
+  if (obj == nullptr)
+    return nullptr;
+  u64 was = __builtin_atomic_load(&obj->refcount);
+  for (;;) {
+    if ((was & immortal) != 0)
+      return (was & dead) != 0 ? nullptr : obj;
+    if ((was & strongMask) == 0)
+      return nullptr;
+    u64 seen = __builtin_atomic_cas(&obj->refcount, was, was + 1);
+    if (seen == was)
+      return obj;
+    was = seen;
+  }
+}
+
 }  // namespace vertex
 
 using namespace vertex;
@@ -49,7 +100,10 @@ HeapObject* vertex_alloc(u64 size) {
 // vertex_dealloc returns an object's memory, once what it owned has been
 // released. A class's destroyer ends with it.
 void vertex_dealloc(HeapObject* obj) {
-  vertex_pal_free(obj, 0, 16);
+  // While weak references remain, the last of them frees it.
+  u64 was = orCount(obj, deallocated);
+  if ((was & weakMask) == 0)
+    vertex_pal_free(obj, 0, 16);
 }
 
 // A box's end: its value through the value's own witnesses, then the
@@ -95,24 +149,116 @@ void vertex_release(HeapObject* obj) {
   if (obj == nullptr || (obj->refcount & immortal))
     return;
   // The count as it was: one means this call took it to zero.
-  if (__builtin_atomic_sub(&obj->refcount, 1ull) != 1)
+  if ((__builtin_atomic_sub(&obj->refcount, 1ull) & strongMask) != 1)
     return;
+  // Immortal while it ends: a deinit that retains and releases self, or
+  // hands it somewhere for the length of a call, must not take the count
+  // back to zero and end it a second time. Dead, so that a weak reference
+  // to it reads nil from here on.
+  orCount(obj, immortal | dead);
   if (obj->metadata != nullptr && obj->metadata->destroy != nullptr) {
-    // Immortal while it ends: a deinit that retains and releases self, or
-    // hands it somewhere for the length of a call, must not take the
-    // count back to zero and end it a second time.
-    obj->refcount = immortal;
     obj->metadata->destroy(obj);
     return;
   }
+  vertex_dealloc(obj);
+}
+
+// vertex_weak_retain adds a weak or unowned reference to an object,
+// which keeps its memory, and not the object, alive.
+void vertex_weak_retain(HeapObject* obj) {
+  if (!counted(obj))
+    return;
+  __builtin_atomic_add(&obj->refcount, weakUnit);
+}
+
+// vertex_weak_release drops a weak or unowned reference, and frees the
+// object's memory where it was the last reference of any kind.
+void vertex_weak_release(HeapObject* obj) {
+  if (!counted(obj))
+    return;
+  u64 was = __builtin_atomic_sub(&obj->refcount, weakUnit);
+  if ((was & weakMask) == weakUnit && (was & deallocated) != 0)
+    vertex_pal_free(obj, 0, 16);
+}
+
+// vertex_weak_load reads a weak reference held at slot: a strong
+// reference to its object, which the caller owns, or null where the
+// object has ended.
+HeapObject* vertex_weak_load(HeapObject* const* slot) {
+  return strongFromWeak(*slot);
+}
+
+// vertex_unowned_load reads an unowned reference held at slot: a strong
+// reference to its object, which the caller owns. The object outlives it
+// or the program is wrong, and it traps, as Swift's does.
+HeapObject* vertex_unowned_load(HeapObject* const* slot) {
+  HeapObject* obj = *slot;
+  HeapObject* strong = strongFromWeak(obj);
+  if (obj != nullptr && strong == nullptr)
+    fatal("Attempted to read an unowned reference but the object was already deallocated");
+  return strong;
+}
+
+// A weak cell: an object of its own holding one weak or unowned reference,
+// which is how a closure's capture list holds `[weak self]` -- the closure
+// holds the cell as it holds anything else, strongly, and the cell's end
+// is its reference's.
+struct WeakCell {
+  HeapObject header;
+  HeapObject* held;
+};
+
+static void destroyWeakCell(HeapObject* obj) {
+  vertex_weak_release(reinterpret_cast<WeakCell*>(obj)->held);
   vertex_pal_free(obj, 0, 16);
+}
+
+static const HeapMetadata weakCellMetadata = {destroyWeakCell, nullptr};
+
+// vertex_weak_cell makes a cell holding a weak reference to obj, which
+// the caller lends; the caller owns the cell.
+HeapObject* vertex_weak_cell(HeapObject* obj) {
+  auto* cell = static_cast<WeakCell*>(vertex_pal_alloc(sizeof(WeakCell), 16));
+  if (cell == nullptr)
+    vertex_pal_abort();
+  cell->header.metadata = &weakCellMetadata;
+  cell->header.refcount = 1;
+  cell->held = obj;
+  vertex_weak_retain(obj);
+  return &cell->header;
+}
+
+// vertex_weak_cell_load is a strong reference to what a cell holds, which
+// the caller owns, or null where it has ended; vertex_unowned_cell_load
+// traps there instead.
+HeapObject* vertex_weak_cell_load(HeapObject* cell) {
+  return vertex_weak_load(&reinterpret_cast<WeakCell*>(cell)->held);
+}
+
+HeapObject* vertex_unowned_cell_load(HeapObject* cell) {
+  return vertex_unowned_load(&reinterpret_cast<WeakCell*>(cell)->held);
+}
+
+// vertex_weak_assign puts obj, borrowed from the caller, in a weak or
+// unowned reference held at slot, letting go of the one there.
+void vertex_weak_assign(HeapObject** slot, HeapObject* obj) {
+  vertex_weak_retain(obj);
+  HeapObject* old = *slot;
+  *slot = obj;
+  vertex_weak_release(old);
 }
 
 // vertex_is_unique reports whether the caller holds the only reference,
 // which is the question copy-on-write asks before it writes. An immortal
 // object is never unique: it may not be written to.
 bool vertex_is_unique(HeapObject* obj) {
-  return __builtin_atomic_load(&obj->refcount) == 1;
+  return (__builtin_atomic_load(&obj->refcount) & (immortal | strongMask)) == 1;
+}
+
+// vertex_is_uniquely_referenced is isKnownUniquelyReferenced(&x): the
+// same question, of the reference held at slot.
+bool vertex_is_uniquely_referenced(HeapObject* const* slot) {
+  return *slot != nullptr && vertex_is_unique(*slot);
 }
 
 }

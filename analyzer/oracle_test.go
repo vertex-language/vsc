@@ -14,7 +14,7 @@ import (
 
 // The checker's oracle is the same one the parser has: Swift itself.
 //
-// tests/check holds programs written inside what this checker models
+// testdata/check holds programs written inside what this checker models
 // — no standard library beyond the builtin types — and named for the
 // verdict they carry. An `ok-` program is one Swift accepts, and this
 // checker must find nothing wrong with it; a `bad-` program is one
@@ -51,7 +51,7 @@ func checkFile(t *testing.T, path string) []string {
 // file names, so the test runs with no toolchain installed;
 // TestCheckAgreesWithSwiftc is what keeps the names honest.
 func TestCheckCorpus(t *testing.T) {
-	files, _ := filepath.Glob("../tests/check/*.swift")
+	files, _ := filepath.Glob("testdata/check/*.swift")
 	if len(files) == 0 {
 		t.Skip("no semantic corpus")
 	}
@@ -77,7 +77,7 @@ func TestCheckAgreesWithSwiftc(t *testing.T) {
 	if err != nil {
 		t.Skip("no swiftc on PATH")
 	}
-	files, _ := filepath.Glob("../tests/check/*.swift")
+	files, _ := filepath.Glob("testdata/check/*.swift")
 	if len(files) == 0 {
 		t.Skip("no semantic corpus")
 	}
@@ -104,7 +104,7 @@ func TestCheckAgreesWithSwiftc(t *testing.T) {
 // operators as expressions so that the tree says what was written;
 // they are not values and have no type.
 func TestEveryExpressionIsVisited(t *testing.T) {
-	files, _ := filepath.Glob("../tests/check/ok-*.swift")
+	files, _ := filepath.Glob("testdata/check/ok-*.swift")
 	if len(files) == 0 {
 		t.Skip("no semantic corpus")
 	}
@@ -136,12 +136,12 @@ func TestEveryExpressionIsVisited(t *testing.T) {
 }
 
 // TestCheckCorpusDoesNotCrash runs the checker over every file in
-// tests/. Those programs use names this checker cannot resolve yet —
+// testdata/syntax. Those programs use names this checker cannot resolve yet —
 // the standard library is not modelled — so what is required here is
 // not a clean check but a finished one: a front end that gives up on
 // a construct says so with a diagnostic, never with a panic.
 func TestCheckCorpusDoesNotCrash(t *testing.T) {
-	files, err := filepath.Glob("../tests/syntax/*.swift")
+	files, err := filepath.Glob("../parser/testdata/syntax/*.swift")
 	if err != nil || len(files) == 0 {
 		t.Skip("no corpus")
 	}

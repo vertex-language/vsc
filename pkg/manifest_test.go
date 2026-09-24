@@ -13,7 +13,7 @@ import (
 	"github.com/vertex-language/vsc/token"
 )
 
-// TestManifestsMatchSwiftPM reads every package in tests/packages and
+// TestManifestsMatchSwiftPM reads every package in build/testdata/packages and
 // compares what vsc makes of its manifest with what SwiftPM does:
 // `swift package dump-package` runs the manifest and prints the Package
 // it built, so it is the answer and cannot drift.
@@ -27,7 +27,7 @@ func TestManifestsMatchSwiftPM(t *testing.T) {
 	if err != nil {
 		t.Skip("no swift on PATH")
 	}
-	dirs, _ := filepath.Glob("../tests/packages/*")
+	dirs, _ := filepath.Glob("../build/testdata/packages/*")
 	ran := 0
 	for _, dir := range dirs {
 		if _, err := os.Stat(filepath.Join(dir, ManifestName)); err != nil {
@@ -67,7 +67,7 @@ func TestManifestsMatchSwiftPM(t *testing.T) {
 		})
 	}
 	if ran == 0 {
-		t.Fatal("no packages in tests/packages")
+		t.Fatal("no packages in build/testdata/packages")
 	}
 }
 

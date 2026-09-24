@@ -15,6 +15,40 @@ import (
 
 // callGeneric lowers a call to a generic function by lowering the
 // function for these type arguments and calling that.
+// specializedValue is a generic function, specialized, as a function
+// value: `<` on tuples handed to sorted(by:).
+func (g *gen) specializedValue(at ast.Node, sym *analyzer.FuncSymbol, spec analyzer.Specialization) *sil.Value {
+	if len(g.subst) > 0 {
+		args := make([]types.Type, len(spec.Args))
+		for i, a := range spec.Args {
+			args[i] = types.Substitute(a, g.subst)
+		}
+		spec = analyzer.Specialization{Params: spec.Params, Args: args}
+	}
+	subst := spec.Subst()
+	sig, ok := types.Substitute(sym.Signature(), subst).(*types.Signature)
+	if !ok {
+		g.refuse(at, "a generic signature this compiler cannot substitute")
+		return nil
+	}
+	name := g.specializedSymbol(sym, sig, spec)
+	if name == "" {
+		g.refuse(at, "a generic function this compiler cannot name")
+		return nil
+	}
+	if err := g.emitSpecialization(sym, name, subst); err != nil {
+		g.errorAt(at, err.Error())
+		return nil
+	}
+	callee := g.m.Func(name).SetSourceName(sym.Name())
+	if g.needsType(callee) {
+		g.declareSignature(callee, sig)
+	}
+	v := g.blk.ThinToThickFunction(g.blk.FunctionRef(callee), lowerType(sig))
+	g.destroyLater(v)
+	return v
+}
+
 func (g *gen) callGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol, spec analyzer.Specialization, optional bool) *sil.Value {
 	for _, a := range spec.Args {
 		if a == nil {
@@ -201,6 +235,14 @@ func (g *gen) witness(ref *analyzer.MethodRef, recv types.Type) (*analyzer.Metho
 	}
 	found, m := g.methodOn(recv, ref.Method.Name)
 	if m == nil {
+		// A requirement the type does not implement is the default an
+		// extension of the protocol gives.
+		if p, ok := ref.Recv.(*types.Protocol); ok && ref.Method.Sig != nil && !isExistentialType(recv) {
+			if q, em := p.ExtensionMethod(ref.Method.Name, ref.Method.IsStatic); em != nil && em.Sig != nil &&
+				len(em.Sig.Params) == len(ref.Method.Sig.Params) {
+				return &analyzer.MethodRef{Recv: q, Method: em}, true
+			}
+		}
 		return nil, false
 	}
 	return &analyzer.MethodRef{Recv: found, Method: m}, true

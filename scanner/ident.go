@@ -184,6 +184,11 @@ func isOperChar(r rune) bool {
 	return isOperHeadRune(r) || isOperCombiningRune(r)
 }
 
+// IsOperatorChar reports whether a scalar outside ASCII may be part of an
+// operator: one Swift reserves for operators, or a combining mark that may
+// follow one. The mangler asks it to tell `√` from a name like `日本`.
+func IsOperatorChar(r rune) bool { return isOperChar(r) }
+
 // isOperHeadRune reports whether r is a non-ASCII OperatorHead.
 func isOperHeadRune(r rune) bool {
 	switch {

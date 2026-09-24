@@ -643,6 +643,8 @@ func (l *lowerer) fieldTypeRecord(t types.Type) (ir.Symbol, bool) {
 		return nil, false
 	}
 	switch ex := t.(type) {
+	case *types.Metatype:
+		return l.metadataRecord(stdlib.Metadata("Metatype")), true
 	case *types.Existential:
 		switch len(ex.Protocols) {
 		case 0:
@@ -732,6 +734,16 @@ func ownedWords(st *types.Struct, base int64) ([]ownedWord, bool) {
 			out = append(out, ownedWord{offset: at + 8})
 		case *sil.BoxType:
 			out = append(out, ownedWord{offset: at})
+		case *sil.Builtin:
+			// A native object -- a weak cell a closure captured -- is one
+			// counted reference.
+			if u == sil.BuiltinNativeObj {
+				out = append(out, ownedWord{offset: at})
+				continue
+			}
+			if !sil.Object(f.Type).Trivial() {
+				return nil, false
+			}
 		case *types.Struct:
 			inner, ok := ownedWords(u, at)
 			if !ok {
@@ -1557,18 +1569,39 @@ func (l *lowerer) classMetadataFor(className string) (*ir.Global, bool) {
 		ir.Array(vwWords, ir.StorePtr.FType())).Init(ir.List(rows...)).Align(8)
 
 	descr := l.nominalDescriptorWith(info, &types.Struct{Name: info.Name}, nominalClassFlags)
+	// The class's dispatch table, where this module has it, so that a
+	// metatype -- `type(of: x)`, a `T.Type` -- reaches the class methods
+	// and required initializers an instance's header reaches for it.
+	var table ir.Init = ir.Lit(ir.Int(0))
+	if vt := l.module.VTableNamed(className); vt != nil {
+		table = ir.RelocInit(l.vtableGlobal(vt))
+	}
 	rec := l.out.Struct("meta_" + identSafe(className))
 	rec.Field("vwt", ir.StorePtr.FType())
 	rec.Field("kind", ir.StoreI64.FType())
 	rec.Field("descriptor", ir.StorePtr.FType())
-	g := l.out.Global(l.sym(info.Mangled+"Mf"), ir.RO, rec.FType()).
-		Init(ir.Fields(
-			ir.Val("vwt", ir.RelocInit(vwt)),
-			ir.Val("kind", ir.Lit(ir.Int(stdlib.KindClass))),
-			ir.Val("descriptor", ir.RelocInit(descr)),
-		)).Align(8)
+	rec.Field("table", ir.StorePtr.FType())
+	rec.Field("superclass", ir.StorePtr.FType())
+	g := l.out.Global(l.sym(info.Mangled+"Mf"), ir.RO, rec.FType()).Align(8)
 	g.Export()
 	l.meta[className] = g
+	// The superclass's metadata, where this module has it, which a cast
+	// down from it walks up to.
+	var super ir.Init = ir.Lit(ir.Int(0))
+	if cl, ok := info.Layout.Underlying().(*types.Class); ok && cl.Superclass != nil {
+		if sc, ok := cl.Superclass.Underlying().(*types.Class); ok {
+			if sg, ok := l.classMetadataFor(sc.Name); ok {
+				super = ir.RelocInit(sg).Plus(ir.Int(stdlib.MetadataOffset))
+			}
+		}
+	}
+	g.Init(ir.Fields(
+		ir.Val("vwt", ir.RelocInit(vwt)),
+		ir.Val("kind", ir.Lit(ir.Int(stdlib.KindClass))),
+		ir.Val("descriptor", ir.RelocInit(descr)),
+		ir.Val("table", table),
+		ir.Val("superclass", super),
+	))
 	l.metadataAccessorFor(info.Mangled+"Ma", g)
 	return g, true
 }

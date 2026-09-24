@@ -138,6 +138,20 @@ func (c *checker) arraySliceOf(elem types.Type, scope *Scope) types.Type {
 	return &types.GenericInstance{Base: tn.Type(), Args: []types.Type{elem}}
 }
 
+// rangeOf is the core's range of bound by name -- Range, which `a..<b`
+// makes, ClosedRange, PartialRangeUpTo, ... -- or Invalid if the core
+// has none.
+func (c *checker) rangeOf(name string, bound types.Type) types.Type {
+	var tn *TypeNameSymbol
+	if core := c.modules["Swift"]; core != nil {
+		tn, _ = core.Lookup(name).(*TypeNameSymbol)
+	}
+	if tn == nil || tn.Type() == nil {
+		return types.Typ[types.Invalid]
+	}
+	return &types.GenericInstance{Base: tn.Type(), Args: []types.Type{bound}}
+}
+
 // returnsNothing reports whether a result is Void, or the empty tuple it
 // is written as.
 func returnsNothing(t types.Type) bool {

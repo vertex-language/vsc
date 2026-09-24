@@ -1,140 +1,79 @@
 # tests
 
-Five corpora, asking five different questions. Each is named for its
-question, and a file belongs in exactly one of them.
+A ladder: one small thing per file, numbered `001`–`250` in the order the
+rungs climb, from an empty program to a closing program that uses most of
+the language.
 
-## syntax/
+Nothing here writes down an expected value. Every file is built twice,
+once by vsc and once by swiftc, and the two results are compared. swiftc's
+answer is the oracle, and a disagreement with it is a bug in vsc by
+definition.
 
-Does it parse? 94 files covering the grammar, from identifiers to the
-combinations that only break a parser when they meet. Nothing here has
-to mean anything or run -- several files are deliberately nonsense
-that happens to be well-formed -- so the only question asked of them
-is whether the parser accepts what swiftc accepts.
+| Ladder | Files | The oracle | Compared |
+| --- | --- | --- | --- |
+| `tests/` | `001`–`250` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
 
-Used by `parser`, and by `analyzer`'s crash tests.
+Each file is a `main.swift` of top-level code, and both compilers are
+given it unchanged. There is no entry point to rename and no harness
+around it.
 
-## check/
+## `001`–`250`
 
-Does it typecheck, and does it say the right thing when it does not?
-Files named `ok-*` must check clean; the rest must be rejected, and
-the diagnostic is compared against swiftc's.
+| | |
+| --- | --- |
+| 001–020 | the smallest programs and `print`, then integer arithmetic one operator at a time: add, sub, mul, div, remainder, unsigned, the overflow trap, the wrapping operators, shifts, bitwise, compares, logical, `?:`, compound assignment |
+| 021–040 | every scalar type: the integer widths and their bounds, conversions exact, truncating, clamping and trapping, `Bool`, `Double`, `Float`, float to integer, NaN and infinity, literals, inference, bit counts, the overflow-reporting methods, `typealias` |
+| 041–060 | control flow: `if`, `else if`, the loops, ranges, `stride`, `break` and `continue`, labels, `switch` on integers, ranges and tuples, `where`, `fallthrough`, `guard`, `defer`, recursion, and `if` and `switch` as expressions |
+| 061–080 | functions and closures: labels, defaults, variadics, `inout`, overloading, nested functions, function values, closures and their shorthand, captures and capture lists, `@escaping`, `@autoclosure`, composition, trailing closures, generic functions, `Never`, operators of a program's own and precedence groups |
+| 081–100 | strings, optionals and tuples: literals, multi-line and raw strings, interpolation, characters, comparison, the everyday methods, Unicode views, substrings, conversions; `if let`, `??`, `?.`, the `!` trap, `map` on an optional; tuples; then `Array` |
+| 101–120 | collections: the index trap, mutation, copy on write, iteration, `map`/`filter`/`reduce`, sorting, slices, searching, nested arrays, `Dictionary`, `Set` and its algebra, ranges as values, `zip`, `lazy`, `compactMap` and `flatMap`, the other sequence algorithms, `joined` |
+| 121–140 | structs and enums: memberwise and custom initializers, methods and `mutating`, computed properties, observers, `lazy`, statics, subscripts, value semantics; plain, raw-valued and payload enums, `CaseIterable`, `indirect`, nested patterns, nested types, extensions, `init?` |
+| 141–160 | classes: reference semantics and `===`, inheritance, `override` and `super`, `class` and `final` members, convenience and required initializers, `deinit`, `weak`, `unowned`, closure cycles, `is` and `as?`, `Any` and `AnyObject`, access control, property wrappers, key paths, two-phase initialization, copy on write by hand, a hierarchy |
+| 161–180 | protocols and generics: requirements, protocol extensions, mutating and static requirements, `any`, `some`, composition, associated types, generic types, constraints, conditional conformance, `Equatable`, `Hashable`, `Comparable`, `CustomStringConvertible`, a `Sequence` and a `Collection` of a program's own, refinement, primary associated types, generic subscripts |
+| 181–200 | errors and concurrency, and the rest: `throw` and `catch`, propagation, `try?`, `rethrows`, typed throws, `Result`, an uncaught error; `async`/`await`, `async let`, task groups, `Task`, actors, async sequences; result builders, `@dynamicMemberLookup`, `callAsFunction`, parameter packs, `~Copyable`, `#if`, and a closing program |
+| 201–210 | numbers, further: operators as static methods, the integer methods, how a `Double` prints across its range, `Float16`, code over `BinaryInteger` and `FloatingPoint`, a `~=` of a program's own, the literal protocols, `OptionSet`, the defined edges of integer arithmetic |
+| 211–220 | control flow, further: `for case`, `while let`, condition lists, `switch` on strings and characters, several patterns in one case, scopes and shadowing, labelled `do` and `if`, `defer` on every exit, `guard case`, `switch` over optionals |
+| 221–230 | functions and values, further: stored closures, recursion through local functions and a fixed point, currying, closures inferred through generics, method and initializer references, static subscripts, tuple destructuring, `inout` writeback through properties and subscripts, mutation deep inside nested values |
+| 231–240 | types, further: generic enums, recursive structs, associated type defaults, opening an existential, generic class inheritance, class-only protocols and weak delegates, `Identifiable`, static factories, raw values of every kind, a struct holding a class |
+| 241–250 | programs: a Caesar cipher over Unicode scalars, word frequencies, a multi-key sort, generic binary search and insertion sort, matrices, a tokenizer, a linked list freed in order, a stack-machine interpreter, an async pipeline, and a closing program replaying a transaction log |
 
-Used by `analyzer`.
+## Rules
 
-## compiler/
+- **One thing per file.** A failure should name what broke. When a test
+  turns out to be asking two questions, split it.
+- **Every rung is Swift.** swiftc has to build it unchanged; a file only
+  vsc accepts belongs in a package's own tests, not here.
+- **Nothing unspecified.** No dictionary or set is printed with more than
+  one entry, no hash values, no addresses, no clock, no tasks racing to
+  print: an unordered result is sorted before it is printed.
+- **A trapping rung prints nothing before the trap.** A trap ends the
+  program by a signal, and output buffered before it may be lost -- the
+  two runtimes buffer differently -- so only the signal is compared.
+- **Each run is capped** at 10 seconds and 1 MB of output, so a
+  miscompiled loop fails its own test instead of the whole run.
+- **A refusal is a failure.** A diagnostic from vsc fails the rung rather
+  than skipping it, so the ladder says plainly how far up the compiler
+  has climbed.
+- **Every fix lands with the smallest numbered file that shows it.**
 
-Does the program do what it says? Whole programs, compiled twice --
-once by this compiler, once by swiftc -- run twice, and compared.
+## The other corpora
 
-Nothing here writes down an expected value. A number beside a program
-is a claim about Swift that has to be maintained by hand and is wrong
-the moment it drifts; swiftc's answer cannot drift, because it is
-Swift's answer. So the runner compares outcomes: exit status for a
-program that returns, and the same signal for one that traps.
+Suites that are not one file, or that ask a question other than "does
+it run the way swiftc's build does", live beside the package that runs
+them:
 
-Each file is a whole program with `func main() -> Int32`, this
-compiler's entry point. swiftc has no such convention, so for its half
-the function is renamed and called from top-level code -- that rewrite
-is the only difference between what the two compilers are given.
+| Corpus | Asks | Run by |
+| --- | --- | --- |
+| `parser/testdata/syntax` | does it parse? | `parser` (which parses this ladder too) |
+| `analyzer/testdata/check` | does it typecheck, and say what swiftc says when it does not? | `analyzer` |
+| `build/testdata/interop` | is what vsc builds the same thing swiftc builds, linked in one process? | `build`, `TestInteropCorpus` |
+| `build/testdata/cinterop` | can C call what vsc builds, and can it call C? | `build`, `TestCInteropCorpus` |
+| `build/testdata/packages` | does a SwiftPM package build as `swift build` builds it? | `build`, `TestPackagesMatchSwiftPM`; `pkg` |
 
-The files are numbered in the order they get harder, and the early
-ones are one idea each -- a loop, a struct, an override -- so that a
-failure names the thing that broke rather than the last thing added.
-A file belongs here once the compiler can build it: a refusal fails
-the suite rather than being skipped, so the corpus is a live statement
-of what works rather than a wishlist.
+## Running
 
-Used by `build`, in `corpus_test.go`.
-
-## interop/
-
-Is what this compiler builds the same thing swiftc builds?
-
-The only way to ask that which cannot be fudged is to put both
-compilers' output in one process. A library written in Swift is built
-by swiftc; a program is built by this compiler and linked against it.
-The symbol asked of the linker has to be the symbol swiftc defined,
-and the registers the arguments go in have to be the ones swiftc's
-code reads them from.
-
-The libraries use the parts of Swift this compiler does not have --
-String, Array, Dictionary, Optional, Codable, Foundation's Calendar,
-JSON and URL. That is the point rather than a limitation: a compiler
-does not have to implement a library to call it. It has to agree with
-it about names and registers, and nothing short of running the two
-together shows that it does.
-
-Each case is a directory of three files:
-
-    library.swift             built by swiftc, with -parse-as-library
-    <Module>.vinterface  what this compiler is told about it
-    program.swift             built by this compiler, and run
-
-A case about what happens between two modules has two libraries
-instead, named for the order they must be built in and the module they
-are: `1-Units.swift`, `2-Scale.swift`, with an interface each. The
-order is the point of such a case, so it is in the filename rather
-than in a manifest.
-
-The interface is a claim about the library, and the test is whether
-the claim is true: naming something swiftc did not build fails at the
-link, with the demangled name in the error.
-
-Most of the interfaces here are written by hand, which keeps a case to
-the one thing it is about. Case 006 does not: its interface is what
-swiftc emitted for its own library, copied in unedited, because a
-.swiftinterface is valid Swift with the bodies taken out and reading a
-real one is the thing that has to keep working.
-
-Two facts about emitted interfaces are worth writing down, because
-getting them the wrong way round costs a day. swiftc emits one under
-`-emit-module-interface-path` whatever the mode, warning but not
-refusing outside `-enable-library-evolution`; and the two interfaces
-are the same text apart from the header. So the interface does not say
-which ABI the library was built for -- its `// swift-module-flags:`
-line does, and a library built with library evolution is resilient:
-its non-@frozen types have no layout a client may rely on. That is why
-the flags line is read: `vsc.go` refuses such a library by name rather
-than compiling against a layout that is not there, which would link
-and then die on the first field read.
-
-A program returns 42 when it is satisfied and the number of the check
-that failed otherwise. There is no oracle to compare against here --
-the program is this compiler's alone -- so it checks itself, which is
-what tests/compiler does for the same reason.
-
-Used by `build`, in `interop_test.go`.
-
-## cinterop/
-
-Is what this compiler builds callable from C, and can it call C back?
-
-The same question as interop/ asked of the other boundary, and it is
-a different question. There is no importer and no header here: what
-crosses is a symbol and a register and nothing else. Two attributes
-name the symbol -- `@_cdecl` for one this compiler defines, and
-`@_silgen_name` for one it does not -- and neither can be checked by
-reading anything. The object file has to go to clang and the result
-has to run.
-
-Each case is a directory of two files:
-
-    library.swift   built by this compiler, as a module of its own
-    host.c          built by clang, and holds main
-
-The library has no entry point, because the entry point is C's. And
-nothing here links the Swift runtime -- that is rather the point,
-since a C caller has none.
-
-A program returns 42 when it is satisfied and the number of the check
-that failed otherwise, which is interop/'s convention for the same
-reason: a program that is half this compiler's has no oracle, so it
-checks itself.
-
-What is *not* here is everything an importer would bring: the header
-that would have declared these, and every C type that is not a scalar
-or a pointer. What is here is the widths, void, the two directions,
-and pointers -- including a null one, which is an optional here and
-one word in both languages.
-
-Used by `build`, in `cinterop_test.go`.
+```console
+$ cd build && go test -run TestCorpus .          # the ladder
+$ cd build && go test -run 'TestCorpus/113' .    # one rung
+$ vsc run tests/042-else-if.swift                # one rung, by hand
+```

@@ -31,6 +31,10 @@ var files = map[string]string{
 	"DerivedCoreProperties.txt":     "DerivedCoreProperties.txt",
 	"UnicodeData.txt":               "UnicodeData.txt",
 	"DerivedNormalizationProps.txt": "DerivedNormalizationProps.txt",
+	"SpecialCasing.txt":             "SpecialCasing.txt",
+	"PropList.txt":                  "PropList.txt",
+	"DerivedNumericType.txt":        "extracted/DerivedNumericType.txt",
+	"DerivedNumericValues.txt":      "extracted/DerivedNumericValues.txt",
 }
 
 func main() {
@@ -48,6 +52,8 @@ func main() {
 	header(&b)
 	grapheme(&b, *dir)
 	normalization(&b, *dir)
+	casing(&b, *dir)
+	properties(&b, *dir)
 	b.WriteString("} // namespace vertex::ucd\n")
 	if err := os.WriteFile(*out, []byte(b.String()), 0o644); err != nil {
 		fail(err)
@@ -284,6 +290,173 @@ func normalization(b *strings.Builder, dir string) {
 		comp = append(comp, uint32(p.key>>32), uint32(p.key), uint32(p.to))
 	}
 	array(b, "compositions", comp)
+}
+
+// casing writes each scalar's full uppercase and lowercase mapping where
+// it is not the scalar itself: SpecialCasing's unconditional mappings (ß
+// uppercases to SS), and UnicodeData's simple ones otherwise. Swift's
+// uppercased() and lowercased() map scalar by scalar, without context,
+// and so do these. Each table is sorted pairs: the scalar, then the offset
+// of its mapping in casePool shifted left eight with its length below.
+func casing(b *strings.Builder, dir string) {
+	upper, lower := map[rune][]rune{}, map[rune][]rune{}
+	for _, r := range read(dir, "UnicodeData.txt") {
+		// Fields after the code point: ..., 11 uppercase, 12 lowercase.
+		if len(r.fields) > 12 {
+			if u := r.fields[11]; u != "" {
+				upper[r.lo] = []rune{parseHex(u)}
+			}
+			if l := r.fields[12]; l != "" {
+				lower[r.lo] = []rune{parseHex(l)}
+			}
+		}
+	}
+	for _, r := range read(dir, "SpecialCasing.txt") {
+		// code; lower; title; upper; [condition;] -- only unconditional.
+		if len(r.fields) > 3 && r.fields[3] != "" {
+			continue
+		}
+		seq := func(f string) []rune {
+			var out []rune
+			for _, h := range strings.Fields(f) {
+				out = append(out, parseHex(h))
+			}
+			return out
+		}
+		lower[r.lo] = seq(r.fields[0])
+		upper[r.lo] = seq(r.fields[2])
+	}
+	var pool []uint32
+	table := func(name string, m map[rune][]rune) {
+		keys := make([]rune, 0, len(m))
+		for c, to := range m {
+			if len(to) == 1 && to[0] == c {
+				continue
+			}
+			keys = append(keys, c)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		var flat []uint32
+		for _, c := range keys {
+			flat = append(flat, uint32(c), uint32(len(pool))<<8|uint32(len(m[c])))
+			for _, x := range m[c] {
+				pool = append(pool, uint32(x))
+			}
+		}
+		array(b, name, flat)
+	}
+	table("uppercaseMappings", upper)
+	table("lowercaseMappings", lower)
+	array(b, "casePool", pool)
+}
+
+// The scalar property flags scalarFlags holds, which unicode.h reads.
+const (
+	flagAlphabetic = 1 << iota
+	flagUppercase
+	flagLowercase
+	flagCased
+	flagWhiteSpace
+	flagMath
+)
+
+// generalCategories numbers each General_Category in the order Swift's
+// Unicode.GeneralCategory lists them; unicode.h reads the same numbers.
+var generalCategories = []string{
+	"", "Lu", "Ll", "Lt", "Lm", "Lo", "Mn", "Mc", "Me", "Nd", "Nl", "No",
+	"Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "Sm", "Sc", "Sk", "So",
+	"Zs", "Zl", "Zp", "Cc", "Cf", "Cs", "Co", "Cn",
+}
+
+var numericTypes = map[string]byte{"Decimal": 1, "Digit": 2, "Numeric": 3}
+
+// properties writes what Character's properties ask of its first scalar:
+// flags, the general category, the numeric type, and the whole numeric
+// values, as (scalar, low word, high word) triples.
+func properties(b *strings.Builder, dir string) {
+	flags := map[rune]byte{}
+	set := func(name string, bit byte, file string) {
+		for _, r := range read(dir, file) {
+			if r.fields[0] != name {
+				continue
+			}
+			for c := r.lo; c <= r.hi; c++ {
+				flags[c] |= bit
+			}
+		}
+	}
+	set("Alphabetic", flagAlphabetic, "DerivedCoreProperties.txt")
+	set("Uppercase", flagUppercase, "DerivedCoreProperties.txt")
+	set("Lowercase", flagLowercase, "DerivedCoreProperties.txt")
+	set("Cased", flagCased, "DerivedCoreProperties.txt")
+	set("Math", flagMath, "DerivedCoreProperties.txt")
+	set("White_Space", flagWhiteSpace, "PropList.txt")
+	ranges(b, "scalarFlags", flags)
+
+	gcIndex := map[string]byte{}
+	for i, name := range generalCategories {
+		gcIndex[name] = byte(i)
+	}
+	gc := map[rune]byte{}
+	var first rune = -1
+	for _, r := range read(dir, "UnicodeData.txt") {
+		v, ok := gcIndex[r.fields[1]]
+		if !ok {
+			fail(fmt.Errorf("unknown General_Category %q", r.fields[1]))
+		}
+		// A range is written as its First and Last lines.
+		switch {
+		case strings.HasSuffix(r.fields[0], ", First>"):
+			first = r.lo
+			continue
+		case strings.HasSuffix(r.fields[0], ", Last>") && first >= 0:
+			for c := first; c <= r.lo; c++ {
+				gc[c] = v
+			}
+			first = -1
+			continue
+		}
+		gc[r.lo] = v
+	}
+	ranges(b, "generalCategoryRanges", gc)
+
+	nt := map[rune]byte{}
+	for _, r := range read(dir, "DerivedNumericType.txt") {
+		v, ok := numericTypes[r.fields[0]]
+		if !ok {
+			fail(fmt.Errorf("unknown Numeric_Type %q", r.fields[0]))
+		}
+		for c := r.lo; c <= r.hi; c++ {
+			nt[c] = v
+		}
+	}
+	ranges(b, "numericTypeRanges", nt)
+
+	// DerivedNumericValues: code; decimal value; ; rational value.
+	var whole []uint32
+	type value struct {
+		c rune
+		n uint64
+	}
+	var vals []value
+	for _, r := range read(dir, "DerivedNumericValues.txt") {
+		rational := r.fields[len(r.fields)-1]
+		if strings.Contains(rational, "/") || strings.HasPrefix(rational, "-") {
+			continue
+		}
+		n, err := strconv.ParseUint(rational, 10, 64)
+		if err != nil {
+			continue
+		}
+		for c := r.lo; c <= r.hi; c++ {
+			vals = append(vals, value{c, n})
+		}
+	}
+	sort.Slice(vals, func(i, j int) bool { return vals[i].c < vals[j].c })
+	for _, v := range vals {
+		whole = append(whole, uint32(v.c), uint32(v.n), uint32(v.n>>32))
+	}
+	array(b, "wholeNumbers", whole)
 }
 
 // ranges writes a property map as merged ranges of equal value.

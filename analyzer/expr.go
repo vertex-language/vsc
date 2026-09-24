@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/core"
@@ -18,7 +19,7 @@ func (c *checker) checkExpr(expr ast.Expr, expected types.Type, scope *Scope) ty
 	// The root of an optional chain -- `a?.b.c()` -- is evaluated with every
 	// step seeing the unwrapped value, and is the optional of what the last
 	// step gives.
-	if c.chainRoot(expr) {
+	if c.chainRoot(expr, scope) {
 		c.markChain(expr)
 		inner := c.evalExpr(expr, nil, scope)
 		if inner == nil {
@@ -86,6 +87,14 @@ func (c *checker) reconcileLiterals(x ast.Expr, lhs types.Type, y ast.Expr, rhs 
 	if types.Identical(lhs, rhs) {
 		return lhs, rhs
 	}
+	// A literal beside a value of a type expressible by it is one of that
+	// type: `c == "a"` with c a Character.
+	if t, ok := c.adoptExpressed(x, rhs, scope); ok {
+		return t, rhs
+	}
+	if t, ok := c.adoptExpressed(y, lhs, scope); ok {
+		return lhs, t
+	}
 	// A literal beside an optional is of what the optional wraps:
 	// `Double("2") == -1000` compares with a Double.
 	if o, ok := lhs.(*types.Optional); ok && !types.Identical(o.Wrapped, rhs) {
@@ -121,6 +130,42 @@ func (c *checker) reconcileLiterals(x ast.Expr, lhs types.Type, y ast.Expr, rhs 
 		return lhs, t
 	}
 	return lhs, rhs
+}
+
+// adoptExpressed re-reads a literal as want, where want is a type of a
+// program's own, or the core's, that is expressible by it.
+func (c *checker) adoptExpressed(e ast.Expr, want types.Type, scope *Scope) (types.Type, bool) {
+	if want == nil {
+		return nil, false
+	}
+	switch want.Underlying().(type) {
+	case *types.Basic, *types.Optional:
+		return nil, false
+	}
+	var kind types.BasicKind
+	switch lit := unparen(e).(type) {
+	case *ast.StringLit:
+		kind = types.UntypedString
+	case *ast.BasicLit:
+		switch lit.Kind {
+		case token.INT_LIT:
+			kind = types.UntypedInt
+		case token.FLOAT_LIT:
+			kind = types.UntypedFloat
+		case token.TRUE, token.FALSE:
+			kind = types.UntypedBool
+		default:
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	for _, p := range types.LiteralProtocols(kind) {
+		if types.ConformsToNamed(want, p) {
+			return c.checkExpr(e, want, scope), true
+		}
+	}
+	return nil, false
 }
 
 // adoptTree re-evaluates an expression made only of literals against want.
@@ -161,7 +206,7 @@ func (c *checker) isLiteralTree(e ast.Expr) bool {
 		if n.Op == nil {
 			return false
 		}
-		op := string(c.file.Slice(n.Op.Lo, n.Op.Hi))
+		op := n.Op.Text(c.file)
 		return sharesOperandType(op) && c.isLiteralTree(n.X) && c.isLiteralTree(n.Y)
 	}
 	return false
@@ -205,15 +250,48 @@ func literalUnder(e ast.Expr) (*ast.BasicLit, bool) {
 	return lit, ok
 }
 
+// checkPostfix is a postfix operator: one the program declares, or
+// `a...`, a range with no upper bound.
+func (c *checker) checkPostfix(e *ast.PostfixExpr, expected types.Type, scope *Scope) types.Type {
+	op := ""
+	if e.Op != nil {
+		op = e.Op.Text(c.file)
+	}
+	inner := c.checkExpr(e.X, c.rangeElement(unwrappedContext(expected)), scope)
+	if isInvalid(inner) {
+		return inner
+	}
+	if t, ok := c.resolveOperator(scope, op, e, []ast.Expr{e.X}, []types.Type{inner}); ok {
+		return t
+	}
+	if op == "..." {
+		return c.rangeOf("PartialRangeFrom", literalDefault(inner))
+	}
+	c.typeErrorf(e.Pos(), "cannot find operator '%s' in scope", op)
+	return types.Typ[types.Invalid]
+}
+
 // checkPrefix type-checks a unary prefix expression.
 func (c *checker) checkPrefix(e *ast.PrefixExpr, expected types.Type, scope *Scope) types.Type {
 	expected = unwrappedContext(expected)
 	op := ""
 	if e.Op != nil {
-		op = string(c.file.Slice(e.Op.Pos(), e.Op.End()))
+		op = e.Op.Text(c.file)
 	}
 	if lit, ok := e.X.(*ast.BasicLit); ok && (op == "-" || op == "+") {
 		c.negated[lit] = op == "-"
+	}
+	// `..<b` and `...b` are ranges with no lower bound, whose operand is
+	// the bound.
+	if op == "..<" || op == "..." {
+		inner := literalDefault(c.checkExpr(e.X, c.rangeElement(expected), scope))
+		if isInvalid(inner) {
+			return inner
+		}
+		if op == "..<" {
+			return c.rangeOf("PartialRangeUpTo", inner)
+		}
+		return c.rangeOf("PartialRangeThrough", inner)
 	}
 	inner := c.checkExpr(e.X, expected, scope)
 	// The signed value belongs to the expression, so that whatever
@@ -248,76 +326,103 @@ func (c *checker) checkPrefix(e *ast.PrefixExpr, expected types.Type, scope *Sco
 	return types.Typ[types.Invalid]
 }
 
-// checkStmtExpr reads an if or a switch used as a value. Every branch
-// checkStmtExpr checks an if or switch expression in value position.
+// checkStmtExpr checks an if or a switch used as a value (SE-0380). It
+// is checked as the statement it is -- conditions binding names for their
+// branch, a switch covering its subject -- with the expression each branch
+// consists of checked for what the context wants; the branches must agree
+// on a type, which is the expression's.
 func (c *checker) checkStmtExpr(e *ast.StmtExpr, expected types.Type, scope *Scope) types.Type {
-	switch s := e.Stmt.(type) {
-	case *ast.IfStmt:
-		for cur := ast.Stmt(s); cur != nil; {
-			ifStmt, ok := cur.(*ast.IfStmt)
-			if !ok {
-				break
-			}
-			for _, cond := range ifStmt.Conds {
-				c.checkCondition(cond, scope)
-			}
-			cur = ifStmt.Else
-		}
-	case *ast.SwitchStmt:
-		c.checkExpr(s.Subject, nil, scope)
+	vals, ok := BranchValues(e.Stmt)
+	if !ok {
+		c.checkStmt(e.Stmt, scope)
+		c.typeErrorf(e.Pos(), "each branch of an 'if' or 'switch' expression must be a single expression, and an 'if' must have an 'else'")
+		return types.Typ[types.Invalid]
 	}
+	if c.branchValues == nil {
+		c.branchValues = map[*ast.ExprStmt]types.Type{}
+	}
+	for _, v := range vals {
+		c.branchValues[v] = expected
+	}
+	c.checkStmt(e.Stmt, scope)
 
 	var result types.Type
-	for _, blk := range branchBlocks(e.Stmt) {
-		t := c.checkBranchValue(blk, expected, scope)
+	for _, v := range vals {
+		t := c.info.Types[v.X]
 		switch {
 		case t == nil || isInvalid(t):
+			return types.Typ[types.Invalid]
+		case types.Identical(t, types.Typ[types.Never]):
+			// A branch that does not come back gives no value.
+		case expected != nil:
+			if !types.AssignableTo(t, expected) {
+				c.typeErrorf(v.X.Pos(), "cannot convert value of type '%s' to specified type '%s'", t, expected)
+				return types.Typ[types.Invalid]
+			}
+			result = expected
 		case result == nil:
-			result = t
-		case !types.Identical(result, t):
-			c.typeErrorf(blk.Pos(), "branches have mismatching types '%s' and '%s'", result, t)
+			result = literalDefault(t)
+		case !types.Identical(result, literalDefault(t)) && !types.AssignableTo(t, result):
+			c.typeErrorf(v.X.Pos(), "branches have mismatching types '%s' and '%s'", result, t)
 			return types.Typ[types.Invalid]
 		}
 	}
 	if result == nil {
-		c.checkStmt(e.Stmt, scope)
-		return types.Typ[types.Invalid]
+		return types.Typ[types.Never]
 	}
 	return result
 }
 
-// branchBlocks collects executable blocks from an if or switch statement expression.
-func branchBlocks(s ast.Stmt) []*ast.CodeBlock {
-	var out []*ast.CodeBlock
-	for s != nil {
+// BranchValues is the expression statement each branch of an if or a
+// switch used as a value consists of, in order; a branch that is itself an
+// if or a switch gives its own branches'. A branch may instead be a throw,
+// which gives nothing. It reports false where s cannot be a value: a
+// branch of more than one statement, or an if without an else.
+func BranchValues(s ast.Stmt) ([]*ast.ExprStmt, bool) {
+	var out []*ast.ExprStmt
+	var walk func(ast.Stmt) bool
+	branch := func(stmts []ast.Stmt) bool {
+		if len(stmts) != 1 {
+			return false
+		}
+		switch st := stmts[0].(type) {
+		case *ast.ExprStmt:
+			out = append(out, st)
+			return true
+		case *ast.ThrowStmt:
+			return true
+		case *ast.IfStmt, *ast.SwitchStmt:
+			return walk(st)
+		}
+		return false
+	}
+	walk = func(s ast.Stmt) bool {
 		switch n := s.(type) {
 		case *ast.IfStmt:
-			if n.Body != nil {
-				out = append(out, n.Body)
+			if n.Body == nil || n.Else == nil || !branch(n.Body.Stmts) {
+				return false
 			}
-			s = n.Else
-			continue
-		case *ast.CodeBlock:
-			out = append(out, n)
+			switch e := n.Else.(type) {
+			case *ast.IfStmt:
+				return walk(e)
+			case *ast.CodeBlock:
+				return branch(e.Stmts)
+			}
+		case *ast.SwitchStmt:
+			for _, cs := range n.Cases {
+				clause, ok := cs.(*ast.CaseClause)
+				if !ok || !branch(clause.Stmts) {
+					return false
+				}
+			}
+			return len(n.Cases) > 0
 		}
-		break
+		return false
 	}
-	return out
-}
-
-// checkBranchValue checks a branch block and returns the evaluated type of its final expression.
-func (c *checker) checkBranchValue(blk *ast.CodeBlock, expected types.Type, scope *Scope) types.Type {
-	blockScope := NewScope(scope, blk.Pos(), blk.End())
-	c.info.Scopes[blk] = blockScope
-	var last types.Type
-	for i, st := range blk.Stmts {
-		if es, ok := st.(*ast.ExprStmt); ok && i == len(blk.Stmts)-1 {
-			last = c.checkExpr(es.X, expected, blockScope)
-			continue
-		}
-		c.checkStmt(st, blockScope)
+	if !walk(s) {
+		return nil, false
 	}
-	return last
+	return out, true
 }
 
 // checkInterpolation checks string interpolation expressions in scope.
@@ -348,22 +453,34 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		c.valueOf(e)
 		switch e.Kind {
 		case token.INT_LIT:
+			if t, ok := c.expressedLiteral(e, expected, types.UntypedInt); ok {
+				return t
+			}
 			if adopts(expected, types.Typ[types.UntypedInt]) {
 				return expected
 			}
 			return types.Typ[types.Int]
 		case token.FLOAT_LIT:
+			if t, ok := c.expressedLiteral(e, expected, types.UntypedFloat); ok {
+				return t
+			}
 			if adopts(expected, types.Typ[types.UntypedFloat]) {
 				return expected
 			}
 			return types.Typ[types.Double]
 		case token.TRUE, token.FALSE:
+			if t, ok := c.expressedLiteral(e, expected, types.UntypedBool); ok {
+				return t
+			}
 			return types.Typ[types.Bool]
 		case token.NIL:
 			if expected != nil {
 				if _, ok := expected.(*types.Optional); ok {
 					return expected
 				}
+			}
+			if t, ok := c.expressedLiteral(e, expected, types.UntypedNil); ok {
+				return t
 			}
 			return types.Typ[types.UntypedNil]
 		default:
@@ -380,6 +497,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 		}
 		if adopts(expected, types.Typ[types.UntypedString]) {
+			if t, ok := c.expressedLiteral(e, expected, types.UntypedString); ok {
+				return t
+			}
 			return expected
 		}
 		return types.Typ[types.String]
@@ -391,6 +511,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	// `self` and `Self` inside a member: the type the member is
 	// written in, and its metatype.
 	case *ast.SelfExpr:
+		// Inside a closure that captured `[weak self]`, self is that.
+		if v, ok := scope.Lookup("self").(*VarSymbol); ok {
+			c.info.SelfVars[e] = v
+			return v.Type()
+		}
 		if c.currType == nil {
 			c.errorf(e.Pos(), "'self' is only available in a member")
 			return types.Typ[types.Invalid]
@@ -404,10 +529,48 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		c.errorf(e.Pos(), "'super' is only available in a class with a superclass")
 		return types.Typ[types.Invalid]
 
+	// `self.init`, `super.init`, `T.init`: the type's initializers, called
+	// as the type is -- `T.init(x)` is `T(x)` -- which picks among them.
+	case *ast.InitRefExpr:
+		var t types.Type
+		switch e.X.(type) {
+		case *ast.SelfExpr, *ast.SuperExpr:
+			t = c.checkExpr(e.X, nil, scope)
+			if !isInvalid(t) {
+				t = &types.Metatype{Instance: t}
+			}
+		default:
+			t = c.checkExpr(e.X, nil, scope)
+		}
+		return t
+
+	// A key path where a function is wanted -- `people.map(\.name)` -- is
+	// the function that reads through it, `{ $0.name }` (SE-0249).
+	case *ast.KeyPathExpr:
+		if closure := c.keyPathClosure(e); closure != nil && wantsFunctionOfOne(expected) {
+			return c.checkExpr(closure, expected, scope)
+		}
+		return c.keyPathValue(e, expected, scope)
+
 	// `X.self` is the value X names, which for a type is its
 	// metatype; `T.Type` written as an expression is the same thing.
 	case *ast.PostfixSelfExpr:
-		return c.checkExpr(e.X, nil, scope)
+		t := c.checkExpr(e.X, nil, scope)
+		// `[Int].self` and `[String: Int].self`: a collection literal of
+		// types is the collection type.
+		switch u := t.(type) {
+		case *types.Array:
+			if m, ok := u.Elem.(*types.Metatype); ok {
+				return &types.Metatype{Instance: &types.Array{Elem: m.Instance}}
+			}
+		case *types.Dictionary:
+			k, kok := u.Key.(*types.Metatype)
+			v, vok := u.Value.(*types.Metatype)
+			if kok && vok {
+				return &types.Metatype{Instance: &types.Dictionary{Key: k.Instance, Value: v.Instance}}
+			}
+		}
+		return t
 
 	case *ast.TypeExpr:
 		return &types.Metatype{Instance: c.resolveType(e.Type, scope)}
@@ -440,6 +603,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	// declaration to resolve against.
 	case *ast.PrefixExpr:
 		return c.checkPrefix(e, expected, scope)
+
+	case *ast.PostfixExpr:
+		return c.checkPostfix(e, expected, scope)
 
 	// An if or a switch standing where a value goes: its type is the
 	// type its branches agree on.
@@ -545,7 +711,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return c.checkExpr(folded, expected, scope)
 
 	case *ast.BinaryExpr:
-		opName := string(c.file.Slice(e.Op.Lo, e.Op.Hi))
+		opName := e.Op.Text(c.file)
 		if opName == "=" {
 			// `_ = x` discards x. There is nothing on the left to give the
 			// right a type, so x is checked on its own -- which is what lets
@@ -676,7 +842,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// expression it is the range being asked for, whose element
 		// is the same answer one level in.
 		if opName == "..." || opName == "..<" {
-			operandCtx = rangeElement(expected)
+			operandCtx = c.rangeElement(expected)
 		}
 		// A leading-dot member has no type of its own: `k.Code == .escape`
 		// names a case of whatever the other side is, and `x ?? .none`
@@ -705,6 +871,14 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				ctx = lhs
 			}
 			rhs = c.checkExpr(e.Y, ctx, scope)
+		} else if _, isClosure := unparen(e.Y).(*ast.ClosureExpr); isClosure {
+			// A closure operand takes its type from the operator the
+			// other operand chooses.
+			lhs = c.checkExpr(e.X, operandCtx, scope)
+			rhs = c.checkExpr(e.Y, c.closureOperandContext(scope, opName, lhs, 1), scope)
+		} else if _, isClosure := unparen(e.X).(*ast.ClosureExpr); isClosure {
+			rhs = c.checkExpr(e.Y, operandCtx, scope)
+			lhs = c.checkExpr(e.X, c.closureOperandContext(scope, opName, rhs, 0), scope)
 		} else {
 			lhs = c.checkExpr(e.X, operandCtx, scope)
 			rhs = c.checkExpr(e.Y, operandCtx, scope)
@@ -729,6 +903,13 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 
 		switch opName {
+		case "===", "!==":
+			// Whether two references are to one object: each a class
+			// instance, an optional one, AnyObject, or nil.
+			if !isReferenceOperand(lhs) || !isReferenceOperand(rhs) {
+				c.typeErrorf(e.Op.Pos(), "binary operator '%s' cannot be applied to operands of type '%s' and '%s'", opName, lhs, rhs)
+			}
+			return types.Typ[types.Bool]
 		case "==", "!=", "<", "<=", ">", ">=":
 			if (opName == "==" || opName == "!=") &&
 				(isUntypedNil(lhs) && isOptionalType(rhs) ||
@@ -840,7 +1021,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				}
 				return types.Typ[types.Invalid]
 			}
-			return &types.Range{Element: lhs, Closed: opName == "..."}
+			if opName == "..." {
+				return c.rangeOf("ClosedRange", literalDefault(lhs))
+			}
+			return c.rangeOf("Range", literalDefault(lhs))
 
 		default:
 			return lhs
@@ -879,6 +1063,18 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return thenT
 
 	case *ast.CallExpr:
+		// A key path given where a function goes -- `xs.map(\.name)` --
+		// is the closure `{ $0.name }`, and is checked and lowered as one.
+		// No parameter takes a KeyPath yet, so every argument is that.
+		if e.Args != nil {
+			for _, a := range e.Args.Args {
+				if kp, ok := unparen(a.X).(*ast.KeyPathExpr); ok {
+					if cl := c.keyPathClosure(kp); cl != nil {
+						a.X = cl
+					}
+				}
+			}
+		}
 		if t, ok := c.optionalSome(e, expected, scope); ok {
 			return t
 		}
@@ -929,7 +1125,8 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				if t, ok := c.withUnsafeBytesCall(mem, baseType, args, expected, scope); ok {
 					return t
 				}
-				if m, ok := core.LowerCollectionMethod(baseType, name, labels); ok && closuresFit(args, m.Params) {
+				if m, ok := core.LowerCollectionMethod(baseType, name, labels); ok && closuresFit(args, m.Params) &&
+					c.valuesFit(args, m.Params, scope) {
 					if m.Mutating {
 						c.checkMutableReceiver(mem.X, mem.Name.Pos(), "cannot use mutating member on immutable value", scope)
 					}
@@ -948,6 +1145,29 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 		}
 
+		if t, ok := c.coreInitCall(e, scope); ok {
+			return t
+		}
+		// `Array(repeating: v, count: n)`: n copies of v, as
+		// `[T](repeating:count:)` makes them with T what v is.
+		if id, ok := e.Fun.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil && id.Name.Text(c.file) == "Array" &&
+			scope.LookupType("Array") == nil && e.Args != nil && len(e.Args.Args) == 2 &&
+			e.Args.Args[0].Label != nil && e.Args.Args[0].Label.Text(c.file) == "repeating" &&
+			e.Args.Args[1].Label != nil && e.Args.Args[1].Label.Text(c.file) == "count" {
+			var elem types.Type
+			if arr, isArray := expected.(*types.Array); isArray {
+				elem = arr.Elem
+			}
+			vt := literalDefault(c.checkExpr(e.Args.Args[0].X, elem, scope))
+			if nt := c.checkExpr(e.Args.Args[1].X, types.Typ[types.Int], scope); !types.AssignableTo(nt, types.Typ[types.Int]) {
+				c.typeErrorf(e.Args.Args[1].Pos(), "cannot convert value of type '%s' to expected argument type 'Int'", nt)
+			}
+			if isInvalid(vt) {
+				return vt
+			}
+			c.info.ArrayRepeats[e] = true
+			return &types.Array{Elem: vt}
+		}
 		// `Array(xs)`: an array of what a sequence holds. Only an array's
 		// own elements so far -- `Array(s.utf8)`, whose utf8 is one.
 		if id, ok := e.Fun.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil && id.Name.Text(c.file) == "Array" &&
@@ -956,6 +1176,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if _, isArray := t.Underlying().(*types.Array); isArray {
 				c.info.ArrayCopies[e] = t
 				return t
+			}
+			// Any other sequence: its elements, as for-in reads them.
+			if it := c.iteration(t); it != nil {
+				c.info.ArraySequences[e] = it
+				return &types.Array{Elem: it.Element}
 			}
 			if !isInvalid(t) {
 				c.typeErrorf(e.Pos(), "no initializer of 'Array' takes a '%s' yet", t)
@@ -980,9 +1205,18 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 		}
 
+		if t, ok := c.typeOf(e, scope); ok {
+			return t
+		}
 		var calleeWant types.Type
 		if _, ok := e.Fun.(*ast.ImplicitMemberExpr); ok {
 			calleeWant = expected
+		}
+		// `{ ...; return x }()` where an Int is wanted is a closure that
+		// returns one.
+		if _, ok := unparen(e.Fun).(*ast.ClosureExpr); ok && expected != nil && !isInvalid(expected) &&
+			(e.Args == nil || len(e.Args.Args) == 0) && len(e.Trailing) == 0 {
+			calleeWant = &types.Signature{Results: expected}
 		}
 		var calleeType types.Type
 		// `.init(...)` where a T is wanted is T(...).
@@ -1007,7 +1241,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					}
 				}
 			}
-			if chosen := c.resolveOverload(e.Fun, args, scope); chosen != nil {
+			if chosen := c.resolveOverload(e.Fun, args, expected, scope); chosen != nil {
 				sig = chosen
 			} else if mem, ok := e.Fun.(*ast.MemberExpr); ok {
 				if chosen := c.resolveMethodOverload(mem, args, scope); chosen != nil {
@@ -1060,7 +1294,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if st, ok := inst.Underlying().(*types.Struct); ok {
 				// The memberwise initializer is read off the instance's own
 				// properties, which are its arguments already.
-				if sig := st.Memberwise(); sig != nil {
+				// Beside initializers an extension declares, the
+				// memberwise one is the call whose labels are its own.
+				if sig := st.Memberwise(); sig != nil && (len(st.Inits) == 0 || c.labelsFit(sig, args)) {
 					// A memberwise initializer is internal: another
 					// module's struct is made only by one it made public.
 					if c.isImportedType(inst) {
@@ -1073,13 +1309,20 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					c.info.Inits[e] = sig
 					c.checkImportedInit(e, inst, sig)
 					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
-					return inst
+					return initResult(inst, sig)
 				}
 				if sig := c.soleInitializerOfArity(st.Inits, len(args)); sig != nil {
 					c.info.Inits[e] = sig
 					c.checkImportedInit(e, inst, sig)
 					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
-					return inst
+					return initResult(inst, sig)
+				}
+				// Several with the same labels are told apart by type.
+				if sig := c.pickInitializerByType(st.Inits, args, scope); sig != nil {
+					c.info.Inits[e] = sig
+					c.checkImportedInit(e, inst, sig)
+					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+					return initResult(inst, sig)
 				}
 				if len(st.Inits) > 0 {
 					c.typeErrorf(e.Pos(),
@@ -1090,17 +1333,27 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				if sig := c.pickInitializer(cl.Inits, args); sig != nil {
 					c.info.Inits[e] = sig
 					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
-					return inst
+					return initResult(inst, sig)
 				}
 				if sig := c.soleInitializerOfArity(cl.Inits, len(args)); sig != nil {
 					c.info.Inits[e] = sig
 					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
-					return inst
+					return initResult(inst, sig)
 				}
 				c.typeErrorf(e.Pos(), "no initializer of '%s' takes these arguments", inst)
 				return inst
 			}
 			if b, ok := inst.Underlying().(*types.Basic); ok {
+				// An initializer an extension declares -- the core's
+				// `Int32(clamping:)`, or a program's own -- is called as a
+				// struct's is.
+				if bm := c.builtinOf(inst); bm != nil && len(bm.Inits) > 0 {
+					if sig := c.pickInitializerByType(bm.Inits, args, scope); sig != nil {
+						c.info.Inits[e] = sig
+						c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+						return initResult(inst, sig)
+					}
+				}
 				if t, handled := c.basicInit(e, b, inst, args, scope); handled {
 					return t
 				}
@@ -1201,6 +1454,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if o, ok := base.(*types.Optional); ok {
 				base = o.Wrapped
 			}
+			if t, ok := c.integerBoundNamed(e, name, &types.Metatype{Instance: base}); ok {
+				return t
+			}
 			if t := c.lookupMember(&types.Metatype{Instance: base}, name); t != nil {
 				if _, isFunc := t.(*types.Signature); !isFunc && types.AssignableTo(t, base) {
 					return t
@@ -1247,6 +1503,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if t, ok := c.integerBound(e, baseType); ok {
 			return t
 		}
+		if t, ok := c.memoryLayout(e, baseType); ok {
+			return t
+		}
 		memberName := e.Name.Text(c.file)
 		if _, chained := e.X.(*ast.OptionalExpr); !chained {
 			baseType = c.unwrapImplicit(e.X, baseType)
@@ -1280,6 +1539,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return types.Typ[types.Invalid]
 
 	case *ast.SubscriptExpr:
+		// `x[keyPath: k]`, which every type has: what k reads from an x.
+		if len(e.Args) == 1 && e.Args[0].Label != nil && e.Args[0].Label.Text(c.file) == "keyPath" {
+			if t, ok := c.keyPathSubscript(e, scope); ok {
+				return t
+			}
+		}
 		baseType := c.checkExpr(e.X, nil, scope)
 		var index, fallback types.Type
 		var result types.Type = types.Typ[types.Invalid]
@@ -1288,7 +1553,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			// `a[lo..<hi]` is the elements between, as an ArraySlice.
 			if len(e.Args) == 1 {
 				at := c.checkExpr(e.Args[0].X, types.Typ[types.Int], scope)
-				if _, isRange := at.Underlying().(*types.Range); isRange {
+				if _, _, isRange := c.info.AnyRangeOf(at); isRange {
 					if s := c.arraySliceOf(b.Elem, scope); s != nil {
 						return s
 					}
@@ -1491,6 +1756,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 			return inner
 		}
+		// `Int?` written where a value goes is the type Optional<Int>.
+		if meta, ok := inner.(*types.Metatype); ok {
+			return &types.Metatype{Instance: &types.Optional{Wrapped: meta.Instance}}
+		}
 		return &types.Optional{Wrapped: inner}
 
 	// An operator named as a value -- `reduce(0, +)` -- is the operator
@@ -1501,6 +1770,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	case *ast.ClosureExpr:
 		closureScope := NewScope(scope, e.Pos(), e.End())
 		c.info.Scopes[e] = closureScope
+		if e.Sig != nil && e.Sig.Captures != nil {
+			for _, item := range e.Sig.Captures.Items {
+				c.checkCaptureItem(item, scope, closureScope)
+			}
+		}
 
 		var expSig *types.Signature
 		if expected != nil {
@@ -1520,25 +1794,29 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			for i, p := range e.Sig.Params.Params {
 				name := p.Name.Text(c.file)
 				var paramType types.Type
+				ownership := types.DefaultOwnership
 				if p.Type != nil {
 					paramType = c.resolveType(p.Type, scope)
 				} else if expSig != nil && i < len(expSig.Params) {
+					// An `inout` parameter of the function wanted is one
+					// of the closure's too: `{ acc, x in acc += x }`.
 					paramType = expSig.Params[i].Type
+					ownership = expSig.Params[i].Ownership
 				}
 				if paramType == nil {
 					paramType = types.Typ[types.Invalid]
 				}
-				params = append(params, &types.Param{Name: name, Type: paramType})
-				v := NewVar(name, paramType, p.Name.Pos(), true, types.DefaultOwnership)
+				params = append(params, &types.Param{Name: name, Type: paramType, Ownership: ownership})
+				v := NewVar(name, paramType, p.Name.Pos(), ownership != types.InOut, ownership)
 				closureScope.Insert(v)
 				c.info.Defs[p.Name] = v
 			}
 		} else if expSig != nil {
 			for i, p := range expSig.Params {
 				shorthandName := fmt.Sprintf("$%d", i)
-				v := NewVar(shorthandName, p.Type, e.Pos(), true, types.DefaultOwnership)
+				v := NewVar(shorthandName, p.Type, e.Pos(), p.Ownership != types.InOut, p.Ownership)
 				closureScope.Insert(v)
-				params = append(params, &types.Param{Name: shorthandName, Type: p.Type})
+				params = append(params, &types.Param{Name: shorthandName, Type: p.Type, Ownership: p.Ownership})
 			}
 		}
 
@@ -1672,10 +1950,10 @@ func (c *checker) foldSign(e *ast.PrefixExpr, op string) {
 	}
 }
 
-// rangeElement returns the element type if expected is a Range, or expected itself.
-func rangeElement(expected types.Type) types.Type {
-	if r, ok := expected.(*types.Range); ok {
-		return r.Element
+// rangeElement returns the bound type if expected is a range, or expected itself.
+func (c *checker) rangeElement(expected types.Type) types.Type {
+	if bound, _, ok := c.info.AnyRangeOf(expected); ok {
+		return bound
 	}
 	return expected
 }
@@ -1717,6 +1995,68 @@ func (c *checker) pickInitializer(inits []*types.Signature, args []*ast.CallArg)
 	return found
 }
 
+// initResult is what a call of the initializer sig makes: inst, or an
+// optional of it where the initializer is failable.
+func initResult(inst types.Type, sig *types.Signature) types.Type {
+	if sig != nil && sig.Failable {
+		return &types.Optional{Wrapped: inst}
+	}
+	return inst
+}
+
+// pickInitializerByType is pickInitializer for initializers that share
+// their labels and differ by type -- the core's `Int(bitPattern: UInt)`
+// beside a pointer's, `Int(exactly: Double)` beside `Int(exactly: Float)`:
+// the labels narrow first, then the arguments' types, then Swift's
+// preference for a literal as the type it is alone. It is nil when none
+// fits, or when several still do.
+func (c *checker) pickInitializerByType(inits []*types.Signature, args []*ast.CallArg, scope *Scope) *types.Signature {
+	var labelled []*types.Signature
+	for _, sig := range inits {
+		if sig != nil && c.labelsFit(sig, args) {
+			labelled = append(labelled, sig)
+		}
+	}
+	// One that fits by its labels is still checked by type: String(i) is
+	// not the String(_: Character) an extension declares, but the
+	// built-in conversion of an Int.
+	if len(labelled) == 0 {
+		return nil
+	}
+	quiet := len(c.info.Diagnostics)
+	argTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		argTypes[i] = c.checkExpr(arg.X, nil, scope)
+	}
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	var fits []*types.Signature
+	for _, sig := range labelled {
+		if c.sigFits(sig, args, argTypes, c.labelFits) {
+			fits = append(fits, sig)
+		}
+	}
+	if len(fits) > 1 {
+		if keep := c.byLiteralDefaults(fits, args); len(keep) == 1 {
+			return fits[keep[0]]
+		}
+		// Swift's last preference: one that cannot fail, as
+		// `UnicodeScalar(65)` is its init(_: UInt8) beside init?(_: UInt32).
+		var sure []*types.Signature
+		for _, sig := range fits {
+			if !sig.Failable {
+				sure = append(sure, sig)
+			}
+		}
+		if len(sure) == 1 {
+			return sure[0]
+		}
+	}
+	if len(fits) != 1 {
+		return nil
+	}
+	return fits[0]
+}
+
 // labelsFit reports whether arguments fit a signature by their labels
 // alone: in order, leaving out a parameter with a default where nothing is
 // written for it, as `init(seconds: Int64, nanos: Int64 = 0)` is called
@@ -1727,6 +2067,15 @@ func (c *checker) labelsFit(sig *types.Signature, args []*ast.CallArg) bool {
 	}
 	next := 0
 	for _, p := range sig.Params {
+		if p.Variadic {
+			for first := true; next < len(args); first = false {
+				if (first && !c.labelFits(args[next], p)) || (!first && args[next].Label != nil) {
+					break
+				}
+				next++
+			}
+			continue
+		}
 		if next < len(args) && c.labelFits(args[next], p) {
 			next++
 			continue
@@ -1851,6 +2200,22 @@ func (c *checker) operatorReference(e *ast.OperatorExpr, expected types.Type, sc
 	}
 	for _, ch := range c.operatorChoices(scope, op, operands) {
 		sig := ch.sig()
+		// A generic one, specialized for the operands: `sorted(by: <)`
+		// over tuples is Swift's `<` on tuples of their types.
+		if ch.fn != nil && len(sig.TypeParams) > 0 {
+			subst, ok := c.inferOperator(sig, operands)
+			if !ok {
+				continue
+			}
+			ch.subst = subst
+			c.info.Operators[e] = ch.fn
+			spec := Specialization{Params: sig.TypeParams}
+			for _, p := range sig.TypeParams {
+				spec.Args = append(spec.Args, subst[p])
+			}
+			c.info.OperatorSpecs[e] = spec
+			return ch.sig()
+		}
 		fits := true
 		for i, t := range operands {
 			if t == nil || isInvalid(t) {
@@ -1882,6 +2247,25 @@ func closuresFit(args []*ast.CallArg, params []*types.Param) bool {
 			return false
 		}
 		if _, isFunc := params[i].Type.Underlying().(*types.Signature); !isFunc {
+			return false
+		}
+	}
+	return true
+}
+
+// valuesFit reports whether the arguments that are not closures convert
+// to their parameters, checked without a trace: the runtime's
+// `append(_: String)` is not the call `t.append(c)` with c a Character,
+// which an extension's append(_: Character) is.
+func (c *checker) valuesFit(args []*ast.CallArg, params []*types.Param, scope *Scope) bool {
+	for i, a := range args {
+		if i >= len(params) {
+			return false
+		}
+		if _, isClosure := unparen(a.X).(*ast.ClosureExpr); isClosure {
+			continue
+		}
+		if !c.fitsQuietly(a.X, params[i].Type, scope) {
 			return false
 		}
 	}
@@ -1963,6 +2347,15 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 		}
 		t = cl.Superclass
 	}
+	// What an extension of a built-in type that is not generic -- String
+	// -- declares.
+	if b := c.builtinOf(recv); b != nil && len(b.Params) == 0 {
+		for _, sub := range b.Subscripts {
+			if sub != nil && sub.IsStatic == static {
+				candidates = append(candidates, &SubscriptRef{Recv: b.Type, Subscript: sub})
+			}
+		}
+	}
 	if len(candidates) == 0 {
 		switch recv.Underlying().(type) {
 		case *types.Struct, *types.Class, *types.Enum:
@@ -2031,8 +2424,21 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 		}
 		return types.Typ[types.Invalid], true
 	}
+	// A generic type's subscript is its instance's: Box<Int>'s subscript
+	// answers an Int where it was declared answering a T.
+	instSub := func(t types.Type) types.Type { return t }
+	if inst := genericInstanceOf(recv); inst != nil {
+		params := typeParamsOf(inst.Base)
+		subst := make(map[*types.TypeParam]types.Type, len(params))
+		for i, p := range params {
+			if i < len(inst.Args) {
+				subst[p] = inst.Args[i]
+			}
+		}
+		instSub = func(t types.Type) types.Type { return types.Substitute(t, subst) }
+	}
 	for i, arg := range e.Args {
-		want := chosen.Subscript.Params[i].Type
+		want := instSub(chosen.Subscript.Params[i].Type)
 		got := c.checkExpr(arg.X, want, scope)
 		if t, adopted := c.adopt(arg.X, want); adopted {
 			got = t
@@ -2042,7 +2448,7 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 		}
 	}
 	c.info.Subscripts[e] = chosen
-	return chosen.Subscript.Result, true
+	return instSub(chosen.Subscript.Result), true
 }
 
 // checkSubscriptWrite says what is wrong with writing through a declared
@@ -2243,8 +2649,17 @@ func isArrayType(t types.Type) bool {
 // integerBound is `Int64.max` and the other integer types' min and max:
 // constants of the type, recorded as values so they lower as literals do.
 func (c *checker) integerBound(e *ast.MemberExpr, base types.Type) (types.Type, bool) {
+	if e.Name == nil {
+		return nil, false
+	}
+	return c.integerBoundNamed(e, e.Name.Text(c.file), base)
+}
+
+// integerBoundNamed is integerBound for any expression naming one: a
+// member expression, or `.max` where the context says which integer.
+func (c *checker) integerBoundNamed(e ast.Expr, name string, base types.Type) (types.Type, bool) {
 	meta, ok := base.(*types.Metatype)
-	if !ok || e.Name == nil {
+	if !ok {
 		return nil, false
 	}
 	b, ok := meta.Instance.Underlying().(*types.Basic)
@@ -2265,8 +2680,13 @@ func (c *checker) integerBound(e *ast.MemberExpr, base types.Type) (types.Type, 
 		return nil, false
 	}
 	signed := b.Info()&types.IsUnsigned == 0
+	if name == "bitWidth" {
+		c.info.Values[e] = Value{Kind: IntValue, Int: uint64(bits)}
+		c.info.Types[e] = types.Typ[types.Int]
+		return types.Typ[types.Int], true
+	}
 	var v uint64
-	switch e.Name.Text(c.file) {
+	switch name {
 	case "max":
 		switch {
 		case signed:
@@ -2287,6 +2707,90 @@ func (c *checker) integerBound(e *ast.MemberExpr, base types.Type) (types.Type, 
 	c.info.Values[e] = Value{Kind: IntValue, Int: v}
 	c.info.Types[e] = meta.Instance
 	return meta.Instance, true
+}
+
+// typeOf is `type(of: x)`: the metatype of x's type, which Swift's
+// standard library declares with a signature no Swift function can
+// have -- its result is the dynamic type of its argument.
+func (c *checker) typeOf(e *ast.CallExpr, scope *Scope) (types.Type, bool) {
+	id, ok := e.Fun.(*ast.IdentExpr)
+	if !ok || id.Name == nil || id.Name.Text(c.file) != "type" || scope.Lookup("type") != nil {
+		return nil, false
+	}
+	if e.Args == nil || len(e.Args.Args) != 1 || e.Args.Args[0].Label == nil ||
+		e.Args.Args[0].Label.Text(c.file) != "of" {
+		return nil, false
+	}
+	t := c.checkExpr(e.Args.Args[0].X, nil, scope)
+	if d := literalDefault(t); d != t {
+		t = d
+		c.info.Types[e.Args.Args[0].X] = t
+	}
+	c.info.TypeOfs[e] = t
+	out := &types.Metatype{Instance: t}
+	c.info.Types[e] = out
+	return out, true
+}
+
+// isReferenceOperand reports whether t can be an operand of === : a class,
+// AnyObject or an existential of a class-bound protocol, optionally, or nil.
+func isReferenceOperand(t types.Type) bool {
+	if isUntypedNil(t) {
+		return true
+	}
+	if o, ok := t.(*types.Optional); ok {
+		t = o.Wrapped
+	}
+	if t == nil {
+		return false
+	}
+	if _, ok := t.Underlying().(*types.Class); ok {
+		return true
+	}
+	return types.ConformsTo(t, types.AnyObjectProtocol)
+}
+
+// literalDefault is the type a literal is where nothing says otherwise:
+// an integer an Int, a float a Double. Any other type is itself.
+func literalDefault(t types.Type) types.Type {
+	b, ok := t.(*types.Basic)
+	if !ok {
+		return t
+	}
+	switch b.Kind() {
+	case types.UntypedInt:
+		return types.Typ[types.Int]
+	case types.UntypedFloat:
+		return types.Typ[types.Double]
+	case types.UntypedString:
+		return types.Typ[types.String]
+	case types.UntypedBool:
+		return types.Typ[types.Bool]
+	}
+	return t
+}
+
+// memoryLayout is `MemoryLayout<T>.size`, `.stride` or `.alignment`: an
+// Int the lowering works out once T is known.
+func (c *checker) memoryLayout(e *ast.MemberExpr, base types.Type) (types.Type, bool) {
+	meta, ok := base.(*types.Metatype)
+	if !ok || e.Name == nil {
+		return nil, false
+	}
+	inst, ok := meta.Instance.(*types.GenericInstance)
+	if !ok || !c.info.CoreTypes[inst.Base] || len(inst.Args) != 1 {
+		return nil, false
+	}
+	if en, ok := inst.Base.Underlying().(*types.Enum); !ok || en.Name != "MemoryLayout" {
+		return nil, false
+	}
+	switch kind := e.Name.Text(c.file); kind {
+	case "size", "stride", "alignment":
+		c.info.Layouts[e] = Layout{Of: inst.Args[0], Kind: kind}
+		c.info.Types[e] = types.Typ[types.Int]
+		return types.Typ[types.Int], true
+	}
+	return nil, false
 }
 
 // isImportedType reports whether another module declared t.
@@ -2393,12 +2897,12 @@ func chainSpine(e ast.Expr) ast.Expr {
 // chainRoot reports whether e is the outermost step of an optional chain:
 // a member, call, subscript or force whose spine holds an `a?`, and that is
 // not itself a step of a longer chain.
-func (c *checker) chainRoot(e ast.Expr) bool {
-	switch e.(type) {
+func (c *checker) chainRoot(e ast.Expr, scope *Scope) bool {
+	switch o := e.(type) {
 	case *ast.MemberExpr, *ast.CallExpr, *ast.SubscriptExpr, *ast.ForceExpr:
 	case *ast.OptionalExpr:
 		// A bare `x?` -- `s? += "c"` -- is a chain of one step.
-		return !c.inChain[e] && !c.info.ChainRoots[e]
+		return !c.inChain[e] && !c.info.ChainRoots[e] && !c.optionalOfType(o, scope)
 	default:
 		return false
 	}
@@ -2406,11 +2910,27 @@ func (c *checker) chainRoot(e ast.Expr) bool {
 		return false
 	}
 	for x := chainSpine(e); x != nil; x = chainSpine(x) {
-		if _, ok := x.(*ast.OptionalExpr); ok {
-			return true
+		if o, ok := x.(*ast.OptionalExpr); ok {
+			return !c.optionalOfType(o, scope)
 		}
 	}
 	return false
+}
+
+// optionalOfType reports whether `X?` is a type -- `Int?.none` is
+// Optional<Int>'s none -- rather than a step of a chain: X names a type
+// and no value.
+func (c *checker) optionalOfType(e *ast.OptionalExpr, scope *Scope) bool {
+	id, ok := unparen(e.X).(*ast.IdentExpr)
+	if !ok || id.Name == nil {
+		return false
+	}
+	name := id.Name.Text(c.file)
+	if sym := c.lookupValue(scope, name); sym != nil {
+		_, isType := sym.(*TypeNameSymbol)
+		return isType
+	}
+	return scope.LookupType(name) != nil || types.LookupUniverse(name) != nil
 }
 
 // markChain marks every step below a chain's root as part of it.
@@ -2431,6 +2951,15 @@ func (c *checker) markChain(root ast.Expr) {
 // expression position, where nothing of the program's own has that name:
 // `Optional<Int>`, or the optional wanted for a bare `Optional`.
 func (c *checker) optionalNamed(e ast.Expr, expected types.Type, scope *Scope) (*types.Optional, bool) {
+	// `Int?`, the same optional spelled short.
+	if o, ok := e.(*ast.OptionalExpr); ok && c.optionalOfType(o, scope) {
+		if meta, ok := c.checkExpr(o, nil, scope).(*types.Metatype); ok {
+			if opt, ok := meta.Instance.(*types.Optional); ok {
+				return opt, true
+			}
+		}
+		return nil, false
+	}
 	id, ok := e.(*ast.IdentExpr)
 	if !ok || id.Name == nil || id.Name.Text(c.file) != "Optional" ||
 		scope.LookupType("Optional") != nil || c.lookupValue(scope, "Optional") != nil {
@@ -2502,4 +3031,320 @@ func (c *checker) optionalSome(e *ast.CallExpr, expected types.Type, scope *Scop
 	c.info.Types[e.Fun] = &types.Metatype{Instance: opt}
 	c.info.OptionalSomes[e] = opt
 	return opt, true
+}
+
+// expressedLiteral is the type a literal of this kind is where expected is
+// a type expressible by it -- one that conforms to ExpressibleByIntegerLiteral
+// and has init(integerLiteral:), and so on -- or an optional of one, which
+// the value made is wrapped in. It records the initializer that makes it.
+func (c *checker) expressedLiteral(e ast.Expr, expected types.Type, kind types.BasicKind) (types.Type, bool) {
+	target := expected
+	if o, ok := target.(*types.Optional); ok && kind != types.UntypedNil {
+		target = o.Wrapped
+	}
+	if target == nil {
+		return nil, false
+	}
+	var inits []*types.Signature
+	switch u := target.Underlying().(type) {
+	case *types.Struct:
+		inits = u.Inits
+	case *types.Class:
+		inits = u.Inits
+	default:
+		return nil, false
+	}
+	for _, p := range types.LiteralProtocols(kind) {
+		if !types.ConformsToNamed(target, p) {
+			continue
+		}
+		label := literalLabel(p)
+		for _, sig := range inits {
+			if sig != nil && len(sig.Params) == 1 && sig.Params[0].Label == label {
+				c.info.LiteralInits[e] = &LiteralInit{Type: target, Init: sig}
+				return expected, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// literalLabel is the argument label of the initializer a literal protocol
+// requires: integerLiteral for ExpressibleByIntegerLiteral.
+func literalLabel(protocol string) string {
+	name := strings.TrimSuffix(strings.TrimPrefix(protocol, "ExpressibleBy"), "Literal")
+	if name == "" {
+		return ""
+	}
+	if name == "Integer" || name == "Float" || name == "Boolean" || name == "String" || name == "Nil" {
+		return strings.ToLower(name) + "Literal"
+	}
+	return strings.ToLower(name[:1]) + name[1:] + "Literal"
+}
+
+// checkCaptureItem declares what one item of a closure's capture list
+// binds: `[x]` a constant x of the closure's, holding what x holds when
+// the closure is made, and `[y = e]` a constant y holding e. `[self]`
+// binds nothing: the closure captures self as it would anyway.
+func (c *checker) checkCaptureItem(item *ast.CaptureItem, outer, closure *Scope) {
+	var name *ast.Ident
+	var value ast.Expr
+	switch x := item.X.(type) {
+	case *ast.SelfExpr:
+		t := c.checkExpr(x, nil, outer)
+		// `[weak self]` and `[unowned self]` bind a self of the closure's
+		// own: an optional for a weak one.
+		if item.Spec != nil && item.Spec.Name != nil && !isInvalid(t) {
+			if item.Spec.Name.Text(c.file) == "weak" {
+				t = &types.Optional{Wrapped: t}
+			}
+			sym := NewVar("self", t, x.Pos(), true, types.DefaultOwnership)
+			closure.Insert(sym)
+			c.info.Captures[item] = &Capture{Sym: sym, Value: x}
+		}
+		return
+	case *ast.IdentExpr:
+		name, value = x.Name, x
+	case *ast.SequenceExpr:
+		if len(x.Elements) >= 3 {
+			id, isIdent := x.Elements[0].(*ast.IdentExpr)
+			op, isOp := x.Elements[1].(*ast.OperatorExpr)
+			if isIdent && isOp && op.Text(c.file) == "=" {
+				name = id.Name
+				value = x.Elements[2]
+				if len(x.Elements) > 3 {
+					value = &ast.SequenceExpr{Span: ast.Span{Lo: x.Elements[2].Pos(), Hi: x.End()}, Elements: x.Elements[2:]}
+				}
+			}
+		}
+	}
+	if name == nil || value == nil {
+		c.errorf(item.Pos(), "expected 'weak', 'unowned', or no specifier in capture list")
+		return
+	}
+	t := c.checkExpr(value, nil, outer)
+	if item.Spec != nil && item.Spec.Name != nil && item.Spec.Name.Text(c.file) == "weak" {
+		if _, isOpt := t.(*types.Optional); !isOpt {
+			t = &types.Optional{Wrapped: t}
+		}
+	}
+	sym := NewVar(name.Text(c.file), literalDefault(t), name.Pos(), true, types.DefaultOwnership)
+	closure.Insert(sym)
+	c.info.Captures[item] = &Capture{Sym: sym, Value: value}
+}
+
+// coreInits are the initializers of the built-in generic types the core
+// writes as generic functions, by type and argument labels ("" for none).
+var coreInits = map[string]string{
+	"Dictionary(grouping:by:)":          "_dictionaryGrouping",
+	"Dictionary(grouping:_:)":           "_dictionaryGrouping",
+	"Dictionary(_:uniquingKeysWith:)":   "_dictionaryUniquing",
+	"Dictionary(uniqueKeysWithValues:)": "_dictionaryUniqueKeys",
+}
+
+// coreInitCall checks `Dictionary(grouping: xs, by: f)` and the like as
+// the call of the core function that makes one, whose type arguments the
+// arguments infer as for any generic call.
+func (c *checker) coreInitCall(e *ast.CallExpr, scope *Scope) (types.Type, bool) {
+	id, ok := e.Fun.(*ast.IdentExpr)
+	if !ok || id.Name == nil || id.Args != nil || e.Args == nil {
+		return nil, false
+	}
+	name := id.Name.Text(c.file)
+	if scope.LookupType(name) != nil {
+		return nil, false
+	}
+	key := name + "("
+	for _, a := range e.Args.Args {
+		if a.Label != nil {
+			key += a.Label.Text(c.file) + ":"
+		} else {
+			key += "_:"
+		}
+	}
+	key += ")"
+	fn, ok := coreInits[key]
+	// Set(xs) of an array, or of a String's Characters.
+	if key == "Set(_:)" {
+		quiet := len(c.info.Diagnostics)
+		at := c.checkExpr(e.Args.Args[0].X, nil, scope)
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+		switch {
+		case isArrayType(at):
+			fn, ok = "_setOfArray", true
+		case isString(at):
+			fn, ok = "_setOfString", true
+		}
+	}
+	if !ok || c.modules["Swift"] == nil {
+		return nil, false
+	}
+	sym, ok := c.modules["Swift"].Lookup(fn).(*FuncSymbol)
+	if !ok {
+		return nil, false
+	}
+	fun := &ast.IdentExpr{Span: id.Span, Name: &ast.Ident{Span: id.Name.Span}}
+	call := &ast.CallExpr{Span: e.Span, Fun: fun, Args: &ast.CallArgs{Span: e.Args.Span}}
+	for _, a := range e.Args.Args {
+		call.Args.Args = append(call.Args.Args, &ast.CallArg{Span: a.Span, X: a.X})
+	}
+	c.info.Uses[fun.Name] = sym
+	sig := c.checkCallArguments(call, sym.Signature(), call.Args.Args, scope)
+	c.info.Types[fun] = sig
+	c.info.Types[call] = sig.Results
+	c.info.CoreCalls[e] = call
+	return sig.Results, true
+}
+
+// wantsFunctionOfOne reports whether expected is a function of one
+// argument, or an optional of one.
+func wantsFunctionOfOne(expected types.Type) bool {
+	if expected == nil {
+		return false
+	}
+	t := expected.Underlying()
+	if o, ok := t.(*types.Optional); ok && o.Wrapped != nil {
+		t = o.Wrapped.Underlying()
+	}
+	sig, ok := t.(*types.Signature)
+	return ok && len(sig.Params) == 1
+}
+
+// keyPathClosure is the closure `{ $0.a.b }` that key path `\.a.b` reads
+// as, made once: each component a step from the one before, starting at
+// the closure's argument. A key path whose root is written -- `\T.a` --
+// reads the same way; the closure's argument is that T.
+func (c *checker) keyPathClosure(e *ast.KeyPathExpr) *ast.ClosureExpr {
+	if cl := c.info.KeyPathClosures[e]; cl != nil {
+		return cl
+	}
+	x := keyPathSteps(e)
+	if x == nil {
+		return nil
+	}
+	cl := &ast.ClosureExpr{Span: e.Span, Lbrace: e.Pos(), Rbrace: e.End(),
+		Stmts: []ast.Stmt{&ast.ExprStmt{Span: e.Span, X: x}}}
+	c.info.KeyPathClosures[e] = cl
+	return cl
+}
+
+// keyPathSteps is `$0.a.b` for key path `\.a.b`: each component a step
+// from the one before, starting at a `$0` of its own -- made anew each
+// time, as each closure that reads through the path has its own $0.
+func keyPathSteps(e *ast.KeyPathExpr) ast.Expr {
+	at := ast.Span{Lo: e.Pos(), Hi: e.Pos()}
+	var x ast.Expr = &ast.IdentExpr{Span: at, Name: &ast.Ident{Span: at, Synth: "$0"}}
+	for _, k := range e.Components {
+		span := ast.Span{Lo: e.Pos(), Hi: k.End()}
+		switch {
+		case k.Name != nil:
+			x = &ast.MemberExpr{Span: span, X: x, Dot: k.Dot, Name: k.Name}
+			if k.Args != nil {
+				x = &ast.CallExpr{Span: span, Fun: x, Args: k.Args}
+			}
+		case k.Sub != nil:
+			x = &ast.SubscriptExpr{Span: span, X: x, Lsquare: k.Sub.Lsquare, Args: k.Sub.Args, Rsquare: k.Sub.Rsquare}
+		case k.Question.IsValid():
+			x = &ast.OptionalExpr{Span: span, X: x, Question: k.Question}
+		case k.Exclaim.IsValid():
+			x = &ast.ForceExpr{Span: span, X: x, Exclaim: k.Exclaim}
+		case k.Self.IsValid():
+		default:
+			return nil
+		}
+	}
+	return x
+}
+
+// coreKeyPath is core's KeyPath, the type of a key path used as a value.
+func (c *checker) coreKeyPath() types.Type {
+	core := c.modules["Swift"]
+	if core == nil {
+		return nil
+	}
+	if tn, ok := core.elems["KeyPath"].(*TypeNameSymbol); ok {
+		return tn.Type()
+	}
+	return nil
+}
+
+// keyPathValue types a key path used as a value -- `\Person.name`, or
+// `\.name` where a KeyPath of a known root is wanted -- as the
+// KeyPath<Root, Value> made of the closure reading through it,
+// `{ $0.name }`, and the one writing through it, `{ $0.name = $1 }`,
+// where that one checks: every step can be written.
+func (c *checker) keyPathValue(e *ast.KeyPathExpr, expected types.Type, scope *Scope) types.Type {
+	kp := c.coreKeyPath()
+	if kp == nil {
+		c.errorf(e.Pos(), "cannot use a key path other than as a function yet")
+		return types.Typ[types.Invalid]
+	}
+	var root types.Type
+	if e.Type != nil {
+		root = c.resolveType(e.Type, scope)
+	} else if gi, ok := expected.(*types.GenericInstance); ok && gi.Base == kp && len(gi.Args) == 2 {
+		root = gi.Args[0]
+	}
+	if root == nil || isInvalid(root) {
+		c.errorf(e.Pos(), "cannot infer key path type from context; consider explicitly specifying a root type")
+		return types.Typ[types.Invalid]
+	}
+	get := c.keyPathClosure(e)
+	if get == nil {
+		c.errorf(e.Pos(), "cannot use this key path yet")
+		return types.Typ[types.Invalid]
+	}
+	sig, ok := c.checkExpr(get, &types.Signature{Params: []*types.Param{{Type: root}}}, scope).(*types.Signature)
+	if !ok || sig.Results == nil || isInvalid(sig.Results) {
+		return types.Typ[types.Invalid]
+	}
+	value := sig.Results
+	kv := &KeyPathValue{Type: &types.GenericInstance{Base: kp, Args: []types.Type{root, value}}, Get: get}
+	// The writing one, where it checks.
+	body := keyPathSteps(e)
+	at := ast.Span{Lo: e.Pos(), Hi: e.Pos()}
+	assign := &ast.BinaryExpr{Span: e.Span, X: body,
+		Op: &ast.OperatorExpr{Span: at, Kind: token.ASSIGN, Synth: "="},
+		Y:  &ast.IdentExpr{Span: at, Name: &ast.Ident{Span: at, Synth: "$1"}}}
+	set := &ast.ClosureExpr{Span: e.Span, Lbrace: e.Pos(), Rbrace: e.End(),
+		Stmts: []ast.Stmt{&ast.ExprStmt{Span: e.Span, X: assign}}}
+	quiet := len(c.info.Diagnostics)
+	want := &types.Signature{Params: []*types.Param{{Type: root, Ownership: types.InOut}, {Type: value}},
+		Results: types.Typ[types.Void]}
+	if _, ok := c.checkExpr(set, want, scope).(*types.Signature); ok && len(c.info.Diagnostics) == quiet {
+		kv.Set = set
+	}
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	c.info.KeyPathValues[e] = kv
+	return kv.Type
+}
+
+// keyPathSubscript types `x[keyPath: k]` as the Value of k's KeyPath,
+// whose Root is x's type.
+func (c *checker) keyPathSubscript(e *ast.SubscriptExpr, scope *Scope) (types.Type, bool) {
+	kp := c.coreKeyPath()
+	if kp == nil {
+		return nil, false
+	}
+	base := c.checkExpr(e.X, nil, scope)
+	if isInvalid(base) {
+		return base, true
+	}
+	var want types.Type
+	if _, literal := unparen(e.Args[0].X).(*ast.KeyPathExpr); literal {
+		want = &types.GenericInstance{Base: kp, Args: []types.Type{base, types.Typ[types.Invalid]}}
+	}
+	kt := c.checkExpr(e.Args[0].X, want, scope)
+	gi, ok := kt.(*types.GenericInstance)
+	if !ok || gi.Base != kp || len(gi.Args) != 2 {
+		if !isInvalid(kt) {
+			c.typeErrorf(e.Args[0].X.Pos(), "cannot convert value of type '%s' to expected argument type 'KeyPath<%s, _>'", kt, base)
+		}
+		return types.Typ[types.Invalid], true
+	}
+	if !types.Identical(gi.Args[0], base) {
+		c.typeErrorf(e.Args[0].X.Pos(), "key path with root type '%s' cannot be applied to a base of type '%s'", gi.Args[0], base)
+	}
+	c.info.KeyPathReads[e] = kt
+	return gi.Args[1], true
 }

@@ -114,27 +114,45 @@ func main() -> Int32 {
 	}
 }
 
-// TestASubclassInitializerIsRefused: a class's initializer is two
+// TestASubclassInitializerRunsTheOneAbove: a class's initializer is two
 // functions rather than one -- an allocating entry point and an
-// initializing one -- and both are emitted. What is not is a
-// subclass's, which has to run the initializer above it on the same
-// instance, and `super.init` is not lowered.
-func TestASubclassInitializerIsRefused(t *testing.T) {
-	_, diags := generate(t, "main", `
-class Base { var n: Int32 = 1 }
+// initializing one. A subclass's initializing entry fills in its own
+// properties and then runs its superclass's initializing entry on the
+// same instance, upcast: here Base's init(), run implicitly at the end,
+// as Swift runs it where the body calls no super.init. A superclass that
+// declares no initializer has no entry to run; its properties get their
+// defaults from the subclass's.
+func TestASubclassInitializerRunsTheOneAbove(t *testing.T) {
+	out, diags := generate(t, "main", `
+class Base {
+    var n: Int32
+    init() { n = 1 }
+}
 final class Box: Base {
     var m: Int32
     init(m: Int32) { self.m = m }
 }
+class Plain { var k: Int32 = 5 }
+final class Sub: Plain {
+    var j: Int32
+    init(j: Int32) { self.j = j }
+}
 func main() -> Int32 {
     let b = Box(m: 3)
-    return b.m
+    return b.m + Sub(j: 1).k
 }`)
-	if len(diags) == 0 {
-		t.Fatal("a subclass's initializer was lowered")
+	if len(diags) > 0 {
+		t.Fatalf("a subclass's initializer was refused: %s", diags[0].Message)
 	}
-	if msg := diags[0].Message; !strings.Contains(msg, "superclass") {
-		t.Errorf("said %q, want it to say the superclass is what is missing", msg)
+	body := bodyOf(t, out, "$s4main3BoxC1mACs5Int32V_tcfc")
+	for _, want := range []string{"upcast", "@$s4main4BaseCACycfc"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Box.init(m:) does not run Base.init() on its instance (no %q):\n%s", want, body)
+		}
+	}
+	body = bodyOf(t, out, "$s4main3SubC1jACs5Int32V_tcfc")
+	if !strings.Contains(body, "#Plain.k") {
+		t.Errorf("Sub.init(j:) does not give Plain.k its default:\n%s", body)
 	}
 }
 

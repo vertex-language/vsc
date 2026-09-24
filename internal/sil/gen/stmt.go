@@ -48,6 +48,10 @@ func (g *gen) stmtBody(s ast.Stmt) {
 		}
 
 	case *ast.ExprStmt:
+		if to, ok := g.branchValues[n]; ok {
+			g.branchValue(n, to)
+			break
+		}
 		g.exprStmt(n.X)
 
 	case *ast.ReturnStmt:
@@ -93,6 +97,9 @@ func (g *gen) stmtBody(s ast.Stmt) {
 	case *ast.BreakStmt:
 		g.breakStmt(n)
 
+	case *ast.FallthroughStmt:
+		g.fallthroughStmt(n)
+
 	case *ast.ContinueStmt:
 		g.continueStmt(n)
 
@@ -122,8 +129,15 @@ func (g *gen) exprStmt(e ast.Expr) {
 			return
 		}
 	}
+	// The unused result -- the element `list.removeFirst()` hands back --
+	// ends with the statement, as Swift ends it, and not with the block.
 	if v := g.expr(e); v != nil {
-		g.destroyLater(v)
+		if v.Ownership() == sil.Owned && !g.isLocalValue(v) {
+			g.forget(v)
+			g.destroyTemp(v)
+		} else {
+			g.destroyLater(v)
+		}
 	}
 	// A call that returns Never -- `process.Exit(2)`, `fatalError()` --
 	// does not come back, so nothing after it runs, and a body that ends
@@ -202,7 +216,7 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 			// storage it has. Only the write differs for the second.
 			cur := g.expr(e.X)
 			if _, isComputed := g.computedField(recv, g.text(mem.Name)); isComputed {
-				cur = g.getterCall(mem, recv, f, func() *sil.Value { return g.expr(mem.X) })
+				cur = g.getterOn(mem, recv, f, mem.X)
 			}
 			rhs := g.expr(e.Y)
 			if cur == nil || rhs == nil {
@@ -323,6 +337,11 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 	}
 	// Through a subscript a type declares: its setter.
 	if sub, ok := e.X.(*ast.SubscriptExpr); ok {
+		// `x[keyPath: k] = v` writes through k.
+		if g.info.KeyPathReads[sub] != nil {
+			g.keyPathWrite(sub, e.Y)
+			return
+		}
 		if ref := g.info.Subscripts[sub]; ref != nil {
 			// The setter borrows the value; what made it ends with
 			// the statement.
@@ -391,6 +410,10 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 		return
 	}
 	v = g.optionalFor(e.Y, v, g.typeOf(e.Y), g.typeOf(e.X))
+	if f := g.refSlots[addr]; f != nil {
+		g.refStore(addr, v)
+		return
+	}
 	access := g.blk.BeginAccess(addr, "modify", "unknown")
 	g.blk.Assign(v, access)
 	g.blk.EndAccess(access)
@@ -452,7 +475,11 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 			if base == nil {
 				return nil
 			}
-			return g.blk.RefElementAddr(base, name, t)
+			addr := g.blk.RefElementAddr(base, name, t)
+			if _, f, ok := storedField(g.typeOf(n.X), n.Name.Text(g.file)); ok && f.Ref != "" {
+				g.refSlot(addr, f)
+			}
+			return addr
 		}
 
 		// Struct property addresses require the struct base to be an address.
@@ -499,7 +526,11 @@ func (g *gen) implicitSelfAddr(e *ast.IdentExpr) *sil.Value {
 			"method that changes one has to be declared 'mutating'")
 		return nil
 	}
-	return g.blk.RefElementAddr(self, memberName(owner, name), lowerType(field.Type))
+	addr := g.blk.RefElementAddr(self, memberName(owner, name), lowerType(field.Type))
+	if field.Ref != "" {
+		g.refSlot(addr, field)
+	}
+	return addr
 }
 
 // text is a node's spelling.
@@ -510,6 +541,9 @@ func (g *gen) text(n ast.Node) string {
 	// A name written in backticks -- `default` -- is the name inside them.
 	if id, ok := n.(*ast.Ident); ok {
 		return id.Text(g.file)
+	}
+	if op, ok := n.(*ast.OperatorExpr); ok {
+		return op.Text(g.file)
 	}
 	return string(g.file.Slice(n.Pos(), n.End()))
 }
@@ -719,6 +753,11 @@ func storeQualifier(t sil.Type) string {
 
 // ret lowers a return statement, unwinding scopes before the terminator.
 func (g *gen) ret(s *ast.ReturnStmt) {
+	// `return nil` in an init? gives up on self.
+	if g.initFail != nil && isNilLiteral(s.X) {
+		g.initFail()
+		return
+	}
 	if s.X == nil {
 		if g.initReturn != nil {
 			g.initReturn()
@@ -1090,7 +1129,11 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 		depth := len(g.scopes)
 		g.push()
 		g.destroyArmOwned(bodies[i])
-		g.loops = append(g.loops, loop{header: header, lazyExit: cont, depth: depth, isSwitch: true})
+		var next *sil.Block
+		if i+1 < len(bodies) {
+			next = bodies[i+1]
+		}
+		g.loops = append(g.loops, loop{header: header, lazyExit: cont, depth: depth, isSwitch: true, next: next})
 		for _, st := range cs.Stmts {
 			g.stmt(st)
 			if g.blk == nil || g.blk.Term() != nil {
@@ -1805,32 +1848,14 @@ func (g *gen) caseItemTest(item *ast.CaseItem, subject *sil.Value, t types.Type)
 	return g.blk.Builtin("and_Int1", sil.Object(sil.BuiltinInt1), test, bit), true
 }
 
-// rangeMatch lowers a range pattern test (lo <= subject && subject <= hi).
+// rangeMatch lowers a range pattern test (lo <= subject && subject <= hi),
+// or nil where the pattern is no range written out.
 func (g *gen) rangeMatch(pat *ast.ExprPattern, subject *sil.Value, t types.Type) *sil.Value {
-	bin, ok := g.fold(pat.X).(*ast.BinaryExpr)
-	if !ok || bin.Op == nil {
-		return nil
-	}
-	upper := ""
-	switch g.text(bin.Op) {
-	case "...":
-		upper = "<="
-	case "..<":
-		upper = "<"
-	default:
-		return nil
-	}
-	lo, hi := g.rvalue(bin.X), g.rvalue(bin.Y)
-	if lo == nil || hi == nil {
-		return nil
-	}
-	atLeast := g.compare("<=", lo, subject, t)
-	atMost := g.compare(upper, subject, hi, t)
-	if atLeast == nil || atMost == nil {
+	test, isRange := g.rangeTest(pat.X, subject, t)
+	if isRange && test == nil {
 		g.refuse(pat, "a range pattern over "+t.String())
-		return nil
 	}
-	return g.blk.Builtin("and_Int1", sil.Object(sil.BuiltinInt1), atLeast, atMost)
+	return test
 }
 
 // equals tests equality of two values of the same type.
@@ -1971,6 +1996,31 @@ func (g *gen) takeLabel() string {
 // breakStmt unwinds scopes and branches to the enclosing loop exit.
 func (g *gen) breakStmt(s *ast.BreakStmt) {
 	g.leave(s, "break", g.label(s.Label), func(l loop) *sil.Block { return l.exitBlock() })
+}
+
+// fallthroughStmt unwinds the case's scopes and branches into the next
+// case's body, which is entered without its patterns being tested. The
+// checker holds that the next case binds nothing, so the body needs
+// nothing its own match would have made.
+func (g *gen) fallthroughStmt(s *ast.FallthroughStmt) {
+	for i := len(g.loops) - 1; i >= 0; i-- {
+		l := g.loops[i]
+		if !l.isSwitch {
+			continue
+		}
+		if l.next == nil {
+			g.errorAt(s, "'fallthrough' without a following 'case' or 'default' block")
+			return
+		}
+		if len(g.armOwned[l.next]) > 0 {
+			g.refuse(s, "a fallthrough into a case whose match keeps a value")
+			return
+		}
+		g.unwindTo(l.depth)
+		g.blk.Br(l.next)
+		return
+	}
+	g.errorAt(s, "'fallthrough' is only allowed inside a switch")
 }
 
 // continueStmt unwinds scopes and branches to the loop header.
@@ -2150,32 +2200,20 @@ func (g *gen) forInStmt(s *ast.ForInStmt) {
 		g.forInArray(s, arr)
 		return
 	}
-	rng, ok := g.typeOf(s.Seq).Underlying().(*types.Range)
+	elem, closed, ok := g.rangeOf(s.Seq)
 	if !ok {
 		g.refuse(s, "a for-in over "+g.seqKind(s.Seq))
 		return
 	}
-	elem := rng.Element
 	if _, ok := core.Lower("<", elem); !ok {
 		g.refuse(s, "a for-in over a range of "+elem.String())
 		return
 	}
 
-	bin, ok := g.fold(s.Seq).(*ast.BinaryExpr)
-	if !ok {
-		g.refuse(s.Seq, "this range")
-		return
-	}
-
 	// Evaluate bounds once before loop entry.
-	lo, hi := g.rvalue(bin.X), g.rvalue(bin.Y)
+	lo, hi := g.rangeBounds(s.Seq)
 	if lo == nil || hi == nil {
 		return
-	}
-
-	// Trap if range is invalid (lowerBound > upperBound).
-	if bad := g.compare("<", hi, lo, elem); bad != nil {
-		g.blk.CondFail(bad, "Range requires lowerBound <= upperBound")
 	}
 
 	vt := lowerType(elem)
@@ -2196,7 +2234,7 @@ func (g *gen) forInStmt(s *ast.ForInStmt) {
 
 	g.blk = header
 	index := g.blk.Load(slot, loadQualifier(vt))
-	if !rng.Closed {
+	if !closed {
 		more := g.compare("<", index, hi, elem)
 		if more == nil {
 			g.refuse(s.Seq, "a range of "+elem.String())
@@ -2226,7 +2264,7 @@ func (g *gen) forInStmt(s *ast.ForInStmt) {
 	g.blk = latch
 	at := g.blk.Load(slot, loadQualifier(vt))
 	step := latch
-	if rng.Closed {
+	if closed {
 		last := g.compare("==", at, hi, elem)
 		if last == nil {
 			g.refuse(s.Seq, "a range of "+elem.String())

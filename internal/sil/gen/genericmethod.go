@@ -31,7 +31,8 @@ type genericMethodKey struct {
 func genericMethodDecls(files []*ast.File, info *analyzer.Info) map[genericMethodKey][]*ast.FuncDecl {
 	out := map[genericMethodKey][]*ast.FuncDecl{}
 	add := func(t types.Type, body *ast.MemberBlock) {
-		if t == nil || body == nil || (len(nominalTypeParams(t)) == 0 && builtinParams(info, t) == nil) {
+		_, isProtocol := t.(*types.Protocol)
+		if t == nil || body == nil || (len(nominalTypeParams(t)) == 0 && builtinOf(info, t) == nil && !isProtocol) {
 			return
 		}
 		for _, mem := range body.Members {
@@ -131,10 +132,22 @@ func (g *gen) genericMethod(e *ast.CallExpr, ref *analyzer.MethodRef) (*analyzer
 		inst, _ = t.(*types.GenericInstance)
 		recvT = t
 	}
+	// A method a protocol's extension gives the receiver's type is that
+	// extension's, with Self the receiver's type.
+	if p, ok := ref.Recv.(*types.Protocol); ok && p.IsExtensionMethod(ref.Method) {
+		// Named alone, inside a member, the receiver is self.
+		if recvT == nil {
+			recvT = g.recv
+		}
+		return g.protocolExtensionMethod(e, ref, p, g.substituted(recvT))
+	}
 	// A method an extension gives Array, Dictionary, Set or Optional is
 	// the extension's, for the elements of the one it is called on --
 	// which, inside a method being specialized, are the specialization's.
-	if b := builtinOf(g.info, ref.Recv); b != nil && len(b.Params) > 0 {
+	// The same goes for a method the core's source gives a built-in type
+	// with no parameters -- Bool.toggle -- which no module lowers ahead
+	// of time either.
+	if b := builtinOf(g.info, ref.Recv); b != nil && (len(b.Params) > 0 || b.Modules[ref.Method] == "Swift") {
 		if recvT == nil || analyzer.BuiltinKey(recvT) != b.Key {
 			recvT = g.recv
 		}
@@ -405,4 +418,69 @@ func callsSelf(e *ast.CallExpr) bool {
 	}
 	_, onSelf := mem.X.(*ast.SelfExpr)
 	return onSelf
+}
+
+// protocolExtensionMethod is a call's method of a protocol's extension,
+// specialized for the conforming type it is called on: Self is that type,
+// and the body is lowered privately under a name that says which. An empty
+// symbol with true means the call was refused.
+func (g *gen) protocolExtensionMethod(e *ast.CallExpr, ref *analyzer.MethodRef, p *types.Protocol, recv types.Type) (*analyzer.MethodRef, string, bool) {
+	origin := ref.Method
+	if origin.Origin != nil {
+		origin = origin.Origin
+	}
+	if recv == nil || p.Self == nil {
+		g.refuse(e, "a method of "+p.Name+"'s extension on something whose type is not known")
+		return nil, "", true
+	}
+	decl := g.genericMethodDecl(genericMethodKey{typ: p, name: origin.Name}, origin)
+	if decl == nil {
+		g.refuse(e, "a method of "+p.Name+"'s extension whose declaration this cannot find")
+		return nil, "", true
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+1)
+	for k, v := range g.subst {
+		subst[k] = v
+	}
+	subst[p.Self] = recv
+	var own []types.Type
+	if spec, ok := g.info.Specializations[e]; ok {
+		for i, tp := range spec.Params {
+			if i >= len(spec.Args) || spec.Args[i] == nil {
+				g.refuse(e, "a call whose type arguments could not be inferred")
+				return nil, "", true
+			}
+			arg := types.Substitute(spec.Args[i], subst)
+			subst[tp] = arg
+			own = append(own, arg)
+		}
+	}
+	sig, ok := types.Substitute(origin.Sig, subst).(*types.Signature)
+	if !ok {
+		g.refuse(e, "a method of "+p.Name+"'s extension whose signature this cannot substitute")
+		return nil, "", true
+	}
+	var name strings.Builder
+	name.WriteString("$sVSCext_")
+	name.WriteString(identifierSafe(p.Name))
+	name.WriteString("_")
+	name.WriteString(identifierSafe(origin.Name))
+	for _, prm := range origin.Sig.Params {
+		name.WriteString("_")
+		name.WriteString(identifierSafe(prm.Label))
+	}
+	name.WriteString("_Tv")
+	name.WriteString(identifierSafe(recv.String()))
+	for _, a := range own {
+		name.WriteString("_")
+		name.WriteString(identifierSafe(a.String()))
+	}
+	spec := &analyzer.MethodRef{Recv: recv, Method: &types.Method{
+		Name:       origin.Name,
+		Sig:        sig,
+		IsStatic:   origin.IsStatic,
+		IsMutating: origin.IsMutating,
+	}}
+	g.emitMethodSpecialization(decl, recv, name.String(), subst)
+	return spec, name.String(), true
 }

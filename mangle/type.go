@@ -31,6 +31,35 @@ var standardProtocols = map[string]byte{
 	"BinaryInteger":    'z',
 }
 
+// standardNominals are the standard library's structs the scheme gives a
+// letter of their own, after an S: SJ is Character, Sn Range. Those this
+// compiler has as nominal types of its core are written by them, so that
+// a symbol naming one is swiftc's.
+var standardNominals = map[string]byte{
+	"Character":                     'J',
+	"Range":                         'n',
+	"ClosedRange":                   'N',
+	"UnsafeBufferPointer":           'R',
+	"UnsafeMutableBufferPointer":    'r',
+	"UnsafeRawBufferPointer":        'W',
+	"UnsafeMutableRawBufferPointer": 'w',
+}
+
+// stdNominal writes a standard library struct by its letter, and reports
+// whether it had one.
+func (m *mangler) stdNominal(module, name string) bool {
+	if module != "Swift" {
+		return false
+	}
+	code, ok := standardNominals[name]
+	if !ok {
+		return false
+	}
+	m.endRun()
+	m.buf = append(m.buf, 'S', code)
+	return true
+}
+
 // stdProtocol writes a standard library protocol by its letter, and
 // reports whether it had one.
 func (m *mangler) stdProtocol(module, name string) bool {
@@ -217,6 +246,19 @@ func (m *mangler) typ(t types.Type) error {
 		}
 		m.write("_p")
 		return nil
+	// A metatype: the instance, then `m` -- `Sim` is Int.Type. An
+	// existential's is the existential and `Xp`: `ypXp` is Any.Type.
+	case *types.Metatype:
+		if err := m.typ(t.Instance); err != nil {
+			return err
+		}
+		switch t.Instance.(type) {
+		case *types.Existential, *types.Protocol:
+			m.write("Xp")
+		default:
+			m.writeByte('m')
+		}
+		return nil
 	case *types.TypeParam:
 		// The first parameter at depth zero is `x`; every later one
 		// is `q` and a mangled index, so the second is `q_` and the
@@ -301,6 +343,9 @@ func (m *mangler) nominalType(t types.Type) error {
 		return fail(ErrType, t.String())
 	}
 	module := m.moduleFor(t)
+	if enclosing(t) == nil && m.stdNominal(module, name) {
+		return nil
+	}
 	key := "nominal:" + module + "." + chainOf(t)
 	if i, ok := m.lookup(key); ok {
 		m.substitution(i)
@@ -363,6 +408,9 @@ func chainOf(t types.Type) string {
 
 // nominalIn writes a named type declared in a given module.
 func (m *mangler) nominalIn(module, name string, kind NominalKind) error {
+	if m.stdNominal(module, name) {
+		return nil
+	}
 	key := "nominal:" + module + "." + name
 	if i, ok := m.lookup(key); ok {
 		m.substitution(i)
@@ -382,6 +430,9 @@ func (m *mangler) nominalIn(module, name string, kind NominalKind) error {
 // stdlibNominal writes a named type from the standard library, which
 // differs only in that its module is the single letter s.
 func (m *mangler) stdlibNominal(name string, kind NominalKind) error {
+	if m.stdNominal("Swift", name) {
+		return nil
+	}
 	key := "nominal:Swift." + name
 	if i, ok := m.lookup(key); ok {
 		m.substitution(i)

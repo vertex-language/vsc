@@ -329,13 +329,14 @@ Use `vsc.Options.Stop` to halt compilation at earlier phases (`Parsed`, `Checked
 
 ## Verification & Testing
 
-The compiler's correctness is validated across five automated test suites:
+The compiler's correctness is validated against `swiftc` as the oracle:
 
-- `tests/syntax`: Validates parsing grammar and recovery across syntax forms.
-- `tests/check`: Validates typechecking, semantic constraints, and diagnostic error output.
-- `tests/compiler`: Contains 194 complete programs compiled, linked, and run natively.
-- `tests/interop`: Differential testing comparing binary output and behavior against `swiftc`.
-- `tests/cinterop`: Tests C calling conventions and interoperability (`@_cdecl`, `@_silgen_name`).
+- `tests/`: the ladder -- `001`–`250`, one small Swift program per file, climbing from an empty program to most of the language; each is built by vsc and by swiftc and the output and exit compared (see `tests/README.md`).
+- `parser/testdata/syntax`: Validates parsing grammar and recovery across syntax forms.
+- `analyzer/testdata/check`: Validates typechecking, semantic constraints, and diagnostic error output.
+- `build/testdata/interop`: Links vsc-built programs against swiftc-built libraries in one process.
+- `build/testdata/cinterop`: Tests C calling conventions and interoperability (`@_cdecl`, `@_silgen_name`).
+- `build/testdata/packages`: Builds SwiftPM packages and compares against `swift build`.
 
 ### Running Tests
 

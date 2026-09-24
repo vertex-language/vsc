@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/vertex-language/vsc/scanner"
 	"github.com/vertex-language/vsc/types"
 )
 
@@ -63,6 +64,9 @@ type Decl struct {
 	// Static says the function belongs to the type rather than to an
 	// instance, which the mangling spells with an extra Z.
 	Static bool
+	// Postfix is an operator declared `postfix func`, which the symbol
+	// says apart from a prefix one of the same name.
+	Postfix bool
 	// Discriminator is set for a declaration that is private to one
 	// file, and tells two same-named private declarations in different
 	// files apart. Discriminator computes one.
@@ -248,12 +252,20 @@ func Function(d Decl) (string, error) {
 	}
 	if op, ok := operatorName(d.Name); ok {
 		// An operator is spelled in letters, then its fixity: `==` is
-		// 2ee then oi, for infix; a prefix `-` is 1s then op.
-		m.write(strconv.Itoa(len(op)))
-		m.write(op)
-		if d.Signature != nil && len(d.Signature.Params) == 1 {
-			m.write("op")
+		// 2ee then oi, for infix; a prefix `-` is 1s then op, and a
+		// postfix one oP.
+		if isASCII(op) {
+			m.write(strconv.Itoa(len(op)))
+			m.write(op)
 		} else {
+			m.writePunycode(op)
+		}
+		switch {
+		case d.Postfix:
+			m.write("oP")
+		case d.Signature != nil && len(d.Signature.Params) == 1:
+			m.write("op")
+		default:
 			m.write("oi")
 		}
 	} else if err := m.identifier(d.Name); err != nil {
@@ -427,7 +439,14 @@ func (m *mangler) context(d Decl) error {
 		m.writeByte('E')
 		return nil
 	}
-	if err := m.module(d.Module); err != nil {
+	// A member of a standard library type with a letter of its own is in
+	// that type's context, written by the letter: SJ for Character's.
+	context := d.Context
+	chain := ""
+	if len(context) > 0 && m.stdNominal(d.Module, context[0].Name) {
+		chain = context[0].Name
+		context = context[1:]
+	} else if err := m.module(d.Module); err != nil {
 		return err
 	}
 	// The chain is remembered under its whole dotted spelling, not
@@ -435,8 +454,7 @@ func (m *mangler) context(d Decl) error {
 	// back-reference to that one entry, and remembering it as `Point`
 	// makes it a different entry -- so the numbering drifts and the
 	// symbol comes out with a substitution nothing put there.
-	chain := ""
-	for _, n := range d.Context {
+	for _, n := range context {
 		if err := m.identifier(n.Name); err != nil {
 			return err
 		}
@@ -516,13 +534,23 @@ func operatorName(name string) (string, bool) {
 	if name == "" {
 		return "", false
 	}
-	out := make([]byte, len(name))
-	for i := 0; i < len(name); i++ {
-		c, ok := operatorLetters[name[i]]
+	// A character outside ASCII that Swift reserves for operators -- √,
+	// ∪ -- is kept as it is, and the name is then punycoded as any other
+	// that is not ASCII.
+	out := make([]byte, 0, len(name))
+	for _, r := range name {
+		if r >= 0x80 {
+			if !scanner.IsOperatorChar(r) {
+				return "", false
+			}
+			out = append(out, string(r)...)
+			continue
+		}
+		c, ok := operatorLetters[byte(r)]
 		if !ok {
 			return "", false
 		}
-		out[i] = c
+		out = append(out, c)
 	}
 	return string(out), true
 }
@@ -533,14 +561,11 @@ func (m *mangler) rawIdentifier(name string) error {
 	if name == "" {
 		return fail(ErrName, "empty")
 	}
-	for i := 0; i < len(name); i++ {
-		if name[i] >= 0x80 {
-			// Swift punycodes a name that is not ASCII and marks it
-			// with a leading 00. Writing the marker without the
-			// encoding would produce a symbol that demangles to
-			// something else.
-			return fail(ErrName, "a name that is not ASCII: "+name)
-		}
+	// Swift punycodes a name that is not ASCII and marks it with a
+	// leading 00; see punycode.go.
+	if !isASCII(name) {
+		m.writePunycode(name)
+		return nil
 	}
 	m.write(strconv.Itoa(len(name)))
 	m.write(name)

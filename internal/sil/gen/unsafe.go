@@ -412,14 +412,9 @@ func (g *gen) arraySliceSubscript(e *ast.SubscriptExpr) (*sil.Value, bool) {
 	if _, ok := g.arraySlice(t); !ok || len(e.Args) != 1 {
 		return nil, false
 	}
-	rng, ok := g.typeOf(e.Args[0].X).Underlying().(*types.Range)
+	_, kind, ok := g.anyRangeOf(e.Args[0].X)
 	if !ok {
 		return nil, false
-	}
-	bin, ok := g.fold(e.Args[0].X).(*ast.BinaryExpr)
-	if !ok {
-		g.refuse(e, "a slice by a range that is not written out")
-		return nil, true
 	}
 	arrType := g.typeOf(e.X)
 	count, ok := core.LowerMember(arrType, "count")
@@ -428,18 +423,39 @@ func (g *gen) arraySliceSubscript(e *ast.SubscriptExpr) (*sil.Value, bool) {
 		return nil, true
 	}
 	arr := g.rvalue(e.X)
-	lo, hi := g.rvalue(bin.X), g.rvalue(bin.Y)
-	if arr == nil || lo == nil || hi == nil {
+	if arr == nil {
 		return nil, true
 	}
 	intT := types.Typ[types.Int]
 	word := sil.Object(builtinFor(intT))
 	bit := sil.Object(sil.BuiltinInt1)
-	start, end := g.machine(lo, intT), g.machine(hi, intT)
-	if rng.Closed {
+	n := g.machine(g.readProperty(e.X, arr, arrType, count, "count"), intT)
+	// The bounds: both written, or one of them and the array's own end
+	// for the other -- `a[2...]` is from 2 to the count, `a[..<2]` from 0.
+	var start, end *sil.Value
+	switch kind {
+	case "Range", "ClosedRange":
+		lo, hi := g.rangeBounds(e.Args[0].X)
+		if lo == nil || hi == nil {
+			return nil, true
+		}
+		start, end = g.machine(lo, intT), g.machine(hi, intT)
+	case "PartialRangeFrom":
+		lo := g.partialBound(e.Args[0].X)
+		if lo == nil {
+			return nil, true
+		}
+		start, end = g.machine(lo, intT), n
+	default:
+		hi := g.partialBound(e.Args[0].X)
+		if hi == nil {
+			return nil, true
+		}
+		start, end = g.blk.IntegerLiteral(word, 0), g.machine(hi, intT)
+	}
+	if kind == "ClosedRange" || kind == "PartialRangeThrough" {
 		end = g.checkedWord("sadd_with_overflow_Int64", end, g.blk.IntegerLiteral(word, 1))
 	}
-	n := g.machine(g.readProperty(e.X, arr, arrType, count, "count"), intT)
 	g.blk.CondFail(g.blk.Builtin("cmp_slt_Int64", bit, start, g.blk.IntegerLiteral(word, 0)),
 		"Array index is out of range")
 	g.blk.CondFail(g.blk.Builtin("cmp_slt_Int64", bit, end, start),

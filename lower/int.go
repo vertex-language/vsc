@@ -23,6 +23,11 @@ func (c *fn) int64Builtin(name, verb string, args []ir.Value) ([]ir.Value, error
 	ns := c.b.I64
 
 	switch verb {
+	// The high word of a double-width product: multipliedFullWidth.
+	case "int_smulhi":
+		return []ir.Value{ns.SMulHi(a, b)}, nil
+	case "int_umulhi":
+		return []ir.Value{ns.UMulHi(a, b)}, nil
 	// Arithmetic with overflow reporting.
 	case "sadd_with_overflow":
 		return []ir.Value{ns.Add(a, b), ns.SAddO(a, b)}, nil

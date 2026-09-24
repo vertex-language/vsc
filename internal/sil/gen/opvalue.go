@@ -17,6 +17,18 @@ import (
 // operatorValue lowers an operator written as a value.
 func (g *gen) operatorValue(e *ast.OperatorExpr) *sil.Value {
 	if ref := g.info.OperatorMethods[e]; ref != nil {
+		// A requirement's operator -- `+` of a T: Zeroable -- is, in a
+		// specialization, the one the concrete type declares.
+		// The concrete type is what the operands are, substituted.
+		if _, abstract := ref.Recv.(*types.Protocol); abstract && ref.Method.Sig != nil && len(ref.Method.Sig.Params) > 0 {
+			if resolved, ok := g.witness(ref, g.substituted(ref.Method.Sig.Params[0].Type)); ok {
+				ref = resolved
+			}
+		} else if tp, ok := ref.Recv.(*types.TypeParam); ok {
+			if resolved, ok := g.witness(ref, g.substituted(tp)); ok {
+				ref = resolved
+			}
+		}
 		symbol := g.staticSymbol(ref, ref.Recv)
 		callee := g.m.Func(symbol).SetSourceName(ref.Method.Name)
 		if g.needsType(callee) {
@@ -30,6 +42,9 @@ func (g *gen) operatorValue(e *ast.OperatorExpr) *sil.Value {
 	if sym == nil {
 		g.refuse(e, "an operator used as a value that the checker did not resolve")
 		return nil
+	}
+	if spec, generic := g.info.OperatorSpecs[e]; generic {
+		return g.specializedValue(e, sym, spec)
 	}
 	if !g.coreOperator(sym) {
 		return g.funcValue(sym)

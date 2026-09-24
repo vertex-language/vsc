@@ -35,12 +35,27 @@ inline void describeString(Text& t, const String& s) {
 
 void describe(Text& t, const void* value, const Metadata* type);
 void debugDescribe(Text& t, const void* value, const Metadata* type);
+void typeName(Text& t, const Metadata* type);
 
 // describeConforming writes the description of a value whose type is
 // CustomStringConvertible, and reports whether it is. The table's first
 // row after its descriptor is the description getter.
 inline bool describeConforming(Text& t, const void* value, const Metadata* type) {
   const void* const* table = vertex_conformance(type, &vertex_protocol_CustomStringConvertible);
+  if (table == nullptr)
+    return false;
+  auto* getter = static_cast<void (*)()>(const_cast<void*>(table[1]));
+  String s = vertex_witness_call(getter, value, type, table);
+  describeString(t, s);
+  vertex_string_release(s.object);
+  return true;
+}
+
+// debugDescribeConforming is describeConforming for
+// CustomDebugStringConvertible: the debugDescription, which Swift's debug
+// description prefers to the description.
+inline bool debugDescribeConforming(Text& t, const void* value, const Metadata* type) {
+  const void* const* table = vertex_conformance(type, &vertex_protocol_CustomDebugStringConvertible);
   if (table == nullptr)
     return false;
   auto* getter = static_cast<void (*)()>(const_cast<void*>(table[1]));
@@ -320,8 +335,10 @@ inline void debugDescribe(Text& t, const void* value, const Metadata* type) {
     debugString(t, *static_cast<const String*>(value));
     return;
   }
-  // Swift's debug description falls back to the description, and only
-  // then to reflection.
+  // Swift's debug description is the debugDescription, falling back to
+  // the description, and only then to reflection.
+  if (debugDescribeConforming(t, value, type))
+    return;
   if (describeConforming(t, value, type))
     return;
   if (type->kind == kindStruct && reinterpret_cast<const StructMetadata*>(type)->description != nullptr) {
@@ -335,9 +352,95 @@ inline void debugDescribe(Text& t, const void* value, const Metadata* type) {
   describe(t, value, type);
 }
 
+// typeName writes a type's name as `String(describing: T.self)` gives it:
+// unqualified, with an Optional, Array, Dictionary or Set written out as
+// the generic type it is.
+void typeName(Text& t, const Metadata* type) {
+  static const struct {
+    const FullMetadata* record;
+    const char* name;
+  } builtins[] = {
+      {&vertex_metadata_Bool, "Bool"},     {&vertex_metadata_Int8, "Int8"},
+      {&vertex_metadata_UInt8, "UInt8"},   {&vertex_metadata_Int16, "Int16"},
+      {&vertex_metadata_UInt16, "UInt16"}, {&vertex_metadata_Int32, "Int32"},
+      {&vertex_metadata_UInt32, "UInt32"}, {&vertex_metadata_Float, "Float"},
+      {&vertex_metadata_Int, "Int"},       {&vertex_metadata_UInt, "UInt"},
+      {&vertex_metadata_Int64, "Int64"},   {&vertex_metadata_UInt64, "UInt64"},
+      {&vertex_metadata_Double, "Double"}, {&vertex_metadata_String, "String"},
+      {&vertex_metadata_Any, "Any"},
+  };
+  if (type == nullptr) {
+    textString(t, "<unknown>");
+    return;
+  }
+  for (auto& b : builtins) {
+    if (is(type, *b.record)) {
+      textString(t, b.name);
+      return;
+    }
+  }
+  switch (type->kind) {
+  case kindOptional:
+    textString(t, "Optional<");
+    typeName(t, static_cast<const OptionalMetadata*>(type)->payload);
+    textByte(t, '>');
+    return;
+  case kindArray:
+    textString(t, "Array<");
+    typeName(t, static_cast<const ArrayMetadata*>(type)->element);
+    textByte(t, '>');
+    return;
+  case kindDictionary:
+    textString(t, "Dictionary<");
+    typeName(t, static_cast<const DictionaryMetadata*>(type)->key);
+    textString(t, ", ");
+    typeName(t, static_cast<const DictionaryMetadata*>(type)->value);
+    textByte(t, '>');
+    return;
+  case kindSet:
+    textString(t, "Set<");
+    typeName(t, static_cast<const SetMetadata*>(type)->element);
+    textByte(t, '>');
+    return;
+  case kindTuple: {
+    auto* tuple = static_cast<const TupleMetadata*>(type);
+    textByte(t, '(');
+    for (usize i = 0; i < tuple->numElements; i++) {
+      if (i > 0)
+        textString(t, ", ");
+      typeName(t, tuple->elements[i].type);
+    }
+    textByte(t, ')');
+    return;
+  }
+  case kindMetatype:
+    textString(t, "Metatype");
+    return;
+  case kindExistential:
+    textString(t, "Any");
+    return;
+  case kindStruct:
+  case kindEnum:
+  case kindClass:
+    if (auto* d = reinterpret_cast<const StructMetadata*>(type)->description) {
+      if (const char* name = relativeString(&d->name)) {
+        textString(t, name);
+        return;
+      }
+    }
+    break;
+  }
+  textString(t, "<unknown>");
+}
+
 // describe writes what `String(describing:)` gives for the value at
 // `value`, whose type is `type`.
 void describe(Text& t, const void* value, const Metadata* type) {
+  // A metatype is described by the type it names.
+  if (type->kind == kindMetatype) {
+    typeName(t, *static_cast<const Metadata* const*>(value));
+    return;
+  }
   if (is(type, vertex_metadata_String)) {
     describeString(t, *static_cast<const String*>(value));
     return;

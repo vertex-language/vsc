@@ -43,6 +43,13 @@ struct ConformanceDescriptor {
 #endif
 
 extern "C" {
+// AnyObject asks nothing of a class, so what a conformance to it records
+// is only that the class conforms: every class does. Swift has no such
+// descriptor -- AnyObject is not a protocol there -- so this one is ours
+// whichever runtime is linked.
+extern const vertex::ProtocolDescriptor vertex_protocol_AnyObject __asm(VERTEX_ASM_NAME("$ss9AnyObjectMp"));
+const vertex::ProtocolDescriptor vertex_protocol_AnyObject = {3, 0, 0, 0, 0, 0};
+
 // Kind 3 is a protocol. Linked with Swift's runtime, libswiftCore defines
 // these under the same names, and those are the ones.
 #ifndef VERTEX_WITH_SWIFT_RUNTIME
@@ -57,10 +64,32 @@ const vertex::ProtocolDescriptor vertex_protocol_Hashable = {3, 0, 0, 0, 0, 0};
 extern const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible
     __asm(VERTEX_ASM_NAME("$ss23CustomStringConvertibleMp"));
 const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible = {3, 0, 0, 0, 0, 0};
+extern const vertex::ProtocolDescriptor vertex_protocol_CustomDebugStringConvertible
+    __asm(VERTEX_ASM_NAME("$ss28CustomDebugStringConvertibleMp"));
+const vertex::ProtocolDescriptor vertex_protocol_CustomDebugStringConvertible = {3, 0, 0, 0, 0, 0};
 extern const vertex::ProtocolDescriptor vertex_protocol_Sequence __asm(VERTEX_ASM_NAME("$sSTMp"));
 const vertex::ProtocolDescriptor vertex_protocol_Sequence = {3, 0, 0, 0, 0, 0};
 extern const vertex::ProtocolDescriptor vertex_protocol_IteratorProtocol __asm(VERTEX_ASM_NAME("$sStMp"));
 const vertex::ProtocolDescriptor vertex_protocol_IteratorProtocol = {3, 0, 0, 0, 0, 0};
+
+// The other protocols core declares. Nothing reads them here; a
+// conformance to one (a Character made from a literal, an enum that is
+// CaseIterable) names it, so each protocol core.swift declares is here.
+#define VERTEX_CORE_PROTOCOL(id, sym) \
+  extern const vertex::ProtocolDescriptor vertex_protocol_##id __asm(VERTEX_ASM_NAME(sym)); \
+  const vertex::ProtocolDescriptor vertex_protocol_##id = {3, 0, 0, 0, 0, 0};
+VERTEX_CORE_PROTOCOL(ExpressibleByIntegerLiteral, "$ss27ExpressibleByIntegerLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByFloatLiteral, "$ss25ExpressibleByFloatLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByBooleanLiteral, "$ss27ExpressibleByBooleanLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByNilLiteral, "$ss23ExpressibleByNilLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByUnicodeScalarLiteral, "$ss33ExpressibleByUnicodeScalarLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByExtendedGraphemeClusterLiteral,
+                     "$ss43ExpressibleByExtendedGraphemeClusterLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByStringLiteral, "$ss26ExpressibleByStringLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByArrayLiteral, "$ss25ExpressibleByArrayLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByDictionaryLiteral, "$ss30ExpressibleByDictionaryLiteralMp")
+VERTEX_CORE_PROTOCOL(CaseIterable, "$ss12CaseIterableMp")
+#undef VERTEX_CORE_PROTOCOL
 
 #else
 extern const vertex::ProtocolDescriptor vertex_protocol_Error __asm(VERTEX_ASM_NAME("$ss5ErrorMp"));
@@ -69,6 +98,8 @@ extern const vertex::ProtocolDescriptor vertex_protocol_Comparable __asm(VERTEX_
 extern const vertex::ProtocolDescriptor vertex_protocol_Hashable __asm(VERTEX_ASM_NAME("$sSHMp"));
 extern const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible
     __asm(VERTEX_ASM_NAME("$ss23CustomStringConvertibleMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_CustomDebugStringConvertible
+    __asm(VERTEX_ASM_NAME("$ss28CustomDebugStringConvertibleMp"));
 #endif
 
 // Calls a witness whose only argument is the conformer, by address, in the

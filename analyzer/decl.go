@@ -3,6 +3,7 @@ package analyzer
 import (
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/derive"
+	"github.com/vertex-language/vsc/parser"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 )
@@ -145,12 +146,13 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			}
 			ownership := c.ownershipOf(p.Mods)
 			params[i] = &types.Param{
-				Name:       name,
-				Label:      label,
-				Type:       c.resolveType(p.Type, scope),
-				Ownership:  ownership,
-				Variadic:   p.Ellipsis != token.NoPos,
-				HasDefault: p.Default != nil,
+				Name:        name,
+				Label:       label,
+				Type:        c.resolveType(p.Type, scope),
+				Ownership:   ownership,
+				Variadic:    p.Ellipsis != token.NoPos,
+				HasDefault:  p.Default != nil,
+				Autoclosure: c.autoclosureType(p.Type),
 			}
 		}
 		throws, thrown := c.throwsOf(t.Throws, scope)
@@ -222,10 +224,48 @@ func (c *checker) resolveMemberType(t *ast.MemberType, scope *Scope) types.Type 
 		if inner := c.nestedType(base, name, t, scope); inner != nil {
 			return inner
 		}
+		if inner := c.coreNestedType(base, name); inner != nil {
+			return inner
+		}
 	}
 	c.errorf(t.Pos(), "cannot find type '%s' in scope: a type declared inside "+
 		"another type is not modelled yet", c.spellingOf(t))
 	return types.Typ[types.Invalid]
+}
+
+// coreNestedTypes are the types Swift declares inside a built-in one that
+// the core declares at its top level, under a name of its own.
+var coreNestedTypes = map[string]string{
+	"String.Index":                "_StringIndex",
+	"String.Iterator":             "_StringIterator",
+	"String.UnicodeScalarView":    "_UnicodeScalarView",
+	"String.UTF16View":            "_UTF16View",
+	"Substring.Index":             "_StringIndex",
+	"Substring.Iterator":          "_StringIterator",
+	"Unicode.Scalar":              "UnicodeScalar",
+	"Character.UnicodeScalarView": "_UnicodeScalarView",
+}
+
+// coreNestedType is String.Index and the like: the core's type standing
+// for a type Swift nests in one of its own, or nil.
+func (c *checker) coreNestedType(outer types.Type, name string) types.Type {
+	outerName := BuiltinKey(outer)
+	if c.info.CoreTypes[outer] {
+		switch u := outer.Underlying().(type) {
+		case *types.Struct:
+			outerName = u.Name
+		case *types.Enum:
+			outerName = u.Name
+		}
+	}
+	core, ok := coreNestedTypes[outerName+"."+name]
+	if !ok || c.modules["Swift"] == nil {
+		return nil
+	}
+	if tn, ok := c.modules["Swift"].Lookup(core).(*TypeNameSymbol); ok && tn.Type() != nil {
+		return tn.Type()
+	}
+	return nil
 }
 
 // nestedType resolves a type declared inside outer, or returns nil.
@@ -428,6 +468,9 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 			if c.hasAttr(d.Attrs, mainActorAttr) {
 				c.info.MainActor[st] = true
 			}
+			if c.hasAttr(d.Attrs, "propertyWrapper") {
+				c.info.Wrappers[st] = true
+			}
 
 		case *ast.ClassDecl:
 			name := d.Name.Text(c.file)
@@ -441,6 +484,9 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 			c.declaredHere(sym, c.accessOf(d.Mods))
 			if c.hasAttr(d.Attrs, mainActorAttr) {
 				c.info.MainActor[cl] = true
+			}
+			if c.hasAttr(d.Attrs, "propertyWrapper") {
+				c.info.Wrappers[cl] = true
 			}
 
 		case *ast.ActorDecl:
@@ -711,6 +757,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
 				c.memberIsolated = c.info.MainActor[n]
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
+				n.BodyInits = len(n.Inits)
 				c.memberIsolated = false
 			}
 
@@ -839,6 +886,12 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 				for _, f := range got {
 					f.Exported = exported(c.accessOf(m.Mods))
 					f.Isolated = c.declIsolated(m.Attrs, m.Mods)
+					switch {
+					case c.hasModifier(m.Mods, "weak"):
+						f.Ref = "weak"
+					case c.hasModifier(m.Mods, "unowned"):
+						f.Ref = "unowned"
+					}
 				}
 				switch {
 				case static:
@@ -859,6 +912,45 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 						f.IsComputed = true
 					}
 					*computed = append(*computed, got...)
+				case len(got) == 1 && computed != nil && fields != nil && c.wrapperAttr(m.Attrs, typeScope) != nil:
+					// `@Clamped(0...10) var level = 5` is stored as the
+					// wrapper, `_level`, and read and written through it.
+					attr := c.wrapperAttr(m.Attrs, typeScope)
+					w := c.resolveType(attr.Name, typeScope)
+					f := got[0]
+					storage := &types.Field{Name: "_" + f.Name, Type: w, Isolated: f.Isolated}
+					if call := c.wrapperInit(attr, b); call != nil {
+						storage.HasDefault = true
+						c.info.FieldDefaults[storage] = call
+						c.info.WrapperInits[b] = call
+					}
+					typeScope.Insert(NewVar(storage.Name, w, attr.Pos(), false, types.DefaultOwnership))
+					f.IsComputed, f.HasSetter, f.HasDefault = true, true, false
+					f.Wrapper = storage.Name
+					*fields = append(*fields, storage)
+					*computed = append(*computed, f)
+					c.wrapped = append(c.wrapped, wrappedProperty{field: f, wrapper: w, computed: computed, scope: typeScope, at: attr.Pos()})
+				case c.hasModifier(m.Mods, "lazy") && len(got) == 1 && computed != nil && fields != nil:
+					// `lazy var x: T = e` is stored as an optional, nil until
+					// the getter first runs e, and read and written as a T.
+					f := got[0]
+					storage := &types.Field{
+						Name:       "$__lazy_storage_$_" + f.Name,
+						Type:       &types.Optional{Wrapped: f.Type},
+						HasDefault: true,
+						LazyOf:     f.Name,
+						Exported:   f.Exported,
+						Isolated:   f.Isolated,
+					}
+					if b.Value != nil {
+						none := &ast.BasicLit{Span: ast.Span{Lo: b.Value.Pos(), Hi: b.Value.Pos()}, Kind: token.NIL}
+						c.info.Types[none] = storage.Type
+						c.info.FieldDefaults[storage] = none
+					}
+					f.IsComputed, f.HasSetter, f.HasDefault = true, true, false
+					f.LazyStorage = storage.Name
+					*fields = append(*fields, storage)
+					*computed = append(*computed, f)
 				default:
 					if fields == nil {
 						c.errorf(b.Pos(), "enums must not contain stored properties")
@@ -894,6 +986,9 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			sig := c.buildFuncSig(m.Sig, typeScope)
 			sig.Exported = exported(c.accessOf(m.Mods))
 			sig.Isolated = c.declIsolated(m.Attrs, m.Mods)
+			sig.Failable = m.Question.IsValid() || m.Exclaim.IsValid()
+			sig.Convenience = c.hasModifier(m.Mods, "convenience")
+			sig.Required = c.hasModifier(m.Mods, "required")
 			*inits = append(*inits, sig)
 
 		case *ast.SubscriptDecl:
@@ -976,6 +1071,7 @@ func (c *checker) declareFunctions(decls []ast.Decl, scope *Scope) {
 			sym := NewFunc(name, sig, f.Name.Pos())
 			sym.SetDecl(f)
 			sym.SetAccess(c.accessOf(f.Mods))
+			sym.SetPostfix(c.hasModifier(f.Mods, "postfix"))
 			c.declaredHere(sym, sym.Access())
 			// Functions may share a name if signatures differ (overloading).
 			if old := scope.Insert(sym); old != nil {
@@ -1091,12 +1187,13 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 				c.checkExpr(p.Default, pt, scope)
 			}
 			params[i] = &types.Param{
-				Name:       name,
-				Label:      label,
-				Type:       pt,
-				Ownership:  ownership,
-				Variadic:   p.Ellipsis != token.NoPos,
-				HasDefault: p.Default != nil,
+				Name:        name,
+				Label:       label,
+				Type:        pt,
+				Ownership:   ownership,
+				Variadic:    p.Ellipsis != token.NoPos,
+				HasDefault:  p.Default != nil,
+				Autoclosure: c.autoclosureType(p.Type),
 			}
 			if p.Default != nil {
 				c.info.Defaults[params[i]] = p.Default
@@ -1206,6 +1303,16 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		c.info.Extensions[ext] = extType
 
 		typeScope := c.typeScope(extType)
+		// A built-in type's members scope hangs off wherever the type was
+		// first extended -- the core -- where the program's types are out
+		// of sight. So each extension of one reads its body in a scope
+		// inside the one the extension is written in, holding the same
+		// members: every extension's, and its generic parameters.
+		if isBuiltin && builtin != nil && builtin.scope != nil {
+			typeScope = NewScope(scope, ext.Pos(), ext.End())
+			typeScope.members = true
+			typeScope.elems = builtin.scope.elems
+		}
 		if typeScope == nil {
 			typeScope = NewScope(scope, ext.Pos(), ext.End())
 			typeScope.members = true
@@ -1223,8 +1330,16 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		if computed != nil {
 			computedBefore = len(*computed)
 		}
+		staticsBefore := 0
+		if statics != nil {
+			staticsBefore = len(*statics)
+		}
 		var subscripts *[]*types.Subscript
 		switch u := extType.Underlying().(type) {
+		case *types.Basic:
+			if isBuiltin && builtin != nil {
+				subscripts = &builtin.Subscripts
+			}
 		case *types.Struct:
 			subscripts = &u.Subscripts
 		case *types.Class:
@@ -1244,6 +1359,11 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 			}
 			for _, f := range (*computed)[computedBefore:] {
 				builtin.Modules[f] = c.importing
+			}
+			if statics != nil {
+				for _, f := range (*statics)[staticsBefore:] {
+					builtin.Modules[f] = c.importing
+				}
 			}
 		}
 		if conds := c.extensionConditions(ext, extType, typeScope); len(conds) > 0 {
@@ -1492,6 +1612,9 @@ func sinksOf(t types.Type) (fields *[]*types.Field, methods *[]*types.Method, co
 		return &n.Fields, &n.Methods, &n.Conformances, &n.Inits, &n.Computed, &n.Statics
 	case *types.Enum:
 		return nil, &n.Methods, &n.Conformances, nil, &n.Computed, &n.Statics
+	// A protocol's extension adds members every conforming type has.
+	case *types.Protocol:
+		return nil, &n.ExtMethods, nil, nil, &n.ExtComputed, &n.ExtStatics
 	}
 	return nil, nil, nil, nil, nil, nil
 }
@@ -1565,6 +1688,16 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 			if _, isEnum := conformer.Underlying().(*types.Enum); isEnum && req.Name == "==" {
 				satisfied = true
 			}
+			// A protocol extension's method of the requirement's name and
+			// type is the default a conformer that writes none has.
+			if !satisfied {
+				for _, m := range proto.ExtensionMethods(req.Name, req.IsStatic) {
+					if got, _ := types.Substitute(m.Sig, subst).(*types.Signature); got != nil && types.Identical(got, want) {
+						satisfied = true
+						break
+					}
+				}
+			}
 			// A Sequence that is its own iterator has makeIterator() made
 			// for it, as Swift makes one for a type that is IteratorProtocol.
 			if req.Name == "makeIterator" && proto.Name == "Sequence" && c.info.CoreTypes[proto] {
@@ -1576,10 +1709,25 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 			}
 		} else if req.Type != nil {
 			want := types.Substitute(req.Type, subst)
-			for _, f := range fields {
+			candidates := fields
+			// A static requirement is met by a static property.
+			if req.IsStatic {
+				candidates = nil
+				if _, _, _, _, _, statics := sinksOf(conformer.Underlying()); statics != nil {
+					candidates = *statics
+				}
+			}
+			for _, f := range candidates {
 				if f.Name == req.Name && types.AssignableTo(f.Type, want) {
 					satisfied = true
 					break
+				}
+			}
+			// Or by the default a protocol extension gives.
+			if !satisfied {
+				if _, f := proto.ExtensionProperty(req.Name, req.IsStatic); f != nil &&
+					types.AssignableTo(types.Substitute(f.Type, subst), want) {
+					satisfied = true
 				}
 			}
 		}
@@ -1646,4 +1794,194 @@ func meetsWithFewerEffects(have, want *types.Signature) bool {
 	relaxed.Rethrows = want.Rethrows
 	relaxed.Thrown = want.Thrown
 	return types.Identical(&relaxed, want)
+}
+
+// autoclosureType reports whether a parameter's type is written
+// @autoclosure: `_ message: @autoclosure () -> String`.
+func (c *checker) autoclosureType(t ast.Type) bool {
+	ft, ok := t.(*ast.FuncType)
+	if !ok {
+		return false
+	}
+	for _, a := range ft.Attrs {
+		if a == nil {
+			continue
+		}
+		if id, ok := a.Name.(*ast.IdentType); ok && id.Name != nil && id.Name.Text(c.file) == "autoclosure" {
+			return true
+		}
+	}
+	return false
+}
+
+// inheritInitializers gives each class that declares no designated
+// initializer, and whose own stored properties all have a value to
+// start with, its superclass's designated initializers -- Swift's first
+// rule of initializer inheritance -- the superclass's own inherited ones
+// included, so it is done superclass first.
+func (c *checker) inheritInitializers(decls []ast.Decl, scope *Scope) {
+	done := map[*types.Class]bool{}
+	var inherit func(cl *types.Class)
+	inherit = func(cl *types.Class) {
+		if cl == nil || done[cl] {
+			return
+		}
+		done[cl] = true
+		if cl.Superclass == nil {
+			return
+		}
+		super, ok := cl.Superclass.Underlying().(*types.Class)
+		if !ok {
+			return
+		}
+		inherit(super)
+		// A designated initializer of its own -- or ones it already
+		// inherited, reached from another file's pass -- and it inherits
+		// none.
+		for _, sig := range cl.Inits {
+			if sig != nil && !sig.Convenience {
+				return
+			}
+		}
+		for _, f := range cl.Fields {
+			if f == nil {
+				continue
+			}
+			if _, optional := f.Type.(*types.Optional); !f.HasDefault && !(optional && !f.IsConst) {
+				return
+			}
+		}
+		for _, sig := range super.Inits {
+			if sig == nil || sig.Convenience {
+				continue
+			}
+			own := *sig
+			own.Inherited = true
+			cl.Inits = append(cl.Inits, &own)
+		}
+	}
+	var walk func(decls []ast.Decl)
+	walk = func(decls []ast.Decl) {
+		for _, d := range decls {
+			var name *ast.Ident
+			var body *ast.MemberBlock
+			switch d := d.(type) {
+			case *ast.ClassDecl:
+				name, body = d.Name, d.Body
+			case *ast.StructDecl:
+				name, body = d.Name, d.Body
+			case *ast.EnumDecl:
+				name, body = d.Name, d.Body
+			default:
+				continue
+			}
+			if tn, ok := c.info.Defs[name].(*TypeNameSymbol); ok {
+				if cl, ok := tn.Type().(*types.Class); ok {
+					inherit(cl)
+				}
+			}
+			if body != nil {
+				var nested []ast.Decl
+				for _, m := range body.Members {
+					if nd, ok := m.(ast.Decl); ok {
+						nested = append(nested, nd)
+					}
+				}
+				walk(nested)
+			}
+		}
+	}
+	walk(decls)
+}
+
+// A wrappedProperty is a property a wrapper gives, whose type -- where it
+// was not written -- setter and projection are read once every type's
+// members are, the wrapper's among them.
+type wrappedProperty struct {
+	field    *types.Field
+	wrapper  types.Type
+	computed *[]*types.Field
+	scope    *Scope
+	at       token.Pos
+}
+
+// wrapperAttr is the attribute among attrs naming a property wrapper, or nil.
+func (c *checker) wrapperAttr(attrs []*ast.Attr, scope *Scope) *ast.Attr {
+	for _, a := range attrs {
+		id, ok := a.Name.(*ast.IdentType)
+		if !ok || id.Name == nil {
+			continue
+		}
+		tn := scope.LookupType(id.Name.Text(c.file))
+		if tn != nil && c.info.Wrappers[tn.Type()] {
+			return a
+		}
+	}
+	return nil
+}
+
+// wrapperInit is the call of the wrapper's initializer that a wrapped
+// property's storage starts as: its initial value as wrappedValue, then
+// the attribute's own arguments -- `Clamped(wrappedValue: 5, 0...10)` --
+// or nil where there is neither.
+func (c *checker) wrapperInit(attr *ast.Attr, b *ast.PatternBinding) *ast.CallExpr {
+	id := attr.Name.(*ast.IdentType)
+	var args []*ast.CallArg
+	if b.Value != nil {
+		at := ast.Span{Lo: b.Value.Pos(), Hi: b.Value.End()}
+		args = append(args, &ast.CallArg{Span: at,
+			Label: &ast.Ident{Span: ast.Span{Lo: at.Lo, Hi: at.Lo}, Synth: "wrappedValue"}, X: b.Value})
+	}
+	more, diags := parser.ParseAttrArgs(c.file, attr)
+	c.info.Diagnostics = append(c.info.Diagnostics, diags...)
+	args = append(args, more...)
+	if b.Value == nil && !attr.Lparen.IsValid() {
+		return nil
+	}
+	return &ast.CallExpr{Span: attr.Span,
+		Fun:  &ast.IdentExpr{Span: id.Span, Name: id.Name, Args: id.Args},
+		Args: &ast.CallArgs{Span: attr.Span, Lparen: attr.Lparen, Args: args, Rparen: attr.Rparen}}
+}
+
+// finishWrappedProperties gives each wrapped property what its wrapper
+// says, now that the wrapper's members are read: the type of its
+// wrappedValue where none was written, whether it may be set, and the
+// projection `$name` where the wrapper has a projectedValue.
+func (c *checker) finishWrappedProperties() {
+	for _, w := range c.wrapped {
+		value := wrapperMember(w.wrapper, "wrappedValue")
+		if value == nil {
+			c.errorf(w.at, "property wrapper '%s' has no 'wrappedValue'", w.wrapper)
+			continue
+		}
+		if w.field.Type == nil || isInvalid(w.field.Type) {
+			w.field.Type = value.Type
+		}
+		w.field.HasSetter = !value.IsConst && (!value.IsComputed || value.HasSetter)
+		if p := wrapperMember(w.wrapper, "projectedValue"); p != nil {
+			proj := &types.Field{Name: "$" + w.field.Name, Type: p.Type, IsComputed: true,
+				HasSetter: !p.IsConst && (!p.IsComputed || p.HasSetter),
+				Wrapper:   w.field.Wrapper, Projected: true, Isolated: w.field.Isolated}
+			*w.computed = append(*w.computed, proj)
+			w.scope.Insert(NewVar(proj.Name, p.Type, w.at, false, types.DefaultOwnership))
+		}
+	}
+	c.wrapped = nil
+}
+
+// wrapperMember is a wrapper type's property of a name, stored or computed.
+func wrapperMember(t types.Type, name string) *types.Field {
+	var fields, computed []*types.Field
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		fields, computed = u.Fields, u.Computed
+	case *types.Class:
+		fields, computed = u.Fields, u.Computed
+	}
+	for _, f := range append(append([]*types.Field{}, fields...), computed...) {
+		if f != nil && f.Name == name {
+			return f
+		}
+	}
+	return nil
 }

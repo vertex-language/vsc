@@ -61,7 +61,13 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		}
 
 	case *ast.ExprStmt:
-		c.checkExpr(s.X, nil, scope)
+		// The value of a branch of an if or a switch expression is
+		// checked for what the expression is wanted to be.
+		want, isValue := c.branchValues[s]
+		t := c.checkExpr(s.X, want, scope)
+		if isValue {
+			c.info.Types[s.X] = t
+		}
 
 	case *ast.ReturnStmt:
 		var retType types.Type = types.Typ[types.Void]
@@ -112,18 +118,20 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		// Determine loop element type from sequence type.
 		seqType := c.checkExpr(s.Seq, nil, scope)
 		elemType := types.Type(types.Typ[types.Invalid])
+		bound, _, isRange := c.info.RangeOf(seqType)
 		switch seq := seqType.Underlying().(type) {
 		case *types.Array:
 			elemType = seq.Elem
-		case *types.Range:
-			elemType = seq.Element
 		case *types.Set:
 			elemType = seq.Elem
 		case *types.Dictionary:
 			elemType = &types.Tuple{Elements: []*types.TupleElement{
 				{Name: "key", Type: seq.Key}, {Name: "value", Type: seq.Value}}}
 		default:
-			if it := c.iteration(seqType); it != nil {
+			if isRange {
+				// A range counts from one bound to the other.
+				elemType = bound
+			} else if it := c.iteration(seqType); it != nil {
 				c.info.Iterations[s] = it
 				elemType = it.Element
 			} else if !isInvalid(seqType) {
@@ -162,6 +170,11 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 				}
 
 				for _, item := range cs.Items {
+					// `case 0 as Int` reads as the expression `0 as Int`;
+					// it is the pattern 0 under a cast to Int.
+					if item.Pat != nil {
+						item.Pat = castPattern(item.Pat)
+					}
 					// Declare pattern bindings before checking where clause condition.
 					if item.Pat != nil {
 						c.declareCasePattern(item.Pat, subjectType, caseScope)
@@ -225,10 +238,38 @@ func (c *checker) declareCatchPattern(pat ast.Pattern, isConst bool, scope *Scop
 	}
 }
 
+// castPattern is an expression pattern `x as T` -- which is how
+// `case 0 as Int` parses -- as the pattern x under a cast to T; any other
+// pattern as it is.
+func castPattern(pat ast.Pattern) ast.Pattern {
+	ep, ok := pat.(*ast.ExprPattern)
+	if !ok {
+		return pat
+	}
+	seq, ok := ep.X.(*ast.SequenceExpr)
+	if !ok || len(seq.Elements) != 2 {
+		return pat
+	}
+	cast, ok := seq.Elements[1].(*ast.CastExpr)
+	if !ok || cast.Kind != token.AS || cast.Question.IsValid() || cast.Exclaim.IsValid() {
+		return pat
+	}
+	inner := &ast.ExprPattern{Span: ast.Span{Lo: seq.Elements[0].Pos(), Hi: seq.Elements[0].End()}, X: seq.Elements[0]}
+	return &ast.AsPattern{Span: ep.Span, Pat: inner, As: cast.Keyword, Type: cast.Type}
+}
+
 func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, scope *Scope) {
 	switch p := pat.(type) {
 	case *ast.ValueBindingPattern:
 		c.declareBoundPattern(p.Pat, subjectType, p.Kind == token.LET, scope)
+
+	// `case is T`, and `case x as T`: what the subject is at run time.
+	case *ast.IsPattern:
+		c.info.PatternTypes[p] = c.resolveType(p.Type, scope)
+	case *ast.AsPattern:
+		t := c.resolveType(p.Type, scope)
+		c.info.PatternTypes[p] = t
+		c.declareCasePattern(p.Pat, t, scope)
 
 	case *ast.ExprPattern:
 		if p.X == nil {
@@ -236,8 +277,8 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 		}
 		// Match against subject type or range element type.
 		t := c.checkExpr(p.X, subjectType, scope)
-		if rng, isRange := t.(*types.Range); isRange {
-			t = rng.Element
+		if bound, _, isRange := c.info.AnyRangeOf(t); isRange {
+			t = bound
 		}
 		if subjectType != nil && t != nil &&
 			!types.Identical(t, subjectType) &&
@@ -349,23 +390,17 @@ func (c *checker) checkCondition(cond ast.Node, scope *Scope) {
 		}
 
 	case *ast.OptionalBinding:
+		// `if let x` is `if let x = x` (SE-0345): the value is the name
+		// the pattern binds, read where the condition is written.
+		if idPat, ok := cn.Pat.(*ast.IdentPattern); ok && cn.Value == nil && idPat.Name != nil {
+			cn.Value = &ast.IdentExpr{Span: idPat.Span, Name: &ast.Ident{Span: idPat.Name.Span, Escaped: idPat.Name.Escaped}}
+		}
 		var innerType types.Type
 		if cn.Value != nil {
 			initType := c.checkExpr(cn.Value, nil, scope)
 			innerType = initType
 			if opt, ok := initType.(*types.Optional); ok {
 				innerType = opt.Wrapped
-			}
-		} else {
-			// Shorthand: if let x
-			if idPat, ok := cn.Pat.(*ast.IdentPattern); ok {
-				name := idPat.Name.Text(c.file)
-				if sym := scope.Lookup(name); sym != nil {
-					innerType = sym.Type()
-					if opt, ok := innerType.(*types.Optional); ok {
-						innerType = opt.Wrapped
-					}
-				}
 			}
 		}
 		if innerType == nil {
@@ -399,7 +434,13 @@ func (c *checker) checkStored(b *ast.PatternBinding, isConst bool, scope *Scope)
 
 	var expectedType types.Type
 	if tp, ok := b.Pat.(*ast.TypedPattern); ok {
-		expectedType = c.resolveType(tp.Type, scope)
+		// `let s: Set = [1, 2]`: a generic type named bare takes its
+		// arguments from the value.
+		if t, ok := c.bareGenericAnnotation(tp.Type, b.Value, scope); ok {
+			expectedType = t
+		} else {
+			expectedType = c.resolveType(tp.Type, scope)
+		}
 	}
 	var initType types.Type
 	hasInit := b.Value != nil
@@ -416,7 +457,13 @@ func (c *checker) checkStored(b *ast.PatternBinding, isConst bool, scope *Scope)
 	if declType == nil {
 		declType = types.Typ[types.Invalid]
 	}
-	c.declarePatternInit(b.Pat, declType, isConst, hasInit, scope)
+	// The annotation is read above, where a bare `Set` takes its
+	// arguments from the value; reading it again would not.
+	pat := b.Pat
+	if tp, ok := pat.(*ast.TypedPattern); ok {
+		pat = tp.Pat
+	}
+	c.declarePatternInit(pat, declType, isConst, hasInit, scope)
 }
 
 // declareModuleVars declares the module's stored variables, before any
@@ -601,6 +648,11 @@ func (c *checker) checkMembers(d ast.Decl, body *ast.MemberBlock, self types.Typ
 	if body == nil || typeScope == nil {
 		return
 	}
+	// In a protocol's extension, self is whatever conforms: the
+	// protocol's Self, which has what the protocol requires.
+	if p, ok := self.(*types.Protocol); ok && p.Self != nil {
+		self = p.Self
+	}
 
 	prevType, prevActor, prevMember := c.currType, c.currActor, c.memberIsolated
 	c.currType = self
@@ -757,6 +809,12 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 			prev := c.inPropertyInit
 			c.inPropertyInit = !static && b.Body == nil && b.Accessors == nil && b.Value != nil
 			c.checkBinding(b, typeScope)
+			// A wrapped property's storage starts as the wrapper's
+			// initializer makes it, which runs where that did.
+			if call := c.info.WrapperInits[b]; call != nil {
+				c.inPropertyInit = true
+				c.checkExpr(call, nil, typeScope)
+			}
 			c.inPropertyInit = prev
 		}
 
@@ -861,8 +919,15 @@ func (c *checker) iteration(t types.Type) *Iteration {
 	if t == nil || isInvalid(t) {
 		return nil
 	}
+	builtin := false
 	switch t.Underlying().(type) {
-	case *types.Struct, *types.Class, *types.Enum:
+	// A generic parameter -- Self in an extension of Sequence -- is
+	// iterated through what its constraints require of it.
+	case *types.Struct, *types.Class, *types.Enum, *types.TypeParam, *types.Dependent:
+	// A built-in type -- String -- through the makeIterator() an
+	// extension gives it.
+	case *types.Basic:
+		builtin = true
 	default:
 		return nil
 	}
@@ -880,6 +945,18 @@ func (c *checker) iteration(t types.Type) *Iteration {
 			return nil, nil
 		}
 		return &MethodRef{Recv: recv, Method: m}, o.Wrapped
+	}
+	if builtin {
+		recv, ms := c.builtinMethods(t, "makeIterator")
+		for _, m := range ms {
+			if m.IsStatic || len(m.Sig.Params) != 0 {
+				continue
+			}
+			if next, elem := nextOf(m.Sig.Results); next != nil {
+				return &Iteration{MakeIterator: &MethodRef{Recv: recv, Method: m}, Iterator: m.Sig.Results, Next: next, Element: elem}
+			}
+		}
+		return nil
 	}
 	if recv, m := c.findMethod(t, "makeIterator"); m != nil && !m.IsStatic && len(m.Sig.Params) == 0 {
 		sig, _ := c.lookupMember(t, "makeIterator").(*types.Signature)
@@ -980,9 +1057,26 @@ func implicitReturn(body *ast.CodeBlock, result types.Type) {
 	if body == nil || len(body.Stmts) != 1 || result == nil || isVoidType(result) {
 		return
 	}
+	// A body that is an if or a switch of one expression per branch
+	// returns what it evaluates to (SE-0380).
+	switch st := body.Stmts[0].(type) {
+	case *ast.IfStmt, *ast.SwitchStmt:
+		if vals, ok := BranchValues(st); ok && len(vals) > 0 {
+			span := ast.Span{Lo: st.Pos(), Hi: st.End()}
+			body.Stmts[0] = &ast.ReturnStmt{Span: span, X: &ast.StmtExpr{Span: span, Stmt: st}}
+		}
+		return
+	}
 	st, ok := body.Stmts[0].(*ast.ExprStmt)
 	if !ok || st.X == nil {
 		return
+	}
+	// An init? is checked as returning Void?, and the only thing it can
+	// return implicitly is nil: `init?() { self = x }` assigns.
+	if o, ok := result.(*types.Optional); ok && isVoidType(o.Wrapped) {
+		if lit, ok := st.X.(*ast.BasicLit); !ok || lit.Kind != token.NIL {
+			return
+		}
 	}
 	body.Stmts[0] = &ast.ReturnStmt{Span: st.Span, X: st.X}
 }
@@ -1052,17 +1146,22 @@ func (c *checker) recordRawValue(self types.Type, el *ast.EnumCaseElem) {
 	if !ok || en.RawType == nil || el.Name == nil {
 		return
 	}
-	v, found := c.info.Values[el.Value]
-	if !found || v.Kind != IntValue {
-		return
-	}
 	name := el.Name.Text(c.file)
 	for _, k := range en.Cases {
 		if k != nil && k.Name == name {
-			k.RawInt, k.HasRawInt = int64(v.Int), true
+			c.info.RawValues[k] = el.Value
+			if v, found := c.info.Values[el.Value]; found && v.Kind == IntValue && isIntegerType(en.RawType) {
+				k.RawInt, k.HasRawInt = int64(v.Int), true
+			}
 			return
 		}
 	}
+}
+
+// isIntegerType reports whether t is one of the integer types.
+func isIntegerType(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsInteger != 0
 }
 
 // numberRawCases fills in consecutive integer raw values for enum cases lacking explicit values.
@@ -1135,6 +1234,13 @@ func (c *checker) joinBranches(done [][]*VarSymbol) {
 // does.
 func (c *checker) declareBoundPattern(pat ast.Pattern, t types.Type, isConst bool, scope *Scope) {
 	switch p := pat.(type) {
+	// `case let d as Double` binds a Double.
+	case *ast.AsPattern:
+		ct := c.resolveType(p.Type, scope)
+		c.info.PatternTypes[p] = ct
+		c.declareBoundPattern(p.Pat, ct, isConst, scope)
+	case *ast.IsPattern:
+		c.info.PatternTypes[p] = c.resolveType(p.Type, scope)
 	case *ast.EnumCasePattern:
 		if p.Args == nil {
 			return
@@ -1186,4 +1292,43 @@ func isVoidType(t types.Type) bool {
 		return len(u.Elements) == 0
 	}
 	return false
+}
+
+// bareGenericAnnotation is the type `let s: Set = [1, 2]` declares: the
+// built-in generic type named, with the arguments the value it is given
+// says -- the element type of an array literal for a Set or an Array,
+// the key and value types of a dictionary literal.
+func (c *checker) bareGenericAnnotation(t ast.Type, value ast.Expr, scope *Scope) (types.Type, bool) {
+	id, ok := t.(*ast.IdentType)
+	if !ok || id.Name == nil || (id.Args != nil && len(id.Args.Args) > 0) || value == nil {
+		return nil, false
+	}
+	name := id.Name.Text(c.file)
+	if name != "Set" && name != "Array" && name != "Dictionary" {
+		return nil, false
+	}
+	if scope.LookupType(name) != nil {
+		return nil, false
+	}
+	quiet := len(c.info.Diagnostics)
+	vt := c.checkExpr(value, nil, scope)
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	switch v := vt.Underlying().(type) {
+	case *types.Array:
+		switch name {
+		case "Set":
+			return &types.Set{Elem: v.Elem}, true
+		case "Array":
+			return v, true
+		}
+	case *types.Dictionary:
+		if name == "Dictionary" {
+			return v, true
+		}
+	case *types.Set:
+		if name == "Set" {
+			return v, true
+		}
+	}
+	return nil, false
 }

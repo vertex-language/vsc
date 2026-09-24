@@ -113,13 +113,14 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 				changed = true
 			}
 			params[i] = &Param{
-				Name:       p.Name,
-				Label:      p.Label,
-				Type:       newTyp,
-				Ownership:  p.Ownership,
-				Variadic:   p.Variadic,
-				HasDefault: p.HasDefault,
-				Origin:     p,
+				Name:        p.Name,
+				Label:       p.Label,
+				Type:        newTyp,
+				Ownership:   p.Ownership,
+				Variadic:    p.Variadic,
+				HasDefault:  p.HasDefault,
+				Autoclosure: p.Autoclosure,
+				Origin:      p,
 			}
 		}
 		res := substitute(tt.Results, subst, seen)

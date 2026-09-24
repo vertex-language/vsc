@@ -93,6 +93,20 @@ type WildcardExpr struct {
 type OperatorExpr struct {
 	Span
 	Kind token.Kind
+	// Synth is the spelling of an operator the compiler wrote rather than
+	// read, as Ident.Synth is a name's.
+	Synth string
+}
+
+// Text is the operator's spelling.
+func (o *OperatorExpr) Text(f *token.File) string {
+	if o == nil {
+		return ""
+	}
+	if o.Synth != "" {
+		return o.Synth
+	}
+	return string(f.Slice(o.Lo, o.Hi))
 }
 
 // PrefixExpr is PrefixOperator PostfixExpression.

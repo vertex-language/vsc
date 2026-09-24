@@ -17,7 +17,7 @@ import (
 // The C interop corpus: a C program that calls what this compiler
 // built, and Vertex code that calls what clang built.
 //
-// tests/interop asks whether what this compiler builds is the same
+// testdata/interop asks whether what this compiler builds is the same
 // thing swiftc builds. This asks the same question of the other
 // boundary, and it is a different question: there is no importer and
 // no header here, so what crosses is a symbol and a register and
@@ -32,7 +32,7 @@ import (
 //	host.c         built by clang, and holds main
 //
 // The C program returns 42 when it is satisfied and the number of the
-// check that failed otherwise, which is what tests/interop does and
+// check that failed otherwise, which is what testdata/interop does and
 // for the same reason: there is no oracle for a program that is half
 // this compiler's, so it checks itself.
 //
@@ -53,9 +53,9 @@ func TestCInteropCorpus(t *testing.T) {
 		t.Skip("no backend for this machine")
 	}
 
-	dirs, err := filepath.Glob("../tests/cinterop/*")
+	dirs, err := filepath.Glob("testdata/cinterop/*")
 	if err != nil || len(dirs) == 0 {
-		t.Fatal("no cases found in tests/cinterop")
+		t.Fatal("no cases found in testdata/cinterop")
 	}
 	for _, dir := range dirs {
 		info, err := os.Stat(dir)

@@ -29,6 +29,12 @@ func (b *Block) MoveValue(v *Value, attrs ...string) *Value {
 	return b.add(MoveValue, Aux{Attrs: attrs}, []*Value{v}, v.typ).Result()
 }
 
+// Upcast is a class instance seen as an instance of its superclass t: the
+// same reference, forwarded with the operand's ownership.
+func (b *Block) Upcast(v *Value, t Type) *Value {
+	return b.add(Upcast, Aux{}, []*Value{v}, t).Result()
+}
+
 // ExtendLifetime extends value lifetime without an explicit use.
 func (b *Block) ExtendLifetime(v *Value) *Inst {
 	return b.add(ExtendLifetime, Aux{}, []*Value{v})

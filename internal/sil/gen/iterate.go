@@ -3,7 +3,9 @@ package gen
 import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/types"
 )
 
 // A for-in over a sequence of the program's own is what Swift makes of
@@ -18,13 +20,31 @@ import (
 
 // forInIterator lowers a for-in the checker resolved to an iteration.
 func (g *gen) forInIterator(s *ast.ForInStmt, it *analyzer.Iteration) {
+	label := g.takeLabel()
+	g.iterate(s.Seq, it, label, func(payload *sil.Value, wrapped sil.Type, elem types.Type, header, exit *sil.Block, depth int) {
+		if s.Case.IsValid() {
+			g.loopCase = &loopElement{value: payload, typ: elem}
+		} else {
+			g.bindLoopVar(s.Pat, payload, wrapped)
+		}
+		g.loops = append(g.loops, loop{header: header, exit: exit, depth: depth, label: label})
+		g.forInBody(s)
+		g.loops = g.loops[:len(g.loops)-1]
+	})
+}
+
+// iterate lowers the loop over seq an iteration describes, running body
+// for each element in a scope of the element's own, which it may leave
+// for header (continue) or exit (break) as a loop's body does.
+func (g *gen) iterate(seq ast.Expr, it *analyzer.Iteration, label string,
+	body func(payload *sil.Value, wrapped sil.Type, elem types.Type, header, exit *sil.Block, depth int)) {
 	// The iterator, from makeIterator() or the sequence itself.
 	var iter *sil.Value
 	if it.MakeIterator != nil {
-		call := &ast.CallExpr{Span: ast.Span{Lo: s.Seq.Pos(), Hi: s.Seq.End()}, Fun: &ast.MemberExpr{Span: ast.Span{Lo: s.Seq.Pos(), Hi: s.Seq.End()}, X: s.Seq}}
-		iter = g.methodCall(call, it.MakeIterator, func() *sil.Value { return g.expr(s.Seq) })
+		call := &ast.CallExpr{Span: ast.Span{Lo: seq.Pos(), Hi: seq.End()}, Fun: &ast.MemberExpr{Span: ast.Span{Lo: seq.Pos(), Hi: seq.End()}, X: seq}}
+		iter = g.methodCall(call, it.MakeIterator, func() *sil.Value { return g.expr(seq) })
 	} else {
-		iter = g.expr(s.Seq)
+		iter = g.expr(seq)
 	}
 	if iter == nil {
 		return
@@ -40,9 +60,9 @@ func (g *gen) forInIterator(s *ast.ForInStmt, it *analyzer.Iteration) {
 	g.blk.Store(iter, slot, storeQualifier(lt))
 
 	// A node standing for the iterator, for the call's receiver type.
-	iterExpr := &ast.IdentExpr{Span: ast.Span{Lo: s.Seq.Pos(), Hi: s.Seq.End()}}
+	iterExpr := &ast.IdentExpr{Span: ast.Span{Lo: seq.Pos(), Hi: seq.End()}}
 	g.info.Types[iterExpr] = it.Iterator
-	nextCall := &ast.CallExpr{Span: ast.Span{Lo: s.Seq.Pos(), Hi: s.Seq.End()}, Fun: &ast.MemberExpr{Span: ast.Span{Lo: s.Seq.Pos(), Hi: s.Seq.End()}, X: iterExpr}}
+	nextCall := &ast.CallExpr{Span: ast.Span{Lo: seq.Pos(), Hi: seq.End()}, Fun: &ast.MemberExpr{Span: ast.Span{Lo: seq.Pos(), Hi: seq.End()}, X: iterExpr}}
 
 	elem := g.substituted(it.Element)
 	wrapped := lowerType(elem)
@@ -52,7 +72,6 @@ func (g *gen) forInIterator(s *ast.ForInStmt, it *analyzer.Iteration) {
 	}
 
 	header, exit := g.fn.Block(), g.fn.Block()
-	label := g.takeLabel()
 	g.blk.Br(header)
 
 	// Each pass asks the iterator for its next element.
@@ -72,23 +91,16 @@ func (g *gen) forInIterator(s *ast.ForInStmt, it *analyzer.Iteration) {
 	// call made end here, on both arms.
 	v := g.consume(next)
 	g.pop()
-	body := g.fn.Block()
-	payload := body.Arg(wrapped, own)
+	bodyBlk := g.fn.Block()
+	payload := bodyBlk.Arg(wrapped, own)
 	g.blk.SwitchEnum(v,
-		sil.Case{Member: optionalSome, Dest: body},
+		sil.Case{Member: optionalSome, Dest: bodyBlk},
 		sil.Case{Member: optionalNone, Dest: exit})
 
-	g.blk = body
+	g.blk = bodyBlk
 	depth := len(g.scopes)
 	g.push()
-	if s.Case.IsValid() {
-		g.loopCase = &loopElement{value: payload, typ: elem}
-	} else {
-		g.bindLoopVar(s.Pat, payload, wrapped)
-	}
-	g.loops = append(g.loops, loop{header: header, exit: exit, depth: depth, label: label})
-	g.forInBody(s)
-	g.loops = g.loops[:len(g.loops)-1]
+	body(payload, wrapped, elem, header, exit, depth)
 	if g.blk != nil && g.blk.Term() == nil {
 		g.pop()
 		g.blk.Br(header)
@@ -96,4 +108,50 @@ func (g *gen) forInIterator(s *ast.ForInStmt, it *analyzer.Iteration) {
 		g.scopes = g.scopes[:len(g.scopes)-1]
 	}
 	g.blk = exit
+}
+
+// arrayOfSequence lowers `Array(s)` of a sequence the checker can iterate
+// -- a String's Characters, a Sequence of the program's own -- as Swift's
+// init does: each element appended, in order, to an array made empty.
+func (g *gen) arrayOfSequence(e *ast.CallExpr, it *analyzer.Iteration) *sil.Value {
+	t := g.typeOf(e)
+	arr, ok := arrayOf(t)
+	if !ok {
+		g.refuse(e, "an array of a sequence whose element type is not known")
+		return nil
+	}
+	empty := g.makeArray(e, t, arr.Elem, nil)
+	if empty == nil {
+		return nil
+	}
+	g.forget(empty)
+	lt := lowerType(t)
+	box := g.blk.AllocBox(lt, "$array", "var")
+	borrow := g.blk.BeginBorrow(box, "var_decl")
+	slot := g.blk.ProjectBox(borrow, 0, lt)
+	g.destroyLater(box)
+	g.endBorrowLater(borrow)
+	g.blk.Store(empty, slot, storeQualifier(lt))
+	// A variable of the loop's own stands for the array, so that append
+	// writes through it as it would through a variable the program named.
+	span := ast.Span{Lo: e.Pos(), Hi: e.End()}
+	sym := analyzer.NewVar("$array", t, e.Pos(), false, types.DefaultOwnership)
+	array := &ast.IdentExpr{Span: span, Name: &ast.Ident{Span: span}}
+	g.info.Uses[array.Name] = sym
+	g.info.Types[array] = t
+	g.locals[sym] = &local{addr: slot, box: box, typ: lt}
+	appendElem, ok := core.LowerCollectionMethod(t, "append", []string{""})
+	if !ok {
+		g.refuse(e, "an array of a sequence of '"+arr.Elem.String()+"'")
+		return nil
+	}
+	g.iterate(e.Args.Args[0].X, it, "", func(payload *sil.Value, wrapped sil.Type, _ types.Type, _, _ *sil.Block, _ int) {
+		v := payload
+		if v.Ownership() != sil.Owned && !wrapped.Trivial() {
+			v = g.blk.CopyValue(v)
+		}
+		g.collectionCall(e, appendElem, array, []collArg{{value: v}})
+	})
+	delete(g.locals, sym)
+	return g.loaded(g.blk.Load(slot, loadQualifier(lt)), lt)
 }

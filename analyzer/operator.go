@@ -45,10 +45,19 @@ func unlabelOperator(name string, sig *types.Signature) {
 type operatorChoice struct {
 	fn  *FuncSymbol
 	ref *MethodRef
+	// subst is what a generic function's parameters stand for at this
+	// use: Swift's `==` on tuples is `== <A, B>`, and `(1, "a") == p`
+	// has A an Int and B a String.
+	subst map[*types.TypeParam]types.Type
 }
 
 func (o operatorChoice) sig() *types.Signature {
 	if o.fn != nil {
+		if len(o.subst) > 0 {
+			if s, ok := types.Substitute(o.fn.Signature(), o.subst).(*types.Signature); ok {
+				return s
+			}
+		}
 		return o.fn.Signature()
 	}
 	return o.ref.Method.Sig
@@ -165,6 +174,9 @@ func requirementOperators(t types.Type, op string, arity int) []operatorChoice {
 // both to literals retyped to fit.
 func (c *checker) resolveOperator(scope *Scope, op string, e ast.Expr, xs []ast.Expr, operands []types.Type) (types.Type, bool) {
 	if ch, ok := c.pickOperator(scope, op, xs, operands); ok {
+		if len(ch.subst) > 0 {
+			return c.chooseGenericOperator(e, ch, xs, scope), true
+		}
 		return c.chooseOperator(e, ch), true
 	}
 	if t, ok := c.derivedOperator(scope, op, e, xs, operands); ok {
@@ -193,9 +205,24 @@ func (c *checker) pickOperator(scope *Scope, op string, xs []ast.Expr, operands 
 	}
 	for _, exact := range []bool{true, false} {
 		for _, ch := range choices {
+			if ch.fn != nil && len(ch.fn.Signature().TypeParams) > 0 {
+				continue
+			}
 			if fits(ch, exact) {
 				return ch, true
 			}
+		}
+	}
+	// A generic operator, where nothing more particular fits: its
+	// parameters are what the operands say, and must meet their
+	// constraints.
+	for _, ch := range choices {
+		if ch.fn == nil || len(ch.fn.Signature().TypeParams) == 0 {
+			continue
+		}
+		if subst, ok := c.inferOperator(ch.fn.Signature(), operands); ok {
+			ch.subst = subst
+			return ch, true
 		}
 	}
 	// Literals retyped to what a declaration takes: `d * 4` with d a
@@ -287,6 +314,97 @@ func (c *checker) coreProtocol(name string) (*types.Protocol, bool) {
 	return p, ok
 }
 
+// inferOperator is what a generic operator's parameters stand for, given
+// its operands, where every one is said and meets its constraints.
+func (c *checker) inferOperator(sig *types.Signature, operands []types.Type) (map[*types.TypeParam]types.Type, bool) {
+	subst := map[*types.TypeParam]types.Type{}
+	for i, t := range operands {
+		if t == nil || isInvalid(t) || !types.Unify(sig.Params[i].Type, literalDefaults(t), subst) {
+			return nil, false
+		}
+	}
+	for _, tp := range sig.TypeParams {
+		bound, ok := subst[tp]
+		if !ok || !c.meetsConstraints(bound, tp) {
+			return nil, false
+		}
+	}
+	out, ok := types.Substitute(sig, subst).(*types.Signature)
+	if !ok {
+		return nil, false
+	}
+	for i, t := range operands {
+		if !types.AssignableTo(t, out.Params[i].Type) {
+			return nil, false
+		}
+	}
+	return subst, true
+}
+
+// literalDefaults is t with every untyped literal type in it the type the
+// literal is alone: a tuple of an integer and a string literal is an
+// (Int, String).
+func literalDefaults(t types.Type) types.Type {
+	if tu, ok := t.(*types.Tuple); ok {
+		elems := make([]*types.TupleElement, len(tu.Elements))
+		for i, el := range tu.Elements {
+			elems[i] = &types.TupleElement{Name: el.Name, Type: literalDefaults(el.Type)}
+		}
+		return &types.Tuple{Elements: elems}
+	}
+	return literalDefault(t)
+}
+
+// chooseGenericOperator records a generic operator's use as the call it
+// is -- `(a, b) == (c, d)` is `==(…)` specialized for the operands' types
+// -- which the generator lowers as it would that call.
+func (c *checker) chooseGenericOperator(e ast.Expr, ch operatorChoice, xs []ast.Expr, scope *Scope) types.Type {
+	sig := ch.sig()
+	span := ast.Span{Lo: e.Pos(), Hi: e.End()}
+	if bin, ok := e.(*ast.BinaryExpr); ok && bin.Op != nil {
+		span = ast.Span{Lo: bin.Op.Pos(), Hi: bin.Op.End()}
+	}
+	fun := &ast.IdentExpr{Span: span, Name: &ast.Ident{Span: span}}
+	call := &ast.CallExpr{Span: ast.Span{Lo: e.Pos(), Hi: e.End()}, Fun: fun, Args: &ast.CallArgs{Span: ast.Span{Lo: e.Pos(), Hi: e.End()}}}
+	for i, x := range xs {
+		call.Args.Args = append(call.Args.Args, &ast.CallArg{Span: ast.Span{Lo: x.Pos(), Hi: x.End()}, X: x})
+		// A literal operand, or a tuple of them, is the type the
+		// parameter took it as.
+		if i < len(sig.Params) && literalOperand(x) && !types.Identical(c.info.Types[x], sig.Params[i].Type) {
+			c.checkExpr(x, sig.Params[i].Type, scope)
+		}
+	}
+	c.info.Uses[fun.Name] = ch.fn
+	c.info.Types[fun] = sig
+	c.info.Types[call] = sig.Results
+	spec := Specialization{Params: ch.fn.Signature().TypeParams}
+	for _, p := range spec.Params {
+		spec.Args = append(spec.Args, ch.subst[p])
+	}
+	c.info.Specializations[call] = spec
+	c.info.OperatorCalls[e] = call
+	return sig.Results
+}
+
+// literalOperand reports whether e is a literal, or a tuple of them.
+func literalOperand(e ast.Expr) bool {
+	switch x := unparen(e).(type) {
+	case *ast.BasicLit, *ast.StringLit:
+		return true
+	case *ast.PrefixExpr:
+		_, lit := literalUnder(x)
+		return lit
+	case *ast.TupleExpr:
+		for _, el := range x.Elems {
+			if !literalOperand(el.X) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // chooseOperator records a choice and returns its result type.
 func (c *checker) chooseOperator(e ast.Expr, ch operatorChoice) types.Type {
 	if ch.ref != nil {
@@ -322,6 +440,26 @@ func (c *checker) implicitOperandContext(scope *Scope, op string, other types.Ty
 		}
 	}
 	return other
+}
+
+// closureOperandContext is the function type a closure written as an
+// operand is wanted as: the parameter at index of an operator declared
+// for the other operand, `x |> { $0 * 10 }`. A closure has no type of its
+// own to choose an operator by, and its `$0` needs one to be declared.
+func (c *checker) closureOperandContext(scope *Scope, op string, other types.Type, index int) types.Type {
+	if other == nil || isInvalid(other) {
+		return nil
+	}
+	for _, ch := range c.operatorChoices(scope, op, []types.Type{other, other}) {
+		params := ch.sig().Params
+		if len(params) != 2 || !types.AssignableTo(other, params[1-index].Type) {
+			continue
+		}
+		if _, isFunc := params[index].Type.Underlying().(*types.Signature); isFunc {
+			return params[index].Type
+		}
+	}
+	return nil
 }
 
 // fitsQuietly reports whether e checks as want without a diagnostic, and

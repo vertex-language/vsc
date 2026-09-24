@@ -150,6 +150,89 @@ inline usize graphemeCount(const u8* bytes, usize count) {
   return clusters;
 }
 
+// ---- case mapping and scalar properties ----
+
+// encodeScalar writes c as UTF-8 into out, which has room for four bytes,
+// and answers how many it took.
+inline usize encodeScalar(u32 c, u8* out) {
+  if (c < 0x80) {
+    out[0] = static_cast<u8>(c);
+    return 1;
+  }
+  if (c < 0x800) {
+    out[0] = static_cast<u8>(0xC0 | (c >> 6));
+    out[1] = static_cast<u8>(0x80 | (c & 0x3F));
+    return 2;
+  }
+  if (c < 0x10000) {
+    out[0] = static_cast<u8>(0xE0 | (c >> 12));
+    out[1] = static_cast<u8>(0x80 | ((c >> 6) & 0x3F));
+    out[2] = static_cast<u8>(0x80 | (c & 0x3F));
+    return 3;
+  }
+  out[0] = static_cast<u8>(0xF0 | (c >> 18));
+  out[1] = static_cast<u8>(0x80 | ((c >> 12) & 0x3F));
+  out[2] = static_cast<u8>(0x80 | ((c >> 6) & 0x3F));
+  out[3] = static_cast<u8>(0x80 | (c & 0x3F));
+  return 4;
+}
+
+// caseMapping finds c's full mapping in a table of (scalar, offset << 8 |
+// length) pairs, sorted by scalar: where it starts in casePool, with its
+// length in *length, or nullptr where c maps to itself.
+inline const u32* caseMapping(const u32* table, u32 count, u32 c, u32* length) {
+  u32 lo = 0, hi = count / 2;
+  while (lo < hi) {
+    u32 mid = (lo + hi) / 2;
+    if (table[2 * mid] < c)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  if (lo < count / 2 && table[2 * lo] == c) {
+    u32 packed = table[2 * lo + 1];
+    *length = packed & 0xFF;
+    return ucd::casePool + (packed >> 8);
+  }
+  *length = 0;
+  return nullptr;
+}
+
+// The flags scalarFlags holds for a scalar; the generator writes them.
+enum : u8 {
+  scalarAlphabetic = 1, scalarUppercase = 2, scalarLowercase = 4,
+  scalarCased = 8, scalarWhiteSpace = 16, scalarMath = 32,
+};
+
+inline u8 flagsOf(u32 c) { return rangeValue(ucd::scalarFlags, ucd::scalarFlagsCount, c); }
+
+// generalCategoryOf numbers c's General_Category as Swift's
+// Unicode.GeneralCategory lists them, from 1; 30 is unassigned.
+inline u8 generalCategoryOf(u32 c) {
+  u8 v = rangeValue(ucd::generalCategoryRanges, ucd::generalCategoryRangesCount, c);
+  return v == 0 ? 30 : v;
+}
+
+// numericTypeOf is 1 for Decimal, 2 for Digit, 3 for Numeric, 0 for none.
+inline u8 numericTypeOf(u32 c) { return rangeValue(ucd::numericTypeRanges, ucd::numericTypeRangesCount, c); }
+
+// wholeNumberOf is c's numeric value where it is a whole number.
+inline bool wholeNumberOf(u32 c, u64* out) {
+  u32 lo = 0, hi = ucd::wholeNumbersCount / 3;
+  while (lo < hi) {
+    u32 mid = (lo + hi) / 2;
+    if (ucd::wholeNumbers[3 * mid] < c)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  if (lo < ucd::wholeNumbersCount / 3 && ucd::wholeNumbers[3 * lo] == c) {
+    *out = static_cast<u64>(ucd::wholeNumbers[3 * lo + 1]) | static_cast<u64>(ucd::wholeNumbers[3 * lo + 2]) << 32;
+    return true;
+  }
+  return false;
+}
+
 // ---- canonical equivalence ----
 
 inline u8 combiningClass(u32 c) {

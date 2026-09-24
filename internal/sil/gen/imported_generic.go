@@ -51,6 +51,10 @@ func (g *gen) callImportedGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol,
 		g.refuse(e, "a generic function this compiler cannot name: "+err.Error())
 		return nil
 	}
+	// One the runtime implements says which of its functions it is.
+	if silgen, has := g.silgenName(sym); has && silgen != "" {
+		name = silgen
+	}
 	callee := g.m.Func(name).SetSourceName(sym.Name())
 	if g.needsType(callee) {
 		callee.SetLinkage(sil.PublicExternal)
@@ -59,9 +63,18 @@ func (g *gen) callImportedGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol,
 
 	// The arguments the source wrote. One whose parameter is a type
 	// parameter goes into storage and travels as its address.
-	var args []*sil.Value
+	var args, slots []*sil.Value
 	if e.Args != nil {
 		for i, a := range e.Args.Args {
+			// An inout argument is its storage already.
+			if i < len(sig.Params) && sig.Params[i].Ownership == types.InOut {
+				v := g.expr(a.X)
+				if v == nil {
+					return nil
+				}
+				args = append(args, v)
+				continue
+			}
 			v := g.rvalue(a.X)
 			if v == nil {
 				return nil
@@ -69,6 +82,7 @@ func (g *gen) callImportedGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol,
 			if i < len(sig.Params) && isTypeParam(sig.Params[i].Type) {
 				slot := g.blk.AllocStack(v.Type())
 				g.blk.Store(v, slot, storeQualifier(v.Type()))
+				slots = append(slots, slot)
 				v = slot
 			}
 			args = append(args, v)
@@ -78,6 +92,14 @@ func (g *gen) callImportedGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol,
 
 	result := lowerType(types.Substitute(sig.Results, spec.Subst()))
 	v := g.blk.Apply(g.blk.FunctionRef(callee), result, args...)
+	// The storage the arguments travelled in, and what is in it, end with
+	// the call: the callee borrowed them.
+	for i := len(slots) - 1; i >= 0; i-- {
+		if !slots[i].Type().Object().Trivial() {
+			g.blk.DestroyAddr(slots[i])
+		}
+		g.blk.DeallocStack(slots[i])
+	}
 	g.destroyLater(v)
 	return v
 }
@@ -92,6 +114,10 @@ func (g *gen) declareImportedGeneric(f *sil.Func, sig *types.Signature) {
 	ft.Async = sig.Async
 	for _, p := range sig.Params {
 		t := lowerType(p.Type)
+		if p.Ownership == types.InOut {
+			ft.Params = append(ft.Params, sil.Param{Type: t.Address(), Convention: sil.ParamInout})
+			continue
+		}
 		if isTypeParam(p.Type) {
 			ft.Params = append(ft.Params,
 				sil.Param{Type: t.Address(), Convention: sil.ParamInGuaranteed})

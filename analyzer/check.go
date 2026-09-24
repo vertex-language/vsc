@@ -18,6 +18,9 @@ type checker struct {
 	info        *Info
 	resolved    map[ast.Type]types.Type
 	currFuncRet types.Type
+	// branchValues is the expression statements that are the branches of
+	// an if or a switch used as a value, and the type each is wanted as.
+	branchValues map[*ast.ExprStmt]types.Type
 	// currFuncName is what #function says where it is written: the
 	// declaration being checked, spelled as Swift names it.
 	currFuncName string
@@ -67,6 +70,9 @@ type checker struct {
 	inChain map[ast.Expr]bool
 	// importing is the module whose interface is being read, or "".
 	importing string
+	// wrapped is the properties property wrappers give, finished once
+	// every type's members are read.
+	wrapped []wrappedProperty
 }
 
 // typeErrorf reports a type diagnostic unless one of the types is types.Invalid.
@@ -212,6 +218,17 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 			c.file = f.Unit
 		}
 		c.resolveExtensions(declsOf(f.Stmts), pkgScope)
+	}
+
+	// Pass 3.52: What property wrappers give the properties they wrap.
+	c.finishWrappedProperties()
+
+	// Pass 3.55: Initializers a subclass inherits.
+	for _, f := range files {
+		if f.Unit != nil {
+			c.file = f.Unit
+		}
+		c.inheritInitializers(declsOf(f.Stmts), pkgScope)
 	}
 
 	// Pass 3.6: Receiver methods

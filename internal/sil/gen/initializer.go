@@ -16,13 +16,13 @@ func (g *gen) initializer(d *ast.InitDecl, recv types.Type) {
 		return
 	}
 	switch {
-	case d.Question.IsValid() || d.Exclaim.IsValid():
-		g.refuse(d, "a failable initializer")
+	case (d.Question.IsValid() || d.Exclaim.IsValid()) && isClass(recv):
+		g.refuse(d, "a failable initializer of a class")
 		return
 	case isClass(recv):
 		g.classInitializer(d, recv)
 		return
-	case !isStructType(recv):
+	case !isStructType(recv) && !isBasicValue(recv):
 		g.refuse(d, "an initializer this type declares")
 		return
 	}
@@ -47,25 +47,26 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 	f := g.m.Func(name).SetSourceName("init").SetLinkage(g.initLinkage()).SetAttr("ossa")
 
 	outer := struct {
-		fn      *sil.Func
-		entry   bool
-		blk     *sil.Block
-		scopes  []*scope
-		locals  map[analyzer.Symbol]*local
-		loops   []loop
-		pending string
-		recv    types.Type
-		self    *local
-		initRet func()
-		throws  bool
-		catches []catchTarget
-	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.initReturn, g.throws, g.catches}
+		fn       *sil.Func
+		entry    bool
+		blk      *sil.Block
+		scopes   []*scope
+		locals   map[analyzer.Symbol]*local
+		loops    []loop
+		pending  string
+		recv     types.Type
+		self     *local
+		initRet  func()
+		initFail func()
+		throws   bool
+		catches  []catchTarget
+	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.initReturn, g.initFail, g.throws, g.catches}
 	defer func() {
 		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
 		g.scopes, g.locals = outer.scopes, outer.locals
 		g.loops, g.pending = outer.loops, outer.pending
 		g.recv, g.self = outer.recv, outer.self
-		g.initReturn = outer.initRet
+		g.initReturn, g.initFail = outer.initRet, outer.initFail
 		g.throws, g.catches = outer.throws, outer.catches
 	}()
 
@@ -100,7 +101,13 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 	mt := sil.ThinMetatype(recv)
 	f.Param(mt, sil.ParamUnowned)
 	f.Type().Convention = sil.Method
-	f.SetResult(lowerType(recv), resultConvention(lowerType(recv)))
+	// An init? makes an optional: .some(self) where the body finishes,
+	// .none where it returns nil.
+	made := types.Type(recv)
+	if sig.Failable {
+		made = &types.Optional{Wrapped: recv}
+	}
+	f.SetResult(lowerType(made), resultConvention(lowerType(made)))
 
 	t := lowerType(recv)
 	// A property's first assignment in the body lets go of what was there
@@ -160,7 +167,17 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 		// end and box destroy (registered above) along with any parameters.
 		v := g.blk.Load(addr, loadQualifier(t))
 		g.unwind()
+		if sig.Failable {
+			v = g.blk.Enum(lowerType(made), optionalSome, v)
+		}
 		g.blk.Return(v)
+	}
+	g.initFail = nil
+	if sig.Failable {
+		g.initFail = func() {
+			g.unwind()
+			g.blk.Return(g.blk.Enum(lowerType(made), optionalNone, nil))
+		}
 	}
 	_ = selfCleanup
 
@@ -177,11 +194,6 @@ func (g *gen) classInitializer(d *ast.InitDecl, recv types.Type) {
 	if !ok {
 		return
 	}
-	if cl.Superclass != nil {
-		g.refuse(d, "an initializer of a class with a superclass, which has to run "+
-			"the one above it")
-		return
-	}
 	sig := g.classInitSignature(d, recv, cl)
 	if sig == nil {
 		g.refuse(d, "this initializer")
@@ -192,10 +204,67 @@ func (g *gen) classInitializer(d *ast.InitDecl, recv types.Type) {
 		g.refuse(d, "this initializer")
 		return
 	}
+	if sig.Convenience {
+		g.convenienceInit(d, recv, sig, alloc)
+		return
+	}
 	initializing := alloc[:len(alloc)-1] + "c"
 
 	g.classInitBody(d, recv, sig, initializing)
 	g.classAllocator(recv, sig, alloc, initializing)
+}
+
+// convenienceInit emits a class's convenience initializer: an entry that
+// makes the instance by handing on to another of the class's initializers
+// -- its `self.init(...)` -- and then runs the rest of its body on it.
+func (g *gen) convenienceInit(d *ast.InitDecl, recv types.Type, sig *types.Signature, name string) {
+	f := g.m.Func(name).SetSourceName("init").SetLinkage(g.initLinkage()).SetAttr("ossa")
+	restore := g.saveFunction()
+	convenience, convSelf := g.convenience, g.convSelf
+	defer func() {
+		restore()
+		g.convenience, g.convSelf = convenience, convSelf
+	}()
+	g.fn, g.entry = f, false
+	f.Type().Params = nil
+	g.locals = map[analyzer.Symbol]*local{}
+	g.scopes, g.loops, g.pending = nil, nil, ""
+	g.recv, g.self, g.initReturn = recv, nil, nil
+	g.convenience, g.convSelf = true, nil
+	g.push()
+	g.blk = f.Entry()
+
+	params := g.initParams(d)
+	for i, p := range sig.Params {
+		t := lowerType(p.Type)
+		v := f.Param(t, paramConvention(p, t))
+		if i < len(params) && params[i] != nil {
+			g.locals[params[i]] = &local{value: v, typ: t}
+		}
+		if p.Name != "" {
+			g.blk.DebugValue(v, p.Name, "let", "argno "+itoa(i+1))
+		}
+		g.destroyLater(v)
+	}
+	t := lowerType(recv)
+	f.Param(sil.ThinMetatype(recv), sil.ParamUnowned)
+	f.Type().Convention = sil.Method
+	f.SetResult(t, resultConvention(t))
+
+	g.initReturn = func() {
+		if g.convSelf == nil {
+			g.refuse(d, "a convenience initializer that returns before its self.init")
+			g.blk.Unreachable()
+			return
+		}
+		self := g.convSelf
+		g.unwind()
+		g.blk.Return(self)
+	}
+	g.block(d.Body)
+	if g.blk != nil && g.blk.Term() == nil {
+		g.initReturn()
+	}
 }
 
 // classInitBody emits the entry point that fills an instance in: the
@@ -232,36 +301,16 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 	f.SetResult(t, resultConvention(t))
 	g.blk.DebugValue(self, "self", "let")
 
-	// The class's own stored properties with a default value have it
-	// before the body runs, as a struct's do. The instance starts zeroed,
-	// so there is nothing for the store to let go of.
-	if cl, ok := recv.Underlying().(*types.Class); ok {
-		for _, fld := range cl.Fields {
-			if fld == nil || !fld.HasDefault {
-				continue
-			}
-			def := g.info.FieldDefaults[fld]
-			if def == nil {
-				// An instance of a generic class: the default is recorded
-				// against the declaration's property, and the
-				// specialization in force reads it for this instance.
-				def, _ = g.instanceDefault(recv, fld.Name)
-			}
-			if def == nil {
-				continue
-			}
-			v := g.rvalue(def)
-			if v == nil {
-				continue
-			}
-			ft := lowerType(fld.Type)
-			v = g.optionalFor(def, v, g.typeOf(def), fld.Type)
-			at := g.blk.RefElementAddr(self, memberName(recv, fld.Name), ft)
-			g.blk.Store(v, at, storeQualifier(ft))
-		}
-	}
+	g.classFieldDefaults(recv, self)
+	g.defaultAncestors(recv, self)
 
+	// A subclass's initializer that does not run one of its superclass's
+	// runs the superclass's init() at its end, as Swift has it.
+	implicitSuper := g.implicitSuperInit(d, recv)
 	g.initReturn = func() {
+		if implicitSuper != nil {
+			g.callSuperInit(d, recv, implicitSuper, nil)
+		}
 		g.unwind()
 		g.blk.Return(g.blk.CopyValue(self))
 	}
@@ -271,6 +320,175 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 	if g.blk != nil && g.blk.Term() == nil {
 		g.initReturn()
 	}
+}
+
+// implicitSuperInit is the superclass's init() a subclass's designated
+// initializer runs at its end, where the body calls no super.init of its
+// own; nil where there is none to run.
+func (g *gen) implicitSuperInit(d *ast.InitDecl, recv types.Type) *types.Signature {
+	cl, ok := recv.Underlying().(*types.Class)
+	if !ok || cl.Superclass == nil || d == nil || d.Body == nil {
+		return nil
+	}
+	calls := false
+	ast.Inspect(d.Body, func(n ast.Node) bool {
+		if ref, ok := n.(*ast.InitRefExpr); ok {
+			if _, ok := ref.X.(*ast.SuperExpr); ok {
+				calls = true
+			}
+		}
+		return !calls
+	})
+	if calls {
+		return nil
+	}
+	super, ok := cl.Superclass.Underlying().(*types.Class)
+	if !ok {
+		return nil
+	}
+	for _, sig := range super.Inits {
+		if sig != nil && !sig.Convenience && len(sig.Params) == 0 {
+			return sig
+		}
+	}
+	return nil
+}
+
+// superInit is `super.init(...)` in a class's initializer: the
+// superclass's initializing entry, run on this instance.
+func (g *gen) superInit(e *ast.CallExpr, ref *ast.InitRefExpr) (*sil.Value, bool) {
+	if _, ok := ref.X.(*ast.SuperExpr); !ok || g.recv == nil || !isClass(g.recv) {
+		return nil, false
+	}
+	sig := g.info.Inits[e]
+	if sig == nil {
+		g.refuse(e, "a super.init whose arguments do not match one the superclass declares")
+		return nil, true
+	}
+	var args []*ast.CallArg
+	if e.Args != nil {
+		args = e.Args.Args
+	}
+	if !g.callSuperInit(e, g.recv, sig, args) {
+		return nil, true
+	}
+	return g.void(), true
+}
+
+// callSuperInit runs the superclass's initializer sig on self, the
+// instance recv's initializer is filling in, with args for its parameters.
+func (g *gen) callSuperInit(at ast.Node, recv types.Type, sig *types.Signature, args []*ast.CallArg) bool {
+	cl, ok := recv.Underlying().(*types.Class)
+	if !ok || cl.Superclass == nil {
+		return false
+	}
+	super := cl.Superclass
+	out := *sig
+	out.Results = super
+	alloc := g.initSymbol(super, &out)
+	if alloc == "" || !strings.HasSuffix(alloc, "fC") {
+		g.refuse(at, "this super.init")
+		return false
+	}
+	st := lowerType(super)
+	callee := g.m.Func(alloc[:len(alloc)-1] + "c").SetSourceName("init")
+	if g.needsType(callee) {
+		for _, p := range out.Params {
+			pt := lowerType(p.Type)
+			callee.Type().Params = append(callee.Type().Params,
+				sil.Param{Type: pt, Convention: paramConvention(p, pt)})
+		}
+		callee.Type().Params = append(callee.Type().Params,
+			sil.Param{Type: st, Convention: sil.ParamGuaranteed})
+		callee.Type().Convention = sil.Method
+		callee.SetResult(st, resultConvention(st))
+	}
+	var vals []*sil.Value
+	if call, ok := at.(*ast.CallExpr); ok {
+		var ok bool
+		if vals, ok = g.arguments(call, &out); !ok {
+			return false
+		}
+	}
+	self := g.blk.Upcast(g.selfValue(), st)
+	vals = append(vals, self)
+	made := g.blk.Apply(g.blk.FunctionRef(callee), st, vals...)
+	g.blk.DestroyValue(made)
+	return true
+}
+
+// inheritedInitializers emits, for a class that inherits its superclass's
+// designated initializers, the two entries of each: the one filling an
+// instance in -- its own properties' defaults, then the superclass's
+// initializer on it -- and the one making the instance.
+func (g *gen) inheritedInitializers(recv types.Type) {
+	cl, ok := recv.Underlying().(*types.Class)
+	if !ok {
+		return
+	}
+	for _, sig := range cl.Inits {
+		if sig == nil || !sig.Inherited {
+			continue
+		}
+		out := *sig
+		out.Results = recv
+		alloc := g.initSymbol(recv, &out)
+		if alloc == "" || !strings.HasSuffix(alloc, "fC") {
+			continue
+		}
+		initializing := alloc[:len(alloc)-1] + "c"
+		g.inheritedInitBody(recv, &out, sig, initializing)
+		g.classAllocator(recv, &out, alloc, initializing)
+	}
+}
+
+// inheritedInitBody is the initializing entry of an inherited initializer.
+func (g *gen) inheritedInitBody(recv types.Type, out, super *types.Signature, name string) {
+	f := g.m.Func(name).SetSourceName("init").SetLinkage(g.initLinkage()).SetAttr("ossa")
+	restore := g.saveFunction()
+	defer restore()
+	g.fn, g.entry = f, false
+	f.Type().Params = nil
+	g.locals = map[analyzer.Symbol]*local{}
+	g.scopes, g.loops, g.pending = nil, nil, ""
+	g.recv, g.self, g.initReturn = recv, nil, nil
+	g.push()
+	g.blk = f.Entry()
+
+	var args []*sil.Value
+	for _, p := range out.Params {
+		pt := lowerType(p.Type)
+		args = append(args, f.Param(pt, paramConvention(p, pt)))
+	}
+	t := lowerType(recv)
+	self := f.Param(t, sil.ParamGuaranteed)
+	f.Type().Convention = sil.Method
+	f.SetResult(t, resultConvention(t))
+	g.classFieldDefaults(recv, self)
+	g.defaultAncestors(recv, self)
+
+	cl := recv.Underlying().(*types.Class)
+	superT := cl.Superclass
+	sout := *super
+	sout.Results = superT
+	alloc := g.initSymbol(superT, &sout)
+	st := lowerType(superT)
+	callee := g.m.Func(alloc[:len(alloc)-1] + "c").SetSourceName("init")
+	if g.needsType(callee) {
+		for _, p := range sout.Params {
+			pt := lowerType(p.Type)
+			callee.Type().Params = append(callee.Type().Params,
+				sil.Param{Type: pt, Convention: paramConvention(p, pt)})
+		}
+		callee.Type().Params = append(callee.Type().Params,
+			sil.Param{Type: st, Convention: sil.ParamGuaranteed})
+		callee.Type().Convention = sil.Method
+		callee.SetResult(st, resultConvention(st))
+	}
+	made := g.blk.Apply(g.blk.FunctionRef(callee), st, append(args, g.blk.Upcast(self, st))...)
+	g.blk.DestroyValue(made)
+	g.unwind()
+	g.blk.Return(g.blk.CopyValue(self))
 }
 
 // classAllocator emits the entry point that makes the instance and
@@ -351,11 +569,14 @@ func (g *gen) saveFunction() func() {
 // initSignature is the initializer's type: what it was declared with,
 // returning the type it makes.
 func (g *gen) initSignature(d *ast.InitDecl, recv types.Type) *types.Signature {
-	st, ok := recv.Underlying().(*types.Struct)
-	if !ok {
-		return nil
+	var inits []*types.Signature
+	if st, ok := recv.Underlying().(*types.Struct); ok {
+		inits = st.Inits
+	} else if b := g.info.Builtins[analyzer.BuiltinKey(recv)]; b != nil && isBasicValue(recv) {
+		// Int's and String's are the ones their extensions declare.
+		inits = b.Inits
 	}
-	for _, cand := range st.Inits {
+	for _, cand := range inits {
 		if cand != nil && g.sameInitParams(cand, d) {
 			out := *cand
 			out.Results = recv
@@ -395,6 +616,25 @@ func (g *gen) sameInitParams(sig *types.Signature, d *ast.InitDecl) bool {
 			name = label
 		}
 		if sig.Params[i].Label != label || sig.Params[i].Name != name {
+			return false
+		}
+	}
+	// And by type: init?(exactly: Int) and init?(exactly: Double) have
+	// the same labels and names. A type written in a generic parameter is
+	// substituted in an instance's signature, and is left to the labels.
+	prev := g.file
+	g.file = file
+	syms := g.initParams(d)
+	g.file = prev
+	for i, sym := range syms {
+		if sym == nil || i >= len(sig.Params) {
+			continue
+		}
+		declared, called := sym.Type(), sig.Params[i].Type
+		if declared == nil || called == nil || mentionsTypeParam(declared) || mentionsTypeParam(called) {
+			continue
+		}
+		if !types.Identical(declared, called) {
 			return false
 		}
 	}
@@ -461,6 +701,57 @@ func (g *gen) initSymbol(recv types.Type, sig *types.Signature) string {
 	return name
 }
 
+// emitCoreInit emits the body of an initializer the core's source gives
+// Int or String -- `Int32(clamping:)` -- the first time a module calls it.
+// Like the core's functions it is lowered where it is used, privately,
+// so that each module has its own copy and none clashes with another's.
+func (g *gen) emitCoreInit(recv types.Type, sig *types.Signature) {
+	core := g.info.CoreAlgorithms
+	if core == nil {
+		return
+	}
+	name := g.initSymbol(recv, sig)
+	if name == "" {
+		return
+	}
+	if f := g.m.Lookup(name); f != nil && !f.IsDeclaration() {
+		return
+	}
+	for _, st := range core.Stmts {
+		decl, ok := st.(*ast.DeclStmt)
+		if !ok {
+			continue
+		}
+		ext, ok := decl.D.(*ast.ExtensionDecl)
+		if !ok || ext.Body == nil || !types.Identical(g.info.Extensions[ext], recv) {
+			continue
+		}
+		for _, mem := range ext.Body.Members {
+			d, ok := mem.(*ast.InitDecl)
+			if !ok || !g.sameInitParams(sig, d) {
+				continue
+			}
+			restore := g.apart()
+			g.file, g.specializing = core.Unit, true
+			g.initializer(d, recv)
+			restore()
+			return
+		}
+	}
+}
+
+// isBasicValue reports whether t is one of the core's value types that
+// the universe declares rather than a struct: Int, Double, Bool, String.
+// Each lowers as a struct of one field, and an initializer an extension
+// gives it is a struct's initializer.
+func isBasicValue(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsUntyped == 0 && b.Kind() != types.Invalid
+}
+
 func isStructType(t types.Type) bool {
 	if t == nil {
 		return false
@@ -471,11 +762,6 @@ func isStructType(t types.Type) bool {
 
 // callClassInit calls a class's allocating initializer.
 func (g *gen) callClassInit(e *ast.CallExpr, t types.Type, cl *types.Class) *sil.Value {
-	if cl.Superclass != nil && !g.importedType(t) {
-		g.refuse(e, "an initializer of a class with a superclass, which has to run "+
-			"the one above it")
-		return nil
-	}
 	var args []*ast.CallArg
 	if e.Args != nil {
 		args = e.Args.Args
@@ -521,6 +807,118 @@ func (g *gen) callInit(e *ast.CallExpr, t types.Type, st *types.Struct) *sil.Val
 	return g.applyInit(e, t, &out, args)
 }
 
+// delegatingInit is `self.init(...)` in a struct's initializer: the
+// other initializer makes the value, and self is it, as `self = T(...)`
+// would have it.
+func (g *gen) delegatingInit(e *ast.CallExpr, ref *ast.InitRefExpr) (*sil.Value, bool) {
+	if _, isSelf := ref.X.(*ast.SelfExpr); isSelf && g.convenience && g.recv != nil {
+		return g.convenienceDelegation(e)
+	}
+	if _, isSelf := ref.X.(*ast.SelfExpr); !isSelf || g.self == nil || g.recv == nil || isClass(g.recv) {
+		return nil, false
+	}
+	st, ok := g.recv.Underlying().(*types.Struct)
+	if !ok {
+		return nil, false
+	}
+	var v *sil.Value
+	if g.info.Inits[e] == nil && st.Memberwise() != nil {
+		// An extension's initializer handing on to the memberwise one.
+		v = g.memberwise(e, g.recv, st)
+	} else {
+		v = g.callInit(e, g.recv, st)
+	}
+	if v == nil {
+		return nil, true
+	}
+	v = g.consume(v)
+	access := g.blk.BeginAccess(g.self.addr, "modify", "unknown")
+	g.blk.Assign(v, access)
+	g.blk.EndAccess(access)
+	return g.void(), true
+}
+
+// metatypeInit is `T.init(...)`: through a class's name, that class's
+// initializer; through a metatype value -- `type.init(id:)` with type a
+// Widget.Type -- the required initializer of whichever class the value
+// is, found in its table.
+func (g *gen) metatypeInit(e *ast.CallExpr, ref *ast.InitRefExpr) (*sil.Value, bool) {
+	meta, ok := g.typeOf(ref.X).(*types.Metatype)
+	if !ok {
+		return nil, false
+	}
+	t := g.substituted(meta.Instance)
+	cl, ok := receiverClass(t)
+	if !ok {
+		if st, isStruct := t.Underlying().(*types.Struct); isStruct {
+			if st.Memberwise() != nil && g.info.Inits[e] == nil {
+				return g.memberwise(e, t, st), true
+			}
+			return g.callInit(e, t, st), true
+		}
+		return nil, false
+	}
+	if id, named := ref.X.(*ast.IdentExpr); named && id.Name != nil {
+		if _, isType := g.info.Uses[id.Name].(*analyzer.TypeNameSymbol); isType {
+			return g.callClassInit(e, t, cl), true
+		}
+	}
+	sig := g.info.Inits[e]
+	if sig == nil || !sig.Required {
+		g.refuse(e, "an initializer called through a metatype that is not required")
+		return nil, true
+	}
+	self := g.expr(ref.X)
+	if self == nil {
+		return nil, true
+	}
+	out := *sig
+	out.Results = t
+	ct := lowerType(t)
+	ft := &sil.FuncType{Convention: sil.Method}
+	for _, p := range out.Params {
+		pt := lowerType(p.Type)
+		ft.Params = append(ft.Params, sil.Param{Type: pt, Convention: paramConvention(p, pt)})
+	}
+	ft.Params = append(ft.Params, sil.Param{Type: sil.ThinMetatype(t), Convention: sil.ParamUnowned})
+	ft.Results = append(ft.Results, sil.Result{Type: ct, Convention: resultConvention(ct)})
+	intro := initIntroducer(cl, sig)
+	method := g.blk.ClassMethod(self, intro.Name+"."+initSlotKey(sig), sil.Object(ft))
+	vals, ok := g.arguments(e, &out)
+	if !ok {
+		return nil, true
+	}
+	vals = append(vals, g.blk.Metatype(ct))
+	v := g.blk.Apply(method, ct, vals...)
+	g.destroyLater(v)
+	return v, true
+}
+
+// convenienceDelegation is `self.init(...)` in a convenience initializer:
+// the other initializer makes the instance, which is self from here on.
+func (g *gen) convenienceDelegation(e *ast.CallExpr) (*sil.Value, bool) {
+	cl, ok := g.recv.Underlying().(*types.Class)
+	if !ok {
+		return nil, false
+	}
+	if g.convSelf != nil {
+		g.refuse(e, "a second self.init in one initializer")
+		return nil, true
+	}
+	// Where it runs on every path: in the body's own statements, before
+	// anything branches.
+	if g.blk != g.fn.Entry() {
+		g.refuse(e, "a self.init anywhere but in the initializer's own statements")
+		return nil, true
+	}
+	v := g.callClassInit(e, g.recv, cl)
+	if v == nil {
+		return nil, true
+	}
+	g.convSelf = g.consume(v)
+	return g.void(), true
+}
+
 // importedType reports whether another compiled module declared t, and so
 // emitted whatever this module would otherwise have to.
 //
@@ -549,26 +947,11 @@ func (g *gen) applyInit(e *ast.CallExpr, t types.Type, out *types.Signature, arg
 
 // applyInitNamed emits the call to the initializer with this symbol.
 func (g *gen) applyInitNamed(e *ast.CallExpr, t types.Type, out *types.Signature, args []*ast.CallArg, name string) *sil.Value {
-	callee := g.m.Func(name).SetSourceName("init")
-	if g.needsType(callee) {
-		for _, p := range out.Params {
-			pt := lowerType(p.Type)
-			callee.Type().Params = append(callee.Type().Params,
-				sil.Param{Type: pt, Convention: paramConvention(p, pt)})
-		}
-		self := sil.ThinMetatype(t)
-		if isClass(t) && g.importedType(t) {
-			self = sil.ThickMetatype(t)
-		}
-		callee.Type().Params = append(callee.Type().Params,
-			sil.Param{Type: self, Convention: sil.ParamUnowned})
-		callee.Type().Convention = sil.Method
-		callee.SetResult(lowerType(t), resultConvention(lowerType(t)))
-		if out.Throws {
-			callee.SetThrows(sil.Object(sil.BuiltinNativeObj))
-		}
+	made := t
+	if out.Failable {
+		made = &types.Optional{Wrapped: t}
 	}
-	ref := g.blk.FunctionRef(callee)
+	ref := g.initRef(t, out, name)
 
 	// Evaluate call arguments respecting parameter conventions.
 	vals, ok := g.arguments(e, out)
@@ -595,12 +978,41 @@ func (g *gen) applyInitNamed(e *ast.CallExpr, t types.Type, out *types.Signature
 			optional = pendingOptional
 			g.tryBang = pendingTrap
 		}
-		return g.tryApply(e, ref, vals, t, optional, false)
+		return g.tryApply(e, ref, vals, made, optional, false)
 	}
 
-	v := g.blk.Apply(ref, lowerType(t), vals...)
+	v := g.blk.Apply(ref, lowerType(made), vals...)
 	g.destroyLater(v)
 	return v
+}
+
+// initRef is a reference to the initializer of t with this symbol, typed
+// for a call: the parameters out declares, then the metatype.
+func (g *gen) initRef(t types.Type, out *types.Signature, name string) *sil.Value {
+	made := t
+	if out.Failable {
+		made = &types.Optional{Wrapped: t}
+	}
+	callee := g.m.Func(name).SetSourceName("init")
+	if g.needsType(callee) {
+		for _, p := range out.Params {
+			pt := lowerType(p.Type)
+			callee.Type().Params = append(callee.Type().Params,
+				sil.Param{Type: pt, Convention: paramConvention(p, pt)})
+		}
+		self := sil.ThinMetatype(t)
+		if isClass(t) && g.importedType(t) {
+			self = sil.ThickMetatype(t)
+		}
+		callee.Type().Params = append(callee.Type().Params,
+			sil.Param{Type: self, Convention: sil.ParamUnowned})
+		callee.Type().Convention = sil.Method
+		callee.SetResult(lowerType(made), resultConvention(lowerType(made)))
+		if out.Throws {
+			callee.SetThrows(sil.Object(sil.BuiltinNativeObj))
+		}
+	}
+	return g.blk.FunctionRef(callee)
 }
 
 // pickInit is the initializer a call's arguments name.
@@ -661,4 +1073,55 @@ func (g *gen) initLinkage() sil.Linkage {
 		return sil.Private
 	}
 	return sil.Public
+}
+
+// classFieldDefaults gives a class's own stored properties with a default
+// value that value, in the instance self, before an initializer's body
+// runs, as a struct's have theirs. The instance starts zeroed, so there
+// is nothing for the store to let go of.
+func (g *gen) classFieldDefaults(recv types.Type, self *sil.Value) {
+	if cl, ok := recv.Underlying().(*types.Class); ok {
+		for _, fld := range cl.Fields {
+			if fld == nil || !fld.HasDefault {
+				continue
+			}
+			def := g.info.FieldDefaults[fld]
+			if def == nil {
+				// An instance of a generic class: the default is recorded
+				// against the declaration's property, and the
+				// specialization in force reads it for this instance.
+				def, _ = g.instanceDefault(recv, fld.Name)
+			}
+			if def == nil {
+				continue
+			}
+			v := g.rvalue(def)
+			if v == nil {
+				continue
+			}
+			ft := lowerType(fld.Type)
+			v = g.optionalFor(def, v, g.typeOf(def), fld.Type)
+			at := g.blk.RefElementAddr(self, memberName(recv, fld.Name), ft)
+			g.blk.Store(v, at, storeQualifier(ft))
+		}
+	}
+}
+
+// defaultAncestors gives the properties of the superclasses above recv
+// that declare no initializer their defaults, in self: such a class is
+// made by its implicit init(), which is those defaults and nothing else,
+// and which has no entry of its own to run.
+func (g *gen) defaultAncestors(recv types.Type, self *sil.Value) {
+	cl, ok := recv.Underlying().(*types.Class)
+	if !ok {
+		return
+	}
+	for up := cl.Superclass; up != nil; {
+		ucl, ok := up.Underlying().(*types.Class)
+		if !ok || len(ucl.Inits) > 0 {
+			return
+		}
+		g.classFieldDefaults(up, self)
+		up = ucl.Superclass
+	}
 }

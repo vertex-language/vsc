@@ -2,7 +2,9 @@ package gen
 
 import (
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/stdlib"
 	"github.com/vertex-language/vsc/types"
 )
 
@@ -77,14 +79,12 @@ func rawValueRead(t types.Type, name string) (*types.Enum, bool) {
 	return en, true
 }
 
-// rawValue lowers `c.rawValue` by switching over enum cases and returning the declared raw integer.
+// rawValue lowers `c.rawValue`: a switch over the cases, each answering
+// with its raw value.
 func (g *gen) rawValue(e *ast.MemberExpr, en *types.Enum) *sil.Value {
 	for _, k := range en.Cases {
-		if k == nil || !k.HasRawInt {
-			// A string raw value needs a string constant to answer
-			// with, and there is no making one yet. Refused rather
-			// than answered with something else.
-			g.refuse(e, "rawValue of '"+en.Name+"', whose cases are not all numbers")
+		if !g.hasRawValue(en, k) {
+			g.refuse(e, "rawValue of '"+en.Name+"', a case of which has no raw value this knows")
 			return nil
 		}
 	}
@@ -112,11 +112,42 @@ func (g *gen) rawValue(e *ast.MemberExpr, en *types.Enum) *sil.Value {
 
 	for i, k := range en.Cases {
 		g.blk = arms[i]
-		v := g.blk.Struct(raw, g.blk.IntegerLiteral(sil.Object(builtinFor(en.RawType)), k.RawInt))
+		k := k
+		v := g.branchArm(func() *sil.Value { return g.rawCaseValue(en, k) })
+		if v == nil {
+			return nil
+		}
 		g.blk.Br(join, v)
 	}
 	g.blk = join
+	g.destroyLater(answer)
 	return answer
+}
+
+// hasRawValue reports whether k's raw value is one rawCaseValue makes:
+// a number counted or written, a literal written, or for a String the
+// case's own name.
+func (g *gen) hasRawValue(en *types.Enum, k *types.EnumCase) bool {
+	if k == nil {
+		return false
+	}
+	if k.HasRawInt || g.info.RawValues[k] != nil {
+		return true
+	}
+	b, ok := en.RawType.Underlying().(*types.Basic)
+	return ok && b.Kind() == types.String
+}
+
+// rawCaseValue is case k's raw value, owned.
+func (g *gen) rawCaseValue(en *types.Enum, k *types.EnumCase) *sil.Value {
+	raw := lowerType(en.RawType)
+	if k.HasRawInt {
+		return g.blk.Struct(raw, g.blk.IntegerLiteral(sil.Object(builtinFor(en.RawType)), k.RawInt))
+	}
+	if x := g.info.RawValues[k]; x != nil {
+		return g.consume(g.rvalue(x))
+	}
+	return g.consume(g.makeString(k.Name))
 }
 
 // rawInit lowers `E(rawValue: x)`: a comparison against each case's raw
@@ -124,8 +155,8 @@ func (g *gen) rawValue(e *ast.MemberExpr, en *types.Enum) *sil.Value {
 // when none does.
 func (g *gen) rawInit(e *ast.CallExpr, en *types.Enum) *sil.Value {
 	for _, k := range en.Cases {
-		if k == nil || !k.HasRawInt {
-			g.refuse(e, "init(rawValue:) of '"+en.Name+"', whose cases are not all numbers")
+		if !g.hasRawValue(en, k) {
+			g.refuse(e, "init(rawValue:) of '"+en.Name+"', a case of which has no raw value this knows")
 			return nil
 		}
 	}
@@ -135,15 +166,14 @@ func (g *gen) rawInit(e *ast.CallExpr, en *types.Enum) *sil.Value {
 	}
 	enumT := g.typeOf(e).Underlying().(*types.Optional).Wrapped
 	optT := lowerType(g.typeOf(e))
-	word := g.machine(x, en.RawType)
-	builtin := builtinFor(en.RawType)
-	verb := "cmp_eq_" + builtin.String()[len("Builtin."):]
 
 	join := g.fn.Block()
 	answer := join.Arg(optT, sil.None)
 	for _, k := range en.Cases {
-		lit := g.blk.IntegerLiteral(sil.Object(builtin), k.RawInt)
-		same := g.blk.Builtin(verb, sil.Object(sil.BuiltinInt1), word, lit)
+		same := g.rawEquals(e, en, k, x)
+		if same == nil {
+			return nil
+		}
 		hit, miss := g.fn.Block(), g.fn.Block()
 		g.blk.CondBr(same, hit, nil, miss, nil)
 		g.blk = hit
@@ -154,4 +184,45 @@ func (g *gen) rawInit(e *ast.CallExpr, en *types.Enum) *sil.Value {
 	g.blk.Br(join, g.blk.Enum(optT, optionalNone, nil))
 	g.blk = join
 	return answer
+}
+
+// rawEquals is whether x is case k's raw value, as a bit.
+func (g *gen) rawEquals(at ast.Node, en *types.Enum, k *types.EnumCase, x *sil.Value) *sil.Value {
+	rawT := en.RawType
+	if k.HasRawInt {
+		builtin := builtinFor(rawT)
+		lit := g.blk.IntegerLiteral(sil.Object(builtin), k.RawInt)
+		verb := "cmp_eq_" + builtin.String()[len("Builtin."):]
+		return g.blk.Builtin(verb, sil.Object(sil.BuiltinInt1), g.machine(x, rawT), lit)
+	}
+	v := g.branchArm(func() *sil.Value { return g.rawCaseValue(en, k) })
+	if v == nil {
+		return nil
+	}
+	b, _ := rawT.Underlying().(*types.Basic)
+	switch {
+	case b != nil && b.Kind() == types.String:
+		bit := g.externCompare(x, v, rawT, core.Extern{Symbol: stdlib.StringEqual})
+		g.blk.DestroyValue(v)
+		return bit
+	case b != nil && b.Kind() == types.Character:
+		// A Character is the String of its cluster.
+		str := types.Typ[types.String]
+		st := lowerType(str)
+		lhs := g.blk.BeginBorrow(x)
+		rhs := g.blk.BeginBorrow(v)
+		bit := g.externCompare(
+			g.blk.StructExtract(lhs, memberName(rawT, "_string"), st),
+			g.blk.StructExtract(rhs, memberName(rawT, "_string"), st),
+			str, core.Extern{Symbol: stdlib.StringEqual})
+		g.blk.EndBorrow(rhs)
+		g.blk.EndBorrow(lhs)
+		g.blk.DestroyValue(v)
+		return bit
+	}
+	if op, ok := core.Lower("==", rawT); ok && op.Result == "Int1" {
+		return g.blk.Builtin(op.Name, sil.Object(sil.BuiltinInt1), g.machine(x, rawT), g.machine(v, rawT))
+	}
+	g.refuse(at, "init(rawValue:) of '"+en.Name+"', whose raw type this cannot compare")
+	return nil
 }

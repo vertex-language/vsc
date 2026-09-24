@@ -118,7 +118,11 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 	}
 	for _, r := range p.Requirements {
 		if r != nil && r.Sig == nil && r.Type != nil {
-			thunk, ok := g.getterWitnessThunk(concrete, p, r)
+			getterThunk := g.getterWitnessThunk
+			if r.IsStatic {
+				getterThunk = g.staticGetterWitnessThunk
+			}
+			thunk, ok := getterThunk(concrete, p, r)
 			if !ok {
 				g.errorAt(at, "'"+typeNameOf(concrete)+"' does not provide '"+
 					r.Name+"', which '"+p.Name+"' requires")
@@ -150,6 +154,12 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 			}
 		}
 		if m == nil {
+			// The default a protocol extension gives, specialized for
+			// the conformer.
+			if thunk, ok := g.extensionWitness(at, concrete, p, r); ok {
+				table.Entry(p.Name+"."+r.Name, thunk)
+				continue
+			}
 			g.errorAt(at, "'"+typeNameOf(concrete)+"' does not provide '"+
 				r.Name+"', which '"+p.Name+"' requires")
 			continue
@@ -165,6 +175,13 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 // witnessThunk emits the function a table row names: the receiver
 // arrives as an address, and what the method wants is the value.
 func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *types.Method, req *types.Signature) string {
+	return g.witnessThunkCalling(concrete, found, p, m, req, "")
+}
+
+// witnessThunkCalling is witnessThunk for an implementation named symbol --
+// a protocol extension's default, specialized for the conformer -- or,
+// where symbol is "", the method's own.
+func (g *gen) witnessThunkCalling(concrete, found types.Type, p *types.Protocol, m *types.Method, req *types.Signature, symbol string) string {
 	if req == nil {
 		req = m.Sig
 	}
@@ -245,8 +262,10 @@ func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *typ
 	if !m.IsMutating {
 		self = g.blk.Load(selfAddr, loadQualifier(ct))
 	}
-	callee := g.m.Func(g.methodSymbol(&analyzer.MethodRef{Recv: found, Method: m})).
-		SetSourceName(m.Name)
+	if symbol == "" {
+		symbol = g.methodSymbol(&analyzer.MethodRef{Recv: found, Method: m})
+	}
+	callee := g.m.Func(symbol).SetSourceName(m.Name)
 	if g.needsType(callee) {
 		g.declareMethod(callee, &analyzer.MethodRef{Recv: found, Method: m})
 	}
@@ -294,6 +313,33 @@ func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *typ
 	endSelf()
 	g.blk.Return(out)
 	return name
+}
+
+// extensionWitness is the row for requirement r of p where the conformer
+// writes no implementation and an extension of p -- or of a protocol p
+// inherits -- gives the default: that method, specialized for concrete.
+func (g *gen) extensionWitness(at ast.Node, concrete types.Type, p *types.Protocol, r *types.Requirement) (string, bool) {
+	if r.Sig == nil || r.IsStatic {
+		return "", false
+	}
+	want, _ := types.Substitute(r.Sig, map[*types.TypeParam]types.Type{p.Self: concrete}).(*types.Signature)
+	for _, em := range p.ExtensionMethods(r.Name, false) {
+		owner := p
+		if q, found := p.ExtensionMethod(em.Name, false); found == em && q != nil {
+			owner = q
+		}
+		got, _ := types.Substitute(em.Sig, map[*types.TypeParam]types.Type{owner.Self: concrete}).(*types.Signature)
+		if got == nil || want == nil || !types.Identical(got, want) {
+			continue
+		}
+		spec, symbol, ok := g.protocolExtensionMethod(nil, &analyzer.MethodRef{Recv: owner, Method: em}, owner, concrete)
+		if !ok || spec == nil {
+			return "", false
+		}
+		thunk := g.witnessThunkCalling(concrete, concrete, p, spec.Method, r.Sig, symbol)
+		return thunk, thunk != ""
+	}
+	return "", false
 }
 
 // selfIteratorThunk is the makeIterator() row of a Sequence that is its
@@ -409,23 +455,8 @@ func (g *gen) witnessApply(at ast.Node, x ast.Expr, ex *types.Existential, m *ty
 	if _, ok := g.layoutOrder(at, p); !ok {
 		return nil
 	}
-	addr := g.lvalue(x)
+	addr := g.existentialPlace(x)
 	if addr == nil {
-		// Indirect existential return values already reside in allocated memory.
-		if _, isCall := x.(*ast.CallExpr); isCall {
-			addr = g.rvalue(x)
-			g.destroyLater(addr)
-		} else if v := g.expr(x); v != nil && v.Type().IsAddress() {
-			// Any other existential expression -- an element read out of an
-			// array -- is a temporary in memory, ended after the call.
-			addr = v
-			if !g.storage[v] {
-				g.destroyAddrLater(v)
-			}
-		}
-	}
-	if addr == nil {
-		g.refuse(x, "an existential that is not somewhere in memory")
 		return nil
 	}
 
@@ -647,7 +678,7 @@ func (g *gen) existentialFor(at ast.Node, v *sil.Value, from, to types.Type) *si
 			return v
 		}
 	}
-	if len(ex.Protocols) > 0 && g.conformancesOf(from) == nil && from != nil {
+	if len(ex.Protocols) > 0 && g.conformancesOf(from) == nil && from != nil && !conformsToAll(from, ex) {
 		// Unconformed type; let checker handle error.
 		return v
 	}
@@ -1028,6 +1059,9 @@ func (g *gen) describable(at ast.Node, t types.Type) bool {
 	if ex, ok := existentialOf(t); ok && len(ex.Protocols) <= 1 {
 		return true
 	}
+	if _, ok := t.(*types.Metatype); ok {
+		return true
+	}
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
 		if _, ok := metadataRecords[u.Kind()]; ok {
@@ -1217,6 +1251,70 @@ func (g *gen) getterWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 	}
 	if !ct.Trivial() {
 		g.blk.DestroyValue(self)
+	}
+	g.blk.Return(out)
+	return name, true
+}
+
+// staticGetterWitnessThunk emits the row for a static property
+// requirement -- CaseIterable's allCases -- which takes the conformer's
+// type in the self register and answers what its static property holds:
+// through the static getter of a computed one, out of the storage of a
+// stored one.
+func (g *gen) staticGetterWitnessThunk(concrete types.Type, p *types.Protocol, r *types.Requirement) (string, bool) {
+	var field *types.Field
+	for _, f := range g.staticsOf(concrete) {
+		if f != nil && f.Name == r.Name {
+			field = f
+		}
+	}
+	if field == nil {
+		return "", false
+	}
+	d := mangle.Decl{
+		Module:    g.memberModule(concrete, field),
+		Context:   memberChain(concrete),
+		Extended:  extendedBuiltin(concrete),
+		Name:      field.Name,
+		Signature: &types.Signature{Results: field.Type},
+		ModuleOf:  g.moduleOfType,
+	}
+	getter, err := mangle.StaticGetter(d)
+	if err != nil {
+		return "", false
+	}
+	name := getter + "TW" + identifierSafe(typeNameOf(concrete)) + "_" + identifierSafe(p.Name)
+	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
+		return name, true
+	}
+	f := g.m.Func(name).SetSourceName(r.Name).SetLinkage(sil.Private).SetAttr("ossa")
+	outerFn, outerEntry, outerBlk := g.fn, g.entry, g.blk
+	defer func() { g.fn, g.entry, g.blk = outerFn, outerEntry, outerBlk }()
+	g.fn, g.entry = f, false
+	f.Type().Params = nil
+	g.blk = f.Entry()
+
+	rt := lowerType(field.Type)
+	f.Param(sil.ThickMetatype(concrete), sil.ParamUnowned)
+	f.Type().Convention = sil.ConvWitness
+	f.SetResult(rt, resultConvention(rt))
+	var out *sil.Value
+	if field.IsComputed {
+		g.emitCoreGetter(concrete, field, getter, true)
+		callee := g.m.Func(getter).SetSourceName(field.Name)
+		if g.needsType(callee) {
+			callee.Type().Params = nil
+			callee.SetResult(rt, resultConvention(rt))
+		}
+		out = g.blk.Apply(g.blk.FunctionRef(callee), rt)
+	} else {
+		addr := g.staticAddr(nil, concrete, field)
+		if addr == nil {
+			return "", false
+		}
+		access := g.blk.BeginAccess(addr, "read", "dynamic")
+		out = g.blk.Load(access, loadQualifier(rt))
+		g.blk.EndAccess(access)
 	}
 	g.blk.Return(out)
 	return name, true
@@ -1420,4 +1518,52 @@ func (g *gen) methodMatching(t types.Type, r *types.Requirement) (types.Type, *t
 		}
 	}
 	return found, first
+}
+
+// existentialPlace is where an existential expression's container is: a
+// variable's storage, or a temporary in memory ended after the statement.
+func (g *gen) existentialPlace(x ast.Expr) *sil.Value {
+	if addr := g.lvalue(x); addr != nil {
+		return addr
+	}
+	// Indirect existential return values already reside in allocated memory.
+	if _, isCall := x.(*ast.CallExpr); isCall {
+		addr := g.rvalue(x)
+		g.destroyLater(addr)
+		if addr != nil {
+			return addr
+		}
+		g.refuse(x, "an existential that is not somewhere in memory")
+		return nil
+	}
+	v := g.expr(x)
+	switch {
+	case v == nil:
+		return nil
+	case v.Type().IsAddress():
+		// Any other existential expression -- an element read out of an
+		// array -- is a temporary in memory, ended after the statement.
+		if !g.storage[v] {
+			g.destroyAddrLater(v)
+		}
+		return v
+	}
+	// An existential held as a value -- a closure's parameter -- is put in
+	// a temporary of its own, a copy where the value is borrowed.
+	lt := v.Type()
+	slot := g.blk.AllocStack(lt)
+	g.blk.Store(g.consume(v), slot, storeQualifier(lt))
+	g.destroyAddrLater(slot)
+	return slot
+}
+
+// conformsToAll reports whether t conforms to every protocol of ex by what
+// it is rather than by what it declares: a class to AnyObject.
+func conformsToAll(t types.Type, ex *types.Existential) bool {
+	for _, p := range ex.Protocols {
+		if !types.ConformsTo(t, p) {
+			return false
+		}
+	}
+	return true
 }

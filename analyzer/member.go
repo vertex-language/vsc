@@ -69,6 +69,22 @@ func (c *checker) enumCaseSymbol(t types.Type, name string) *EnumCaseSymbol {
 
 // findMethod finds a method named name on t and returns its declaring type and method object.
 func (c *checker) findMethod(t types.Type, name string) (types.Type, *types.Method) {
+	if found, m := c.findOwnMethod(t, name); m != nil {
+		return found, m
+	}
+	static := false
+	inst := t
+	if meta, ok := t.(*types.Metatype); ok {
+		static, inst = true, meta.Instance
+	}
+	if q, m := c.extensionMethodOf(inst, name, static); m != nil {
+		return q, m
+	}
+	return nil, nil
+}
+
+// findOwnMethod is findMethod without what protocol extensions add.
+func (c *checker) findOwnMethod(t types.Type, name string) (types.Type, *types.Method) {
 	if t == nil {
 		return nil, nil
 	}
@@ -150,12 +166,102 @@ func (c *checker) findMethod(t types.Type, name string) (types.Type, *types.Meth
 		}
 	}
 	if b, ok := t.Underlying().(*types.Class); ok && b.Superclass != nil {
+		// A class method or static one is inherited as an instance
+		// method is: looked for on the superclass's metatype.
+		if onType {
+			return c.findMethod(&types.Metatype{Instance: b.Superclass}, name)
+		}
 		return c.findMethod(b.Superclass, name)
 	}
 	return nil, nil
 }
 
 func (c *checker) lookupMember(t types.Type, name string) types.Type {
+	if m := c.lookupOwnMember(t, name); m != nil {
+		return m
+	}
+	return c.extensionMember(t, name)
+}
+
+// extensionMember is the type of the member named name a protocol t
+// conforms to gives it through an extension, with Self as t: nil where
+// there is none.
+func (c *checker) extensionMember(t types.Type, name string) types.Type {
+	onType := false
+	if meta, ok := t.(*types.Metatype); ok {
+		onType, t = true, meta.Instance
+	}
+	if _, m := c.extensionMethodOf(t, name, onType); m != nil {
+		return m.Sig
+	}
+	if _, f := c.extensionPropertyOf(t, name, onType); f != nil {
+		return known(f.Type)
+	}
+	return nil
+}
+
+// extensionMethodOf is the method named name an extension of a protocol t
+// conforms to declares, with Self replaced by t, and that protocol.
+func (c *checker) extensionMethodOf(t types.Type, name string, static bool) (*types.Protocol, *types.Method) {
+	if protocolOfSelf(t) != nil || isInvalid(t) {
+		return nil, nil
+	}
+	for _, p := range c.conformancesOfType(t) {
+		if q, m := p.ExtensionMethod(name, static); m != nil {
+			sig, _ := types.Substitute(m.Sig, map[*types.TypeParam]types.Type{q.Self: t}).(*types.Signature)
+			if sig == nil {
+				sig = m.Sig
+			}
+			return q, &types.Method{Name: m.Name, Sig: sig, IsStatic: m.IsStatic, IsMutating: m.IsMutating, Origin: m}
+		}
+	}
+	return nil, nil
+}
+
+// extensionPropertyOf is extensionMethodOf for a computed property.
+func (c *checker) extensionPropertyOf(t types.Type, name string, static bool) (*types.Protocol, *types.Field) {
+	if protocolOfSelf(t) != nil || isInvalid(t) {
+		return nil, nil
+	}
+	for _, p := range c.conformancesOfType(t) {
+		if q, f := p.ExtensionProperty(name, static); f != nil {
+			out := *f
+			out.Type = types.Substitute(f.Type, map[*types.TypeParam]types.Type{q.Self: t})
+			out.Origin = f
+			return q, &out
+		}
+	}
+	return nil, nil
+}
+
+// conformancesOfType is the protocols t declares it conforms to, in its
+// declaration or its extensions, and those its superclasses do.
+func (c *checker) conformancesOfType(t types.Type) []*types.Protocol {
+	var out []*types.Protocol
+	for t != nil {
+		if inst, ok := t.(*types.GenericInstance); ok {
+			t = inst.Base
+		}
+		if b := c.builtinOf(t); b != nil {
+			out = append(out, b.Conformances...)
+		}
+		switch u := t.Underlying().(type) {
+		case *types.Struct:
+			return append(out, u.Conformances...)
+		case *types.Enum:
+			return append(out, u.Conformances...)
+		case *types.Class:
+			out = append(out, u.Conformances...)
+			t = u.Superclass
+			continue
+		}
+		return out
+	}
+	return out
+}
+
+// lookupOwnMember is lookupMember without what protocol extensions add.
+func (c *checker) lookupOwnMember(t types.Type, name string) types.Type {
 	if t == nil {
 		return nil
 	}
@@ -333,6 +439,9 @@ func (c *checker) lookupMember(t types.Type, name string) types.Type {
 			}
 		}
 		if b.Superclass != nil {
+			if onType {
+				return c.lookupMember(&types.Metatype{Instance: b.Superclass}, name)
+			}
 			return c.lookupMember(b.Superclass, name)
 		}
 	case *types.Enum:
@@ -430,6 +539,12 @@ func requirementOf(c types.Type, name string) (types.Type, *types.Method) {
 			return found, m
 		}
 	}
+	// Not a requirement, but what an extension gives every conformer.
+	for _, static := range []bool{false, true} {
+		if q, m := p.ExtensionMethod(name, static); m != nil {
+			return q, m
+		}
+	}
 	return nil, nil
 }
 
@@ -456,6 +571,19 @@ func (c *checker) requirementType(con types.Type, name string) types.Type {
 		if t := c.requirementType(up, name); t != nil {
 			return t
 		}
+	}
+	// Not a requirement, but what an extension gives every conformer.
+	if _, m := p.ExtensionMethod(name, false); m != nil {
+		return m.Sig
+	}
+	if _, f := p.ExtensionProperty(name, false); f != nil {
+		return known(f.Type)
+	}
+	if _, m := p.ExtensionMethod(name, true); m != nil {
+		return m.Sig
+	}
+	if _, f := p.ExtensionProperty(name, true); f != nil {
+		return known(f.Type)
 	}
 	return nil
 }

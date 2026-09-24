@@ -13,8 +13,12 @@ import (
 
 const (
 	attrSilgenName = "_silgen_name"
-	attrCDecl      = "_cdecl"
-	attrObjC       = "objc"
+	// attrBuiltin is the core's: a function declared @_builtin("int_sqrt")
+	// is that one machine instruction, named for its operand's type as
+	// SIL names it -- int_sqrt_FPIEEE64.
+	attrBuiltin = "_builtin"
+	attrCDecl   = "_cdecl"
+	attrObjC    = "objc"
 )
 
 // asmName returns the symbol named by an attribute and whether it was present.
@@ -220,4 +224,73 @@ func (g *gen) fileOf(n ast.Node) *token.File {
 	}
 	g.nodeFiles[n] = found
 	return found
+}
+
+// builtinOp is the instruction `@_builtin` makes a core function, if it
+// is one. Only the core declares these.
+func (g *gen) builtinOp(sym *analyzer.FuncSymbol) (string, bool) {
+	if sym == nil || g.info.Imported[sym] != "Swift" {
+		return "", false
+	}
+	_, file, _ := core.Files()
+	return g.asmNameIn(file, funcAttrs(sym), attrBuiltin)
+}
+
+// callBuiltinOp lowers a call of a core function declared @_builtin: the
+// arguments' machine values, the instruction, and its result wrapped as
+// the function's result type -- which is the first operand's type, as it
+// is for Swift's Builtin.int_ctpop and Builtin.int_sqrt.
+func (g *gen) callBuiltinOp(e *ast.CallExpr, sym *analyzer.FuncSymbol, op string) *sil.Value {
+	sig := sym.Signature()
+	if e.Args == nil || len(e.Args.Args) != len(sig.Params) || len(sig.Params) == 0 {
+		g.refuse(e, "a builtin called with other than its operands")
+		return nil
+	}
+	machine, ok := builtinMachine(sig.Params[0].Type)
+	if !ok {
+		g.refuse(e, "a builtin on a type that is not a number or a metatype")
+		return nil
+	}
+	raws := make([]*sil.Value, len(e.Args.Args))
+	for i, a := range e.Args.Args {
+		v := g.rvalue(a.X)
+		if v == nil {
+			return nil
+		}
+		raws[i] = g.machine(v, sig.Params[i].Type)
+	}
+	res := sig.Results
+	// An arithmetic instruction that reports overflow answers the value
+	// and a flag: (T, Bool), from SIL's (Builtin.IntN, Builtin.Int1).
+	if tt, ok := res.Underlying().(*types.Tuple); ok && len(tt.Elements) == 2 {
+		val, flag := tt.Elements[0].Type, tt.Elements[1].Type
+		bit := sil.Object(sil.BuiltinInt1)
+		pair := sil.Object(&types.Tuple{Elements: []*types.TupleElement{
+			{Type: builtinFor(val)}, {Type: sil.BuiltinInt1},
+		}})
+		raws = append(raws, g.blk.IntegerLiteral(bit, -1))
+		both := g.blk.Builtin(op+"_"+machine, pair, raws...)
+		v := g.blk.Struct(lowerType(val), g.blk.TupleExtract(both, 0, sil.Object(builtinFor(val))))
+		f := g.blk.Struct(lowerType(flag), g.blk.TupleExtract(both, 1, bit))
+		return g.blk.Tuple(lowerType(res), v, f)
+	}
+	name := op + "_" + machine
+	// A conversion names both types, as SIL's do: bitcast_FPIEEE64_Int64.
+	// (A comparison's result is of another type too, but it is named for
+	// its operands alone: cmp_eq_RawPointer.)
+	if to, ok := builtinMachine(res); ok && to != machine && op == "bitcast" {
+		name += "_" + to
+	}
+	out := g.blk.Builtin(name, sil.Object(builtinFor(res)), raws...)
+	return g.blk.Struct(lowerType(res), out)
+}
+
+// builtinMachine is the machine type SIL names an instruction on t by: a
+// number's own, and a raw pointer for a metatype, which is its metadata.
+func builtinMachine(t types.Type) (string, bool) {
+	if _, ok := t.(*types.Metatype); ok {
+		return "RawPointer", true
+	}
+	_, machine, ok := core.Layout(t)
+	return machine, ok
 }

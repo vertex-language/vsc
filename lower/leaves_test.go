@@ -64,11 +64,11 @@ func use() -> Int32 {
 
 // TestLeavesRefuseWhatTheyCannotPlace: a field with no register makes
 // the whole struct unplaceable, because half a list would put every
-// later scalar in the wrong one. A Character is the example: two words
-// this package has no representation for yet.
+// later scalar in the wrong one. An Error? is the example: an existential
+// in an optional, which makes the struct wider than any register list.
 func TestLeavesRefuseWhatTheyCannotPlace(t *testing.T) {
 	if _, err := lowerSrc(t, `
-struct Holder { var c: Character; var n: Int32 }
+struct Holder { var c: Error?; var n: Int32 }
 func use(_ h: Holder) -> Int32 { return h.n }
 `); err == nil {
 		t.Error("a struct with a field that has no register was passed in registers")

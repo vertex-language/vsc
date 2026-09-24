@@ -92,6 +92,41 @@ func (m *matcher) matchAs(p ast.Pattern, v *sil.Value, t types.Type, kind token.
 		}
 		return m.compare(pat, v, t)
 
+	// `case is T`: whether the value is a T at run time.
+	case *ast.IsPattern:
+		to := g.info.PatternTypes[pat]
+		out, bit, ok := g.castValue(p, v, t, to)
+		if !ok {
+			return false
+		}
+		yes := m.castBranch(bit, out)
+		g.blk = yes
+		lt := lowerType(to)
+		if !lt.Trivial() {
+			g.blk.DestroyValue(g.blk.Load(out, "take"))
+		}
+		g.blk.DeallocStack(out)
+		return true
+
+	// `case let d as Double`: the value as a T, where it is one, matched
+	// against the pattern before `as`.
+	case *ast.AsPattern:
+		to := g.info.PatternTypes[pat]
+		if _, isEx := existentialOf(to); isEx {
+			g.refuse(p, "an 'as' pattern to an existential")
+			return false
+		}
+		out, bit, ok := g.castValue(p, v, t, to)
+		if !ok {
+			return false
+		}
+		g.blk = m.castBranch(bit, out)
+		lt := lowerType(to)
+		cast := g.blk.Load(out, loadQualifierTake(lt))
+		g.blk.DeallocStack(out)
+		m.take(cast)
+		return m.matchAs(pat.Pat, cast, to, kind)
+
 	case *ast.TuplePattern:
 		tu, isTuple := t.Underlying().(*types.Tuple)
 		if !isTuple || len(tu.Elements) != len(pat.Elems) {
@@ -180,6 +215,18 @@ func (m *matcher) compare(p ast.Pattern, v *sil.Value, t types.Type) bool {
 	g.blk.CondBr(bit, next, nil, m.fail(), nil)
 	g.blk = next
 	return true
+}
+
+// castBranch goes on to the block it answers where bit says a cast
+// matched, and to miss where it did not, letting go of the slot the cast
+// wrote nothing to on the way.
+func (m *matcher) castBranch(bit, slot *sil.Value) *sil.Block {
+	g := m.g
+	yes, no := g.fn.Block(), g.fn.Block()
+	g.blk.CondBr(bit, yes, nil, no, nil)
+	no.DeallocStack(slot)
+	no.Br(m.fail())
+	return yes
 }
 
 // parts is a tuple's elements: taken apart where the match owns the

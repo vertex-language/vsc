@@ -23,7 +23,7 @@ import (
 //
 // Both are skipped where they are not installed, so the suite still
 // runs on a machine with no toolchain. Neither is a substitute for
-// tests/, which is the corpus this front end owns.
+// testdata/syntax, which is the corpus this front end owns.
 
 // sdkRoots returns the SDK directories to search for module
 // interfaces, newest first, or nil if there is no toolchain.
@@ -164,7 +164,7 @@ func TestSwiftcAgreement(t *testing.T) {
 	}
 	for _, src := range rejected {
 		if swiftcAccepts(t, swiftc, src) {
-			t.Errorf("swiftc accepts %q: the case belongs in tests/syntax, not here", src)
+			t.Errorf("swiftc accepts %q: the case belongs in testdata/syntax, not here", src)
 			continue
 		}
 		if accepts(src) {
@@ -172,9 +172,9 @@ func TestSwiftcAgreement(t *testing.T) {
 		}
 	}
 
-	// The corpus, the other way round: everything in tests/ is Swift,
+	// The corpus, the other way round: everything in testdata/syntax is Swift,
 	// and this is what keeps it honest as it grows.
-	files, _ := filepath.Glob("../tests/syntax/*.swift")
+	files, _ := filepath.Glob("testdata/syntax/*.swift")
 	for _, name := range files {
 		src, err := os.ReadFile(name)
 		if err != nil {

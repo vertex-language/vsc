@@ -81,7 +81,7 @@ Invalid for the reasons above.
 
 ## The oracle
 
-`tests/check` holds programs written inside what is modelled, named
+`testdata/check` holds programs written inside what is modelled, named
 for the verdict they carry: `ok-` is a program Swift accepts and this
 checker must find nothing wrong with, `bad-` is one Swift rejects and
 this checker must reject too. `oracle_test.go` runs both halves, and

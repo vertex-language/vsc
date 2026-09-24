@@ -101,6 +101,10 @@ type Param struct {
 	Ownership  OwnershipKind
 	Variadic   bool
 	HasDefault bool
+	// Autoclosure is a parameter declared @autoclosure: its type is a
+	// function of no arguments, and what a call writes for it is the
+	// expression the function evaluates, not the function.
+	Autoclosure bool
 	// Origin is the parameter this one was substituted from, where it
 	// was: what was recorded about that one -- its default -- is this
 	// one's too.
@@ -162,6 +166,17 @@ type Signature struct {
 	// one is called from there or under `await`; an async one gets
 	// itself there.
 	Isolated bool
+	// Failable is, for an initializer's signature, `init?`: a call makes
+	// an optional, nil where the body returned nil.
+	Failable bool
+	// Convenience and Required are a class initializer's modifiers.
+	// Inherited is a designated initializer a subclass has from its
+	// superclass, declaring none of its own: the superclass's, run on the
+	// subclass's instance once the subclass's own properties have their
+	// defaults.
+	Convenience bool
+	Required    bool
+	Inherited   bool
 }
 
 func (s *Signature) Underlying() Type { return s }
@@ -256,6 +271,24 @@ type Field struct {
 	// Another module reads or writes it only then -- though it lays out
 	// every stored property, and an interface lists each.
 	Exported bool
+	// Origin is the property this one was substituted from, where it was;
+	// see Method.Origin.
+	Origin *Field
+	// LazyStorage is, on a `lazy var`, the stored property that holds its
+	// value once made -- Swift's `$__lazy_storage_$_name`, an optional --
+	// whose getter makes it on the first read. LazyOf is, on that storage,
+	// the property it is for: the memberwise initializer's label.
+	LazyStorage string
+	LazyOf      string
+	// Ref is "weak" or "unowned" for a class-typed stored property that
+	// does not keep its object alive: its word counts a weak reference.
+	Ref string
+	// Wrapper is, on a property a property wrapper gives -- `level` of
+	// `@Clamped(0...10) var level = 5`, and its projection `$level` --
+	// the stored property holding the wrapper, `_level`; the property is
+	// the wrapper's wrappedValue, or with Projected its projectedValue.
+	Wrapper   string
+	Projected bool
 }
 
 // Method represents a method declaration or requirement.
@@ -267,6 +300,10 @@ type Method struct {
 	// Exported is whether the method was declared public or open, which
 	// is what a module interface writes and nothing else.
 	Exported bool
+	// Origin is the method this one was substituted from, where it was: a
+	// protocol extension's method as a conforming type sees it, with Self
+	// replaced. The declaration is found by the origin.
+	Origin *Method
 }
 
 // Subscript is a subscript a type declares: `subscript(x: Int) -> T`.
@@ -288,7 +325,8 @@ type Requirement struct {
 	Type    Type       // non-nil for property requirement
 	IsVar   bool
 	IsConst bool
-	// IsStatic and IsMutating are a method requirement's.
+	// IsStatic is a requirement of the type rather than of an instance;
+	// IsMutating a method requirement's.
 	IsStatic   bool
 	IsMutating bool
 }
@@ -327,12 +365,16 @@ type Struct struct {
 	Computed     []*Field        // computed properties
 	Statics      []*Field        // static properties
 	Subscripts   []*Subscript
+	// BodyInits is how many of Inits the struct's own body declares,
+	// which come first. Only those take the memberwise initializer away:
+	// one an extension declares is beside it, as in Swift.
+	BodyInits int
 }
 
 // Memberwise returns the synthesized memberwise initializer signature for the struct,
-// or nil if the struct declares its own initializers or has unresolvable fields.
+// or nil if the struct's body declares its own initializers or has unresolvable fields.
 func (s *Struct) Memberwise() *Signature {
-	if len(s.Inits) > 0 {
+	if s.BodyInits > 0 {
 		return nil
 	}
 	sig := &Signature{TypeParams: s.TypeParams}
@@ -340,9 +382,13 @@ func (s *Struct) Memberwise() *Signature {
 		if f == nil || f.Type == nil {
 			return nil
 		}
+		label := f.Name
+		if f.LazyOf != "" {
+			label = f.LazyOf
+		}
 		sig.Params = append(sig.Params, &Param{
-			Name:       f.Name,
-			Label:      f.Name,
+			Name:       label,
+			Label:      label,
 			Type:       f.Type,
 			HasDefault: f.HasDefault,
 		})
@@ -428,6 +474,110 @@ type Protocol struct {
 	Requirements []*Requirement
 	Associated   []*Associated
 	Self         *TypeParam
+	// What the protocol's extensions add: members every conforming type
+	// has, written in terms of Self, which is the conforming type where
+	// one is used.
+	ExtMethods  []*Method
+	ExtComputed []*Field
+	ExtStatics  []*Field
+}
+
+// ExtensionMethod is the method named name an extension of p, or of a
+// protocol p inherits, declares, with the protocol that declares it.
+func (p *Protocol) ExtensionMethod(name string, static bool) (*Protocol, *Method) {
+	return p.extensionMethod(name, static, map[*Protocol]bool{})
+}
+
+func (p *Protocol) extensionMethod(name string, static bool, seen map[*Protocol]bool) (*Protocol, *Method) {
+	if p == nil || seen[p] {
+		return nil, nil
+	}
+	seen[p] = true
+	for _, m := range p.ExtMethods {
+		if m.Name == name && m.IsStatic == static {
+			return p, m
+		}
+	}
+	for _, up := range p.Inherited {
+		if q, m := up.extensionMethod(name, static, seen); m != nil {
+			return q, m
+		}
+	}
+	return nil, nil
+}
+
+// ExtensionMethods is every method named name the extensions of p and of
+// the protocols it inherits declare: overloads, told apart by the call.
+func (p *Protocol) ExtensionMethods(name string, static bool) []*Method {
+	var out []*Method
+	seen := map[*Protocol]bool{}
+	var walk func(q *Protocol)
+	walk = func(q *Protocol) {
+		if q == nil || seen[q] {
+			return
+		}
+		seen[q] = true
+		for _, m := range q.ExtMethods {
+			if m.Name == name && m.IsStatic == static {
+				out = append(out, m)
+			}
+		}
+		for _, up := range q.Inherited {
+			walk(up)
+		}
+	}
+	walk(p)
+	return out
+}
+
+// ExtensionProperty is the computed property named name an extension of
+// p, or of a protocol p inherits, declares.
+func (p *Protocol) ExtensionProperty(name string, static bool) (*Protocol, *Field) {
+	seen := map[*Protocol]bool{}
+	var walk func(q *Protocol) (*Protocol, *Field)
+	walk = func(q *Protocol) (*Protocol, *Field) {
+		if q == nil || seen[q] {
+			return nil, nil
+		}
+		seen[q] = true
+		list := q.ExtComputed
+		if static {
+			list = q.ExtStatics
+		}
+		for _, f := range list {
+			if f.Name == name {
+				return q, f
+			}
+		}
+		for _, up := range q.Inherited {
+			if r, f := walk(up); f != nil {
+				return r, f
+			}
+		}
+		return nil, nil
+	}
+	return walk(p)
+}
+
+// IsExtensionMethod reports whether m is one p's extensions declare.
+func (p *Protocol) IsExtensionMethod(m *Method) bool {
+	if m == nil {
+		return false
+	}
+	if m.Origin != nil {
+		m = m.Origin
+	}
+	q, found := p.ExtensionMethod(m.Name, m.IsStatic)
+	if found == m {
+		return true
+	}
+	for _, x := range p.ExtensionMethods(m.Name, m.IsStatic) {
+		if x == m {
+			return true
+		}
+	}
+	_ = q
+	return false
 }
 
 // Associated represents an associated type requirement in a protocol.

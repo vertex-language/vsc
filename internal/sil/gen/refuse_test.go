@@ -175,14 +175,11 @@ func entryBody(sil string) (string, bool) {
 // and not on whether it verifies.
 func TestARefusedReturnInventsNothing(t *testing.T) {
 	got, said := refusals(t, `
-class Base { var n: Int32 = 1 }
-final class Box: Base {
-    var m: Int32
-    init(m: Int32) { self.m = m }
-}
+protocol P {}
+struct S: P {}
 func main() -> Int32 {
-    let b = Box(m: 3)
-    return b.m
+    let x: Any = S()
+    return (x as? P) == nil ? 1 : 0
 }`)
 	if said == "" {
 		t.Fatal("refused the body and said nothing")
@@ -232,11 +229,12 @@ func main() -> Int32 { return fib(10) }`)
 // the node knows its extent.
 func TestRefusalsCoverTheirSpan(t *testing.T) {
 	src := `
-class Base { var n: Int { get { return 1 } set {} } }
-final class Sub: Base {}
+class Base {
+    init?(n: Int) {
+        return nil
+    }
+}
 func main() -> Int32 {
-    let b: Base = Sub()
-    b.n = 4
     return 0
 }`
 	_, diags := generate(t, "main", src)

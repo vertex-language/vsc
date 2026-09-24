@@ -168,7 +168,7 @@ func runAgainst(t *testing.T, swiftc string, target ir.Target, dir, lib string, 
 // buffer and the table were always right, and the metadata word held
 // a placeholder that said only "trivial, inline".
 //
-// It says the type now. See tests/interop/020-existentials-out for
+// It says the type now. See testdata/interop/020-existentials-out for
 // the program that runs; this is the same program compiled, which is
 // what catches a refusal coming back.
 func TestAnExistentialCrossesAModuleBoundary(t *testing.T) {

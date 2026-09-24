@@ -97,6 +97,14 @@ func ourSymbols(t *testing.T, path string, src []byte, module string) map[string
 			Module:    module,
 			Name:      name,
 			Signature: fs.Signature(),
+			// The core's types are the standard library's, as the
+			// generator says of them.
+			ModuleOf: func(t types.Type) string {
+				if info.CoreTypes[t] {
+					return "Swift"
+				}
+				return ""
+			},
 		})
 		if err != nil {
 			t.Logf("%s: %v", name, err)

@@ -138,12 +138,25 @@ print(n)
 // undefined symbol.
 func TestNoEntryPointReported(t *testing.T) {
 	const src = `func add(_ a: int32) -> int32 { return a }`
-	_, diags := compile(t, src, vsc.Options{Module: "main"})
+	_, diags := vsc.Compile([]vsc.Source{{Name: "t.vs", Text: []byte(src)}},
+		vsc.Options{Module: "main", Target: ir.AArch64MacOS})
 	if !vsc.Errors(diags) {
 		t.Fatal("a program with no entry point was accepted")
 	}
 	if !strings.Contains(diags[0].Message, "no entry point") {
 		t.Errorf("diagnostic does not name the problem: %s", diags[0])
+	}
+}
+
+// TestSwiftFileIsTheProgram: Swift's rule differs. The only .swift file
+// is the program whatever it holds -- declarations alone make one that
+// does nothing, as swiftc builds it.
+func TestSwiftFileIsTheProgram(t *testing.T) {
+	const src = `func add(_ a: Int32) -> Int32 { return a }`
+	if _, diags := compile(t, src, vsc.Options{Module: "main"}); vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
 	}
 }
 

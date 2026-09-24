@@ -174,6 +174,31 @@ func TestSubstitutionsFold(t *testing.T) {
 	}
 }
 
+// TestNamesThatAreNotASCII: swiftc writes a name outside ASCII in its
+// Punycode, after 00 and the length -- operators too, once their ASCII
+// characters are letters -- and a postfix operator says so with oP. The
+// strings are swiftc's for the same declarations.
+func TestNamesThatAreNotASCII(t *testing.T) {
+	d := types.Typ[types.Double]
+	i := types.Typ[types.Int]
+	for _, c := range []struct {
+		decl Decl
+		want string
+	}{
+		{Decl{Module: "m", Name: "café", Signature: sig(nil, nil)}, "$s1m007caf_dmayyF"},
+		{Decl{Module: "op", Name: "héllo", Signature: sig(nil, nil)}, "$s2op008hllo_bpayyF"},
+		{Decl{Module: "op", Name: "日本", Signature: sig(nil, nil)}, "$s2op006wgvHBayyF"},
+		{Decl{Module: "op", Name: "√", Signature: sig([]*types.Param{p("", d)}, d)}, "$s2op003BJgopyS2dF"},
+		{Decl{Module: "op", Name: "+√", Signature: sig([]*types.Param{p("", i), p("", i)}, i)}, "$s2op005p_ubooiyS2i_SitF"},
+		{Decl{Module: "op", Name: "%%", Postfix: true, Signature: sig([]*types.Param{p("", i)}, d)}, "$s2op2rroPySdSiF"},
+	} {
+		got, err := Function(c.decl)
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q (%v), want %q", c.decl.Name, got, err, c.want)
+		}
+	}
+}
+
 // TestRefusals: a symbol that is merely plausible is worse than none,
 // so what this package cannot spell it declines to spell.
 func TestRefusals(t *testing.T) {
@@ -188,8 +213,6 @@ func TestRefusals(t *testing.T) {
 					{Name: "T", Constraints: []types.Type{&types.Protocol{Name: "P"}}},
 				},
 			}}, ErrUnsupported},
-		{"a name that is not ASCII",
-			Decl{Module: "m", Name: "café", Signature: sig(nil, nil)}, ErrName},
 		{"no signature",
 			Decl{Module: "m", Name: "f"}, ErrUnsupported},
 	} {
