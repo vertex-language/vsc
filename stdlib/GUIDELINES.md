@@ -1,6 +1,6 @@
 # Runtime vs. Package Bridges
 
-`stdlib/runtime` is unconditionally linked into every Vertex binary across all targets. It contains only what compiled code and core types strictly require to exist. Everything else—especially OS-facing functionality—belongs in a **package native bridge** linked only when imported.
+`stdlib/runtime`'s core unit is unconditionally linked into every Vertex binary across all targets. It contains only what compiled code and core types strictly require to exist. A language feature that not every program uses gets a **runtime unit of its own**, linked only into the programs that use it (§1.1). Everything else—especially OS-facing functionality—belongs in a **package native bridge** linked only when imported.
 
 ---
 
@@ -18,6 +18,14 @@ Code belongs in the runtime if and only if:
 | Would basic language types fail to link without it? | **Yes** | — |
 | Does it require direct task/executor/worker state? | **Yes** | — |
 | Is it OS interaction (files, sockets, env, processes)? | — | **Yes** |
+
+### 1.1 Runtime units linked on demand
+
+Some of what the compiler emits calls to belongs to a feature most programs never use. It still belongs to the compiler, by rule 1, but it doesn't belong in every binary. It gets its own unit beside the core one, and the build adds that unit to the link only when the program uses the feature.
+
+* **The precedent:** `SwiftBridge`, linked only into programs that use Swift interop.
+* **The first real one:** the built-in `gpu` module (`proposed_vertex_kernel.md` §3). Its device half is compiler intrinsics that lower straight to VIR and need no runtime at all. Its host half, which the compiler-written `Launch`, `Enqueue` and `Map` call, is `stdlib/runtime/gpu/`: the one binding to the Metal, CUDA-driver and HIP APIs, linked only into programs that import `gpu`. Vendor drivers are opened at run time, so a binary runs on a machine that lacks one.
+* **Not a way around §3.** An on-demand unit is for code the compiler itself calls. A library that merely needs the OS is still a package with a bridge.
 
 ---
 
@@ -42,7 +50,7 @@ A bridge translates platform APIs into an `extern "C"` ABI wrapped by Vertex bin
 │   ├── include/c<pkg>.h   # Public C ABI: extern "C", primitive types only
 │   ├── c<pkg>.cpp         # Main implementation (#if defined(_WIN32), etc.)
 │   ├── c<pkg>_darwin.m    # Optional: Objective-C for Apple frameworks
-│   └── kernels.metal      # Optional: GPU kernels
+│   └── kernels.metal      # gpu/* only: vendor GPU kernels (elsewhere, kernels are .vs)
 ├── bindings.vs            # @_silgen_name definitions only
 └── *.vs                   # Public Vertex API, types, policy, and validation
 ```
@@ -62,8 +70,8 @@ All native code compiles in-process using the Go toolchain (no external toolchai
 | --- | --- | --- | --- |
 | `.cpp`, `.cc`, `.cxx` | **vcx** / `v++` | the manifest's `cxxLanguageStandard` (up to C++23) | **Default.** Use for all POSIX and Win32 bridges. Enables RAII, clean string views, and templates. |
 | `.c` | **vcc** | C11/C17 | Pristine upstream C code only. |
-| `.m` | **objv** | Objective-C (ARC) | Apple-only frameworks (AppKit, Metal host APIs, Security). |
-| `.cu`, `.cuh`, `.hip`, `.metal` | **vcx** | GPU kernels | Accelerator code, launched through a C host wrapper. `.metal` builds a `.metallib` that's loaded at run time, not a linked object. |
+| `.m` | **objv** | Objective-C (ARC) | Apple-only frameworks (AppKit, Security, MPS/Accelerate in `gpu/blas`). Metal's host API belongs to the built-in `gpu`'s runtime unit (§1.1), not to packages. |
+| `.cu`, `.cuh`, `.hip`, `.metal` | **vcx** | vendor GPU kernels | Only in the `gpu` repository's function packages (`gpu/blas`, `gpu/dnn`), for kernels that need vendor tuning. Everywhere else a GPU kernel is `.vs` (`func f(...) kernel`), which builds for every vendor and the CPU. Vendor sources load through `device.Library`. `.metal` builds a `.metallib` that's loaded at run time, not a linked object. |
 
 **Known gaps:**
 * **GPU sources in packages:** `vsc/pkg/layout.go` doesn't list `.cu`, `.cuh`, `.hip` or `.metal` yet, so a `package.vs` target won't pick them up.
@@ -81,7 +89,7 @@ All native code compiles in-process using the Go toolchain (no external toolchai
 * **Return Conventions:** Return `0` or byte counts on success; return negative error codes on failure. Provide `c<pkg>_last_error()` to surface underlying OS error numbers (`errno`, `GetLastError()`).
 * **Universal Target Support:** Every header function must be implemented across all supported targets (`aarch64-macos`, `x86_64-windows`, `aarch64-android`). Unsupported operations must return `*_ERR_UNSUPPORTED` rather than being omitted or panicking.
 * **Thin Adapters:** The bridge handles OS call translation only. Parsing, business logic, default values, and data structures belong in Vertex.
-* **Privileged Packages Only:** Native bridges are restricted to core platform modules (`os`, `sync`, `fs`, `time`, `net/*`, `gpu`, `ui/window`, `db/sqlite`).
+* **Privileged Packages Only:** Native bridges are restricted to core platform modules (`os`, `sync`, `fs`, `time`, `net/*`, `ui/window`, `db/sqlite`) and the `gpu` repository's function packages (`gpu/*`: vendor kernel sources, and `gpu/blas`'s MPS/Accelerate binding). `gpu` itself isn't a package: it's built into the compiler (§1.1).
 
 ---
 
@@ -94,4 +102,6 @@ If a feature meets the runtime criteria:
 3. **Bind:** If generated by the compiler, register the symbol in `stdlib.go`.
 4. **Document & Test:** Add the definition to `ABI.md` and add automated coverage under `stdlib/tests`.
 
-Keep runtime additions small. Every one ships in every Vertex binary and has to be maintained on every target.
+Keep runtime additions small. Every one in the core unit ships in every Vertex binary and has to be maintained on every target.
+
+For an on-demand unit (§1.1), the same steps apply, plus: put it in its own directory under `stdlib/runtime/` with its own `vertex_<feature>_*` prefix; have `vsc/build` add it to the link only when the program uses the feature, as it does `SwiftBridge`; and load any vendor or system library it needs at run time, so a binary still starts on a machine without it.
