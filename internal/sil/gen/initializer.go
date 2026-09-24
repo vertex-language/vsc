@@ -44,7 +44,7 @@ func (g *gen) initializer(d *ast.InitDecl, recv types.Type) {
 // the declaration's own, or one specialized for a generic struct's
 // instance.
 func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signature, name string) {
-	f := g.m.Func(name).SetSourceName("init").SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName("init").SetLinkage(g.initLinkage()).SetAttr("ossa")
 
 	outer := struct {
 		fn      *sil.Func
@@ -202,7 +202,7 @@ func (g *gen) classInitializer(d *ast.InitDecl, recv types.Type) {
 // declared parameters, then the instance itself as the receiver.
 func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 	sig *types.Signature, name string) {
-	f := g.m.Func(name).SetSourceName("init").SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName("init").SetLinkage(g.initLinkage()).SetAttr("ossa")
 	restore := g.saveFunction()
 	defer restore()
 
@@ -276,7 +276,7 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 // classAllocator emits the entry point that makes the instance and
 // hands it to the one that fills it in.
 func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body string) {
-	f := g.m.Func(name).SetSourceName("init").SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName("init").SetLinkage(g.initLinkage()).SetAttr("ossa")
 	restore := g.saveFunction()
 	defer restore()
 
@@ -378,13 +378,19 @@ func (g *gen) sameInitParams(sig *types.Signature, d *ast.InitDecl) bool {
 	}
 	// By label and name too: init(nanos:) and init(label:) take one
 	// parameter each, and counting them made both bodies one function.
+	// Read in the file the initializer was written in, which for a type
+	// another module declares is not the file being lowered.
+	file := g.fileOf(d)
+	if file == nil {
+		file = g.file
+	}
 	for i, p := range params {
 		label, name := "", ""
 		if p.Label != nil {
-			label = g.text(p.Label)
+			label = p.Label.Text(file)
 		}
 		if p.Name != nil {
-			name = g.text(p.Name)
+			name = p.Name.Text(file)
 		} else if label != "_" {
 			name = label
 		}
@@ -646,4 +652,13 @@ func (g *gen) deinitializer(d *ast.DeinitDecl, recv types.Type) {
 // destroyer in the same module, so the name is this compiler's.
 func deinitSymbol(module string, recv types.Type) string {
 	return "$sVSCdeinit_" + identifierSafe(module) + "_" + identifierSafe(typeNameOf(recv))
+}
+
+// initLinkage is an initializer's: public, as it has always been, except
+// for a specialization, which is this module's own copy.
+func (g *gen) initLinkage() sil.Linkage {
+	if g.specializing {
+		return sil.Private
+	}
+	return sil.Public
 }

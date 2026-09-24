@@ -765,7 +765,7 @@ func (g *gen) callFuncTry(e *ast.CallExpr, sym *analyzer.FuncSymbol, optional bo
 		if _, imported := g.info.Imported[sym]; imported && !hasBody(sym) {
 			return g.callImportedGeneric(e, sym, spec)
 		}
-		return g.callGeneric(e, sym, spec)
+		return g.callGeneric(e, sym, spec, optional)
 	}
 	callee := g.m.Func(g.symbol(sym)).SetSourceName(sym.Name())
 	if g.needsType(callee) {

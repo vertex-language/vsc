@@ -230,6 +230,9 @@ func (g *gen) computedName(b *ast.PatternBinding) string {
 // one its declaration asks for. A public property's getter is called from
 // another module, so it has to be a symbol that module can reach.
 func (g *gen) accessLinkage(mods []*ast.Modifier) sil.Linkage {
+	if g.specializing {
+		return sil.Private
+	}
 	for _, m := range mods {
 		if m == nil || m.Name == nil {
 			continue

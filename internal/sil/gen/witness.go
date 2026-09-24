@@ -140,7 +140,7 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 			table.Entry(p.Name+"."+r.Name, thunk)
 			continue
 		}
-		found, m := g.methodOn(concrete, r.Name)
+		found, m := g.methodMatching(concrete, r)
 		if m == nil && r.Name == "makeIterator" && p.Name == "Sequence" && g.info.CoreTypes[p] {
 			// A Sequence that is its own iterator: makeIterator() is a
 			// copy of self, as Swift's default makes it.
@@ -154,7 +154,7 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 				r.Name+"', which '"+p.Name+"' requires")
 			continue
 		}
-		thunk := g.witnessThunk(concrete, found, p, m)
+		thunk := g.witnessThunk(concrete, found, p, m, r.Sig)
 		if thunk == "" {
 			continue
 		}
@@ -164,7 +164,10 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 
 // witnessThunk emits the function a table row names: the receiver
 // arrives as an address, and what the method wants is the value.
-func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *types.Method) string {
+func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *types.Method, req *types.Signature) string {
+	if req == nil {
+		req = m.Sig
+	}
 	name := witnessThunkSymbol(concrete, p, m)
 	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
 		return name
@@ -172,7 +175,7 @@ func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *typ
 	if m.IsStatic {
 		return g.staticMethodWitnessThunk(name, concrete, found, m)
 	}
-	f := g.m.Func(name).SetSourceName(m.Name).SetLinkage(sil.Hidden).SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName(m.Name).SetLinkage(sil.Private).SetAttr("ossa")
 
 	outer := struct {
 		fn      *sil.Func
@@ -205,8 +208,14 @@ func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *typ
 	ct := lowerType(concrete)
 	var args []*sil.Value
 	for i, param := range m.Sig.Params {
-		t := lowerType(param.Type)
-		v := f.Param(t, paramConvention(param, t))
+		t := lowerType(param.BodyType())
+		conv := paramConvention(param, t)
+		// An inout parameter is the caller's storage, as the method
+		// declares it (declareMethod): the thunk passes the address on.
+		if byAddress(conv) {
+			t = t.Address()
+		}
+		v := f.Param(t, conv)
 		args = append(args, v)
 		if param.Name != "" {
 			g.blk.DebugValue(v, param.Name, "let", "argno "+itoa(i+1))
@@ -223,6 +232,13 @@ func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *typ
 	if m.Sig.Results != nil && !isVoid(m.Sig.Results) {
 		rt := lowerType(m.Sig.Results)
 		f.SetResult(rt, resultConvention(rt))
+	}
+	// The thunk is what a caller through the table calls, so it has the
+	// requirement's effects: async where the call suspends, and throwing
+	// where what the method throws has to reach that caller.
+	f.Type().Async = req.Async
+	if req.Throws {
+		f.SetThrows(sil.Object(sil.BuiltinNativeObj))
 	}
 
 	self := selfAddr
@@ -243,7 +259,32 @@ func (g *gen) witnessThunk(concrete, found types.Type, p *types.Protocol, m *typ
 			g.blk.DestroyValue(self)
 		}
 	}
-	if m.Sig.Results == nil || isVoid(m.Sig.Results) {
+	void := m.Sig.Results == nil || isVoid(m.Sig.Results)
+	// The method's own effects decide how it is called: one that cannot
+	// throw meets a requirement that may, and is applied plainly.
+	if m.Sig.Throws && req.Throws {
+		// try_apply: the value comes back on one edge, the error box on
+		// the other, and the thunk throws that box on to its caller.
+		normal, failed := f.Block(), f.Block()
+		var out *sil.Value
+		if !void {
+			out = normal.Arg(lowerType(m.Sig.Results), sil.Owned)
+		}
+		box := failed.Arg(errorBoxType(), sil.Owned)
+		g.blk.TryApply(ref, normal, failed, args...)
+		g.blk = failed
+		endSelf()
+		g.blk.Throw(box)
+		g.blk = normal
+		endSelf()
+		if void {
+			g.blk.Return(g.void())
+		} else {
+			g.blk.Return(out)
+		}
+		return name
+	}
+	if void {
 		g.blk.Apply(ref, lowerType(m.Sig.Results), args...)
 		endSelf()
 		g.blk.Return(g.void())
@@ -263,7 +304,7 @@ func (g *gen) selfIteratorThunk(concrete types.Type, p *types.Protocol) string {
 	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
 		return name
 	}
-	f := g.m.Func(name).SetSourceName(m.Name).SetLinkage(sil.Hidden).SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName(m.Name).SetLinkage(sil.Private).SetAttr("ossa")
 	outerFn, outerEntry, outerBlk := g.fn, g.entry, g.blk
 	defer func() { g.fn, g.entry, g.blk = outerFn, outerEntry, outerBlk }()
 	g.fn, g.entry = f, false
@@ -281,7 +322,7 @@ func (g *gen) selfIteratorThunk(concrete types.Type, p *types.Protocol) string {
 // not an operator: the declared parameters, then the conformer's type in
 // the self register, and the conformer's own static method answers.
 func (g *gen) staticMethodWitnessThunk(name string, concrete, found types.Type, m *types.Method) string {
-	f := g.m.Func(name).SetSourceName(m.Name).SetLinkage(sil.Hidden).SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName(m.Name).SetLinkage(sil.Private).SetAttr("ossa")
 	outerFn, outerEntry, outerBlk := g.fn, g.entry, g.blk
 	defer func() { g.fn, g.entry, g.blk = outerFn, outerEntry, outerBlk }()
 	g.fn, g.entry = f, false
@@ -391,7 +432,11 @@ func (g *gen) witnessApply(at ast.Node, x ast.Expr, ex *types.Existential, m *ty
 	var args []*sil.Value
 	want := existentialParams(m.Sig)
 	for i, a := range argExprs {
-		v := g.rvalue(a)
+		// As a direct call's arguments are: a temporary is made and ended
+		// with the statement, a variable is borrowed where it is. An owned
+		// copy passed to a borrowed parameter had no end, which a call
+		// that may fail -- two ways out -- made plain.
+		v := g.expr(a)
 		if v == nil {
 			return nil
 		}
@@ -402,6 +447,13 @@ func (g *gen) witnessApply(at ast.Node, x ast.Expr, ex *types.Existential, m *ty
 	opened := g.blk.OpenExistentialAddr(addr, lowerType(ex).Address())
 	args = append(args, opened)
 
+	// A throwing requirement is try_applied, as a call to the method
+	// itself would be: its error is caught, turned optional or raised.
+	if call, isCall := at.(*ast.CallExpr); isCall && m.Sig.Throws {
+		optional, trap := g.tryOn(call)
+		g.tryBang = trap
+		return g.tryApply(call, method, args, m.Sig.Results, optional, false)
+	}
 	v := g.blk.Apply(method, lowerType(m.Sig.Results), args...)
 	g.destroyLater(v)
 	return v
@@ -412,16 +464,30 @@ func (g *gen) witnessApply(at ast.Node, x ast.Expr, ex *types.Existential, m *ty
 func witnessType(m *types.Method, ex *types.Existential) sil.Type {
 	ft := &sil.FuncType{Convention: sil.ConvWitness}
 	for _, p := range m.Sig.Params {
-		t := lowerType(p.Type)
-		ft.Params = append(ft.Params, sil.Param{Type: t, Convention: paramConvention(p, t)})
+		t := lowerType(p.BodyType())
+		conv := paramConvention(p, t)
+		if byAddress(conv) {
+			t = t.Address()
+		}
+		ft.Params = append(ft.Params, sil.Param{Type: t, Convention: conv})
+	}
+	// The receiver as the thunk takes it: the conformer's storage to change
+	// for a mutating requirement, borrowed otherwise.
+	selfConv := sil.ParamInGuaranteed
+	if m.IsMutating {
+		selfConv = sil.ParamInout
 	}
 	ft.Params = append(ft.Params, sil.Param{
 		Type:       lowerType(ex).Address(),
-		Convention: sil.ParamInGuaranteed,
+		Convention: selfConv,
 	})
 	if m.Sig.Results != nil && !isVoid(m.Sig.Results) {
 		t := lowerType(m.Sig.Results)
 		ft.Results = append(ft.Results, sil.Result{Type: t, Convention: resultConvention(t)})
+	}
+	ft.Async = m.Sig.Async
+	if m.Sig.Throws {
+		ft.ErrorType = sil.Object(sil.BuiltinNativeObj)
 	}
 	return sil.Object(ft)
 }
@@ -1110,7 +1176,7 @@ func (g *gen) getterWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
 		return name, true
 	}
-	f := g.m.Func(name).SetSourceName(r.Name).SetLinkage(sil.Hidden).SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName(r.Name).SetLinkage(sil.Private).SetAttr("ossa")
 
 	outerFn, outerEntry, outerBlk := g.fn, g.entry, g.blk
 	defer func() { g.fn, g.entry, g.blk = outerFn, outerEntry, outerBlk }()
@@ -1199,7 +1265,7 @@ func (g *gen) staticWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 		return "", false
 	}
 
-	f := g.m.Func(name).SetSourceName(r.Name).SetLinkage(sil.Hidden).SetAttr("ossa")
+	f := g.m.Func(name).SetSourceName(r.Name).SetLinkage(sil.Private).SetAttr("ossa")
 	outerFn, outerEntry, outerBlk := g.fn, g.entry, g.blk
 	defer func() { g.fn, g.entry, g.blk = outerFn, outerEntry, outerBlk }()
 	g.fn, g.entry = f, false
@@ -1312,4 +1378,46 @@ func (g *gen) intoExistential(src *sil.Value, slot *sil.Value) {
 		return
 	}
 	g.blk.CopyAddr(src, slot, "take", "init")
+}
+
+// methodMatching is the method a concrete type declares that meets a
+// requirement: of its name, taking the same labels and parameter types --
+// so that of two overloads, `Write(_: [UInt8])` and `Write(_: String)`,
+// the one the requirement names is the one in the table. It falls back to
+// the first of the name where none matches exactly.
+func (g *gen) methodMatching(t types.Type, r *types.Requirement) (types.Type, *types.Method) {
+	found, first := g.methodOn(t, r.Name)
+	if first == nil || r.Sig == nil {
+		return found, first
+	}
+	base := t
+	if inst, ok := base.(*types.GenericInstance); ok {
+		base = inst.Underlying()
+	}
+	var methods []*types.Method
+	switch b := base.Underlying().(type) {
+	case *types.Struct:
+		methods = b.Methods
+	case *types.Class:
+		methods = b.Methods
+	case *types.Enum:
+		methods = b.Methods
+	}
+	for _, m := range methods {
+		if m == nil || m.Name != r.Name || m.Sig == nil || len(m.Sig.Params) != len(r.Sig.Params) {
+			continue
+		}
+		same := true
+		for i, p := range m.Sig.Params {
+			q := r.Sig.Params[i]
+			if p.Label != q.Label || !types.Identical(p.BodyType(), q.BodyType()) {
+				same = false
+				break
+			}
+		}
+		if same {
+			return found, m
+		}
+	}
+	return found, first
 }

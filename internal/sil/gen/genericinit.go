@@ -149,6 +149,7 @@ func (g *gen) emitClassInitSpecialization(decl *ast.InitDecl, inst types.Type, s
 		t := g.m.VTable(inst.String())
 		t.Layout = inst
 	}
+	defer g.asSpecialization()()
 	g.classInitBody(decl, inst, sig, initializing)
 	g.classAllocator(inst, sig, alloc, initializing)
 }
@@ -248,5 +249,6 @@ func (g *gen) emitStructInitSpecialization(decl *ast.InitDecl, inst types.Type, 
 		g.file = f
 	}
 	g.subst = subst
+	defer g.asSpecialization()()
 	g.structInitBody(decl, inst, sig, name)
 }

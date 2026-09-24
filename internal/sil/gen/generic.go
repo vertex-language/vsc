@@ -15,12 +15,23 @@ import (
 
 // callGeneric lowers a call to a generic function by lowering the
 // function for these type arguments and calling that.
-func (g *gen) callGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol, spec analyzer.Specialization) *sil.Value {
+func (g *gen) callGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol, spec analyzer.Specialization, optional bool) *sil.Value {
 	for _, a := range spec.Args {
 		if a == nil {
 			g.refuse(e, "a call whose type arguments could not be inferred")
 			return nil
 		}
+	}
+	// A call made inside a specialization was checked against the
+	// enclosing function's own type parameters -- `ReadToEnd(&r)` inside
+	// `ReadText<R>` is ReadToEnd<R> -- which are this specialization's
+	// types now.
+	if len(g.subst) > 0 {
+		args := make([]types.Type, len(spec.Args))
+		for i, a := range spec.Args {
+			args[i] = types.Substitute(a, g.subst)
+		}
+		spec = analyzer.Specialization{Params: spec.Params, Args: args}
 	}
 	subst := spec.Subst()
 	sig, ok := types.Substitute(sym.Signature(), subst).(*types.Signature)
@@ -45,19 +56,24 @@ func (g *gen) callGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol, spec analyz
 	}
 	ref := g.blk.FunctionRef(callee)
 
-	var args []*sil.Value
-	want := existentialParams(sig)
-	if e.Args != nil {
-		for i, a := range e.Args.Args {
-			// As an ordinary call's arguments are: borrowed where they
-			// are, since the parameters are borrowed too. Taking one
-			// copied a borrowed value, and nothing let the copy go.
-			v := g.expr(a.X)
-			if v == nil {
-				return nil
-			}
-			args = append(args, g.boxArg(a.X, v, want, i))
+	// As an ordinary call's arguments are, defaults included: a
+	// parameter left out -- `ReadToEnd(&r)` and its `limit:` -- is given
+	// its default, found through the substituted parameter's origin.
+	args, ok := g.arguments(e, sig)
+	if !ok {
+		return nil
+	}
+	// A throwing specialization is try_applied as any throwing call is,
+	// so what it throws is caught, made optional or raised (callFuncTry).
+	if sig.Throws {
+		if pendingOptional, pendingTrap := g.tryOn(e); pendingOptional || pendingTrap {
+			optional = optional || pendingOptional
+			g.tryBang = pendingTrap
 		}
+		if sig.Rethrows && !optional && !g.argumentThrows(e) {
+			g.tryBang = true
+		}
+		return g.tryApply(e, ref, args, sig.Results, optional, false)
 	}
 	v := g.blk.Apply(ref, lowerType(sig.Results), args...)
 	g.destroyLater(v)
@@ -90,12 +106,21 @@ func (g *gen) emitSpecialization(sym *analyzer.FuncSymbol, name string, subst ma
 		recv    types.Type
 		self    *local
 		subst   map[*types.TypeParam]types.Type
-	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.subst}
+		throws  bool
+		catches []catchTarget
+		tryBang bool
+		tryCall *ast.CallExpr
+	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.subst,
+		g.throws, g.catches, g.tryBang, g.tryCall}
+	// The instantiation is lowered in the middle of its caller, which may
+	// be inside a `do`: what the caller's throws are caught by is the
+	// caller's, and has to be there again when its lowering resumes.
 	defer func() {
 		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
 		g.scopes, g.locals = outer.scopes, outer.locals
 		g.loops, g.pending = outer.loops, outer.pending
 		g.recv, g.self, g.subst = outer.recv, outer.self, outer.subst
+		g.throws, g.catches, g.tryBang, g.tryCall = outer.throws, outer.catches, outer.tryBang, outer.tryCall
 	}()
 
 	// The body is read in the file it was written in, which is not
@@ -106,8 +131,17 @@ func (g *gen) emitSpecialization(sym *analyzer.FuncSymbol, name string, subst ma
 		g.file = f
 	}
 	g.subst = subst
+	defer g.asSpecialization()()
 	g.functionNamed(decl, nil, name)
 	return nil
+}
+
+// asSpecialization marks what is lowered from here on as a specialization,
+// until the function it returns is called.
+func (g *gen) asSpecialization() func() {
+	was := g.specializing
+	g.specializing = true
+	return func() { g.specializing = was }
 }
 
 // specializedSymbol generates a unique mangled name for a specialized function instantiation.

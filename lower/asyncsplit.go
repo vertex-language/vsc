@@ -539,6 +539,11 @@ func (c *fn) emitSuspend(s *suspension, after *ir.Block) error {
 		}
 		call = append(call, got)
 	}
+	// A witness ends with the metadata and the table it was found in, as
+	// a synchronous witness call does (see apply).
+	if extra, ok := c.witnessExtra[args[0]]; ok {
+		call = append(call, extra[0], extra[1])
+	}
 	// A function value is called with its captures in the self register,
 	// as a synchronous one is.
 	if !closureCtx.IsZero() {
@@ -777,7 +782,10 @@ func (l *lowerer) asyncRecord(name string, size int64) (*ir.Global, bool) {
 	if fn == nil {
 		return nil, false
 	}
-	return l.asyncRecordFor(fn, sym, size, true), true
+	// The record goes where its function goes: out of the object with
+	// an exported function, and not with a private one -- a witness thunk
+	// or a specialization, which each module has its own copy of.
+	return l.asyncRecordFor(fn, sym, size, l.exported[name]), true
 }
 
 // asyncRecordFor places the record for a function this module holds,

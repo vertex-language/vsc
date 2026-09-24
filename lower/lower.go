@@ -115,6 +115,9 @@ type lowerer struct {
 	// wants, worked out before anything is lowered because a caller
 	// allocates the callee's. See asyncFrameSize.
 	asyncSizes map[string]int64
+	// exported is each function that leaves the object file, by SIL
+	// name: what its async record does too (see asyncRecord).
+	exported map[string]bool
 
 	meta        map[string]*ir.Global
 	vwts        map[string]*ir.Global
@@ -161,13 +164,20 @@ func (l *lowerer) declare(f *sil.Func) error {
 	if err := l.applySig(f, out, sig); err != nil {
 		return err
 	}
-	// Only a public symbol leaves the object file. Package linkage is
-	// visible to the modules built alongside this one, which is a
-	// question for whoever links them and not one an object file can
-	// answer, so it is internal here too.
+	// A public symbol leaves the object file, and so does a module's
+	// internal one (hidden, package): a program is every module it imports
+	// linked into one image, and another module's specialization of this
+	// one's generic code calls this one's internal functions, as Swift's
+	// @usableFromInline makes them callable. Names carry their module, so
+	// two modules' internals cannot collide. Only private stays in the
+	// object: closures, and each module's own copy of a specialization.
 	switch f.Linkage() {
-	case sil.Public, sil.PublicExternal:
+	case sil.Public, sil.PublicExternal, sil.Hidden, sil.PackageLinkage:
 		out.Export()
+		if l.exported == nil {
+			l.exported = map[string]bool{}
+		}
+		l.exported[f.Name()] = true
 	default:
 		out.Internal()
 	}
@@ -614,6 +624,14 @@ func (l *lowerer) vtables(m *sil.Module) error {
 		}
 		members := make([]string, 0, len(t.Entries))
 		for _, e := range t.Entries {
+			// An async witness is reached the way any async function value
+			// is: through the record beside its code, which says where the
+			// code is and how big a context it wants. A call through the
+			// table reads the row as that record (see suspensionTarget).
+			if _, async := l.asyncSizes[e.Impl]; async {
+				rows = append(rows, ir.RelocInit(l.asyncRecordOf(e.Impl)))
+				continue
+			}
 			impl, ok := l.callee[l.sym(e.Impl)]
 			if !ok {
 				f, ok := l.defs[e.Impl]
@@ -752,6 +770,14 @@ func (l *lowerer) witnessTables(m *sil.Module) error {
 						What: "no conformance to " + base + ", which " + t.Protocol + " inherits"}
 				}
 				rows = append(rows, ir.RelocInit(g))
+				continue
+			}
+			// An async witness is reached the way any async function value
+			// is: through the record beside its code, which says where the
+			// code is and how big a context it wants. A call through the
+			// table reads the row as that record (see suspensionTarget).
+			if _, async := l.asyncSizes[e.Impl]; async {
+				rows = append(rows, ir.RelocInit(l.asyncRecordOf(e.Impl)))
 				continue
 			}
 			impl, ok := l.callee[l.sym(e.Impl)]

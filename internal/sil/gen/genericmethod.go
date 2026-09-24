@@ -148,8 +148,11 @@ func (g *gen) genericMethod(e *ast.CallExpr, ref *analyzer.MethodRef) (*analyzer
 		}
 		return g.builtinMethod(e, ref, b, recvT)
 	}
-	// A method called on self, within a method specialized already.
-	if inst == nil {
+	// A method called on self, within a method specialized already:
+	// `Next()` or `self.Next()`. Not a call on anything else -- `inner.Next()`
+	// on a stored `inner: R` is R's method, and taking the specialization's
+	// receiver for it would call the enclosing method of the same name.
+	if inst == nil && callsSelf(e) {
 		inst, _ = g.recv.(*types.GenericInstance)
 	}
 	// The type the method was declared on: the instance's, when there is
@@ -282,6 +285,7 @@ func (g *gen) emitMethodSpecialization(decl *ast.FuncDecl, inst types.Type, name
 		g.file = f
 	}
 	g.subst = subst
+	defer g.asSpecialization()()
 	g.functionNamed(decl, inst, name)
 }
 
@@ -390,4 +394,15 @@ func (g *gen) builtinMethod(e *ast.CallExpr, ref *analyzer.MethodRef, b *analyze
 	}}
 	g.emitMethodSpecialization(decl, concrete, name.String(), subst)
 	return spec, name.String(), true
+}
+
+// callsSelf reports whether a call's receiver is self: a bare call to a
+// method, or one through `self.`.
+func callsSelf(e *ast.CallExpr) bool {
+	mem, ok := e.Fun.(*ast.MemberExpr)
+	if !ok {
+		return true
+	}
+	_, onSelf := mem.X.(*ast.SelfExpr)
+	return onSelf
 }

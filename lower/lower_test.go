@@ -26,7 +26,9 @@ var target = ir.AArch64MacOS
 // TestFib is the whole compiler in one test: Swift in, VIR out.
 //
 // The symbol is the mangled one, because that is what a linker will
-// be asked for. It is worth reading the expected text rather than
+// be asked for, and exported although fib is internal: another module's
+// specialization of this one's generic code may call it (see
+// lowerer.function). It is worth reading the expected text rather than
 // trusting it. The
 // comparison became a branch, the arithmetic became an add and a
 // separate test of whether it overflowed, the trap the language
@@ -34,7 +36,7 @@ var target = ir.AArch64MacOS
 // call. Nothing of Swift is left in it.
 func TestFib(t *testing.T) {
 	got := vir(t, "testdata/fib.swift")
-	want := `internal func @$s1t3fibyS2iF(%a0 i64) i64 {
+	want := `export func @$s1t3fibyS2iF(%a0 i64) i64 {
 @entry:
   %0 = i64.const 2
   %1 = i64.slt %a0, %0
@@ -291,8 +293,15 @@ func body(m *ir.Module) string {
 		return err.Error()
 	}
 	s := b.String()
-	if i := strings.Index(s, "internal func"); i >= 0 {
-		return s[i:]
+	// From the first function on, exported or internal.
+	at := -1
+	for _, kind := range []string{"internal func", "export func"} {
+		if i := strings.Index(s, kind); i >= 0 && (at < 0 || i < at) {
+			at = i
+		}
+	}
+	if at >= 0 {
+		return s[at:]
 	}
 	return s
 }

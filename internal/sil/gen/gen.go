@@ -45,6 +45,11 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 	if info != nil && info.CoreAlgorithms != nil {
 		lookup = append(append([]*ast.File{}, files...), info.CoreAlgorithms)
 	}
+	// And the imported modules' files, whose generic declarations this
+	// module specializes: the checker checked their bodies here for that.
+	if info != nil && len(info.ImportedFiles) > 0 {
+		lookup = append(append([]*ast.File{}, lookup...), info.ImportedFiles...)
+	}
 	methods := genericMethodDecls(lookup, info)
 	inits := genericInitDecls(lookup, info)
 	publicTypes := map[string]bool{}
@@ -397,12 +402,16 @@ func linkageOf(a analyzer.Access) sil.Linkage {
 
 // A gen lowers one file.
 type gen struct {
-	m         *sil.Module
-	info      *analyzer.Info
-	file      *token.File
-	files     []*ast.File              // every file of the module: code written in one is lowered in another
-	nodeFiles map[ast.Node]*token.File // which file a node came from, as fileOf finds it
-	module    string
+	// specializing is set while a generic function, method, initializer
+	// or accessor is lowered for particular types: what is emitted then
+	// is private to this module (see functionNamed and accessLinkage).
+	specializing bool
+	m            *sil.Module
+	info         *analyzer.Info
+	file         *token.File
+	files        []*ast.File              // every file of the module: code written in one is lowered in another
+	nodeFiles    map[ast.Node]*token.File // which file a node came from, as fileOf finds it
+	module       string
 
 	fn     *sil.Func
 	entry  bool // fn is the program's entry point
@@ -615,7 +624,11 @@ func (g *gen) exprKind(e ast.Expr) string {
 			// whoever wrote the call, so the two are told apart
 			// rather than both called "this call".
 			if _, isFunc := g.info.Uses[id.Name].(*analyzer.FuncSymbol); !isFunc {
-				if _, callable := g.typeOf(id).Underlying().(*types.Signature); !callable {
+				t := g.typeOf(id)
+				if t == nil {
+					return "a call to '" + g.text(id) + "'"
+				}
+				if _, callable := t.Underlying().(*types.Signature); !callable {
 					return "a constructor call"
 				}
 			}
@@ -1021,6 +1034,11 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	}
 
 	linkage := linkageOf(sym.Access())
+	// A specialization is this module's own copy: another module that
+	// specializes the same function for the same types makes its own.
+	if g.specializing {
+		linkage = sil.Private
+	}
 	if g.entry {
 		linkage = sil.Public
 	}

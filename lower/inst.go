@@ -2939,6 +2939,11 @@ func (c *fn) tryApply(in *sil.Inst) error {
 		}
 		args = append(args, got)
 	}
+	// A witness that may fail ends with the metadata and the table, as
+	// an apply of one does (see apply and witnessMethod).
+	if extra, ok := c.witnessExtra[in.Args()[0]]; ok {
+		args = append(args, extra[0], extra[1])
+	}
 
 	var res ir.Results
 	if direct {

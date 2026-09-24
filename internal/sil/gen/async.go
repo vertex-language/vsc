@@ -395,7 +395,10 @@ func (g *gen) awaitsIsolatedSync(x ast.Expr) bool {
 	case *ast.TryExpr:
 		return g.awaitsIsolatedSync(e.X)
 	case *ast.CallExpr:
-		sig, _ := g.typeOf(e.Fun).Underlying().(*types.Signature)
+		var sig *types.Signature
+		if t := g.typeOf(e.Fun); t != nil {
+			sig, _ = t.Underlying().(*types.Signature)
+		}
 		if mem, ok := e.Fun.(*ast.MemberExpr); ok && sig == nil {
 			if ref := g.info.Methods[mem]; ref != nil && ref.Method != nil {
 				sig = ref.Method.Sig

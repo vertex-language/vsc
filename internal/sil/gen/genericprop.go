@@ -162,15 +162,18 @@ func (g *gen) genericAccessor(at ast.Node, recv types.Type, f *types.Field, sett
 	g.specialized[name] = true
 
 	restore := g.aside()
+	endSpecialization := g.asSpecialization()
+	defer endSpecialization()
 	defer restore()
 	if file := g.fileOf(decl.binding); file != nil {
 		g.file = file
 	}
 	g.subst = subst
+	// This module's own copy, whatever the declaration's access.
 	if setter {
-		g.emitSetterNamed(name, recv, f.Name, t, set, decl.linkage)
+		g.emitSetterNamed(name, recv, f.Name, t, set, sil.Private)
 	} else {
-		g.emitGetterNamed(name, recv, f.Name, t, body, false, decl.linkage)
+		g.emitGetterNamed(name, recv, f.Name, t, body, false, sil.Private)
 	}
 	return name, t, true
 }
