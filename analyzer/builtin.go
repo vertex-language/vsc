@@ -152,6 +152,7 @@ func (c *checker) builtinMembers(key string, parent *Scope) *BuiltinMembers {
 		b.scope.Insert(NewTypeName(p.Name, p, token.NoPos))
 	}
 	c.typeScopes[typeNameOf(b.Type)] = b.scope
+	c.rememberTypeScope(b.Type, b.scope)
 	c.info.Builtins[key] = b
 	return b
 }

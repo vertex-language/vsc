@@ -521,7 +521,7 @@ func (c *checker) checkReceiverMethod(d *ast.FuncDecl, scope *Scope) {
 	if self == nil {
 		return
 	}
-	typeScope := c.typeScopes[typeNameOf(self)]
+	typeScope := c.typeScope(self)
 	if typeScope == nil {
 		typeScope = scope
 	}

@@ -38,6 +38,9 @@ type checker struct {
 	// declSites tracks top-level declaration locations and access levels.
 	declSites  map[Symbol]declSite
 	typeScopes map[string]*Scope // a declared type's scope, by name
+	// scopesByType is the same, by the type: two imported modules may
+	// each declare a Cursor, and a name keeps only the last of them.
+	scopesByType map[types.Type]*Scope
 	// modules maps module names to their scopes for qualified lookup.
 	modules   map[string]*Scope
 	currActor *types.Class

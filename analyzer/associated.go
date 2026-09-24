@@ -31,6 +31,7 @@ func (c *checker) declareProtocol(d *ast.ProtocolDecl, scope *Scope) {
 		c.typeScopes = map[string]*Scope{}
 	}
 	c.typeScopes[name] = inner
+	c.rememberTypeScope(pr, inner)
 	inner.Insert(NewTypeName("Self", pr.Self, d.Name.Pos()))
 
 	if d.Body == nil {

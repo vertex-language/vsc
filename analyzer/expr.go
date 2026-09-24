@@ -2110,7 +2110,7 @@ func (c *checker) initializesOwnProperty(sym Symbol, name string) bool {
 	if !c.inInit || c.currType == nil {
 		return false
 	}
-	own := c.typeScopes[typeNameOf(c.currType)]
+	own := c.typeScope(c.currType)
 	return own != nil && own.LookupLocal(name) == sym
 }
 

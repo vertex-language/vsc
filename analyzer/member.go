@@ -16,7 +16,7 @@ func (c *checker) lookupMemberFor(e *ast.MemberExpr, t types.Type, name string) 
 			c.info.Methods[e] = &MethodRef{Recv: recv, Method: m}
 		}
 		if meta, ok := t.(*types.Metatype); ok {
-			if scope := c.typeScopes[typeNameOf(meta.Instance)]; scope != nil {
+			if scope := c.typeScope(meta.Instance); scope != nil {
 				if sym, ok := scope.LookupLocal(name).(*TypeNameSymbol); ok {
 					c.info.Uses[e.Name] = sym
 				}
@@ -34,7 +34,7 @@ func (c *checker) nestedIn(outer types.Type, name string) types.Type {
 	if inst, ok := outer.(*types.GenericInstance); ok {
 		outer = inst.Base
 	}
-	scope := c.typeScopes[typeNameOf(outer)]
+	scope := c.typeScope(outer)
 	if scope == nil {
 		return nil
 	}
@@ -59,7 +59,7 @@ func (c *checker) enumCaseSymbol(t types.Type, name string) *EnumCaseSymbol {
 	if _, ok := t.Underlying().(*types.Enum); !ok {
 		return nil
 	}
-	scope := c.typeScopes[typeNameOf(t)]
+	scope := c.typeScope(t)
 	if scope == nil {
 		return nil
 	}
@@ -470,4 +470,28 @@ func caseParams(assoc types.Type, label string) []*types.Param {
 		return out
 	}
 	return []*types.Param{{Name: label, Label: label, Type: assoc}}
+}
+
+// typeScope is a declared type's member scope: the one that type was
+// declared with, or -- for a type not seen declaring one -- the scope of
+// the last type of its name.
+func (c *checker) typeScope(t types.Type) *Scope {
+	if t == nil {
+		return nil
+	}
+	if s := c.scopesByType[t]; s != nil {
+		return s
+	}
+	return c.typeScopes[typeNameOf(t)]
+}
+
+// rememberTypeScope records a type's member scope by the type itself.
+func (c *checker) rememberTypeScope(t types.Type, s *Scope) {
+	if t == nil || s == nil {
+		return
+	}
+	if c.scopesByType == nil {
+		c.scopesByType = map[types.Type]*Scope{}
+	}
+	c.scopesByType[t] = s
 }

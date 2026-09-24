@@ -233,7 +233,7 @@ func (c *checker) nestedType(outer types.Type, name string, at *ast.MemberType, 
 	if inst, ok := outer.(*types.GenericInstance); ok {
 		outer = inst.Base
 	}
-	inner := c.typeScopes[typeNameOf(outer)]
+	inner := c.typeScope(outer)
 	if inner == nil {
 		return nil
 	}
@@ -779,6 +779,7 @@ func (c *checker) openType(d ast.Decl, name *ast.Ident, generics *ast.GenericPar
 		c.typeScopes = map[string]*Scope{}
 	}
 	c.typeScopes[name.Text(c.file)] = typeScope
+	c.rememberTypeScope(sym.Type(), typeScope)
 	params := c.declareGenericParams(generics, typeScope)
 	c.declareNested(body, typeScope, sym.Type())
 	return sym.Type(), typeScope, params, true
@@ -1204,7 +1205,7 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		}
 		c.info.Extensions[ext] = extType
 
-		typeScope := c.typeScopes[typeNameOf(extType)]
+		typeScope := c.typeScope(extType)
 		if typeScope == nil {
 			typeScope = NewScope(scope, ext.Pos(), ext.End())
 			typeScope.members = true
@@ -1440,7 +1441,7 @@ func (c *checker) resolveReceivers(decls []ast.Decl, scope *Scope) {
 		}
 		c.info.Receivers[fn] = recv
 
-		typeScope := c.typeScopes[typeNameOf(recv)]
+		typeScope := c.typeScope(recv)
 		if typeScope == nil {
 			typeScope = NewScope(scope, fn.Pos(), fn.End())
 			typeScope.members = true
