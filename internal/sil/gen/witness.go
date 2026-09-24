@@ -322,13 +322,14 @@ func (g *gen) extensionWitness(at ast.Node, concrete types.Type, p *types.Protoc
 		return "", false
 	}
 	want, _ := types.Substitute(r.Sig, map[*types.TypeParam]types.Type{p.Self: concrete}).(*types.Signature)
-	for _, em := range p.ExtensionMethods(r.Name, false) {
-		owner := p
-		if q, found := p.ExtensionMethod(em.Name, false); found == em && q != nil {
-			owner = q
-		}
-		got, _ := types.Substitute(em.Sig, map[*types.TypeParam]types.Type{owner.Self: concrete}).(*types.Signature)
-		if got == nil || want == nil || !types.Identical(got, want) {
+	// An extension of this protocol's, or of any the conformer has:
+	// Collection's makeIterator() is a Sequence's.
+	for _, owner := range g.protocolClosure(append([]*types.Protocol{p}, g.conformancesOf(concrete)...)) {
+		em := owner.OwnExtensionMethod(r.Name, false, func(em *types.Method) bool {
+			got, _ := types.Substitute(em.Sig, map[*types.TypeParam]types.Type{owner.Self: concrete}).(*types.Signature)
+			return got != nil && want != nil && types.Identical(got, want)
+		})
+		if em == nil {
 			continue
 		}
 		spec, symbol, ok := g.protocolExtensionMethod(nil, &analyzer.MethodRef{Recv: owner, Method: em}, owner, concrete)
@@ -675,7 +676,7 @@ func (g *gen) existentialFor(at ast.Node, v *sil.Value, from, to types.Type) *si
 	}
 	// Protocols with associated types cannot be represented in non-generic existentials here.
 	for _, p := range ex.Protocols {
-		if a, ok := associatedIn(p); ok {
+		if a, ok := associatedOpenIn(p, ex.Same); ok {
 			g.refuse(at, "a value in 'any "+p.Name+"': "+p.Name+" leaves '"+a+
 				"' to the conforming type, and an existential here carries a witness "+
 				"table but not the metadata that would say what it is")
@@ -794,16 +795,22 @@ func size64(n int64) string { return itoa(int(n)) }
 // associatedIn is the name of an associated type a protocol or one of
 // its inherited protocols declares, and whether there was one.
 func associatedIn(p *types.Protocol) (string, bool) {
+	return associatedOpenIn(p, nil)
+}
+
+// associatedOpenIn is associatedIn, leaving out what known says: an
+// existential's primary associated types, `any Source<String>`'s Value.
+func associatedOpenIn(p *types.Protocol, known map[string]types.Type) (string, bool) {
 	if p == nil {
 		return "", false
 	}
 	for _, a := range p.Associated {
-		if a != nil {
+		if a != nil && known[a.Name] == nil {
 			return a.Name, true
 		}
 	}
 	for _, up := range p.Inherited {
-		if name, ok := associatedIn(up); ok {
+		if name, ok := associatedOpenIn(up, known); ok {
 			return name, true
 		}
 	}
@@ -1512,6 +1519,17 @@ func typeParamsOfType(t types.Type) []*types.TypeParam {
 // and a variable's own storage copied out of into a temporary of its own,
 // which counts whatever is inside a second time.
 func (g *gen) ownedExistential(v *sil.Value) *sil.Value {
+	// One held as a value -- an optional's payload, a case's -- is put
+	// in memory, where an existential is used.
+	if v != nil && !v.Type().IsAddress() {
+		slot := g.blk.AllocStack(v.Type())
+		if v.Ownership() == sil.Owned {
+			g.blk.Store(g.consume(v), slot, "init")
+		} else {
+			g.blk.Store(g.blk.CopyValue(v), slot, "init")
+		}
+		return slot
+	}
 	if v == nil || !g.storage[v] {
 		return v
 	}
@@ -1576,8 +1594,16 @@ func (g *gen) methodMatching(t types.Type, r *types.Requirement) (types.Type, *t
 // existentialPlace is where an existential expression's container is: a
 // variable's storage, or a temporary in memory ended after the statement.
 func (g *gen) existentialPlace(x ast.Expr) *sil.Value {
-	if addr := g.lvalue(x); addr != nil {
-		return addr
+	// `d[k]` read is the get's result, in memory already; as a place it
+	// would be a temporary written back to the dictionary.
+	readOnly := false
+	if sub, ok := unparen(x).(*ast.SubscriptExpr); ok {
+		_, readOnly = g.typeOf(sub.X).Underlying().(*types.Dictionary)
+	}
+	if !readOnly {
+		if addr := g.lvalue(x); addr != nil {
+			return addr
+		}
 	}
 	// Indirect existential return values already reside in allocated memory.
 	if _, isCall := x.(*ast.CallExpr); isCall {
@@ -1649,4 +1675,26 @@ func hasRequirements(ps []*types.Protocol) bool {
 		}
 	}
 	return false
+}
+
+// protocolClosure is the protocols given and every protocol they refine,
+// each once, the given first.
+func (g *gen) protocolClosure(list []*types.Protocol) []*types.Protocol {
+	var out []*types.Protocol
+	seen := map[*types.Protocol]bool{}
+	var add func(p *types.Protocol)
+	add = func(p *types.Protocol) {
+		if p == nil || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+		for _, up := range p.Inherited {
+			add(up)
+		}
+	}
+	for _, p := range list {
+		add(p)
+	}
+	return out
 }

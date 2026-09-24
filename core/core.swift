@@ -451,7 +451,7 @@ public typealias CDouble = Double
 public typealias CBool = Bool
 
 // A value that hands out elements one at a time, until it has none.
-protocol IteratorProtocol {
+protocol IteratorProtocol<Element> {
     associatedtype Element
     mutating func next() -> Element?
 }
@@ -463,11 +463,31 @@ protocol IteratorProtocol {
 // makeIterator() makes the iterator; a type that is its own iterator --
 // declares next() -- has one made for it, as Swift's Sequence gives it
 // one, and its Element is what next() answers.
-protocol Sequence {
+protocol Sequence<Element> {
     associatedtype Element
     associatedtype Iterator: IteratorProtocol where Iterator.Element == Element
     func makeIterator() -> Iterator
 }
+
+// A sequence whose elements are at positions, which can be gone through
+// any number of times and read at any position: startIndex up to, not
+// including, endIndex, each after the one before.
+protocol Collection<Element>: Sequence {
+    associatedtype Index: Comparable
+    var startIndex: Index { get }
+    var endIndex: Index { get }
+    subscript(position: Index) -> Element { get }
+    func index(after i: Index) -> Index
+}
+
+// A collection that can be gone through backwards too.
+protocol BidirectionalCollection<Element>: Collection {
+    func index(before i: Index) -> Index
+}
+
+// A collection whose positions are reached in one step, whatever the
+// distance.
+protocol RandomAccessCollection<Element>: BidirectionalCollection {}
 
 // An iterator whose next() may wait: what `for await` asks for each
 // element, until it answers nil.
@@ -1023,6 +1043,12 @@ struct _UnicodeScalarIterator {
 // String's UTF-8. `String.Index` names it.
 struct _StringIndex {
     let _offset: Int
+}
+
+// A position in a Set: the bucket a member is in, or Int.max past the
+// last, as Swift's Set.Index is a bucket. `Set<T>.Index` names it.
+struct _SetIndex {
+    let _bucket: Int
 }
 
 // Some of a String's Characters, in place: those from byte _start up to

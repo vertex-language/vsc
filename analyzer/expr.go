@@ -440,7 +440,16 @@ func adopts(want, untyped types.Type) bool {
 	if want == nil {
 		return false
 	}
-	switch want.(type) {
+	// Nor where an optional of one is: `let a: Any? = 3` is an Int in it.
+	inner := want
+	for {
+		o, ok := inner.(*types.Optional)
+		if !ok {
+			break
+		}
+		inner = o.Wrapped
+	}
+	switch inner.(type) {
 	case *types.Existential, *types.Protocol:
 		return false
 	}
@@ -980,7 +989,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					return types.Typ[types.Bool]
 				}
 			}
-			if !types.Comparable(lhs) {
+			if !c.comparable(lhs) {
 				c.typeErrorf(e.Op.Pos(), "type '%s' is not comparable", lhs)
 			}
 			if !types.AssignableTo(rhs, lhs) && !types.AssignableTo(lhs, rhs) {
@@ -1359,6 +1368,18 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				}
 			}
 			inst := c.inferInstance(meta.Instance, e, scope)
+			// Where the arguments leave the parameters open, the type
+			// wanted says them: `let d: C<String> = C()`.
+			if _, open := inst.(*types.GenericInstance); !open && len(typeParamsOf(inst)) > 0 {
+				if want, ok := unwrappedContext(expected).(*types.GenericInstance); ok && types.Identical(want.Base, inst) {
+					inst = want
+				} else if ok {
+					// Or the superclass instance wanted says them: a
+					// Named<T>: Container<T> where a Container<Int> goes
+					// is a Named<Int>.
+					inst = inferFromSuperclass(inst, want)
+				}
+			}
 			if st, ok := inst.Underlying().(*types.Struct); ok {
 				// The memberwise initializer is read off the instance's own
 				// properties, which are its arguments already.
@@ -2555,13 +2576,18 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 		}
 		t = cl.Superclass
 	}
-	// What an extension of a built-in type that is not generic -- String
-	// -- declares.
-	if b := c.builtinOf(recv); b != nil && len(b.Params) == 0 {
+	// What the protocols a type parameter, an associated type or Self is
+	// constrained to require: Collection's subscript, on a C: Collection.
+	candidates = append(candidates, requiredSubscripts(recv, static)...)
+	// What an extension of a built-in type declares: String's by
+	// String.Index, and a generic one's -- Set's by position -- for the
+	// elements of the one it is used on.
+	if b := c.builtinOf(recv); b != nil {
 		for _, sub := range b.Subscripts {
-			if sub != nil && sub.IsStatic == static {
-				candidates = append(candidates, &SubscriptRef{Recv: b.Type, Subscript: sub})
+			if sub == nil || sub.IsStatic != static {
+				continue
 			}
+			candidates = append(candidates, &SubscriptRef{Recv: b.Type, Subscript: sub})
 		}
 	}
 	if len(candidates) == 0 {
@@ -2643,6 +2669,9 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 				subst[p] = inst.Args[i]
 			}
 		}
+		instSub = func(t types.Type) types.Type { return types.Substitute(t, subst) }
+	} else if b := c.builtinOf(recv); b != nil && len(b.Params) > 0 && chosen.Recv == b.Type {
+		subst := b.Subst(recv)
 		instSub = func(t types.Type) types.Type { return types.Substitute(t, subst) }
 	}
 	// Its own generic parameters are what the arguments say.
@@ -2776,6 +2805,12 @@ func (c *checker) lookupValue(scope *Scope, name string) Symbol {
 	}
 	seen := map[*types.Class]bool{cl: true}
 	for super := cl.Superclass; super != nil; {
+		// Through an instance of a generic class, a member is typed for
+		// the instance's arguments, which its declaration's symbol is
+		// not: it is self's member, `self.items`; see implicitSelfMember.
+		if _, generic := super.(*types.GenericInstance); generic {
+			return nil
+		}
 		next, ok := super.(*types.Class)
 		if !ok {
 			next, _ = super.Underlying().(*types.Class)
@@ -3124,11 +3159,19 @@ func (c *checker) chainRoot(e ast.Expr, scope *Scope) bool {
 	case *ast.MemberExpr, *ast.CallExpr, *ast.SubscriptExpr, *ast.ForceExpr:
 	case *ast.OptionalExpr:
 		// A bare `x?` -- `s? += "c"` -- is a chain of one step.
-		return !c.inChain[e] && !c.info.ChainRoots[e] && !c.optionalOfType(o, scope)
+		if c.info.ChainRoots[e] {
+			return true
+		}
+		return !c.inChain[e] && !c.optionalOfType(o, scope)
 	default:
 		return false
 	}
-	if c.inChain[e] || c.info.ChainRoots[e] {
+	// A root stays one when it is checked again -- a closure's body is,
+	// once to infer what it returns and once against that.
+	if c.info.ChainRoots[e] {
+		return true
+	}
+	if c.inChain[e] {
 		return false
 	}
 	for x := chainSpine(e); x != nil; x = chainSpine(x) {
@@ -3630,4 +3673,74 @@ func takesArrayLiteral(t types.Type) bool {
 		return types.ConformsToNamed(t, "ExpressibleByArrayLiteral")
 	}
 	return false
+}
+
+// requiredSubscripts is the subscripts the protocols t is constrained to
+// require, t standing for their Self: t a type parameter, an associated
+// type, or a protocol's Self.
+func requiredSubscripts(t types.Type, static bool) []*SubscriptRef {
+	var cons []types.Type
+	switch tt := t.(type) {
+	case *types.TypeParam:
+		cons = tt.Constraints
+	case *types.Dependent:
+		cons = associatedConstraints(tt)
+	default:
+		return nil
+	}
+	var out []*SubscriptRef
+	for _, con := range cons {
+		p, ok := con.Underlying().(*types.Protocol)
+		if !ok {
+			continue
+		}
+		for _, up := range allProtocols([]*types.Protocol{p}) {
+			for _, sub := range up.Subscripts {
+				if sub == nil || sub.IsStatic != static {
+					continue
+				}
+				sig, _ := throughParam(up, t, &types.Signature{Params: sub.Params, Results: sub.Result}).(*types.Signature)
+				if sig == nil {
+					continue
+				}
+				copied := *sub
+				copied.Params, copied.Result = sig.Params, sig.Results
+				out = append(out, &SubscriptRef{Recv: up, Subscript: &copied})
+			}
+		}
+	}
+	return out
+}
+
+// inferFromSuperclass is the instance of generic class cl whose ancestor
+// is want -- Named<Int> for want Container<Int>, where Named<T>:
+// Container<T> -- or cl itself where no ancestor is an instance of want's
+// class or the ancestor leaves a parameter open.
+func inferFromSuperclass(cl types.Type, want *types.GenericInstance) types.Type {
+	params := typeParamsOf(cl)
+	c, ok := cl.Underlying().(*types.Class)
+	if !ok || len(params) == 0 {
+		return cl
+	}
+	for sup := c.Superclass; sup != nil; {
+		if gi, ok := sup.(*types.GenericInstance); ok && types.Identical(gi.Base, want.Base) {
+			subst := map[*types.TypeParam]types.Type{}
+			if !types.Unify(gi, want, subst) {
+				return cl
+			}
+			args := make([]types.Type, len(params))
+			for i, p := range params {
+				if args[i] = subst[p]; args[i] == nil {
+					return cl
+				}
+			}
+			return &types.GenericInstance{Base: cl, Args: args}
+		}
+		up, ok := sup.Underlying().(*types.Class)
+		if !ok {
+			break
+		}
+		sup = up.Superclass
+	}
+	return cl
 }

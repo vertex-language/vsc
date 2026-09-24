@@ -64,6 +64,14 @@ func (c *checker) loadAlgorithms(scope *Scope) {
 	c.resolveTypeMembers(decls, scope)
 	c.resolveExtensions(decls, scope)
 	c.declareFunctions(decls, scope)
+	// What core's types are for the protocols the algorithms' extensions
+	// conform them to -- a Range<Int>'s Element -- read now those are in.
+	if coreFile, coreUnit, ds := core.Files(); coreFile != nil && len(ds) == 0 {
+		c.file = coreUnit
+		c.resolveAssociatedTypes(declsOf(coreFile.Stmts), scope)
+		c.file = unit
+	}
+	c.resolveAssociatedTypes(decls, scope)
 	for _, sym := range scope.Symbols() {
 		if fn, ok := sym.(*FuncSymbol); ok {
 			for _, f := range fn.Overloads() {

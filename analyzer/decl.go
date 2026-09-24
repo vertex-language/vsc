@@ -86,6 +86,11 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			c.errorf(t.Pos(), "cannot find type '%s' in scope", name)
 			return types.Typ[types.Invalid]
 		}
+		// A typealias is the type it names, as in Swift, where the alias
+		// is only a spelling of it: a Matrix is a [[Double]].
+		if alias, ok := base.(*types.Named); ok && alias.Aliased() != nil && (t.Args == nil || len(t.Args.Args) == 0) {
+			return alias.Aliased()
+		}
 		if t.Args != nil && len(t.Args.Args) > 0 {
 			args := make([]types.Type, len(t.Args.Args))
 			for i, arg := range t.Args.Args {
@@ -94,6 +99,14 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			// Swift's Task<Success, Failure>: what it keeps is Success.
 			if c.isCoreTask(base) {
 				return taskOfArgs(base, args)
+			}
+			// A protocol given its primary associated types.
+			if p, ok := base.(*types.Protocol); ok {
+				if len(args) > len(p.Primary) {
+					c.errorf(t.Pos(), "protocol '%s' does not have %d primary associated types", name, len(args))
+					return types.Typ[types.Invalid]
+				}
+				return &types.ParameterizedProtocol{Protocol: p, Args: args}
 			}
 			return &types.GenericInstance{Base: base, Args: args}
 		}
@@ -177,6 +190,9 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 		if p, ok := inner.(*types.Protocol); ok {
 			return &types.Existential{Protocols: []*types.Protocol{p}}
 		}
+		if pp, ok := inner.(*types.ParameterizedProtocol); ok {
+			return &types.Existential{Protocols: []*types.Protocol{pp.Protocol}, Same: pp.Same()}
+		}
 		// `any P & Q` is the composition's existential.
 		if ex, ok := inner.(*types.Existential); ok {
 			return ex
@@ -205,6 +221,9 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 		inner := c.resolveType(t.Base, scope)
 		if p, ok := inner.(*types.Protocol); ok {
 			return &types.Opaque{Constraints: []*types.Protocol{p}}
+		}
+		if pp, ok := inner.(*types.ParameterizedProtocol); ok {
+			return &types.Opaque{Constraints: []*types.Protocol{pp.Protocol}, Same: pp.Same()}
 		}
 		// `some P & Q`: each of them.
 		if ex, ok := inner.(*types.Existential); ok && len(ex.Protocols) > 0 {
@@ -646,6 +665,14 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 	if b.Value != nil {
 		c.info.FieldDefaults[f] = b.Value
 	}
+	// A `var` of an optional type with no value starts as nil, and the
+	// memberwise initializer may leave it out.
+	if b.Value == nil && !isConst && isOptionalType(fieldType) && b.Accessors == nil && b.Body == nil {
+		lit := &ast.BasicLit{Span: ast.Span{Lo: b.Pos(), Hi: b.Pos()}, Kind: token.NIL}
+		c.info.Types[lit] = fieldType
+		c.info.FieldDefaults[f] = lit
+		f.HasDefault = true
+	}
 	return []*types.Field{f}
 }
 
@@ -805,7 +832,9 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 			if t, inner, params, ok := c.openType(d, d.Name, d.Generics, d.Body, scope); ok {
 				n := t.(*types.Class)
 				n.TypeParams = params
-				n.Conformances = c.protocolsOf(d.Inherit, scope, &n.Superclass)
+				// The superclass is named in the class's own generic
+				// scope: `class Named<T>: Container<T>`.
+				n.Conformances = c.protocolsOf(d.Inherit, inner, &n.Superclass)
 				c.memberIsolated = c.info.MainActor[n]
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
 				c.memberIsolated = false
@@ -887,6 +916,13 @@ func (c *checker) protocolsOf(inherit *ast.InheritanceClause, scope *Scope, supe
 			if cl, ok := t.(*types.Class); ok {
 				*super = cl
 				continue
+			}
+			// An instance of a generic class: `class IntBag: Container<Int>`.
+			if gi, ok := t.(*types.GenericInstance); ok {
+				if _, isClass := gi.Base.Underlying().(*types.Class); isClass {
+					*super = gi
+					continue
+				}
 			}
 		}
 		if proto, ok := t.(*types.Protocol); ok {
@@ -1290,6 +1326,13 @@ func (c *checker) opaqueParam(at ast.Type, o *types.Opaque) *types.TypeParam {
 	for _, p := range o.Constraints {
 		tp.Constraints = append(tp.Constraints, p)
 	}
+	// `some Collection<Int>`: its Element is Int.
+	for name, t := range o.Same {
+		if tp.Bound == nil {
+			tp.Bound = map[string]types.Type{}
+		}
+		tp.Bound[name] = t
+	}
 	if c.opaqueParams == nil {
 		c.opaqueParams = map[ast.Type]*types.TypeParam{}
 	}
@@ -1420,7 +1463,7 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 		}
 		var subscripts *[]*types.Subscript
 		switch u := extType.Underlying().(type) {
-		case *types.Basic:
+		case *types.Basic, *types.Array, *types.Set, *types.Dictionary, *types.Optional:
 			if isBuiltin && builtin != nil {
 				subscripts = &builtin.Subscripts
 			}
@@ -1430,6 +1473,17 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 			subscripts = &u.Subscripts
 		case *types.Enum:
 			subscripts = &u.Subscripts
+		}
+		// A built-in type's typealiases are its associated types.
+		if isBuiltin && builtin != nil && ext.Body != nil {
+			for _, mem := range ext.Body.Members {
+				if alias, ok := mem.(*ast.TypealiasDecl); ok && alias.Name != nil && alias.Type != nil {
+					if builtin.Assoc == nil {
+						builtin.Assoc = map[string]types.Type{}
+					}
+					builtin.Assoc[alias.Name.Text(c.file)] = c.resolveType(alias.Type, typeScope)
+				}
+			}
 		}
 		c.memberIsolated = c.info.MainActor[extType.Underlying()]
 		// The where clause holds in the members' signatures as in their
@@ -1497,6 +1551,15 @@ func (c *checker) extensionConditions(ext *ast.ExtensionDecl, extType types.Type
 	params := c.typeParamsOf(extType)
 	var out []memberCondition
 	paramNamed := func(left ast.Type) *types.TypeParam {
+		// A protocol extension's `where Self: P` is on its Self.
+		if _, ok := left.(*ast.SelfType); ok {
+			for _, p := range params {
+				if p.Name == "Self" {
+					return p
+				}
+			}
+			return nil
+		}
 		id, ok := left.(*ast.IdentType)
 		if !ok || id.Name == nil {
 			return nil
@@ -1805,11 +1868,19 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 				satisfied = true
 			}
 			// A protocol extension's method of the requirement's name and
-			// type is the default a conformer that writes none has.
+			// type is the default a conformer that writes none has: an
+			// extension of this protocol, or of any the type conforms to
+			// -- Collection's makeIterator() is a Sequence's.
 			if !satisfied {
-				for _, m := range proto.ExtensionMethods(req.Name, req.IsStatic) {
-					if got, _ := types.Substitute(m.Sig, subst).(*types.Signature); got != nil && types.Identical(got, want) {
-						satisfied = true
+				for _, p := range allProtocols(append([]*types.Protocol{proto}, c.conformancesOfType(conformer)...)) {
+					for _, m := range p.ExtensionMethods(req.Name, req.IsStatic) {
+						sub := map[*types.TypeParam]types.Type{p.Self: conformer}
+						if got, _ := types.Substitute(m.Sig, sub).(*types.Signature); got != nil && types.Identical(got, want) {
+							satisfied = true
+							break
+						}
+					}
+					if satisfied {
 						break
 					}
 				}

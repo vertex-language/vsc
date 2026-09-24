@@ -162,6 +162,7 @@ func CheckImporting(files []*ast.File, imports []Import) (*Info, []token.Diagnos
 func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []token.Diagnostic) {
 	info := NewInfo()
 	pg := NewPrecedenceGraph()
+	types.BuiltinAssoc = info.builtinAssoc
 
 	// 1. Root Universe Scope
 	universeScope := NewScope(nil, token.NoPos, token.NoPos)

@@ -246,7 +246,7 @@ func (g *gen) subscript(e *ast.SubscriptExpr) *sil.Value {
 		return g.keyPathRead(e)
 	}
 	// One a type declares: its getter.
-	if ref := g.info.Subscripts[e]; ref != nil {
+	if ref := g.subscriptRef(e); ref != nil {
 		return g.declaredSubscriptRead(e, ref)
 	}
 	t := g.typeOf(e.X)

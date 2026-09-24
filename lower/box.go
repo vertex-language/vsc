@@ -92,7 +92,7 @@ func (l *lowerer) boxMetadata(elem types.Type) (*ir.Global, error) {
 	b := f.Entry()
 	release := l.runtimeFunc(stdlib.Release, ir.NewSig().Param(ir.TypePtr))
 	releaseString := l.runtimeFunc(stdlib.StringRelease, ir.NewSig().Param(ir.TypePtr))
-	b = countOwned(f, b, obj, owned, releaseString, release, "d")
+	b = countOwned(f, b, obj, owned, releaseString, release, l.existentialCounter(false), "d")
 	b.Call(l.runtimeFunc(stdlib.Dealloc, ir.NewSig().Param(ir.TypePtr)), obj)
 	b.Return()
 	g := l.out.Global(l.sym("$sVSCbox_"+identSafe(key)), ir.RO, ir.Array(2, ir.StorePtr.FType())).

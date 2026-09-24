@@ -400,7 +400,7 @@ func (l *lowerer) contextRelease(name string, caps []*sil.Value, free bool) (*ir
 	b := f.Entry()
 	release := l.runtimeFunc(stdlib.Release, ir.NewSig().Param(ir.TypePtr))
 	releaseString := l.runtimeFunc(stdlib.StringRelease, ir.NewSig().Param(ir.TypePtr))
-	b = countOwned(f, b, obj, owned, releaseString, release, "d")
+	b = countOwned(f, b, obj, owned, releaseString, release, l.existentialCounter(false), "d")
 	if free {
 		b.Call(l.runtimeFunc(stdlib.Dealloc, ir.NewSig().Param(ir.TypePtr)), obj)
 	}

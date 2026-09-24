@@ -14,6 +14,13 @@ func (c *checker) declareProtocol(d *ast.ProtocolDecl, scope *Scope) {
 	name := d.Name.Text(c.file)
 	pr := &types.Protocol{Name: name}
 	pr.Self = &types.TypeParam{Name: "Self", Constraints: []types.Type{pr}}
+	if d.Primary != nil {
+		for _, p := range d.Primary.Params {
+			if p != nil && p.Name != nil {
+				pr.Primary = append(pr.Primary, p.Name.Text(c.file))
+			}
+		}
+	}
 
 	sym := NewTypeName(name, pr, d.Name.Pos())
 	sym.SetDecl(d)
@@ -77,6 +84,16 @@ func (c *checker) resolveProtocol(d *ast.ProtocolDecl, scope *Scope) {
 			}
 		}
 	}
+	// What the protocols it refines leave to the conforming type is named
+	// inside it too: a Collection's Element is its Sequence's.
+	for _, up := range allProtocols(pr.Inherited) {
+		for _, a := range up.Associated {
+			if a == nil || inner.LookupLocal(a.Name) != nil {
+				continue
+			}
+			inner.Insert(NewTypeName(a.Name, &types.Dependent{Base: pr.Self, Name: a.Name}, d.Name.Pos()))
+		}
+	}
 	if d.Body == nil {
 		return
 	}
@@ -102,6 +119,11 @@ func (c *checker) resolveProtocol(d *ast.ProtocolDecl, scope *Scope) {
 				if p, ok := c.resolveType(item.Type, inner).(*types.Protocol); ok {
 					assoc.Constraints = append(assoc.Constraints, p)
 				}
+			}
+
+		case *ast.SubscriptDecl:
+			if sub := c.subscriptOf(m, inner); sub != nil {
+				pr.Subscripts = append(pr.Subscripts, sub)
 			}
 
 		case *ast.FuncDecl:
@@ -164,8 +186,36 @@ func (c *checker) resolveAssociatedChoices(t types.Type, body *ast.MemberBlock, 
 		}
 	}
 
+	// What a subscript or a computed property the protocols require says
+	// of their associated types, read off the type's own: a Collection's
+	// Element and Index from its subscript and its startIndex.
+	all := allProtocols(conformances)
+	for _, p := range all {
+		for _, a := range p.Associated {
+			if a == nil || chosen[a.Name] != nil {
+				continue
+			}
+			if answer := inferFromMembers(all, a.Name, t); answer != nil {
+				chosen[a.Name] = answer
+			}
+		}
+	}
+	// And what a default an extension gives says, where the type writes
+	// none of its own: a Collection's Iterator is the IndexingIterator its
+	// makeIterator() makes.
+	for _, p := range all {
+		for _, a := range p.Associated {
+			if a == nil || chosen[a.Name] != nil {
+				continue
+			}
+			if answer := inferFromDefaults(all, a.Name, t, methods); answer != nil {
+				chosen[a.Name] = answer
+			}
+		}
+	}
+
 	// Infer unassigned associated types from requirement implementations.
-	for _, p := range allProtocols(conformances) {
+	for _, p := range all {
 		for _, a := range p.Associated {
 			if a == nil || chosen[a.Name] != nil {
 				continue
@@ -435,10 +485,86 @@ func (c *checker) applyWhere(w *ast.GenericWhereClause, scope *Scope) {
 			tp.Promised[name] = append(tp.Promised[name], right)
 		}
 	}
+	shareSameTypeConformances(c.whereParams(w, scope))
+}
+
+// whereParams is the type parameters a where clause's requirements are on.
+func (c *checker) whereParams(w *ast.GenericWhereClause, scope *Scope) []*types.TypeParam {
+	var out []*types.TypeParam
+	for _, req := range w.Reqs {
+		var left ast.Type
+		switch r := req.(type) {
+		case *ast.SameTypeReq:
+			left = r.Left
+		case *ast.ConformanceReq:
+			left = r.Left
+		}
+		if tp, _, ok := c.dependentOf(left, scope); ok {
+			out = append(out, tp)
+		}
+	}
+	return out
+}
+
+// shareSameTypeConformances gives an associated type made the same as
+// another -- `A.Element == B.Element` -- what either is said to conform
+// to, as the two are one type in Swift's generic signature:
+// `A.Element: Equatable` makes B.Element Equatable too.
+func shareSameTypeConformances(params []*types.TypeParam) {
+	for _, tp := range params {
+		for name, bound := range tp.Bound {
+			switch b := bound.(type) {
+			case *types.Dependent:
+				other, ok := b.Base.(*types.TypeParam)
+				if !ok {
+					continue
+				}
+				if other.Promised == nil {
+					other.Promised = map[string][]types.Type{}
+				}
+				other.Promised[b.Name] = appendNew(other.Promised[b.Name], tp.Promised[name]...)
+				if tp.Promised == nil {
+					tp.Promised = map[string][]types.Type{}
+				}
+				tp.Promised[name] = appendNew(tp.Promised[name], other.Promised[b.Name]...)
+			case *types.TypeParam:
+				b.Constraints = appendNew(b.Constraints, tp.Promised[name]...)
+			}
+		}
+	}
+}
+
+// appendNew is list with each of more not in it already appended.
+func appendNew(list []types.Type, more ...types.Type) []types.Type {
+	for _, t := range more {
+		have := false
+		for _, x := range list {
+			if types.Identical(x, t) {
+				have = true
+				break
+			}
+		}
+		if !have {
+			list = append(list, t)
+		}
+	}
+	return list
 }
 
 // dependentOf extracts the type parameter and member name from a member type (e.g. C.Item).
 func (c *checker) dependentOf(t ast.Type, scope *Scope) (*types.TypeParam, string, bool) {
+	// An associated type named alone, inside its protocol or an extension
+	// of it: `where Element: Equatable` is Self.Element.
+	if id, ok := t.(*ast.IdentType); ok && id.Name != nil && (id.Args == nil || len(id.Args.Args) == 0) {
+		if tn, ok := scope.Lookup(id.Name.Text(c.file)).(*TypeNameSymbol); ok {
+			if dep, ok := tn.Type().(*types.Dependent); ok {
+				if tp, ok := dep.Base.(*types.TypeParam); ok {
+					return tp, dep.Name, true
+				}
+			}
+		}
+		return nil, "", false
+	}
 	mem, ok := t.(*ast.MemberType)
 	if !ok || mem.Name == nil {
 		return nil, "", false
@@ -488,4 +614,80 @@ func (c *checker) associatedSameTypes(pr *types.Protocol, m *ast.AssociatedTypeD
 		}
 		pr.SameTypes[name+"."+left.Name.Text(c.file)] = right.Name.Text(c.file)
 	}
+}
+
+// inferFromMembers is what t's subscripts and computed properties say the
+// associated type name is, against the protocols' requirements of them.
+func inferFromMembers(protocols []*types.Protocol, name string, t types.Type) types.Type {
+	var subs []*types.Subscript
+	var computed []*types.Field
+	switch u := t.(type) {
+	case *types.Struct:
+		subs, computed = u.Subscripts, append(u.Computed, u.Fields...)
+	case *types.Class:
+		subs, computed = u.Subscripts, append(u.Computed, u.Fields...)
+	case *types.Enum:
+		subs, computed = u.Subscripts, u.Computed
+	}
+	for _, p := range protocols {
+		for _, req := range p.Subscripts {
+			for _, sub := range subs {
+				if sub.IsStatic != req.IsStatic || len(sub.Params) != len(req.Params) {
+					continue
+				}
+				want := &types.Signature{Params: req.Params, Results: req.Result}
+				got := &types.Signature{Params: sub.Params, Results: sub.Result}
+				if answer := matchDependent(want, got, name); answer != nil {
+					return answer
+				}
+			}
+		}
+		for _, req := range p.Requirements {
+			if req.Type == nil {
+				continue
+			}
+			for _, f := range computed {
+				if f != nil && f.Name == req.Name {
+					if answer := matchDependent(req.Type, f.Type, name); answer != nil {
+						return answer
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// inferFromDefaults is what the protocol extension methods t would take as
+// its witnesses -- for requirements it implements none of -- say the
+// associated type name is.
+func inferFromDefaults(protocols []*types.Protocol, name string, t types.Type, own []*types.Method) types.Type {
+	for _, p := range protocols {
+		for _, req := range p.Requirements {
+			if req == nil || req.Sig == nil {
+				continue
+			}
+			written := false
+			for _, m := range own {
+				if m != nil && m.Name == req.Name {
+					written = true
+				}
+			}
+			if written {
+				continue
+			}
+			for _, q := range protocols {
+				for _, m := range q.ExtensionMethods(req.Name, req.IsStatic) {
+					got, _ := types.Substitute(m.Sig, map[*types.TypeParam]types.Type{q.Self: t}).(*types.Signature)
+					if got == nil || len(got.Params) != len(req.Sig.Params) {
+						continue
+					}
+					if answer := matchDependent(req.Sig, got, name); answer != nil {
+						return answer
+					}
+				}
+			}
+		}
+	}
+	return nil
 }

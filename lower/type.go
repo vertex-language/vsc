@@ -223,6 +223,42 @@ func whyNoRegister(t sil.Type) string {
 	return t.String()
 }
 
+// existentialImage is an existential held as a value: its container's
+// words, as Swift lays one out -- a three-word buffer, the type of what it
+// holds, and a witness table for each protocol -- so that it can be an
+// optional's payload, a case's, or a field. What its words hold is counted
+// through the runtime (vertex_existential_retain), not as references.
+func existentialImage(t types.Type) (*types.Struct, bool) {
+	var n int
+	switch u := t.Underlying().(type) {
+	case *types.Existential:
+		n = len(u.Protocols)
+	case *types.Protocol:
+		n = 1
+	default:
+		return nil, false
+	}
+	word := types.Typ[types.UInt64]
+	ptr := &types.Pointer{Elem: types.Typ[types.Void]}
+	st := &types.Struct{Name: "existential", Fields: []*types.Field{
+		{Name: "buffer0", Type: word}, {Name: "buffer1", Type: word}, {Name: "buffer2", Type: word},
+		{Name: "type", Type: ptr},
+	}}
+	for i := 0; i < n; i++ {
+		st.Fields = append(st.Fields, &types.Field{Name: "table" + itoa(i), Type: ptr})
+	}
+	return st, true
+}
+
+// isExistentialValue reports whether t is an existential, held as a value.
+func isExistentialValue(t types.Type) bool {
+	switch t.Underlying().(type) {
+	case *types.Existential, *types.Protocol:
+		return true
+	}
+	return false
+}
+
 // spareStructOptional reports whether an optional wraps a struct that
 // spares a representation, as Swift lays such an optional out: the struct's
 // own words, nil all of them zero, told apart by one word the struct never
@@ -230,6 +266,11 @@ func whyNoRegister(t sil.Type) string {
 func spareStructOptional(o *types.Optional) (*types.Struct, int64, bool) {
 	if o == nil || o.Wrapped == nil {
 		return nil, 0, false
+	}
+	// An existential's nil is a null type word: every value it holds has
+	// a type.
+	if image, ok := existentialImage(o.Wrapped); ok {
+		return image, stdlib.ExistentialMetadata, true
 	}
 	// A tuple is the struct its image is.
 	st, ok := o.Wrapped.Underlying().(*types.Struct)
@@ -310,6 +351,9 @@ func structOf(t sil.Type) (*types.Struct, bool) {
 	}
 	if _, ok := f.Underlying().(*types.Signature); ok {
 		return funcWords, true
+	}
+	if image, ok := existentialImage(f); ok {
+		return image, true
 	}
 	st, ok := f.Underlying().(*types.Struct)
 	return st, ok

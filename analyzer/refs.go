@@ -420,6 +420,10 @@ func (c *checker) hasProperty(t types.Type, name string) bool {
 			}
 		}
 	}
+	// Or one a protocol's extension gives it: a Collection's first.
+	if _, f := c.extensionPropertyOf(t, name, false); f != nil {
+		return true
+	}
 	return false
 }
 

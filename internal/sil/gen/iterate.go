@@ -42,7 +42,7 @@ func (g *gen) iterate(seq ast.Expr, it *analyzer.Iteration, label string,
 	var iter *sil.Value
 	if it.MakeIterator != nil {
 		call := &ast.CallExpr{Span: ast.Span{Lo: seq.Pos(), Hi: seq.End()}, Fun: &ast.MemberExpr{Span: ast.Span{Lo: seq.Pos(), Hi: seq.End()}, X: seq}}
-		iter = g.methodCall(call, it.MakeIterator, func() *sil.Value { return g.expr(seq) })
+		iter = g.methodCall(call, g.requirementOn(it.MakeIterator, g.typeOf(seq)), func() *sil.Value { return g.expr(seq) })
 	} else {
 		iter = g.expr(seq)
 	}
@@ -77,8 +77,9 @@ func (g *gen) iterate(seq ast.Expr, it *analyzer.Iteration, label string,
 	// Each pass asks the iterator for its next element.
 	g.blk = header
 	g.push()
-	next := g.methodCall(nextCall, it.Next, func() *sil.Value {
-		if mutatingRef(it.Next) {
+	nextRef := g.requirementOn(it.Next, itType)
+	next := g.methodCall(nextCall, nextRef, func() *sil.Value {
+		if mutatingRef(nextRef) {
 			return slot
 		}
 		return g.loaded(g.blk.Load(slot, loadQualifier(lt)), lt)
@@ -108,6 +109,17 @@ func (g *gen) iterate(seq ast.Expr, it *analyzer.Iteration, label string,
 		g.scopes = g.scopes[:len(g.scopes)-1]
 	}
 	g.blk = exit
+}
+
+// requirementOn is the method a loop over a sequence of a type parameter
+// calls -- Sequence's makeIterator, IteratorProtocol's next -- as the
+// specialization's type implements it, where the checker resolved it
+// against the parameter.
+func (g *gen) requirementOn(ref *analyzer.MethodRef, recv types.Type) *analyzer.MethodRef {
+	if resolved, ok := g.witness(ref, g.substituted(recv)); ok {
+		return resolved
+	}
+	return ref
 }
 
 // arrayOfSequence lowers `Array(s)` of a sequence the checker can iterate

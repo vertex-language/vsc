@@ -53,6 +53,11 @@ func (g *gen) closureValue(f *sil.Func, sig *types.Signature, caps []closureCapt
 				args = append(args, g.blk.CopyValue(c.loc.box))
 				continue
 			}
+			if c.byAddress() {
+				// The storage itself, which the closure writes through.
+				args = append(args, c.loc.addr)
+				continue
+			}
 			val := c.loc.value
 			if !c.loc.typ.Trivial() {
 				val = g.blk.CopyValue(val)
@@ -165,6 +170,14 @@ func (g *gen) cellRead(l *local) *sil.Value {
 // boxed reports whether the capture is a variable's box.
 func (c closureCapture) boxed() bool { return c.loc.box != nil }
 
+// byAddress reports whether the capture is storage the closure is given
+// the address of: an inout parameter, which Swift lets a closure that
+// does not escape capture (@inout_aliasable), since the storage outlives
+// every call of it.
+func (c closureCapture) byAddress() bool {
+	return c.loc.box == nil && c.loc.value == nil && c.loc.addr != nil && !c.loc.mem
+}
+
 // closureCaptures is what a closure captures -- the values of names bound in
 // the scope around it, each once -- or the name of something it captures
 // that cannot be captured yet: storage with nothing to share, or a self
@@ -228,7 +241,8 @@ func (g *gen) closureCaptures(e ast.Node) ([]closureCapture, string) {
 					// existential in memory -- has no storage to share.
 					value := l.value != nil && l.addr == nil && l.box == nil && !l.mem
 					variable := l.box != nil && l.addr != nil && !l.mem
-					if !value && !variable {
+					inout := l.inout && (closureCapture{loc: l}).byAddress()
+					if !value && !variable && !inout {
 						refused = g.text(x.Name)
 						return false
 					}
@@ -326,7 +340,7 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 			v := f.Param(t.Address(), conv)
 			if i < len(syms) && syms[i] != nil {
 				_, isEx := existentialOf(p.Type)
-				g.locals[syms[i]] = &local{addr: v, typ: t, mem: isEx}
+				g.locals[syms[i]] = &local{addr: v, typ: t, mem: isEx, inout: conv == sil.ParamInout}
 			}
 			if p.Name != "" {
 				g.blk.DebugValue(v, p.Name, "let", "argno "+itoa(i+1))
@@ -348,6 +362,11 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 			box := f.Param(c.loc.box.Type(), sil.ParamGuaranteed)
 			addr := g.blk.ProjectBox(box, 0, c.loc.typ)
 			g.locals[c.sym] = &local{addr: addr, box: box, typ: c.loc.typ}
+			continue
+		}
+		if c.byAddress() {
+			addr := f.Param(c.loc.typ.Address(), sil.ParamInout)
+			g.locals[c.sym] = &local{addr: addr, typ: c.loc.typ, inout: true}
 			continue
 		}
 		conv := sil.ParamUnowned

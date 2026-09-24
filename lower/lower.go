@@ -145,7 +145,10 @@ type lowerer struct {
 
 	retain  ir.Callee
 	release ir.Callee
-	alloc   ir.Callee
+	// existentialRetain and existentialRelease count an existential held
+	// as a value. See countExistentialWords.
+	existentialRetain, existentialRelease ir.Callee
+	alloc                                 ir.Callee
 }
 
 // sym prepends the platform symbol prefix to a SIL identifier.
@@ -995,7 +998,7 @@ func (l *lowerer) classDestroyer(t *sil.VTable) *ir.Func {
 	}
 	release := l.runtimeFunc(stdlib.Release, ir.NewSig().Param(ir.TypePtr))
 	releaseString := l.runtimeFunc(stdlib.StringRelease, ir.NewSig().Param(ir.TypePtr))
-	b = countOwned(f, b, obj, owned, releaseString, release, "d")
+	b = countOwned(f, b, obj, owned, releaseString, release, l.existentialCounter(false), "d")
 	if len(weak) > 0 {
 		weakRelease := l.runtimeFunc(stdlib.WeakRelease, ir.NewSig().Param(ir.TypePtr))
 		for _, at := range weak {

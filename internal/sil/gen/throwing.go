@@ -56,12 +56,22 @@ func (g *gen) boxError(at ast.Node, v *sil.Value, from types.Type) *sil.Value {
 	if ex, already := existentialOf(from); already {
 		// Rethrowing what a catch bound: the existential is copied out of
 		// where it is into a container of its own, which the box takes.
-		if len(ex.Protocols) != 1 || ex.Protocols[0] != types.ErrorProtocol || !v.Type().IsAddress() {
+		if len(ex.Protocols) != 1 || ex.Protocols[0] != types.ErrorProtocol {
 			g.refuse(at, "throwing an existential other than 'any Error'")
 			return nil
 		}
 		slot := g.blk.AllocStack(lowerType(errorExistential()))
-		g.blk.CopyAddr(v, slot, "init")
+		if v.Type().IsAddress() {
+			g.blk.CopyAddr(v, slot, "init")
+		} else {
+			// One held as a value -- a Result's failure -- is its words.
+			if v.Ownership() == sil.Owned {
+				v = g.consume(v)
+			} else {
+				v = g.blk.CopyValue(v)
+			}
+			g.blk.Store(v, slot, "init")
+		}
 		ptr := g.blk.AddressToPointer(slot, rawPointerType())
 		return g.runtimeResult(stdlib.ErrorBox,
 			[]sil.Param{{Type: rawPointerType(), Convention: sil.ParamUnowned}},

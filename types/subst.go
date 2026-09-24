@@ -174,12 +174,19 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 	case *Class:
 		fields, fchanged := substFields(tt.Fields, subst, seen)
 		methods, mchanged := substMethods(tt.Methods, subst, seen)
-		if !fchanged && !mchanged {
+		// A superclass named over the class's parameters is the
+		// instance's: Named<Int>'s is Container<Int>.
+		var super Type
+		if tt.Superclass != nil {
+			super = substitute(tt.Superclass, subst, seen)
+		}
+		if !fchanged && !mchanged && super == tt.Superclass {
 			return t
 		}
 		out := *tt
-		out.Fields, out.Methods = fields, methods
+		out.Fields, out.Methods, out.Superclass = fields, methods, super
 		out.TypeParams = nil
+		out.Origin = tt.Declared()
 		return &out
 	case *Enum:
 		changed := false
@@ -400,6 +407,26 @@ func AssocOf(t Type, name string) Type {
 	if t == nil {
 		return nil
 	}
+	if answer := assocOf(t, name); answer != nil {
+		return answer
+	}
+	// What core's extension of a built-in type names it: Set's Index.
+	if BuiltinAssoc != nil {
+		switch t.(type) {
+		case *Basic, *Array, *Set, *Dictionary, *Optional:
+			return BuiltinAssoc(t, name)
+		}
+	}
+	return nil
+}
+
+// BuiltinAssoc is the associated type of a built-in type that core's
+// extensions name with a typealias -- `extension Set: Collection {
+// typealias Index = _SetIndex }` -- which the checker of the module being
+// compiled knows, and installs here for the compile.
+var BuiltinAssoc func(t Type, name string) Type
+
+func assocOf(t Type, name string) Type {
 	// An instance of a generic type answers with its own arguments
 	// substituted -- `Box<Int>.Element` is what Box said, with T
 	// standing for Int.
@@ -425,8 +452,11 @@ func AssocOf(t Type, name string) Type {
 		return n.Assoc[name]
 	// The built-in collections' element types, as Swift names them.
 	case *Array:
-		if name == "Element" {
+		switch name {
+		case "Element":
 			return n.Elem
+		case "Index":
+			return Typ[Int]
 		}
 	case *Set:
 		if name == "Element" {
@@ -517,4 +547,82 @@ func sameTypeOf(tp *TypeParam, path string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// MapDependents is t with each associated type path in it that answer
+// resolves -- nil where it does not -- replaced by what it answers.
+func MapDependents(t Type, answer func(*Dependent) Type) Type {
+	switch x := t.(type) {
+	case *Dependent:
+		base := MapDependents(x.Base, answer)
+		d := x
+		if base != x.Base {
+			if r, ok := DependentOn(base, x.Name).(*Dependent); ok {
+				d = r
+			} else {
+				return DependentOn(base, x.Name)
+			}
+		}
+		if r := answer(d); r != nil {
+			return r
+		}
+		return d
+	case *Optional:
+		if w := MapDependents(x.Wrapped, answer); w != x.Wrapped {
+			return &Optional{Wrapped: w, Implicit: x.Implicit}
+		}
+	case *Array:
+		if e := MapDependents(x.Elem, answer); e != x.Elem {
+			return &Array{Elem: e}
+		}
+	case *Set:
+		if e := MapDependents(x.Elem, answer); e != x.Elem {
+			return &Set{Elem: e}
+		}
+	case *Dictionary:
+		k, v := MapDependents(x.Key, answer), MapDependents(x.Value, answer)
+		if k != x.Key || v != x.Value {
+			return &Dictionary{Key: k, Value: v}
+		}
+	case *Metatype:
+		if i := MapDependents(x.Instance, answer); i != x.Instance {
+			return &Metatype{Instance: i}
+		}
+	case *Tuple:
+		changed := false
+		elems := make([]*TupleElement, len(x.Elements))
+		for i, el := range x.Elements {
+			elems[i] = &TupleElement{Name: el.Name, Type: MapDependents(el.Type, answer)}
+			changed = changed || elems[i].Type != el.Type
+		}
+		if changed {
+			return &Tuple{Elements: elems}
+		}
+	case *Signature:
+		changed := false
+		params := make([]*Param, len(x.Params))
+		for i, p := range x.Params {
+			cp := *p
+			cp.Type = MapDependents(p.Type, answer)
+			changed = changed || cp.Type != p.Type
+			params[i] = &cp
+		}
+		res := MapDependents(x.Results, answer)
+		if changed || res != x.Results {
+			out := *x
+			out.Params, out.Results = params, res
+			return &out
+		}
+	case *GenericInstance:
+		changed := false
+		args := make([]Type, len(x.Args))
+		for i, a := range x.Args {
+			args[i] = MapDependents(a, answer)
+			changed = changed || args[i] != a
+		}
+		if changed {
+			return &GenericInstance{Base: x.Base, Args: args}
+		}
+	}
+	return t
 }

@@ -70,8 +70,32 @@ func (g *gen) optionalFor(at ast.Node, v *sil.Value, from, to types.Type) *sil.V
 			v = g.upcast(v, g.substituted(inner))
 		}
 	}
+	// A T? where an (any P)? goes: its payload, if any, made the
+	// existential -- `d.delegate = screen`, a Screen? for a Delegate?.
+	if levels == 0 {
+		fo, fromOpt := optionalOf(g.substituted(from))
+		to2, toOpt := optionalOf(g.substituted(to))
+		if fromOpt && toOpt && isExistentialType(to2.Wrapped) && !isExistentialType(fo.Wrapped) {
+			return g.optionalToExistential(at, v, fo, to2)
+		}
+	}
 	if levels <= 0 {
 		return v
+	}
+	// An existential an optional carries is carried as a value: made in
+	// memory as any existential is, and loaded from there.
+	if levels > 0 {
+		inner := to
+		for i := 0; i < levels; i++ {
+			o, _ := optionalOf(inner)
+			inner = o.Wrapped
+		}
+		if isExistentialType(inner) {
+			v = g.existentialValue(at, v, from, g.substituted(inner))
+			if v == nil {
+				return nil
+			}
+		}
 	}
 	// Innermost first: the type each wrap makes is the destination
 	// with the outer levels peeled off.
@@ -85,6 +109,56 @@ func (g *gen) optionalFor(at ast.Node, v *sil.Value, from, to types.Type) *sil.V
 		v = g.blk.Enum(lowerType(g.substituted(wraps[i])), optionalSome, v)
 	}
 	return v
+}
+
+// optionalToExistential is v, a from, as a to whose payload is an
+// existential: nil where v is, and v's payload made the existential
+// otherwise.
+func (g *gen) optionalToExistential(at ast.Node, v *sil.Value, from, to *types.Optional) *sil.Value {
+	wrapped := lowerType(from.Wrapped)
+	own := sil.Owned
+	if wrapped.Trivial() {
+		own = sil.Unowned
+	}
+	if v.Ownership() != sil.Owned && !lowerType(from).Trivial() {
+		v = g.blk.CopyValue(v)
+	} else {
+		v = g.consume(v)
+	}
+	some, none, join := g.fn.Block(), g.fn.Block(), g.fn.Block()
+	payload := some.Arg(wrapped, own)
+	out := join.Arg(lowerType(to), sil.Owned)
+	g.blk.SwitchEnum(v,
+		sil.Case{Member: optionalSome, Dest: some},
+		sil.Case{Member: optionalNone, Dest: none})
+	g.blk = some
+	ex := g.existentialValue(at, payload, from.Wrapped, to.Wrapped)
+	if ex == nil {
+		return nil
+	}
+	g.blk.Br(join, g.blk.Enum(lowerType(to), optionalSome, ex))
+	g.blk = none
+	g.blk.Br(join, g.blk.Enum(lowerType(to), optionalNone, nil))
+	g.blk = join
+	return out
+}
+
+// existentialValue is v, of type from, as an existential of type to held
+// as a value -- what an optional, a case or a field carries -- owned, for
+// the caller to consume: a copy of an existential in memory, or one made
+// of any other value.
+func (g *gen) existentialValue(at ast.Node, v *sil.Value, from, to types.Type) *sil.Value {
+	if isExistentialType(from) {
+		if !v.Type().IsAddress() {
+			return v
+		}
+		return g.blk.Load(v, "copy")
+	}
+	slot := g.existentialFor(at, v, from, to)
+	if slot == nil || slot == v || !slot.Type().IsAddress() {
+		return nil
+	}
+	return g.blk.Load(slot, "take")
 }
 
 // relabel is a tuple as the same elements under other labels -- (x: 1,
@@ -651,6 +725,17 @@ func (g *gen) chainStepAddr(e *ast.OptionalExpr) *sil.Value {
 	if addr == nil {
 		return nil
 	}
+	// A weak or unowned property is read through the runtime -- a strong
+	// reference, or nil once its object has ended -- into a temporary
+	// the chain goes on from.
+	if f := g.refSlots[addr]; f != nil {
+		v := g.refLoad(addr, f)
+		lt := lowerType(o)
+		tmp := g.blk.AllocStack(lt)
+		g.blk.Store(g.blk.CopyValue(v), tmp, "init")
+		g.destroyAddrLater(tmp)
+		addr = tmp
+	}
 	wrapped := lowerType(o.Wrapped)
 	access := g.blk.BeginAccess(addr, "read", "unknown")
 	v := g.blk.Load(access, loadQualifier(access.Type()))
@@ -759,7 +844,9 @@ func isSubclass(from, to types.Type) bool {
 		if !ok || seen[cl] {
 			return false
 		}
-		if cl == target {
+		// An instance of a generic class is its own substituted class:
+		// IntBag's Container<Int> is the Container<Int> wanted.
+		if cl == target || types.Identical(cur, to) {
 			return true
 		}
 		seen[cl] = true

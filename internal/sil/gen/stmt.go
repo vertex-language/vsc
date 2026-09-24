@@ -263,7 +263,7 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 	// Through a subscript a type declares: read by its getter, written
 	// by its setter.
 	if sub, ok := e.X.(*ast.SubscriptExpr); ok {
-		if ref := g.info.Subscripts[sub]; ref != nil {
+		if ref := g.subscriptRef(sub); ref != nil {
 			cur := g.declaredSubscriptRead(sub, ref)
 			rhs := g.expr(e.Y)
 			if cur == nil || rhs == nil {
@@ -386,7 +386,7 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 			g.keyPathWrite(sub, e.Y)
 			return
 		}
-		if ref := g.info.Subscripts[sub]; ref != nil {
+		if ref := g.subscriptRef(sub); ref != nil {
 			// The setter borrows the value; what made it ends with
 			// the statement.
 			v := g.expr(e.Y)
@@ -582,7 +582,7 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 		return g.blk.StructElementAddr(addr, name, t)
 
 	case *ast.SubscriptExpr:
-		if ref := g.info.Subscripts[n]; ref != nil {
+		if ref := g.subscriptRef(n); ref != nil {
 			return g.declaredSubscriptAddr(n, ref)
 		}
 		if _, isDict := g.typeOf(n.X).Underlying().(*types.Dictionary); isDict {

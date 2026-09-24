@@ -62,6 +62,31 @@ void vertex_vw_existential_destroy(void* value, const Metadata*) {
   existentialDestroyContents(static_cast<AnyExistential*>(value));
 }
 
+// An existential held as a value, in registers: its buffer's words and
+// the type of what it holds (the witness tables count nothing). A copy of
+// it is the same words, so retaining it is copying its contents into a
+// scratch container and keeping only the counts that made. A null type
+// is an Optional's nil, which holds nothing to count.
+void vertex_existential_retain(u64 b0, u64 b1, u64 b2, const Metadata* type) {
+  if (!type)
+    return;
+  AnyExistential any = {{b0, b1, b2}, type};
+  const ValueWitnessTable* vw = witnesses(type);
+  if (vw->flags & vwIsNonInline) {
+    vertex_retain(reinterpret_cast<HeapObject*>(any.buffer[0]));
+    return;
+  }
+  u64 scratch[3];
+  vw->initializeWithCopy(scratch, any.buffer, type);
+}
+
+void vertex_existential_release(u64 b0, u64 b1, u64 b2, const Metadata* type) {
+  if (!type)
+    return;
+  AnyExistential any = {{b0, b1, b2}, type};
+  existentialDestroyContents(&any);
+}
+
 void* vertex_vw_existential_assign_copy(void* dest, void* src, const Metadata* type) {
   existentialDestroyContents(static_cast<AnyExistential*>(dest));
   return vertex_vw_existential_copy(dest, src, type);

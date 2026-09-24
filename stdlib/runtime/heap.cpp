@@ -248,6 +248,45 @@ void vertex_weak_assign(HeapObject** slot, HeapObject* obj) {
   vertex_weak_release(old);
 }
 
+// A weak existential of a class-bound protocol -- `weak var delegate:
+// Delegate?` -- is an existential's words whose buffer's first holds a
+// weak reference; the type and the witness tables beside it are plain
+// words. A null type is nil. size is the container's bytes.
+
+// vertex_weak_existential_load writes into out the existential held
+// weakly at slot, holding a strong reference the caller owns, or nil
+// where there is none or its object has ended.
+void vertex_weak_existential_load(const u64* slot, u64* out, i64 size) {
+  i64 words = size / 8;
+  HeapObject* strong = slot[3] ? strongFromWeak(reinterpret_cast<HeapObject*>(slot[0])) : nullptr;
+  if (strong == nullptr) {
+    for (i64 i = 0; i < words; i++)
+      out[i] = 0;
+    return;
+  }
+  out[0] = reinterpret_cast<u64>(strong);
+  out[1] = 0;
+  out[2] = 0;
+  for (i64 i = 3; i < words; i++)
+    out[i] = slot[i];
+}
+
+// vertex_weak_existential_assign puts the existential at value, borrowed
+// from the caller, in the weak existential at slot, letting go of the
+// reference there.
+void vertex_weak_existential_assign(u64* slot, const u64* value, i64 size) {
+  i64 words = size / 8;
+  HeapObject* obj = value[3] ? reinterpret_cast<HeapObject*>(value[0]) : nullptr;
+  vertex_weak_retain(obj);
+  HeapObject* old = slot[3] ? reinterpret_cast<HeapObject*>(slot[0]) : nullptr;
+  slot[0] = reinterpret_cast<u64>(obj);
+  slot[1] = 0;
+  slot[2] = 0;
+  for (i64 i = 3; i < words; i++)
+    slot[i] = obj ? value[i] : 0;
+  vertex_weak_release(old);
+}
+
 // vertex_is_unique reports whether the caller holds the only reference,
 // which is the question copy-on-write asks before it writes. An immortal
 // object is never unique: it may not be written to.

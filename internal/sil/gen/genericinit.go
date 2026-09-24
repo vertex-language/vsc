@@ -145,15 +145,34 @@ func (g *gen) emitClassInitSpecialization(decl *ast.InitDecl, inst types.Type, s
 	}
 	g.subst = subst
 	// The instance's table: its layout, which is the class's with the
-	// arguments in place, for the destroyer to find what it owns. Its
-	// methods are called directly, specialized, so it has no rows.
-	if g.m.VTableNamed(inst.String()) == nil {
-		t := g.m.VTable(inst.String())
-		t.Layout = inst
+	// arguments in place, for the destroyer to find what it owns, and --
+	// where the class has subclasses or a superclass, so that a call
+	// dispatches -- its methods specialized for it.
+	if gi, ok := inst.(*types.GenericInstance); ok {
+		g.instanceTable(gi)
+	} else if g.m.VTableNamed(inst.String()) == nil {
+		g.m.VTable(inst.String()).Layout = inst
 	}
 	defer g.asSpecialization()()
 	g.classInitBody(decl, inst, sig, initializing)
 	g.classAllocator(inst, sig, alloc, initializing)
+}
+
+// instanceTable makes the table of an instance of a generic class, once:
+// its layout, which is the class's with the arguments in place, for the
+// destroyer to find what it owns, and -- where the class has subclasses or
+// a superclass, so that a call dispatches -- its methods specialized for it.
+func (g *gen) instanceTable(inst *types.GenericInstance) {
+	if g.m.VTableNamed(inst.String()) != nil {
+		return
+	}
+	t := g.m.VTable(inst.String())
+	t.Layout = inst
+	if cl, ok := inst.Underlying().(*types.Class); ok && g.poly[cl.Declared()] {
+		for _, s := range g.slots(inst) {
+			t.Entry(s.member, s.impl)
+		}
+	}
 }
 
 // genericStructInit lowers a call to a declared initializer of a generic

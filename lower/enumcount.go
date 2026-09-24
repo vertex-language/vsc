@@ -76,6 +76,16 @@ func (c *fn) countPayload(in *sil.Inst, words []ir.Value, payload types.Type, re
 		objects, strings = stdlib.Retain, stdlib.StringRetain
 	}
 	for _, w := range owned {
+		if w.existential {
+			lo := int(w.offset / 8)
+			if w.offset%8 != 0 || lo+4 > len(words) {
+				return c.fail(ErrUnsupported, in.Op(), "an existential inside a payload that is not in whole words")
+			}
+			if err := c.countExistentialWords(in, words[lo:lo+4], retain); err != nil {
+				return err
+			}
+			continue
+		}
 		if w.enum != nil {
 			// An enum inside the payload: its own words, at its offset.
 			image, ok := enumImage(w.enum)
@@ -255,7 +265,7 @@ func (l *lowerer) enumValueWitnessTable(info sil.TypeMetadata, e *types.Enum, si
 	// and is the block that follows: the enum is one owned thing, at the
 	// start of the value.
 	each := func(f *ir.Func, b *ir.Block, value ir.Ptr, strings, objects ir.Callee, label string) *ir.Block {
-		return countOwned(f, b, value, []ownedWord{{offset: 0, enum: e}}, strings, objects, label)
+		return countOwned(f, b, value, []ownedWord{{offset: 0, enum: e}}, strings, objects, l.existentialCounter(objects == retain), label)
 	}
 	fn := func(suffix string) *ir.Func {
 		f := l.out.Func(l.sym(info.Mangled + suffix))

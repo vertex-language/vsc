@@ -214,6 +214,14 @@ func LowerCollectionMethod(recv types.Type, name string, labels []string) (Metho
 		case name == "contains" && is(""):
 			return Method{Symbol: stdlib.SetContains, Params: []*types.Param{param("", elem)}, Result: boolType,
 				Operands: []Operand{{Kind: OpReceiver}, {Kind: OpArgBorrow, Arg: 0}, meta(elem)}}, true
+		// The first bucket in use at or after from, or -1 past the last,
+		// and the member in one: what Set's Collection positions are.
+		case name == "_bucket" && is("after"):
+			return Method{Symbol: stdlib.HashTableNext, Params: []*types.Param{param("after", intType)}, Result: intType,
+				Operands: []Operand{{Kind: OpReceiver}, {Kind: OpArgValue, Arg: 0}}}, true
+		case name == "_member" && is("at"):
+			return Method{Symbol: stdlib.HashTableKeyAt, Params: []*types.Param{param("at", intType)}, Result: elem, ResultOut: true,
+				Operands: []Operand{{Kind: OpReceiver}, {Kind: OpArgValue, Arg: 0}, {Kind: OpOut}, meta(elem)}}, true
 		case name == "remove" && is(""):
 			opt := &types.Optional{Wrapped: elem}
 			return Method{Symbol: stdlib.SetRemove, Params: []*types.Param{param("", elem)},

@@ -134,6 +134,9 @@ func (c *checker) findOwnMethod(t types.Type, name string) (types.Type, *types.M
 	if ex, ok := t.(*types.Existential); ok {
 		for _, p := range ex.Protocols {
 			if found, m := requirementOf(p, name); m != nil {
+				if sig, ok := existentialSame(ex, found, m.Sig).(*types.Signature); ok && sig != m.Sig {
+					return found, &types.Method{Name: m.Name, Sig: sig, IsStatic: m.IsStatic, IsMutating: m.IsMutating, IsConsuming: m.IsConsuming, Origin: m}
+				}
 				return found, m
 			}
 		}
@@ -191,11 +194,14 @@ func (c *checker) extensionMember(t types.Type, name string) types.Type {
 	if meta, ok := t.(*types.Metatype); ok {
 		onType, t = true, meta.Instance
 	}
-	if _, m := c.extensionMethodOf(t, name, onType); m != nil {
-		return m.Sig
-	}
+	// A property of the name is what the name alone means -- a
+	// Collection's first beside Sequence's first(where:); a call finds
+	// the method by its arguments.
 	if _, f := c.extensionPropertyOf(t, name, onType); f != nil {
 		return known(f.Type)
+	}
+	if _, m := c.extensionMethodOf(t, name, onType); m != nil {
+		return m.Sig
 	}
 	return nil
 }
@@ -307,7 +313,7 @@ func (c *checker) lookupOwnMember(t types.Type, name string) types.Type {
 	if ex, ok := t.(*types.Existential); ok {
 		for _, p := range ex.Protocols {
 			if member := c.requirementType(p, name); member != nil {
-				return member
+				return existentialSame(ex, p, member)
 			}
 		}
 		return nil
@@ -636,4 +642,20 @@ func (c *checker) rememberTypeScope(t types.Type, s *Scope) {
 		c.scopesByType = map[types.Type]*Scope{}
 	}
 	c.scopesByType[t] = s
+}
+
+// existentialSame is t, a requirement's type as protocol p declares it,
+// with each primary associated type the existential gives replaced by
+// what it gives: next() of `any Source<String>` answers a String.
+func existentialSame(ex *types.Existential, p types.Type, t types.Type) types.Type {
+	if len(ex.Same) == 0 || t == nil {
+		return t
+	}
+	return types.MapDependents(t, func(d *types.Dependent) types.Type {
+		tp, ok := d.Base.(*types.TypeParam)
+		if !ok || tp.Name != "Self" {
+			return nil
+		}
+		return ex.Same[d.Name]
+	})
 }

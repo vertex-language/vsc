@@ -26,12 +26,16 @@ type BuiltinMembers struct {
 	// Params are the generic parameters Type is written in, in order.
 	Params []*types.TypeParam
 
-	Methods      []*types.Method
-	Computed     []*types.Field
-	Statics      []*types.Field
-	Inits        []*types.Signature
-	Fields       []*types.Field
-	Subscripts   []*types.Subscript
+	Methods    []*types.Method
+	Computed   []*types.Field
+	Statics    []*types.Field
+	Inits      []*types.Signature
+	Fields     []*types.Field
+	Subscripts []*types.Subscript
+	// Assoc are the associated types its extensions name with a
+	// typealias -- Array's `typealias Iterator = IndexingIterator<[Element]>`
+	// -- written in terms of Params.
+	Assoc        map[string]types.Type
 	Conformances []*types.Protocol
 	// Modules is the module that declared each member an imported
 	// module's extension added: a *types.Method or *types.Field. A member
@@ -262,6 +266,20 @@ func (c *checker) conformsTo(t types.Type, p *types.Protocol) bool {
 	if types.ConformsTo(t, p) {
 		return true
 	}
+	// An associated type conforms to what it is constrained to, and a
+	// type parameter to what it is: a Collection's Index is Equatable.
+	var cons []types.Type
+	switch tt := t.(type) {
+	case *types.Dependent:
+		cons = associatedConstraints(tt)
+	case *types.TypeParam:
+		cons = tt.Constraints
+	}
+	for _, con := range cons {
+		if q, ok := con.Underlying().(*types.Protocol); ok && (types.Identical(q, p) || types.ConformsTo(q, p)) {
+			return true
+		}
+	}
 	if b := c.builtinOf(t); b != nil {
 		for _, have := range b.Conformances {
 			if types.Identical(have, p) || types.ConformsTo(have, p) {
@@ -270,6 +288,35 @@ func (c *checker) conformsTo(t types.Type, p *types.Protocol) bool {
 		}
 	}
 	return false
+}
+
+// builtinDependents is t with an associated type of a built-in type --
+// String.Element -- the typealias its extension in core names it by:
+// Character.
+func (c *checker) builtinDependents(t types.Type) types.Type {
+	return types.MapDependents(t, func(d *types.Dependent) types.Type {
+		b := c.builtinOf(d.Base)
+		if b == nil || b.Assoc[d.Name] == nil {
+			return nil
+		}
+		return types.Substitute(b.Assoc[d.Name], b.Subst(d.Base))
+	})
+}
+
+// comparable is types.Comparable, where a type parameter or an associated
+// type is too when it conforms to Equatable: `[T] == [T]` for T: Equatable,
+// as Swift's `extension Array: Equatable where Element: Equatable` gives.
+func (c *checker) comparable(t types.Type) bool {
+	switch tt := t.(type) {
+	case *types.TypeParam, *types.Dependent:
+		eq, ok := c.coreProtocol("Equatable")
+		return ok && c.conformsTo(t, eq)
+	case *types.Array:
+		return c.comparable(tt.Elem)
+	case *types.Optional:
+		return c.comparable(tt.Wrapped)
+	}
+	return types.Comparable(t)
 }
 
 // implicitSelfMember is `self.name` for a name used alone, or called, inside
@@ -291,6 +338,28 @@ func (c *checker) implicitSelfMember(expr ast.Expr, scope *Scope) ast.Expr {
 		if id, ok := expr.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil &&
 			id.Name.Text(c.file) == "rawValue" && c.lookupValue(scope, "rawValue") == nil {
 			return &ast.MemberExpr{Span: id.Span, X: &ast.SelfExpr{Span: id.Span}, Dot: id.Pos(), Name: id.Name}
+		}
+	}
+	// A member a class inherits from an instance of a generic class --
+	// `items` in `class IntBag: Container<Int>` -- is self's, typed for
+	// the instance.
+	if inheritsGenericInstance(c.currType) {
+		if id, ok := expr.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil {
+			name := id.Name.Text(c.file)
+			if c.lookupValue(scope, name) == nil && c.lookupMember(c.currType, name) != nil {
+				return &ast.MemberExpr{Span: id.Span, X: &ast.SelfExpr{Span: id.Span}, Dot: id.Pos(), Name: id.Name}
+			}
+		}
+		if call, ok := expr.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil {
+				name := id.Name.Text(c.file)
+				if c.lookupValue(scope, name) == nil {
+					if _, m := c.findMethod(c.currType, name); m != nil {
+						fun := &ast.MemberExpr{Span: id.Span, X: &ast.SelfExpr{Span: id.Span}, Dot: id.Pos(), Name: id.Name}
+						return &ast.CallExpr{Span: call.Span, Fun: fun, Args: call.Args, Trailing: call.Trailing}
+					}
+				}
+			}
 		}
 	}
 	if BuiltinKey(c.currType) == "" {
@@ -423,4 +492,17 @@ func (c *checker) protocolSelfMember(expr ast.Expr, scope *Scope, p *types.Proto
 		}
 	}
 	return nil
+}
+
+// inheritsGenericInstance reports whether t is a class with an instance of
+// a generic class among its superclasses.
+func inheritsGenericInstance(t types.Type) bool {
+	cl, ok := t.(*types.Class)
+	for ok && cl != nil && cl.Superclass != nil {
+		if _, generic := cl.Superclass.(*types.GenericInstance); generic {
+			return true
+		}
+		cl, ok = cl.Superclass.Underlying().(*types.Class)
+	}
+	return false
 }

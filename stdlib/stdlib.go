@@ -66,6 +66,10 @@ const (
 	WeakLoad    = "vertex_weak_load"
 	UnownedLoad = "vertex_unowned_load"
 	WeakAssign  = "vertex_weak_assign"
+	// WeakExistentialLoad and WeakExistentialAssign read and write a weak
+	// existential of a class-bound protocol, through memory.
+	WeakExistentialLoad   = "vertex_weak_existential_load"
+	WeakExistentialAssign = "vertex_weak_existential_assign"
 	// A weak cell holds a closure's `[weak x]` / `[unowned x]` capture.
 	WeakCell        = "vertex_weak_cell"
 	WeakCellLoad    = "vertex_weak_cell_load"
@@ -174,14 +178,18 @@ const (
 
 	// Value witnesses every instance of a generic type shares. See
 	// runtime/generic.cpp.
-	WitnessOptionalCopy          = "vertex_vw_optional_copy"
-	WitnessOptionalDestroy       = "vertex_vw_optional_destroy"
-	WitnessOptionalAssignCopy    = "vertex_vw_optional_assign_copy"
-	WitnessOptionalAssignTake    = "vertex_vw_optional_assign_take"
-	WitnessReferenceCopy         = "vertex_vw_reference_copy"
-	WitnessReferenceDestroy      = "vertex_vw_reference_destroy"
-	WitnessReferenceAssignCopy   = "vertex_vw_reference_assign_copy"
-	WitnessReferenceAssignTake   = "vertex_vw_reference_assign_take"
+	WitnessOptionalCopy        = "vertex_vw_optional_copy"
+	WitnessOptionalDestroy     = "vertex_vw_optional_destroy"
+	WitnessOptionalAssignCopy  = "vertex_vw_optional_assign_copy"
+	WitnessOptionalAssignTake  = "vertex_vw_optional_assign_take"
+	WitnessReferenceCopy       = "vertex_vw_reference_copy"
+	WitnessReferenceDestroy    = "vertex_vw_reference_destroy"
+	WitnessReferenceAssignCopy = "vertex_vw_reference_assign_copy"
+	WitnessReferenceAssignTake = "vertex_vw_reference_assign_take"
+	// ExistentialRetain and ExistentialRelease count an existential held
+	// as a value, spilled to memory; a null type word is nil.
+	ExistentialRetain            = "vertex_existential_retain"
+	ExistentialRelease           = "vertex_existential_release"
 	WitnessExistentialCopy       = "vertex_vw_existential_copy"
 	WitnessExistentialDestroy    = "vertex_vw_existential_destroy"
 	WitnessExistentialAssignCopy = "vertex_vw_existential_assign_copy"

@@ -52,7 +52,7 @@ func (g *gen) vtables(files []*ast.File) {
 			if len(cl.TypeParams) == 0 {
 				g.needMetadata(name, sym.Type())
 			}
-			for _, s := range g.slots(cl) {
+			for _, s := range g.slots(sym.Type()) {
 				t.Entry(s.member, s.impl)
 			}
 		}
@@ -65,21 +65,37 @@ type slot struct {
 	impl   string
 }
 
-// slots returns the dispatch table slots for cl in inheritance order.
-func (g *gen) slots(cl *types.Class) []slot {
+// slots returns the dispatch table slots for class t in inheritance order.
+// t may be an instance of a generic class, and any class it inherits from
+// may be one: a row of such a class is its method specialized for it.
+func (g *gen) slots(t types.Type) []slot {
+	cl, ok := t.Underlying().(*types.Class)
+	if !ok {
+		return nil
+	}
 	var out []slot
 	at := map[string]int{}
-	for _, c := range classChain(cl) {
-		for _, m := range c.Methods {
+	levels := typeChain(t)
+	for li, c := range classChain(cl) {
+		var inst *types.GenericInstance
+		if li < len(levels) {
+			inst, _ = levels[li].(*types.GenericInstance)
+		}
+		for mi, m := range c.Methods {
 			if m == nil || m.Sig == nil {
 				continue
 			}
 			ref := &analyzer.MethodRef{Recv: c, Method: m}
-			impl := g.methodSymbol(ref)
-			// A class method is reached through a metatype's table, and
-			// is the static function it is.
-			if m.IsStatic {
+			var impl string
+			switch {
+			case inst != nil && !m.IsStatic:
+				impl = g.instanceMethodSymbol(inst, mi)
+			case m.IsStatic:
+				// A class method is reached through a metatype's table,
+				// and is the static function it is.
 				impl = g.staticSymbol(ref, c)
+			default:
+				impl = g.methodSymbol(ref)
 			}
 			if impl == "" {
 				continue
@@ -139,6 +155,67 @@ func (g *gen) slots(cl *types.Class) []slot {
 		}
 	}
 	return out
+}
+
+// typeChain is t and the classes it inherits from, base-most first, as
+// types: Container<Int> where IntBag inherits from that instance.
+func typeChain(t types.Type) []types.Type {
+	var chain []types.Type
+	seen := map[*types.Class]bool{}
+	for cur := t; cur != nil; {
+		cl, ok := cur.Underlying().(*types.Class)
+		if !ok || seen[cl] {
+			break
+		}
+		seen[cl] = true
+		chain = append([]types.Type{cur}, chain...)
+		cur = cl.Superclass
+	}
+	return chain
+}
+
+// instanceMethodSymbol is the i'th method of generic class instance inst,
+// specialized for it -- Container<Int>'s add -- lowered once, as a call
+// of it through the instance is (genericMethod).
+func (g *gen) instanceMethodSymbol(inst *types.GenericInstance, i int) string {
+	base := inst.Base
+	declared, ok := base.Underlying().(*types.Class)
+	params := nominalTypeParams(base)
+	if !ok || i >= len(declared.Methods) || len(params) != len(inst.Args) {
+		return ""
+	}
+	m := declared.Methods[i]
+	decl := g.genericMethodDecl(genericMethodKey{typ: base, name: m.Name}, m)
+	if decl == nil {
+		return ""
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(params))
+	for k, v := range g.subst {
+		subst[k] = v
+	}
+	for j, p := range params {
+		subst[p] = inst.Args[j]
+	}
+	sig, ok := types.Substitute(m.Sig, subst).(*types.Signature)
+	if !ok {
+		return ""
+	}
+	mangled, err := mangle.Function(mangle.Decl{
+		Module:    g.memberModule(base, m),
+		Context:   memberChain(base),
+		Name:      m.Name,
+		Signature: sig,
+		ModuleOf:  g.moduleOfType,
+	})
+	if err != nil {
+		return ""
+	}
+	name := mangled + "Tv"
+	for _, a := range inst.Args {
+		name += identifierSafe(a.String())
+	}
+	g.emitMethodSpecialization(decl, inst, name, subst)
+	return name
 }
 
 // initSlotKey names a required initializer's row by its parameters.

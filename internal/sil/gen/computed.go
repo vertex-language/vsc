@@ -3,6 +3,7 @@ package gen
 import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/mangle"
 	"github.com/vertex-language/vsc/token"
@@ -29,7 +30,28 @@ func (g *gen) computedProperty(e *ast.MemberExpr) (types.Type, *types.Field, boo
 		}
 		t = cl.Superclass
 	}
+	// One a protocol's extension gives it, where it has none of the name
+	// of its own: stored, or a built-in type's runtime property -- an
+	// array's own count, not Collection's.
+	if !g.ownsProperty(recv, name) {
+		if _, f := g.extensionProperty(recv, name); f != nil {
+			return recv, f, true
+		}
+	}
 	return nil, nil, false
+}
+
+// ownsProperty reports whether t stores a property of the name, or is a
+// built-in type the runtime gives one of the name.
+func (g *gen) ownsProperty(t types.Type, name string) bool {
+	if _, _, stored := storedField(t, name); stored {
+		return true
+	}
+	if _, ok := core.LowerCollectionProperty(t, name); ok {
+		return true
+	}
+	_, ok := core.LowerMember(t, name)
+	return ok
 }
 
 // computedOf is a type's computed properties.
@@ -63,11 +85,14 @@ func (g *gen) getter(e *ast.MemberExpr, recv types.Type, f *types.Field) *sil.Va
 func (g *gen) getterCall(at ast.Node, recv types.Type, f *types.Field,
 	receiver func() *sil.Value) *sil.Value {
 
-	if cl, ok := receiverClass(recv); ok && g.poly[cl] && f.LazyStorage == "" {
+	if cl, ok := receiverClass(recv); ok && g.poly[cl.Declared()] && f.LazyStorage == "" {
 		return g.dynamicGetter(cl, f, receiver)
 	}
 	resultType := f.Type
-	name, spec, generic := g.genericAccessor(at, recv, f, false)
+	name, spec, generic := g.protocolAccessor(at, recv, f)
+	if !generic {
+		name, spec, generic = g.genericAccessor(at, recv, f, false)
+	}
 	if generic {
 		if name == "" {
 			return nil
@@ -581,6 +606,11 @@ func (g *gen) isComputedMember(t types.Type, name string) bool {
 			return true
 		}
 	}
+	if !g.ownsProperty(t, name) {
+		if _, f := g.extensionProperty(t, name); f != nil {
+			return true
+		}
+	}
 	return false
 }
 
@@ -691,6 +721,12 @@ func (g *gen) computedField(t types.Type, name string) (*types.Field, bool) {
 			return f, true
 		}
 	}
+	// One an extension of a protocol it conforms to gives it.
+	if !g.ownsProperty(t, name) {
+		if _, f := g.extensionProperty(t, name); f != nil {
+			return f, true
+		}
+	}
 	return nil, false
 }
 
@@ -707,7 +743,7 @@ func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, v
 // is what a compound assignment has: it read the property, applied
 // the operator, and has the answer in hand.
 func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Field, v *sil.Value) {
-	if cl, ok := receiverClass(recv); ok && g.poly[cl] && f.LazyStorage == "" {
+	if cl, ok := receiverClass(recv); ok && g.poly[cl.Declared()] && f.LazyStorage == "" {
 		g.dynamicSetter(mem, cl, f, v)
 		return
 	}

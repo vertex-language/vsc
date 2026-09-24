@@ -1099,6 +1099,15 @@ func (c *fn) refCount(in *sil.Inst, slot *ir.Callee, name string) error {
 	if bridged(in.Args()[0].Type()) {
 		return c.bridgeRefCount(in, in.Op() == sil.StrongRetain)
 	}
+	// An existential held as a value, or an optional one, is counted
+	// through the runtime, which reads what it holds from its type.
+	if t := in.Args()[0].Type(); !t.IsAddress() && existentialCounted(t.Formal()) {
+		words, err := c.valueWords(in, in.Args()[0])
+		if err != nil {
+			return err
+		}
+		return c.countExistentialWords(in, words, in.Op() == sil.StrongRetain)
+	}
 	// A payload enum is counted as what its active case carries, and
 	// an optional one the same way: its empty tag matches no case.
 	if e, ok := payloadEnumOf(in.Args()[0].Type()); ok && enumCounted(e) {
@@ -1126,6 +1135,82 @@ func (c *fn) refCount(in *sil.Inst, slot *ir.Callee, name string) error {
 		*slot = c.l.runtimeFunc(name, ir.NewSig().Param(ir.TypePtr))
 	}
 	c.b.Call(*slot, p)
+	return nil
+}
+
+// existentialCounted reports whether t is an existential held as a value,
+// or an optional of one, which the runtime counts.
+func existentialCounted(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if o, ok := t.Underlying().(*types.Optional); ok {
+		return isExistentialValue(o.Wrapped)
+	}
+	return isExistentialValue(t)
+}
+
+// valueWords is a value's words in its image's leaf order: the registers
+// it was taken apart into, or read out of the memory it lives in.
+func (c *fn) valueWords(in *sil.Inst, v *sil.Value) ([]ir.Value, error) {
+	st, ok := structOf(v.Type())
+	if !ok {
+		return nil, c.fail(ErrType, in.Op(), v.Type().String())
+	}
+	leaves, ok := structLeaves(st)
+	if !ok {
+		return nil, c.fail(ErrUnsupported, in.Op(), "a value whose layout this cannot take apart")
+	}
+	if parts, ok := c.parts(v); ok && len(parts) == len(leaves) {
+		return parts, nil
+	}
+	from, ok := c.mem[v]
+	if !ok {
+		return nil, c.fail(ErrUnsupported, in.Op(), "a value neither in its words nor in memory")
+	}
+	words := make([]ir.Value, 0, len(leaves))
+	for _, l := range leaves {
+		r, ok := machineOf(l.typ)
+		if !ok {
+			return nil, c.fail(ErrType, in.Op(), l.typ.String())
+		}
+		w, err := c.loadScalar(in, c.fieldAddr(from, l.offset), r)
+		if err != nil {
+			return nil, err
+		}
+		words = append(words, w)
+	}
+	return words, nil
+}
+
+// countExistentialWords retains or releases what an existential's words
+// hold -- its buffer's three and its type, the first four -- through the
+// runtime, which does nothing for a null type: an optional's nil.
+func (c *fn) countExistentialWords(in *sil.Inst, words []ir.Value, retain bool) error {
+	if len(words) < 4 {
+		return c.fail(ErrUnsupported, in.Op(), "an existential of fewer than four words")
+	}
+	name, slot := stdlib.ExistentialRelease, &c.l.existentialRelease
+	if retain {
+		name, slot = stdlib.ExistentialRetain, &c.l.existentialRetain
+	}
+	if *slot == nil {
+		*slot = c.l.runtimeFunc(name, ir.NewSig().Param(ir.TypeI64).Param(ir.TypeI64).Param(ir.TypeI64).Param(ir.TypePtr))
+	}
+	args := make([]ir.Value, 4)
+	for i := 0; i < 3; i++ {
+		w, ok := words[i].(ir.I64)
+		if !ok {
+			return c.fail(ErrType, in.Op(), "an existential's buffer word not in an i64 register")
+		}
+		args[i] = w
+	}
+	typ, err := c.asPointer(in, words[3])
+	if err != nil {
+		return err
+	}
+	args[3] = typ
+	c.b.Call(*slot, args...)
 	return nil
 }
 

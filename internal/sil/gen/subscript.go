@@ -57,6 +57,12 @@ func (g *gen) emitSubscripts(body *ast.MemberBlock, recv types.Type) {
 		if sub == nil {
 			continue
 		}
+		// A subscript with generic parameters of its own is lowered where
+		// it is used, for what they are there (genericSubscript), as a
+		// generic function is.
+		if len(sub.TypeParams) > 0 {
+			continue
+		}
 		linkage := g.accessLinkage(m.Mods)
 		getter := m.Body
 		var setter *ast.Accessor
@@ -139,7 +145,7 @@ func (g *gen) emitSubscriptAccessorNamed(m *ast.SubscriptDecl, recv types.Type, 
 			v := f.Param(t.Address(), conv)
 			if sym != nil {
 				_, isEx := existentialOf(p.Type)
-				g.locals[sym] = &local{addr: v, typ: t, mem: isEx}
+				g.locals[sym] = &local{addr: v, typ: t, mem: isEx, inout: conv == sil.ParamInout}
 			}
 			argno++
 			continue
@@ -368,15 +374,36 @@ func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef,
 		base = gi.Base
 	}
 	params := nominalTypeParams(base)
+	// A generic built-in's, from core's extension -- Set's by position --
+	// is specialized for the elements of the one it is used on.
+	var builtinRecv types.Type
+	if b := builtinOf(g.info, base); b != nil && len(b.Params) > 0 {
+		recv := g.typeOf(e.X)
+		if meta, ok := recv.(*types.Metatype); ok {
+			recv = meta.Instance
+		}
+		args := b.Args(recv)
+		if len(args) != len(b.Params) {
+			g.refuse(e, "a subscript of "+b.Key+" on something whose element types are not known")
+			return ref, nil, true
+		}
+		params, builtinRecv = b.Params, recv
+		base = b.Type
+	}
 	if len(params) == 0 && len(ref.Subst) == 0 {
 		return ref, nil, false
 	}
-	inst, _ := g.typeOf(e.X).(*types.GenericInstance)
-	if meta, ok := g.typeOf(e.X).(*types.Metatype); ok {
-		inst, _ = meta.Instance.(*types.GenericInstance)
-	}
-	if inst == nil {
-		inst, _ = g.recv.(*types.GenericInstance)
+	var inst *types.GenericInstance
+	if builtinRecv != nil {
+		inst = &types.GenericInstance{Base: base, Args: builtinOf(g.info, base).Args(builtinRecv)}
+	} else {
+		inst, _ = g.typeOf(e.X).(*types.GenericInstance)
+		if meta, ok := g.typeOf(e.X).(*types.Metatype); ok {
+			inst, _ = meta.Instance.(*types.GenericInstance)
+		}
+		if inst == nil {
+			inst, _ = g.recv.(*types.GenericInstance)
+		}
 	}
 	// A type with no parameters of its own is its own instance.
 	if inst == nil && len(params) == 0 {
@@ -431,7 +458,11 @@ func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef,
 		b.WriteString(identifierSafe(a.String()))
 	}
 	name := b.String()
-	out := &analyzer.SubscriptRef{Recv: inst, Subscript: &sub}
+	var recvType types.Type = inst
+	if builtinRecv != nil {
+		recvType = builtinRecv
+	}
+	out := &analyzer.SubscriptRef{Recv: recvType, Subscript: &sub}
 	// The accessor's body, once, read in the file it was written in, with
 	// the type's parameters the instance's.
 	if !g.specialized[name] {
@@ -447,13 +478,13 @@ func (g *gen) genericSubscript(e *ast.SubscriptExpr, ref *analyzer.SubscriptRef,
 				}
 				g.subst = subst
 				done := g.asSpecialization()
-				g.emitSubscriptAccessorNamed(decl, inst, &sub, body, set, sil.Private, name)
+				g.emitSubscriptAccessorNamed(decl, recvType, &sub, body, set, sil.Private, name)
 				done()
 				restore()
 			}
 		}
 	}
-	return out, g.subscriptCalleeNamed(inst, &sub, setter, name), true
+	return out, g.subscriptCalleeNamed(recvType, &sub, setter, name), true
 }
 
 // subscriptDecl is the declaration a subscript was read from.
@@ -491,4 +522,73 @@ func subscriptAccessor(g *gen, m *ast.SubscriptDecl, setter bool) (*ast.CodeBloc
 		return set.Body, set
 	}
 	return getter, nil
+}
+
+// subscriptRef is the declared subscript e uses. One a protocol requires
+// -- `xs[i]` with xs a C: Collection -- is, in a specialization, the
+// concrete type's that meets it: the one of the same labels.
+func (g *gen) subscriptRef(e *ast.SubscriptExpr) *analyzer.SubscriptRef {
+	ref := g.info.Subscripts[e]
+	if ref == nil {
+		return nil
+	}
+	if _, required := ref.Recv.(*types.Protocol); !required {
+		return ref
+	}
+	recv := g.substituted(g.typeOf(e.X))
+	if meta, ok := recv.(*types.Metatype); ok {
+		recv = meta.Instance
+	}
+	// A built-in collection's is its own element access, which the
+	// subscript lowers as for any array.
+	if _, isArray := recv.Underlying().(*types.Array); isArray {
+		return nil
+	}
+	// One core's extension gives a built-in type: Set's by position.
+	if b := builtinOf(g.info, recv); b != nil {
+		for _, sub := range b.Subscripts {
+			if sub != nil && sub.IsStatic == ref.Subscript.IsStatic && len(sub.Params) == len(ref.Subscript.Params) {
+				return &analyzer.SubscriptRef{Recv: b.Type, Subscript: sub}
+			}
+		}
+	}
+	for t := recv; t != nil; {
+		for _, sub := range subscriptsOfType(t) {
+			if sub == nil || sub.IsStatic != ref.Subscript.IsStatic || len(sub.Params) != len(ref.Subscript.Params) {
+				continue
+			}
+			same := true
+			for i, p := range sub.Params {
+				if p.Label != ref.Subscript.Params[i].Label {
+					same = false
+				}
+			}
+			if same {
+				return &analyzer.SubscriptRef{Recv: t, Subscript: sub}
+			}
+		}
+		cl, ok := t.Underlying().(*types.Class)
+		if !ok || cl.Superclass == nil {
+			break
+		}
+		t = cl.Superclass
+	}
+	g.refuse(e, "a subscript '"+recv.String()+"' was required to have and does not")
+	return nil
+}
+
+// subscriptsOfType is the subscripts a type declares.
+func subscriptsOfType(t types.Type) []*types.Subscript {
+	if inst, ok := t.(*types.GenericInstance); ok {
+		t = inst.Base
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		return u.Subscripts
+	case *types.Class:
+		return u.Subscripts
+	case *types.Enum:
+		return u.Subscripts
+	}
+	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/vertex-language/vsc/internal/sil/pass"
 	"github.com/vertex-language/vsc/parser"
 	"github.com/vertex-language/vsc/token"
+	"github.com/vertex-language/vsc/types"
 )
 
 // target is the one these tests lower for. Nothing here depends on
@@ -154,17 +155,20 @@ func TestRefusesTheOwnershipForm(t *testing.T) {
 // lowered one that is wrong, and the refusal has to name a function
 // and a reason or it is no use to whoever reads it.
 //
-// The example is a struct with an Error? in it, which makes it wider
-// than a struct this package lays out -- Swift passes one by address --
-// so the parameter cannot be passed, and saying so is the only honest
-// thing left.
+// The example is a method dispatched through a class that has no
+// dispatch table: there is no row to call, and saying so is the only
+// honest thing left.
 func TestRefusalsNameWhatTheyRefuse(t *testing.T) {
-	_, err := lowerSrc(t, `
-struct Wrapper {
-    var flag: Error?
-}
-func first(_ w: Wrapper) -> Int { return 0 }
-`)
+	m := sil.NewModule("t", sil.StageLowered)
+	cl := &types.Class{Name: "Tableless"}
+	f := m.Func("callsThrough")
+	f.Type().Convention = sil.Thin
+	obj := f.Param(sil.Object(cl), sil.ParamGuaranteed)
+	f.SetResult(sil.Object(types.Typ[types.Void]), sil.ResultUnowned)
+	b := f.Entry()
+	b.ClassMethod(obj, "Tableless.m", sil.Object(&sil.FuncType{Convention: sil.Method}))
+	b.Return(b.Tuple(sil.Object(&types.Tuple{})))
+	_, err := Module(m, target, Options{})
 	if err == nil {
 		t.Fatal("lowered a program it cannot lower")
 	}

@@ -185,7 +185,7 @@ func polymorphic(files []*ast.File, info *analyzer.Info) map[*types.Class]bool {
 			return
 		}
 		if cl, ok := t.Underlying().(*types.Class); ok {
-			out[cl] = true
+			out[cl.Declared()] = true
 		}
 	}
 	for _, f := range files {
@@ -772,6 +772,8 @@ type local struct {
 	box   *sil.Value // var: box (if boxed)
 	typ   sil.Type
 	mem   bool // true for memory-only storage (e.g. existentials)
+	// inout is an inout parameter: addr is the caller's storage.
+	inout bool
 	// cell is "weak" or "unowned" for a closure's `[weak x]` capture:
 	// value is the weak cell, and a read is the strong reference the cell
 	// gives, of type held.
@@ -1000,7 +1002,7 @@ func (g *gen) emitCleanups(s *scope) {
 			g.blk.DestroyAddr(c.destroyAddr)
 		case c.destroy != nil:
 			// Existential containers require destroy_addr rather than destroy_value.
-			if isExistentialType(c.destroy.Type().Formal()) {
+			if c.destroy.Type().IsAddress() && isExistentialType(c.destroy.Type().Formal()) {
 				g.blk.DestroyAddr(c.destroy)
 				continue
 			}
@@ -1168,7 +1170,7 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 			if i < len(params) && params[i] != nil {
 				// Inout parameters and existentials are handled by address.
 				_, isEx := existentialOf(p.Type)
-				g.locals[params[i]] = &local{addr: v, typ: t, mem: isEx}
+				g.locals[params[i]] = &local{addr: v, typ: t, mem: isEx, inout: conv == sil.ParamInout}
 			}
 			if p.Name != "" {
 				g.blk.DebugValue(v, p.Name, "let", "argno "+itoa(i+1))
@@ -1381,7 +1383,20 @@ func (g *gen) substituted(t types.Type) types.Type {
 			return &types.Metatype{Instance: inst}
 		}
 	}
-	return types.Substitute(t, g.subst)
+	return g.builtinDependents(types.Substitute(t, g.subst))
+}
+
+// builtinDependents is t with an associated type of a built-in type --
+// [Int].Iterator -- the typealias its extension in core names it by:
+// IndexingIterator<[Int]>.
+func (g *gen) builtinDependents(t types.Type) types.Type {
+	return types.MapDependents(t, func(d *types.Dependent) types.Type {
+		b := builtinOf(g.info, d.Base)
+		if b == nil || b.Assoc[d.Name] == nil {
+			return nil
+		}
+		return types.Substitute(b.Assoc[d.Name], b.Subst(d.Base))
+	})
 }
 
 // selfInstance is a generic type named bare inside its own declaration --

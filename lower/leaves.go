@@ -54,6 +54,9 @@ func appendLeaves(out []leaf, st *types.Struct, base int64) ([]leaf, bool) {
 		if _, isFunc := f.Type.Underlying().(*types.Signature); isFunc {
 			inner, ok = funcWords, true
 		}
+		if image, isEx := existentialImage(f.Type); isEx {
+			inner, ok = image, true
+		}
 		// A payload enum is its words. What follows it starts at its
 		// size, in the part of its last word the enum does not use.
 		if e, isEnum := f.Type.Underlying().(*types.Enum); isEnum && hasPayload(e) {
@@ -124,6 +127,8 @@ func fieldLeaves(t sil.Type, member string) (lo, hi int, ok bool) {
 		} else if _, isFunc := f.Type.Underlying().(*types.Signature); isFunc {
 			// A function value is its code and its context. See funcWords.
 			n = 2
+		} else if image, isEx := existentialImage(f.Type); isEx {
+			n = len(image.Fields)
 		} else if e, isEnum := f.Type.Underlying().(*types.Enum); isEnum && hasPayload(e) {
 			image, got := enumImage(e)
 			if !got {

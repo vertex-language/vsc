@@ -723,6 +723,10 @@ type ownedWord struct {
 	// enum is a payload enum starting at offset, whose owned words are
 	// those its active case carries, found by its tag.
 	enum *types.Enum
+	// existential is an existential's words starting at offset, counted
+	// through the runtime by the type of what it holds; a null type,
+	// an optional's nil, holds nothing.
+	existential bool
 }
 
 // ownedWords returns the byte offsets of reference-counted words within a struct.
@@ -737,6 +741,10 @@ func ownedWords(st *types.Struct, base int64) ([]ownedWord, bool) {
 			return nil, false
 		}
 		at := base + off
+		if existentialCounted(f.Type) {
+			out = append(out, ownedWord{offset: at, existential: true})
+			continue
+		}
 		switch u := f.Type.Underlying().(type) {
 		case *types.Basic:
 			if u.Kind() == types.String {
@@ -836,8 +844,13 @@ func ownedWords(st *types.Struct, base int64) ([]ownedWord, bool) {
 // owned word, and each counted enum by what its active case carries --
 // starting in b, and is the block that follows.
 func countOwned(f *ir.Func, b *ir.Block, value ir.Ptr, owned []ownedWord,
-	strings, objects ir.Callee, label string) *ir.Block {
+	strings, objects, existentials ir.Callee, label string) *ir.Block {
 	for i, w := range owned {
+		if w.existential {
+			at := func(k int64) ir.Ptr { return b.Ptr.Add(value, b.I64.Const(w.offset+k*8)) }
+			b.Call(existentials, b.I64.Load(at(0)), b.I64.Load(at(1)), b.I64.Load(at(2)), b.Ptr.Load(at(3)))
+			continue
+		}
 		if w.enum == nil {
 			word := b.Ptr.Load(b.Ptr.Add(value, b.I64.Const(w.offset)))
 			if w.string {
@@ -868,7 +881,7 @@ func countOwned(f *ir.Func, b *ir.Block, value ir.Ptr, owned []ownedWord,
 			body := f.Block(prefix + "case" + itoa(k))
 			next := f.Block(prefix + "next" + itoa(k))
 			b.BrIf(b.I32.Eq(tag, b.I32.Const(t)), body.To(), next.To())
-			countOwned(f, body, value, shifted, strings, objects, prefix+"c"+itoa(k)+"_").Br(done.To())
+			countOwned(f, body, value, shifted, strings, objects, existentials, prefix+"c"+itoa(k)+"_").Br(done.To())
 			b = next
 		}
 		b.Br(done.To())
@@ -888,7 +901,7 @@ func (l *lowerer) ownedValueWitnessTable(info sil.TypeMetadata, size, align int6
 	retainString := l.runtimeFunc(stdlib.StringRetain, ir.NewSig().Param(ir.TypePtr))
 	releaseString := l.runtimeFunc(stdlib.StringRelease, ir.NewSig().Param(ir.TypePtr))
 	each := func(f *ir.Func, b *ir.Block, value ir.Ptr, strings, objects ir.Callee, label string) *ir.Block {
-		return countOwned(f, b, value, owned, strings, objects, label)
+		return countOwned(f, b, value, owned, strings, objects, l.existentialCounter(objects == retain), label)
 	}
 	fn := func(suffix string) *ir.Func {
 		f := l.out.Func(l.sym(info.Mangled + suffix))
@@ -982,6 +995,9 @@ func (c *fn) structRefCount(in *sil.Inst, st *types.Struct, retain bool) error {
 	// was taken apart into, where a String is its two words and an enum
 	// its words.
 	widthOf := func(w ownedWord) int {
+		if w.existential {
+			return 4
+		}
 		if w.enum == nil {
 			return 1
 		}
@@ -1022,6 +1038,12 @@ func (c *fn) structRefCount(in *sil.Inst, st *types.Struct, retain bool) error {
 		objects, strings = stdlib.Retain, stdlib.StringRetain
 	}
 	for i, w := range owned {
+		if w.existential {
+			if err := c.countExistentialWords(in, words[i], retain); err != nil {
+				return err
+			}
+			continue
+		}
 		if w.enum != nil {
 			if err := c.countEnumWords(in, w.enum, words[i], retain); err != nil {
 				return err
@@ -1051,6 +1073,14 @@ func ownedLeaves(st *types.Struct, base int) ([]int, bool) {
 	for _, f := range st.Fields {
 		if f == nil || f.Type == nil {
 			return nil, false
+		}
+		// An existential, or an optional one: its words, counted from
+		// the first.
+		if existentialCounted(f.Type) {
+			image, _ := existentialImageOf(f.Type)
+			out = append(out, at)
+			at += len(image.Fields)
+			continue
 		}
 		switch u := f.Type.Underlying().(type) {
 		case *types.Basic:
@@ -1752,4 +1782,28 @@ func (l *lowerer) functionMetadata(info sil.TypeMetadata, t types.Type, rec *ir.
 	l.metadataAccessorName(info)
 	l.metadataAccessorFor(info.Mangled+"Ma", g)
 	return g, true
+}
+
+// existentialCounter is the runtime's retain or release of an existential
+// held as a value: its buffer's three words and its type.
+func (l *lowerer) existentialCounter(retain bool) ir.Callee {
+	sig := ir.NewSig().Param(ir.TypeI64).Param(ir.TypeI64).Param(ir.TypeI64).Param(ir.TypePtr)
+	if retain {
+		if l.existentialRetain == nil {
+			l.existentialRetain = l.runtimeFunc(stdlib.ExistentialRetain, sig)
+		}
+		return l.existentialRetain
+	}
+	if l.existentialRelease == nil {
+		l.existentialRelease = l.runtimeFunc(stdlib.ExistentialRelease, sig)
+	}
+	return l.existentialRelease
+}
+
+// existentialImageOf is the image of an existential or an optional one.
+func existentialImageOf(t types.Type) (*types.Struct, bool) {
+	if o, ok := t.Underlying().(*types.Optional); ok {
+		t = o.Wrapped
+	}
+	return existentialImage(t)
 }

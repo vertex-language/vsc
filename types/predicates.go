@@ -67,6 +67,31 @@ func Identical(x, y Type) bool {
 		if yt, ok := y.(*Basic); ok {
 			return xt.kind == yt.kind
 		}
+	// Two existentials of the same protocols, in any order, with the
+	// same primary associated types are one type: `any P & Q`.
+	case *Existential:
+		yt, ok := y.(*Existential)
+		if !ok || len(xt.Protocols) != len(yt.Protocols) || len(xt.Same) != len(yt.Same) {
+			return false
+		}
+		for _, p := range xt.Protocols {
+			found := false
+			for _, q := range yt.Protocols {
+				if p == q {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		for name, t := range xt.Same {
+			if !Identical(t, yt.Same[name]) {
+				return false
+			}
+		}
+		return true
 	case *Named:
 		if yt, ok := y.(*Named); ok {
 			return xt.Name == yt.Name && xt.Pkg == yt.Pkg
@@ -485,19 +510,25 @@ func AssignableTo(from, to Type) bool {
 		}
 	}
 
-	// Class inheritance: subclass is assignable to superclass
-	if fromClass, ok := from.(*Class); ok {
-		if toClass, ok := to.(*Class); ok {
+	// Class inheritance: subclass is assignable to superclass, an
+	// instance of a generic one included: a Named<Int> is a
+	// Container<Int> where Named<T>: Container<T>.
+	_, fromGeneric := from.(*GenericInstance)
+	if fromClass, ok := from.Underlying().(*Class); ok && (fromGeneric || from == Type(fromClass)) {
+		_, toGeneric := to.(*GenericInstance)
+		if _, ok := to.(*Class); ok || toGeneric {
+			seen := map[*Class]bool{fromClass: true}
 			curr := fromClass.Superclass
 			for curr != nil {
-				if Identical(curr, toClass) {
+				if Identical(curr, to) {
 					return true
 				}
-				if c, ok := curr.(*Class); ok {
-					curr = c.Superclass
-				} else {
+				c, ok := curr.Underlying().(*Class)
+				if !ok || seen[c] {
 					break
 				}
+				seen[c] = true
+				curr = c.Superclass
 			}
 		}
 	}

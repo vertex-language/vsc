@@ -29,7 +29,11 @@ func (g *gen) genericPropertyDecl(base types.Type, name string) (genericProperty
 	if g.props == nil {
 		g.props = map[genericMethodKey]genericProperty{}
 		add := func(t types.Type, body *ast.MemberBlock, file *ast.File) {
-			if t == nil || body == nil || (len(nominalTypeParams(t)) == 0 && builtinParams(g.info, t) == nil) {
+			// A protocol's extension's are written in terms of Self, and
+			// lowered for each conformer as a generic type's are for each
+			// instance.
+			_, isProtocol := t.(*types.Protocol)
+			if t == nil || body == nil || (len(nominalTypeParams(t)) == 0 && builtinParams(g.info, t) == nil && !isProtocol) {
 				return
 			}
 			prev := g.file
@@ -207,4 +211,65 @@ func (g *gen) aside() func() {
 		g.throws, g.catches, g.tryBang, g.tryCall = outer.throws, outer.catches, outer.tryBang, outer.tryCall
 		g.file = prevFile
 	}
+}
+
+// extensionProperty is the protocol whose extension gives t the computed
+// property name, and the property, written in terms of the protocol's Self.
+func (g *gen) extensionProperty(t types.Type, name string) (*types.Protocol, *types.Field) {
+	for _, p := range g.conformancesOf(t) {
+		if q, f := p.ExtensionProperty(name, false); f != nil {
+			return q, f
+		}
+	}
+	return nil, nil
+}
+
+// protocolAccessor is the symbol of the getter a protocol's extension
+// gives recv, lowered for recv -- Self standing for it -- the first time,
+// as a protocol extension's method is; see protocolExtensionMethod. ok is
+// false where f is not such a property of recv; an empty symbol with ok
+// true means it was refused.
+func (g *gen) protocolAccessor(at ast.Node, recv types.Type, f *types.Field) (string, types.Type, bool) {
+	p, pf := g.extensionProperty(recv, f.Name)
+	if pf == nil || (pf != f && f.Origin != pf) || p.Self == nil {
+		return "", nil, false
+	}
+	decl, ok := g.genericPropertyDecl(p, pf.Name)
+	if !ok {
+		g.refuse(at, "a property of "+p.Name+"'s extension whose declaration this cannot find")
+		return "", nil, true
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+1)
+	for k, v := range g.subst {
+		subst[k] = v
+	}
+	subst[p.Self] = recv
+	t := types.Substitute(pf.Type, subst)
+	name := "$sVSCext_" + identifierSafe(p.Name) + "_" + identifierSafe(pf.Name) + "_g_Tv" + identifierSafe(recv.String())
+	if g.specialized[name] {
+		return name, t, true
+	}
+	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
+		return name, t, true
+	}
+	body := g.getterBody(decl.binding)
+	if body == nil {
+		g.refuse(at, "a property of "+p.Name+"'s extension with no getter")
+		return "", nil, true
+	}
+	if g.specialized == nil {
+		g.specialized = map[string]bool{}
+	}
+	g.specialized[name] = true
+
+	restore := g.aside()
+	endSpecialization := g.asSpecialization()
+	defer endSpecialization()
+	defer restore()
+	if file := g.fileOf(decl.binding); file != nil {
+		g.file = file
+	}
+	g.subst = subst
+	g.emitGetterNamed(name, recv, pf.Name, t, body, false, sil.Private)
+	return name, t, true
 }

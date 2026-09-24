@@ -67,7 +67,9 @@ func (g *gen) callGeneric(e *ast.CallExpr, sym *analyzer.FuncSymbol, spec analyz
 		spec = analyzer.Specialization{Params: spec.Params, Args: args}
 	}
 	subst := spec.Subst()
-	sig, ok := types.Substitute(sym.Signature(), subst).(*types.Signature)
+	// An associated type of a built-in the specialization is for --
+	// [A.Element] with A a String -- is what core's extension names it.
+	sig, ok := g.builtinDependents(types.Substitute(sym.Signature(), subst)).(*types.Signature)
 	if !ok {
 		g.refuse(e, "a generic signature this compiler cannot substitute")
 		return nil
@@ -233,13 +235,35 @@ func (g *gen) witness(ref *analyzer.MethodRef, recv types.Type) (*analyzer.Metho
 		return nil, false
 	}
 	found, m := g.methodOn(recv, ref.Method.Name)
+	// Of several of the name, the one of the requirement's labels:
+	// index(after:), not index(before:).
+	if m != nil && ref.Method.Sig != nil {
+		if f2, m2 := g.methodLabelled(recv, ref.Method.Name, ref.Method.Sig); m2 != nil {
+			found, m = f2, m2
+		} else {
+			found, m = nil, nil
+		}
+	}
 	if m == nil {
 		// A requirement the type does not implement is the default an
 		// extension of the protocol gives.
 		if p, ok := ref.Recv.(*types.Protocol); ok && ref.Method.Sig != nil && !isExistentialType(recv) {
-			if q, em := p.ExtensionMethod(ref.Method.Name, ref.Method.IsStatic); em != nil && em.Sig != nil &&
-				len(em.Sig.Params) == len(ref.Method.Sig.Params) {
-				return &analyzer.MethodRef{Recv: q, Method: em}, true
+			n := len(ref.Method.Sig.Params)
+			for _, q := range g.protocolClosure(append([]*types.Protocol{p}, g.conformancesOf(recv)...)) {
+				em := q.OwnExtensionMethod(ref.Method.Name, ref.Method.IsStatic, func(em *types.Method) bool {
+					if len(em.Sig.Params) != n || !g.info.SelfConditionsMet(em, recv) {
+						return false
+					}
+					for i, prm := range em.Sig.Params {
+						if prm.Label != ref.Method.Sig.Params[i].Label {
+							return false
+						}
+					}
+					return true
+				})
+				if em != nil {
+					return &analyzer.MethodRef{Recv: q, Method: em}, true
+				}
 			}
 		}
 		return nil, false
@@ -328,4 +352,47 @@ func (g *gen) requirementOperator(at ast.Expr, ref *analyzer.MethodRef, xs []ast
 	}
 	g.refuse(at, "'"+op+"' on "+typeNameOf(concrete)+" in a generic function")
 	return nil
+}
+
+// methodLabelled is the method of t of the name whose parameters have
+// want's labels, where t declares one.
+func (g *gen) methodLabelled(t types.Type, name string, want *types.Signature) (types.Type, *types.Method) {
+	var methods []*types.Method
+	owner := t
+	if b := builtinOf(g.info, t); b != nil {
+		methods, owner = b.Methods, b.Type
+	} else {
+		base := t
+		if inst, ok := t.(*types.GenericInstance); ok {
+			base = inst.Underlying()
+		}
+		for cur := base; cur != nil; {
+			var next types.Type
+			switch u := cur.Underlying().(type) {
+			case *types.Struct:
+				methods = append(methods, u.Methods...)
+			case *types.Enum:
+				methods = append(methods, u.Methods...)
+			case *types.Class:
+				methods = append(methods, u.Methods...)
+				next = u.Superclass
+			}
+			cur = next
+		}
+	}
+	for _, m := range methods {
+		if m == nil || m.Name != name || m.Sig == nil || len(m.Sig.Params) != len(want.Params) {
+			continue
+		}
+		same := true
+		for i, p := range m.Sig.Params {
+			if p.Label != want.Params[i].Label {
+				same = false
+			}
+		}
+		if same {
+			return owner, m
+		}
+	}
+	return nil, nil
 }

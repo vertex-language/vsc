@@ -501,6 +501,45 @@ func (info *Info) setConditions(member any, conds []memberCondition) {
 	info.conditions[member] = conds
 }
 
+// builtinAssoc is what core's extensions of t's built-in type name its
+// associated type: String.Element is Character, Set<Int>.Index _SetIndex.
+func (info *Info) builtinAssoc(t types.Type, name string) types.Type {
+	b := info.Builtins[BuiltinKey(t)]
+	if b == nil || b.Assoc[name] == nil {
+		return nil
+	}
+	return types.Substitute(b.Assoc[name], b.Subst(t))
+}
+
+// SelfConditionsMet reports whether t meets what the where clause of the
+// protocol extension declaring m asks of its Self -- `extension Sequence
+// where Self: IteratorProtocol` -- so that m is a default t can take.
+func (info *Info) SelfConditionsMet(m *types.Method, t types.Type) bool {
+	if m.Origin != nil {
+		m = m.Origin
+	}
+	for _, cond := range info.conditions[m] {
+		if cond.param == nil || cond.param.Name != "Self" || cond.proto == nil {
+			continue
+		}
+		if types.ConformsTo(t, cond.proto) {
+			continue
+		}
+		met := false
+		if b := info.Builtins[BuiltinKey(t)]; b != nil {
+			for _, have := range b.Conformances {
+				if types.Identical(have, cond.proto) || types.ConformsTo(have, cond.proto) {
+					met = true
+				}
+			}
+		}
+		if !met {
+			return false
+		}
+	}
+	return true
+}
+
 // A Layout is one read of MemoryLayout<Of>: its size, stride or
 // alignment, named by Kind.
 type Layout struct {

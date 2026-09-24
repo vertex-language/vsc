@@ -10,6 +10,8 @@ import (
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 	"math"
+	"os"
+	"runtime/debug"
 	"strconv"
 )
 
@@ -1212,7 +1214,7 @@ func (g *gen) makeClass(e *ast.CallExpr, tn *analyzer.TypeNameSymbol, cl *types.
 	// A `var` of an optional type starts as nil, as it does in Swift.
 	held := storedChain(t)
 	for _, held := range held {
-		if _, ok := g.classDefaults(held.owner)[held.field.Name]; !ok && !g.implicitlyNil(held.owner, held.field) {
+		if def, _ := g.classDefault(held.owner, held.field.Name); def == nil && !g.implicitlyNil(held.owner, held.field) {
 			g.errorAt(e, "'"+tn.Name()+"' cannot be made without arguments: '"+
 				held.field.Name+"' has no initial value and there is no "+
 				"initializer to give it one")
@@ -1220,13 +1222,25 @@ func (g *gen) makeClass(e *ast.CallExpr, tn *analyzer.TypeNameSymbol, cl *types.
 		}
 	}
 
+	if inst, ok := t.(*types.GenericInstance); ok {
+		g.instanceTable(inst)
+	}
 	obj := g.blk.AllocRef(lowerType(t))
 	// Initialize stored properties in inheritance order (superclasses first).
 	for _, held := range held {
 		ft := lowerType(held.field.Type)
 		var v *sil.Value
-		if init, ok := g.classDefaults(held.owner)[held.field.Name]; ok {
+		if init, subst := g.classDefault(held.owner, held.field.Name); init != nil {
+			// A generic class's default is lowered for the instance.
+			prev := g.subst
+			if subst != nil {
+				g.subst = subst
+			}
 			v = g.rvalue(init)
+			g.subst = prev
+			if v != nil {
+				v = g.optionalFor(init, v, g.typeOf(init), held.field.Type)
+			}
 		} else {
 			v = g.blk.Enum(ft, optionalNone, nil)
 		}
@@ -1343,6 +1357,9 @@ func (g *gen) classDecl(t types.Type) ast.Decl {
 	if t == nil {
 		return nil
 	}
+	if gi, ok := t.(*types.GenericInstance); ok {
+		t = gi.Base
+	}
 	want := t.Underlying()
 	for _, sym := range g.info.Defs {
 		tn, ok := sym.(*analyzer.TypeNameSymbol)
@@ -1378,6 +1395,16 @@ func (g *gen) bindingName(p ast.Pattern) string {
 	return ""
 }
 
+// carried is v, of type from, as what a case carries of type to: an
+// existential held as a value -- `.failure(error)` of a Result<T, any
+// Error> -- or v wrapped as an optional wants.
+func (g *gen) carried(at ast.Node, v *sil.Value, from, to types.Type) *sil.Value {
+	if isExistentialType(g.substituted(to)) {
+		return g.existentialValue(at, v, from, g.substituted(to))
+	}
+	return g.optionalFor(at, v, from, to)
+}
+
 // payloadCase builds an enum case carrying associated values.
 func (g *gen) payloadCase(e *ast.CallExpr, ec *analyzer.EnumCaseSymbol) *sil.Value {
 	assoc := ec.AssociatedType()
@@ -1406,7 +1433,7 @@ func (g *gen) payloadCase(e *ast.CallExpr, ec *analyzer.EnumCaseSymbol) *sil.Val
 	case len(args) == 1:
 		payload = g.rvalue(args[0].X)
 		if payload != nil {
-			payload = g.optionalFor(args[0].X, payload, g.typeOf(args[0].X), assoc)
+			payload = g.carried(args[0].X, payload, g.typeOf(args[0].X), assoc)
 		}
 	default:
 		tu, _ := assoc.Underlying().(*types.Tuple)
@@ -1417,7 +1444,10 @@ func (g *gen) payloadCase(e *ast.CallExpr, ec *analyzer.EnumCaseSymbol) *sil.Val
 				return nil
 			}
 			if tu != nil && i < len(tu.Elements) {
-				v = g.optionalFor(a.X, v, g.typeOf(a.X), tu.Elements[i].Type)
+				v = g.carried(a.X, v, g.typeOf(a.X), tu.Elements[i].Type)
+				if v == nil {
+					return nil
+				}
 			}
 			vals = append(vals, v)
 		}
@@ -1545,7 +1575,7 @@ func (g *gen) endReceiverTemp(v *sil.Value) {
 				return
 			}
 			s.cleanups = append(s.cleanups[:i], s.cleanups[i+1:]...)
-			if isExistentialType(v.Type().Formal()) {
+			if v.Type().IsAddress() && isExistentialType(v.Type().Formal()) {
 				g.blk.DestroyAddr(v)
 			} else {
 				g.blk.DestroyValue(v)
@@ -1558,7 +1588,7 @@ func (g *gen) endReceiverTemp(v *sil.Value) {
 // methodCall emits a method call over the given receiver.
 func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func() *sil.Value) *sil.Value {
 	// Dynamic dispatch for polymorphic classes via vtable.
-	if cl, ok := receiverClass(ref.Recv); ok && g.poly[cl] {
+	if cl, ok := receiverClass(ref.Recv); ok && g.poly[cl.Declared()] {
 		return g.dynamicCall(e, ref, cl, receiver)
 	}
 	var symbol string
@@ -1620,7 +1650,15 @@ func (g *gen) superMethodCall(e *ast.CallExpr, ref *analyzer.MethodRef) *sil.Val
 		g.refuse(e, "a super call on a superclass this cannot read")
 		return nil
 	}
-	key := ref.Method.Name + ref.Method.Sig.String()
+	// The method as the superclass instance has it: add(Int) of a
+	// Container<Int>, where Container declares add(T).
+	sig := ref.Method.Sig
+	if subst := types.InstanceSubst(cl.Superclass); subst != nil {
+		if s, ok := types.Substitute(sig, subst).(*types.Signature); ok {
+			sig = s
+		}
+	}
+	key := ref.Method.Name + sig.String()
 	var impl *analyzer.MethodRef
 	chain := classChain(super)
 	for i := len(chain) - 1; i >= 0 && impl == nil; i-- {
@@ -1635,11 +1673,26 @@ func (g *gen) superMethodCall(e *ast.CallExpr, ref *analyzer.MethodRef) *sil.Val
 		g.refuse(e, "a super call of a method no superclass implements")
 		return nil
 	}
-	callee := g.m.Func(g.methodSymbol(impl)).SetSourceName(impl.Method.Name)
+	symbol := ""
+	implClass := impl.Recv.(*types.Class)
+	// A method of a generic superclass is its specialization for the
+	// instance the class inherits from: Container<Int>'s add.
+	if _, inst := g.typeOf(e.Fun.(*ast.MemberExpr).X).(*types.GenericInstance); inst {
+		spec, name, generic := g.genericMethod(e, ref)
+		if generic {
+			if name == "" {
+				return nil
+			}
+			impl, symbol = spec, name
+		}
+	}
+	if symbol == "" {
+		symbol = g.methodSymbol(impl)
+	}
+	callee := g.m.Func(symbol).SetSourceName(impl.Method.Name)
 	if g.needsType(callee) {
 		g.declareMethod(callee, impl)
 	}
-	implClass := impl.Recv.(*types.Class)
 	self, args, ok := g.methodArgs(e, impl.Method.Sig, func() *sil.Value {
 		return g.blk.Upcast(g.selfValue(), lowerType(implClass))
 	})
@@ -1668,7 +1721,25 @@ func (g *gen) dynamicCall(e *ast.CallExpr, ref *analyzer.MethodRef, cl *types.Cl
 
 	intro := introducer(cl, ref.Method)
 	member := intro.Name + "." + ref.Method.Name
-	method := g.blk.ClassMethod(self, member, methodType(ref, intro))
+	// On an instance of a generic class, the method is the instance's:
+	// Container<Int>'s add takes an Int, and self is a Container<Int>.
+	var introType types.Type = intro
+	if mem, ok := e.Fun.(*ast.MemberExpr); ok {
+		recvType := g.typeOf(mem.X)
+		if subst := types.InstanceSubst(recvType); subst != nil {
+			if sig, ok := types.Substitute(ref.Method.Sig, subst).(*types.Signature); ok {
+				m := *ref.Method
+				m.Sig = sig
+				ref = &analyzer.MethodRef{Recv: ref.Recv, Method: &m}
+			}
+		}
+		for _, level := range typeChain(recvType) {
+			if lc, ok := level.Underlying().(*types.Class); ok && lc.Name == intro.Name {
+				introType = level
+			}
+		}
+	}
+	method := g.blk.ClassMethod(self, member, methodType(ref, introType))
 
 	args = append(args, self)
 	if ref.Method.Sig.Throws {
@@ -1710,7 +1781,7 @@ func (g *gen) methodArgs(e *ast.CallExpr, sig *types.Signature, receiver func() 
 }
 
 // methodType returns the function type for a class_method instruction.
-func methodType(ref *analyzer.MethodRef, intro *types.Class) sil.Type {
+func methodType(ref *analyzer.MethodRef, intro types.Type) sil.Type {
 	sig := ref.Method.Sig
 	ft := &sil.FuncType{Convention: sil.Method}
 	for _, p := range sig.Params {
@@ -1838,6 +1909,9 @@ func (g *gen) methodSymbol(ref *analyzer.MethodRef) string {
 	name, err := mangle.Function(d)
 	if err != nil {
 		g.errorAt(nil, "cannot name '"+ref.Method.Name+"': "+err.Error())
+		if os.Getenv("VSCDBG") != "" {
+			debug.PrintStack()
+		}
 		return ref.Method.Name
 	}
 	return name
@@ -2348,7 +2422,7 @@ func (g *gen) classMethodCall(e *ast.CallExpr, mem *ast.MemberExpr, ref *analyze
 		return nil, false
 	}
 	cl, ok := receiverClass(meta.Instance)
-	if !ok || !g.poly[cl] {
+	if !ok || !g.poly[cl.Declared()] {
 		return nil, false
 	}
 	var self *sil.Value
@@ -2823,4 +2897,16 @@ func (g *gen) openedType(n ast.Expr) (*sil.Value, bool) {
 	}
 	meta := lowerType(&types.Metatype{Instance: g.substituted(tp)})
 	return g.dynamicType(loc.addr, meta), true
+}
+
+// classDefault is the value a class's declaration gives a stored property,
+// and, for an instance of a generic class, the substitution to lower it in.
+func (g *gen) classDefault(owner types.Type, name string) (ast.Expr, map[*types.TypeParam]types.Type) {
+	if def, subst := g.instanceDefault(owner, name); def != nil {
+		return def, subst
+	}
+	if def, ok := g.classDefaults(owner)[name]; ok {
+		return def, nil
+	}
+	return nil, nil
 }

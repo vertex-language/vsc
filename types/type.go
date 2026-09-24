@@ -352,6 +352,9 @@ func NewNamed(name, pkg string, underlying Type) *Named {
 }
 
 func (n *Named) SetUnderlying(t Type) { n.underlying = t }
+
+// Aliased is the type a typealias names, or nil before it is resolved.
+func (n *Named) Aliased() Type { return n.underlying }
 func (n *Named) Underlying() Type {
 	if n.underlying != nil {
 		return n.underlying.Underlying()
@@ -438,10 +441,21 @@ type Class struct {
 	Computed     []*Field        // computed properties
 	Statics      []*Field        // static properties
 	Subscripts   []*Subscript
+	// Origin is the declared class this one is an instance's substituted
+	// copy of -- Container for Container<Int>'s -- or nil for a declared one.
+	Origin *Class
 }
 
 func (c *Class) Underlying() Type { return c }
-func (c *Class) String() string   { return c.Name }
+
+// Declared is the class as declared: c, or what c was substituted from.
+func (c *Class) Declared() *Class {
+	if c.Origin != nil {
+		return c.Origin
+	}
+	return c
+}
+func (c *Class) String() string { return c.Name }
 
 // EnumCase represents an enum case declaration.
 type EnumCase struct {
@@ -487,6 +501,12 @@ type Protocol struct {
 	Requirements []*Requirement
 	Associated   []*Associated
 	Self         *TypeParam
+	// Primary are the protocol's primary associated types, in order:
+	// `protocol Source<Value>`, which `Source<Int>` gives in brackets.
+	Primary []string
+	// Subscripts are the subscripts the protocol requires:
+	// Collection's `subscript(position: Index) -> Element { get }`.
+	Subscripts []*Subscript
 	// SameTypes are the protocol's own same-type requirements between
 	// its associated types: Sequence's `Iterator.Element == Element` is
 	// "Iterator.Element" to "Element".
@@ -576,6 +596,17 @@ func (p *Protocol) ExtensionProperty(name string, static bool) (*Protocol, *Fiel
 	return walk(p)
 }
 
+// OwnExtensionMethod is the method of the name p's own extensions declare
+// -- not those of a protocol it refines -- that fits says true of, or nil.
+func (p *Protocol) OwnExtensionMethod(name string, static bool, fits func(*Method) bool) *Method {
+	for _, m := range p.ExtMethods {
+		if m != nil && m.Name == name && m.IsStatic == static && m.Sig != nil && fits(m) {
+			return m
+		}
+	}
+	return nil
+}
+
 // IsExtensionMethod reports whether m is one p's extensions declare.
 func (p *Protocol) IsExtensionMethod(m *Method) bool {
 	if m == nil {
@@ -619,6 +650,35 @@ func (d *Dependent) String() string {
 
 func (p *Protocol) Underlying() Type { return p }
 func (p *Protocol) String() string   { return p.Name }
+
+// ParameterizedProtocol is a protocol with its primary associated types
+// given: `Collection<Int>`, a Collection whose Element is Int. It is what
+// `some` and `any` constrain, and a generic parameter conforms to.
+type ParameterizedProtocol struct {
+	Protocol *Protocol
+	Args     []Type
+}
+
+func (p *ParameterizedProtocol) Underlying() Type { return p }
+func (p *ParameterizedProtocol) String() string {
+	args := make([]string, len(p.Args))
+	for i, a := range p.Args {
+		args[i] = a.String()
+	}
+	return p.Protocol.Name + "<" + strings.Join(args, ", ") + ">"
+}
+
+// Same is what the arguments say of the protocol's primary associated
+// types: Element is Int.
+func (p *ParameterizedProtocol) Same() map[string]Type {
+	out := map[string]Type{}
+	for i, a := range p.Args {
+		if i < len(p.Protocol.Primary) {
+			out[p.Protocol.Primary[i]] = a
+		}
+	}
+	return out
+}
 
 // Array is `[T]`. It is the same type as `Array<T>`, which is what
 // the resolver reads both spellings into.
@@ -712,6 +772,9 @@ func (m *Metatype) String() string   { return fmt.Sprintf("%s.Type", m.Instance)
 // Existential represents an existential type (e.g. `any P` or `Any`).
 type Existential struct {
 	Protocols []*Protocol
+	// Same is what primary associated types were given as: `any
+	// Source<String>` has Value String.
+	Same map[string]Type
 }
 
 func (e *Existential) Underlying() Type { return e }
@@ -730,6 +793,9 @@ func (e *Existential) String() string {
 type Opaque struct {
 	Base        Type
 	Constraints []*Protocol
+	// Same is what primary associated types were given as: `some
+	// Collection<Int>` has Element Int.
+	Same map[string]Type
 	// Concrete is, for a function's result, the type its body returns,
 	// which is what `some P` stands for there.
 	Concrete Type

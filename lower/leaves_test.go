@@ -62,16 +62,16 @@ func use() -> Int32 {
 	}
 }
 
-// TestLeavesRefuseWhatTheyCannotPlace: a field with no register makes
-// the whole struct unplaceable, because half a list would put every
-// later scalar in the wrong one. An Error? is the example: an existential
-// in an optional, which makes the struct wider than any register list.
-func TestLeavesRefuseWhatTheyCannotPlace(t *testing.T) {
+// TestLeavesPlaceAnOptionalExistential: an existential held as a value
+// is its container's words, and an optional one the same words with a
+// null type for nil, so a struct holding an Error? is those words and its
+// others, and the fields after it are found where they are.
+func TestLeavesPlaceAnOptionalExistential(t *testing.T) {
 	if _, err := lowerSrc(t, `
 struct Holder { var c: Error?; var n: Int32 }
 func use(_ h: Holder) -> Int32 { return h.n }
-`); err == nil {
-		t.Error("a struct with a field that has no register was passed in registers")
+`); err != nil {
+		t.Errorf("a struct holding an Error? could not be placed: %v", err)
 	}
 }
 

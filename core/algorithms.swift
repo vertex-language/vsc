@@ -3439,3 +3439,324 @@ extension OptionSet {
         return had.isEmpty ? nil : had
     }
 }
+
+// ---- Sequence ----
+
+// What every sequence can do by going through it: Swift's Sequence
+// algorithms, each answering an array where Swift's does. A type's own
+// member of the name -- Array's map -- is the one its values use.
+extension Sequence {
+    // A new array of what transform makes of each element, in order.
+    func map<T>(_ transform: (Element) throws -> T) rethrows -> [T] {
+        var out: [T] = []
+        var it = makeIterator()
+        while let x = it.next() { out.append(try transform(x)) }
+        return out
+    }
+
+    // The elements isIncluded keeps, in order.
+    func filter(_ isIncluded: (Element) throws -> Bool) rethrows -> [Element] {
+        var out: [Element] = []
+        var it = makeIterator()
+        while let x = it.next() {
+            if try isIncluded(x) { out.append(x) }
+        }
+        return out
+    }
+
+    // The elements combined in order, starting from initialResult.
+    func reduce<Result>(_ initialResult: Result, _ nextPartialResult: (Result, Element) throws -> Result) rethrows -> Result {
+        var acc = initialResult
+        var it = makeIterator()
+        while let x = it.next() { acc = try nextPartialResult(acc, x) }
+        return acc
+    }
+
+    // The elements combined in order into initialResult, changed in place.
+    func reduce<Result>(into initialResult: Result, _ updateAccumulatingResult: (inout Result, Element) throws -> Void) rethrows -> Result {
+        var acc = initialResult
+        var it = makeIterator()
+        while let x = it.next() { try updateAccumulatingResult(&acc, x) }
+        return acc
+    }
+
+    // body, called with each element in order.
+    func forEach(_ body: (Element) throws -> Void) rethrows {
+        var it = makeIterator()
+        while let x = it.next() { try body(x) }
+    }
+
+    // The non-nil results of transform, in order.
+    func compactMap<T>(_ transform: (Element) throws -> T?) rethrows -> [T] {
+        var out: [T] = []
+        var it = makeIterator()
+        while let x = it.next() {
+            if let y = try transform(x) { out.append(y) }
+        }
+        return out
+    }
+
+    // The first element predicate is true of, if any.
+    func first(where predicate: (Element) throws -> Bool) rethrows -> Element? {
+        var it = makeIterator()
+        while let x = it.next() {
+            if try predicate(x) { return x }
+        }
+        return nil
+    }
+
+    // Whether predicate is true of some element.
+    func contains(where predicate: (Element) throws -> Bool) rethrows -> Bool {
+        var it = makeIterator()
+        while let x = it.next() {
+            if try predicate(x) { return true }
+        }
+        return false
+    }
+
+    // Whether predicate is true of every element.
+    func allSatisfy(_ predicate: (Element) throws -> Bool) rethrows -> Bool {
+        var it = makeIterator()
+        while let x = it.next() {
+            if !(try predicate(x)) { return false }
+        }
+        return true
+    }
+
+    // The elements, in order, as an array.
+    var _array: [Element] {
+        var out: [Element] = []
+        var it = makeIterator()
+        while let x = it.next() { out.append(x) }
+        return out
+    }
+
+    // The elements in the order areInIncreasingOrder puts them.
+    func sorted(by areInIncreasingOrder: (Element, Element) -> Bool) -> [Element] {
+        return _array.sorted(by: areInIncreasingOrder)
+    }
+
+    // The elements, last first.
+    func reversed() -> [Element] { return _array.reversed() }
+
+    // Each element with its position, counting from 0.
+    func enumerated() -> [(offset: Int, element: Element)] {
+        var out: [(offset: Int, element: Element)] = []
+        var n = 0
+        var it = makeIterator()
+        while let x = it.next() {
+            out.append((offset: n, element: x))
+            n += 1
+        }
+        return out
+    }
+}
+
+// An iterator that hands out what a function answers, until it answers nil;
+// a sequence of those elements too.
+struct AnyIterator<Element>: IteratorProtocol, Sequence {
+    let _body: () -> Element?
+
+    init(_ body: @escaping () -> Element?) { _body = body }
+
+    mutating func next() -> Element? { return _body() }
+}
+
+// A sequence that is its own iterator goes through itself, as Swift's
+// `extension Sequence where Self.Iterator == Self` has it.
+extension Sequence where Self: IteratorProtocol {
+    func makeIterator() -> Self { return self }
+}
+
+// ---- Collection ----
+
+// What goes through a collection by its positions: a collection's
+// iterator, where it declares none of its own.
+struct IndexingIterator<Elements: Collection>: IteratorProtocol {
+    let _elements: Elements
+    var _position: Elements.Index
+
+    mutating func next() -> Elements.Element? {
+        if _position == _elements.endIndex { return nil }
+        let x = _elements[_position]
+        _position = _elements.index(after: _position)
+        return x
+    }
+}
+
+extension Collection {
+    func makeIterator() -> IndexingIterator<Self> {
+        return IndexingIterator(_elements: self, _position: startIndex)
+    }
+
+    var isEmpty: Bool { return startIndex == endIndex }
+
+    // How many elements there are.
+    var count: Int {
+        var n = 0
+        var i = startIndex
+        while i != endIndex {
+            n += 1
+            i = index(after: i)
+        }
+        return n
+    }
+
+    // The first element, or nil where there is none.
+    var first: Element? { return isEmpty ? nil : self[startIndex] }
+
+    // All but the first k elements.
+    func dropFirst(_ k: Int = 1) -> [Element] {
+        var out: [Element] = []
+        var i = startIndex
+        var n = 0
+        while i != endIndex {
+            if n >= k { out.append(self[i]) }
+            n += 1
+            i = index(after: i)
+        }
+        return out
+    }
+
+    // The first maxLength elements.
+    func prefix(_ maxLength: Int) -> [Element] {
+        var out: [Element] = []
+        var i = startIndex
+        while i != endIndex && out.count < maxLength {
+            out.append(self[i])
+            i = index(after: i)
+        }
+        return out
+    }
+
+    // Where the first element predicate is true of is, if anywhere.
+    func firstIndex(where predicate: (Element) throws -> Bool) rethrows -> Index? {
+        var i = startIndex
+        while i != endIndex {
+            if try predicate(self[i]) { return i }
+            i = index(after: i)
+        }
+        return nil
+    }
+
+    // The position distance steps after i.
+    func index(_ i: Index, offsetBy distance: Int) -> Index {
+        var at = i
+        var n = 0
+        while n < distance {
+            at = index(after: at)
+            n += 1
+        }
+        return at
+    }
+
+    // How many steps it is from start to end.
+    func distance(from start: Index, to end: Index) -> Int {
+        var n = 0
+        var i = start
+        while i != end {
+            n += 1
+            i = index(after: i)
+        }
+        return n
+    }
+}
+
+extension Collection where Element: Equatable {
+    // Where the first element equal to element is, if anywhere.
+    func firstIndex(of element: Element) -> Index? {
+        var i = startIndex
+        while i != endIndex {
+            if self[i] == element { return i }
+            i = index(after: i)
+        }
+        return nil
+    }
+
+    // Whether an element equals element.
+    func contains(_ element: Element) -> Bool { return firstIndex(of: element) != nil }
+}
+
+extension BidirectionalCollection {
+    // The last element, or nil where there is none.
+    var last: Element? { return isEmpty ? nil : self[index(before: endIndex)] }
+}
+
+// Integer positions step by one, as Swift's Strideable indices do.
+extension Collection where Index == Int {
+    func index(after i: Int) -> Int { return i + 1 }
+}
+
+extension BidirectionalCollection where Index == Int {
+    func index(before i: Int) -> Int { return i - 1 }
+}
+
+// An array is a collection of its elements at the positions 0 up to its
+// count, gone through by position, as Swift's Array is.
+extension Array: RandomAccessCollection {
+    typealias Index = Int
+    typealias Iterator = IndexingIterator<[Element]>
+
+    var startIndex: Int { return 0 }
+    var endIndex: Int { return count }
+    func index(after i: Int) -> Int { return i + 1 }
+    func index(before i: Int) -> Int { return i - 1 }
+
+    func makeIterator() -> IndexingIterator<[Element]> {
+        return IndexingIterator(_elements: self, _position: 0)
+    }
+}
+
+// A range of integers is a collection of them, each at its own position,
+// as Swift's ranges of Strideable integer bounds are.
+extension Range: RandomAccessCollection where Bound == Int {
+    var startIndex: Int { return lowerBound }
+    var endIndex: Int { return upperBound }
+    subscript(position: Int) -> Int { return position }
+    func index(after i: Int) -> Int { return i + 1 }
+    func index(before i: Int) -> Int { return i - 1 }
+}
+
+extension ClosedRange: RandomAccessCollection where Bound == Int {
+    var startIndex: Int { return lowerBound }
+    var endIndex: Int { return upperBound + 1 }
+    subscript(position: Int) -> Int { return position }
+    func index(after i: Int) -> Int { return i + 1 }
+    func index(before i: Int) -> Int { return i - 1 }
+}
+
+// A string is a collection of its Characters, at the positions of their
+// first bytes, as Swift's String is.
+extension String: BidirectionalCollection {
+    typealias Element = Character
+    typealias Index = _StringIndex
+    typealias Iterator = _StringIterator
+}
+
+extension _SetIndex: Equatable, Comparable {
+    static func == (lhs: _SetIndex, rhs: _SetIndex) -> Bool { return lhs._bucket == rhs._bucket }
+    static func < (lhs: _SetIndex, rhs: _SetIndex) -> Bool { return lhs._bucket < rhs._bucket }
+}
+
+// A set is a collection of its members, in bucket order.
+extension Set: Collection {
+    typealias Index = _SetIndex
+    typealias Iterator = IndexingIterator<Set<Element>>
+
+    func _index(_ bucket: Int) -> _SetIndex {
+        return _SetIndex(_bucket: bucket < 0 ? Int.max : bucket)
+    }
+
+    var startIndex: _SetIndex { return _index(_bucket(after: 0)) }
+    var endIndex: _SetIndex { return _SetIndex(_bucket: Int.max) }
+
+    func index(after i: _SetIndex) -> _SetIndex {
+        if i._bucket == Int.max { fatalError("Set index is out of bounds") }
+        return _index(_bucket(after: i._bucket + 1))
+    }
+
+    subscript(position: _SetIndex) -> Element {
+        if position._bucket == Int.max { fatalError("Set index is out of bounds") }
+        return _member(at: position._bucket)
+    }
+}

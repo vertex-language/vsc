@@ -493,7 +493,13 @@ func (c *checker) checkStored(b *ast.PatternBinding, isConst bool, scope *Scope)
 	}
 	var initType types.Type
 	hasInit := b.Value != nil
-	if hasInit {
+	// `var c: some Source<Int> = Counter()`: the variable is of the
+	// type its value is, which has to be what the annotation says.
+	if o, ok := expectedType.(*types.Opaque); ok && hasInit && len(o.Constraints) > 0 {
+		initType = literalDefault(c.checkExpr(b.Value, nil, scope))
+		c.opaqueValue(b.Value, o, initType)
+		expectedType = initType
+	} else if hasInit {
 		initType = c.checkExpr(b.Value, expectedType, scope)
 		if expectedType != nil && !types.AssignableTo(initType, expectedType) {
 			c.typeErrorf(b.Value.Pos(), "cannot convert value of type '%s' to specified type '%s'", initType, expectedType)
@@ -513,6 +519,25 @@ func (c *checker) checkStored(b *ast.PatternBinding, isConst bool, scope *Scope)
 		pat = tp.Pat
 	}
 	c.declarePatternInit(pat, declType, isConst, hasInit, scope)
+}
+
+// opaqueValue checks that t, the type a value given for `some P` has,
+// conforms to P and has the primary associated types P's arguments say.
+func (c *checker) opaqueValue(at ast.Expr, o *types.Opaque, t types.Type) {
+	if t == nil || isInvalid(t) {
+		return
+	}
+	for _, p := range o.Constraints {
+		if !c.conformsTo(t, p) {
+			c.typeErrorf(at.Pos(), "type '%s' does not conform to '%s'", t, p.Name)
+			return
+		}
+	}
+	for name, want := range o.Same {
+		if got := c.builtinDependents(types.DependentOn(t, name)); !types.Identical(got, want) {
+			c.typeErrorf(at.Pos(), "type '%s' has %s '%s', not '%s'", t, name, got, want)
+		}
+	}
 }
 
 // declareModuleVars declares the module's stored variables, before any
@@ -764,6 +789,14 @@ func (c *checker) typeParamsOf(t types.Type) []*types.TypeParam {
 		return u.TypeParams
 	case *types.Enum:
 		return u.TypeParams
+	// A protocol's extension is written in terms of its Self, which its
+	// where clause constrains for that extension alone.
+	case *types.Protocol:
+		if u.Self != nil {
+			return []*types.TypeParam{u.Self}
+		}
+	case *types.TypeParam:
+		return []*types.TypeParam{u}
 	}
 	return nil
 }

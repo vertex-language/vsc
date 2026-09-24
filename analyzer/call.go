@@ -399,6 +399,9 @@ func (c *checker) resolveMethodOverload(mem *ast.MemberExpr, args []*ast.CallArg
 			subst = b.Subst(base)
 		}
 	}
+	if len(methods) == 0 {
+		return c.extensionOverload(mem, base, args, scope)
+	}
 	if len(methods) < 2 {
 		return nil
 	}
@@ -1021,7 +1024,7 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 		}
 		c.info.Specializations[e] = spec
 	}
-	if out, ok := types.Substitute(sig, subst).(*types.Signature); ok {
+	if out, ok := c.builtinDependents(types.Substitute(sig, subst)).(*types.Signature); ok {
 		return out
 	}
 	return sig
@@ -1288,4 +1291,88 @@ func hasVariadic(sig *types.Signature) bool {
 		}
 	}
 	return false
+}
+
+// extensionOverload picks among the methods of a name that extensions of
+// the protocols base conforms to, or is constrained to, give it --
+// Collection's firstIndex(of:) beside firstIndex(where:) -- the one the
+// arguments fit, and records it as the protocol's.
+func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args []*ast.CallArg, scope *Scope) *types.Signature {
+	static := false
+	t := base
+	if meta, ok := t.(*types.Metatype); ok {
+		static, t = true, meta.Instance
+	}
+	var protocols []*types.Protocol
+	switch tt := t.(type) {
+	case *types.TypeParam:
+		for _, con := range tt.Constraints {
+			if p, ok := con.Underlying().(*types.Protocol); ok {
+				protocols = append(protocols, p)
+			}
+		}
+	case *types.Dependent:
+		for _, con := range associatedConstraints(tt) {
+			if p, ok := con.Underlying().(*types.Protocol); ok {
+				protocols = append(protocols, p)
+			}
+		}
+	default:
+		protocols = c.conformancesOfType(t)
+	}
+	name := mem.Name.Text(c.file)
+	var owners []*types.Protocol
+	var candidates []*types.Method
+	seen := map[*types.Method]bool{}
+	for _, p := range allProtocols(protocols) {
+		// What the protocol requires -- Collection's index(after:) beside
+		// BidirectionalCollection's index(before:) -- where t stands for
+		// its Self, a type parameter or an associated type.
+		if _, abstract := t.(*types.TypeParam); abstract || isDependent(t) {
+			for _, r := range p.Requirements {
+				if r == nil || r.Sig == nil || r.Name != name || r.IsStatic != static {
+					continue
+				}
+				sig, _ := throughParam(p, t, r.Sig).(*types.Signature)
+				if sig == nil {
+					continue
+				}
+				owners = append(owners, p)
+				candidates = append(candidates, &types.Method{Name: r.Name, Sig: sig, IsStatic: r.IsStatic, IsMutating: r.IsMutating})
+			}
+		}
+		for _, m := range p.ExtMethods {
+			if m == nil || m.Name != name || m.IsStatic != static || seen[m] {
+				continue
+			}
+			seen[m] = true
+			sig, _ := types.Substitute(m.Sig, map[*types.TypeParam]types.Type{p.Self: t}).(*types.Signature)
+			if sig == nil {
+				continue
+			}
+			owners = append(owners, p)
+			candidates = append(candidates, &types.Method{Name: m.Name, Sig: sig, IsStatic: m.IsStatic, IsMutating: m.IsMutating, Origin: m})
+		}
+	}
+	if len(candidates) < 2 {
+		return nil
+	}
+	picked := c.methodByArguments(candidates, args, scope)
+	if picked == nil {
+		return nil
+	}
+	for i, m := range candidates {
+		if m == picked {
+			c.info.Methods[mem] = &MethodRef{Recv: owners[i], Method: m}
+			c.info.Types[mem] = m.Sig
+			return m.Sig
+		}
+	}
+	return nil
+}
+
+// isDependent reports whether t is an associated type path.
+func isDependent(t types.Type) bool {
+	_, ok := t.(*types.Dependent)
+	return ok
 }

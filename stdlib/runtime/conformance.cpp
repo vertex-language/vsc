@@ -90,6 +90,10 @@ VERTEX_CORE_PROTOCOL(ExpressibleByArrayLiteral, "$ss25ExpressibleByArrayLiteralM
 VERTEX_CORE_PROTOCOL(ExpressibleByDictionaryLiteral, "$ss30ExpressibleByDictionaryLiteralMp")
 VERTEX_CORE_PROTOCOL(CaseIterable, "$ss12CaseIterableMp")
 VERTEX_CORE_PROTOCOL(Identifiable, "$ss12IdentifiableMp")
+VERTEX_CORE_PROTOCOL(OptionSet, "$ss9OptionSetMp")
+VERTEX_CORE_PROTOCOL(Collection, "$sSlMp")
+VERTEX_CORE_PROTOCOL(BidirectionalCollection, "$ss23BidirectionalCollectionMp")
+VERTEX_CORE_PROTOCOL(RandomAccessCollection, "$ss22RandomAccessCollectionMp")
 VERTEX_CORE_PROTOCOL(AsyncSequence, "$ss13AsyncSequenceMp")
 VERTEX_CORE_PROTOCOL(AsyncIteratorProtocol, "$ss21AsyncIteratorProtocolMp")
 #undef VERTEX_CORE_PROTOCOL
