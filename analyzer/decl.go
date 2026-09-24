@@ -1550,7 +1550,7 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 				want = req.Sig
 			}
 			for _, m := range methods {
-				if m.Name == req.Name && types.Identical(m.Sig, want) {
+				if m.Name == req.Name && (types.Identical(m.Sig, want) || meetsWithFewerEffects(m.Sig, want)) {
 					satisfied = true
 					break
 				}
@@ -1622,4 +1622,27 @@ func (c *checker) rawTypeOf(inherit *ast.InheritanceClause, scope *Scope) types.
 		return nil
 	}
 	return t
+}
+
+// meetsWithFewerEffects reports whether a method meets a requirement it
+// differs from only by doing less: a synchronous method meets an async
+// requirement and one that cannot throw meets one that may, as in Swift.
+// The witness thunk has the requirement's effects and calls the method
+// with its own.
+func meetsWithFewerEffects(have, want *types.Signature) bool {
+	if have == nil || want == nil {
+		return false
+	}
+	if (have.Async && !want.Async) || (have.Throws && !want.Throws) {
+		return false
+	}
+	if have.Async == want.Async && have.Throws == want.Throws {
+		return false
+	}
+	relaxed := *have
+	relaxed.Async = want.Async
+	relaxed.Throws = want.Throws
+	relaxed.Rethrows = want.Rethrows
+	relaxed.Thrown = want.Thrown
+	return types.Identical(&relaxed, want)
 }

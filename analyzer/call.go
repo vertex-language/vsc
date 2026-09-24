@@ -75,6 +75,22 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, scope *Scop
 	return fits[0].Signature()
 }
 
+// meetsConstraints reports whether t conforms to every protocol the
+// type parameter is constrained to: what an argument for a parameter of
+// that type has to do to fit it.
+func (c *checker) meetsConstraints(t types.Type, tp *types.TypeParam) bool {
+	for _, con := range tp.Constraints {
+		proto, ok := protocolOf(con)
+		if !ok {
+			continue
+		}
+		if !c.conformsTo(t, proto) {
+			return false
+		}
+	}
+	return true
+}
+
 // byLiteralDefaults is which of several signatures that all fit take a
 // literal argument as the type the literal is on its own -- an integer
 // literal as an Int, a float literal as a Double -- which is the one
@@ -202,6 +218,12 @@ func (c *checker) sigFits(sig *types.Signature, args []*ast.CallArg, argTypes []
 func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) bool {
 	if t == nil || isInvalid(t) || types.AssignableTo(t, p.Type) {
 		return true
+	}
+	// A parameter whose type is a type parameter takes any argument that
+	// meets its constraints: `Count<R: AsyncReader>(_: inout R)` fits a
+	// Net that is an AsyncReader, and a Reader-constrained twin does not.
+	if tp, ok := p.BodyType().(*types.TypeParam); ok && !p.Variadic {
+		return c.meetsConstraints(t, tp)
 	}
 	// A closure written at the call takes its parameters' types from the
 	// parameter it is passed as, so it fits any function parameter of its
@@ -431,6 +453,60 @@ func (c *checker) labelFitsLax(arg *ast.CallArg, param *types.Param) bool {
 	return written == param.Label || written == param.Name
 }
 
+// inferFromInits infers a generic type's arguments from the declared
+// initializer the call's labels fit, or is nil where none fits or some
+// type parameter is left unbound by it.
+func (c *checker) inferFromInits(instance types.Type, params []*types.TypeParam, call *ast.CallExpr, scope *Scope) types.Type {
+	var inits []*types.Signature
+	switch u := instance.Underlying().(type) {
+	case *types.Struct:
+		inits = u.Inits
+	case *types.Class:
+		inits = u.Inits
+	}
+	if len(inits) == 0 {
+		return nil
+	}
+	args := call.Args.Args
+	quiet := len(c.info.Diagnostics)
+	argTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		argTypes[i] = c.checkExpr(arg.X, nil, scope)
+	}
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	for _, sig := range inits {
+		if sig == nil || !c.sigFits(sig, args, argTypes, c.labelFits) {
+			continue
+		}
+		// The parameters the arguments went to, in the order sigFits
+		// matched them, skipping those left to their defaults.
+		subst := make(map[*types.TypeParam]types.Type, len(params))
+		next := 0
+		for _, p := range sig.Params {
+			if next < len(args) && c.labelFits(args[next], p) && c.argFitsParam(args[next], argTypes[next], p) {
+				if argTypes[next] != nil {
+					types.Unify(p.BodyType(), argTypes[next], subst)
+				}
+				next++
+			}
+		}
+		bound := make([]types.Type, len(params))
+		complete := true
+		for i, p := range params {
+			t, ok := subst[p]
+			if !ok {
+				complete = false
+				break
+			}
+			bound[i] = t
+		}
+		if complete {
+			return &types.GenericInstance{Base: instance, Args: bound}
+		}
+	}
+	return nil
+}
+
 // inferInstance infers specialized generic types from memberwise initializer arguments.
 func (c *checker) inferInstance(instance types.Type, call *ast.CallExpr, scope *Scope) types.Type {
 	if call.Args == nil {
@@ -440,6 +516,13 @@ func (c *checker) inferInstance(instance types.Type, call *ast.CallExpr, scope *
 	params := typeParamsOf(instance)
 	if len(params) == 0 || len(fields) == 0 {
 		return instance
+	}
+
+	// A declared initializer says what each argument is for, by its
+	// labels: `Pair(a, to: b)` binds B through `init(_:to:)`, which no
+	// stored field's name could.
+	if inst := c.inferFromInits(instance, params, call, scope); inst != nil {
+		return inst
 	}
 
 	subst := make(map[*types.TypeParam]types.Type, len(params))

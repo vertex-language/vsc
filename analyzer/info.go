@@ -152,6 +152,12 @@ type Info struct {
 	// ImportedUnits maps imported symbols to interface AST files.
 	ImportedUnits map[Symbol]*token.File
 
+	// ImportedFiles are the source files of the imported modules. Their
+	// generic declarations are checked in this module, because this module
+	// is where they are specialized (see checkImportedGenerics), and the
+	// generator reads the bodies from here.
+	ImportedFiles []*ast.File
+
 	// ImportedTypes maps imported types to declaring module names.
 	ImportedTypes map[types.Type]string
 

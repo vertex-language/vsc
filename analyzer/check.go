@@ -343,8 +343,82 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 			}
 			c.declareImportedVars(declsOf(f.Stmts), staging)
 		}
+		// The generic declarations' bodies, which a client specializes and
+		// so has to have checked. What they say is the module's own
+		// business -- it was said when the module was built -- so their
+		// diagnostics go with the rest of the import's.
+		for i, f := range imp.Files {
+			if i < len(imp.Units) {
+				c.file = imp.Units[i]
+				if f.Unit == nil {
+					f.Unit = imp.Units[i]
+				}
+			}
+			c.checkImportedGenerics(declsOf(f.Stmts), staging)
+			c.info.ImportedFiles = append(c.info.ImportedFiles, f)
+		}
 		c.recordModule(imp, staging, scope)
 	}
+}
+
+// checkImportedGenerics checks the bodies of an imported module's generic
+// declarations: generic functions, generic types (all their members), and
+// extensions and receiver methods of generic types. Nothing else of an
+// import is checked -- the rest is called, not compiled, here.
+func (c *checker) checkImportedGenerics(decls []ast.Decl, scope *Scope) {
+	for _, decl := range decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Body == nil {
+				continue
+			}
+			if d.Generics != nil || (d.Recv != nil && c.namesGenericType(d.Recv.Type, scope)) {
+				c.checkDecl(d, scope)
+			}
+		case *ast.StructDecl:
+			if d.Generics != nil {
+				c.checkDecl(d, scope)
+			}
+		case *ast.ClassDecl:
+			if d.Generics != nil {
+				c.checkDecl(d, scope)
+			}
+		case *ast.EnumDecl:
+			if d.Generics != nil {
+				c.checkDecl(d, scope)
+			}
+		case *ast.ExtensionDecl:
+			if c.namesGenericType(d.Type, scope) {
+				c.checkDecl(d, scope)
+			}
+		}
+	}
+}
+
+// namesGenericType reports whether a written type names a nominal type
+// that has type parameters of its own.
+func (c *checker) namesGenericType(t ast.Type, scope *Scope) bool {
+	if t == nil {
+		return false
+	}
+	quiet := len(c.info.Diagnostics)
+	resolved := c.resolveType(t, scope)
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	if resolved == nil {
+		return false
+	}
+	if gi, ok := resolved.(*types.GenericInstance); ok {
+		resolved = gi.Base
+	}
+	switch u := resolved.Underlying().(type) {
+	case *types.Struct:
+		return len(u.TypeParams) > 0
+	case *types.Class:
+		return len(u.TypeParams) > 0
+	case *types.Enum:
+		return len(u.TypeParams) > 0
+	}
+	return false
 }
 
 // declareImportedVars declares the stored module-scope variables an
