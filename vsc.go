@@ -217,8 +217,15 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	if !opts.Target.Valid() {
 		return u, append(diags, phaseError(errNoTarget))
 	}
+	// Each kernel, for the devices: what its descriptor holds.
+	kernels, kdiags := compileKernels(m, opts.Target)
+	diags = append(diags, kdiags...)
+	if Errors(diags) {
+		return u, diags
+	}
 	out, err := lower.Module(m, opts.Target, lower.Options{
 		SymbolPrefix: SymbolPrefix(opts.Target),
+		Kernels:      kernels,
 	})
 	if err != nil {
 		return u, append(diags, phaseError(err))
@@ -467,6 +474,10 @@ func findFolder(path, fromDir string, pkgPaths []string) (string, bool) {
 //  4. The resolver's fetch: the standard library from
 //     github.com/vertex-language, or a repository the path names.
 func (l *importer) folder(path, fromDir string) (string, error) {
+	// The built-in gpu module is the compiler's own, whatever is on disk.
+	if path == GPUModule {
+		return GPUSourceDir()
+	}
 	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") {
 		if dir, found := findFolder(path, fromDir, nil); found {
 			return dir, nil

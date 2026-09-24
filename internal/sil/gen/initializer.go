@@ -969,7 +969,11 @@ func (g *gen) applyInitNamed(e *ast.CallExpr, t types.Type, out *types.Signature
 	if !ok {
 		return nil
 	}
-	if isClass(t) && g.importedType(t) {
+	// An imported class's initializer is its module's, which takes the
+	// class's metadata; an instance of an imported generic class is made
+	// by a specialization lowered here, which takes none.
+	_, specialized := t.(*types.GenericInstance)
+	if isClass(t) && g.importedType(t) && !specialized {
 		meta, ok := g.classMetatype(t)
 		if !ok {
 			g.refuse(e, "an initializer of a class whose metadata cannot be named")

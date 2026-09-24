@@ -172,6 +172,13 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 		out.TypeParams = nil
 		return &out
 	case *Class:
+		// A class of no parameters of its own -- not generic, and not an
+		// instance already made -- is one type wherever it is named: a
+		// reference type is its identity, and a copy of it would be a
+		// class nothing else knows (its module, its table, its metadata).
+		if len(tt.TypeParams) == 0 && tt.Origin == nil && tt.Superclass == nil {
+			return t
+		}
 		fields, fchanged := substFields(tt.Fields, subst, seen)
 		methods, mchanged := substMethods(tt.Methods, subst, seen)
 		// A superclass named over the class's parameters is the
@@ -183,6 +190,7 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 		if !fchanged && !mchanged && super == tt.Superclass {
 			return t
 		}
+
 		out := *tt
 		out.Fields, out.Methods, out.Superclass = fields, methods, super
 		out.TypeParams = nil
@@ -383,7 +391,28 @@ func substMethods(in []*Method, subst map[*TypeParam]Type, seen map[Type]bool) (
 		if m == nil {
 			continue
 		}
-		sub, _ := substitute(m.Sig, subst, seen).(*Signature)
+		// A method's own type parameters are its own to bind, call by
+		// call: substituting the type's parameters leaves them alone,
+		// or one call's inference would rewrite the method for every
+		// other (`L().add(a).add(b)`).
+		within := subst
+		if m.Sig != nil {
+			copied := false
+			for _, own := range m.Sig.TypeParams {
+				if _, ok := subst[own]; !ok {
+					continue
+				}
+				if !copied {
+					within = make(map[*TypeParam]Type, len(subst))
+					for k, v := range subst {
+						within[k] = v
+					}
+					copied = true
+				}
+				delete(within, own)
+			}
+		}
+		sub, _ := substitute(m.Sig, within, seen).(*Signature)
 		if sub == nil {
 			sub = m.Sig
 		}

@@ -1243,8 +1243,14 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 	if d.Name != nil && d.Sig != nil {
 		c.currFuncName = c.declName(d.Name.Text(c.file), d.Sig.Params, false)
 	}
+	prevKernel := c.inKernel
+	c.inKernel = d.Sig != nil && d.Sig.Exec == ast.ExecKernel
+	if c.inKernel {
+		c.checkKernelDecl(d, sig)
+	}
 	defer func() {
 		c.currFuncRet, c.currAsync, c.currFuncName, c.currIsolated, c.currThrown, c.inferRet = prevRet, prevAsync, prevName, prevIsolated, prevThrown, prevInfer
+		c.inKernel = prevKernel
 	}()
 
 	if d.Body != nil {

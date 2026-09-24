@@ -241,11 +241,23 @@ func (g *gen) extension(d *ast.ExtensionDecl) {
 	for _, mem := range d.Body.Members {
 		switch m := mem.(type) {
 		case *ast.FuncDecl:
+			if g.ownGeneric(m) {
+				continue
+			}
 			g.function(m, recv)
 		case *ast.InitDecl:
 			g.initializer(m, recv)
 		}
 	}
+}
+
+// ownGeneric reports whether a method has type parameters of its own,
+// which makes it lowered where it is called, for the arguments it is
+// called with (genericmethod.go), as a generic function is: unspecialized,
+// its parameters are no signature's.
+func (g *gen) ownGeneric(d *ast.FuncDecl) bool {
+	sym, ok := g.info.Defs[d.Name].(*analyzer.FuncSymbol)
+	return ok && len(sym.Signature().TypeParams) > 0
 }
 
 func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
@@ -276,7 +288,7 @@ func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
 	for _, mem := range body.Members {
 		switch m := mem.(type) {
 		case *ast.FuncDecl:
-			if len(nominalTypeParams(sym.Type())) > 0 {
+			if len(nominalTypeParams(sym.Type())) > 0 || g.ownGeneric(m) {
 				continue
 			}
 			g.function(m, sym.Type())
@@ -998,8 +1010,10 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	}
 	g.recv = recv
 
-	// Reject reserved execution modifiers lacking backend support.
-	if d.Sig != nil && d.Sig.Exec != ast.ExecNone {
+	// Reject reserved execution modifiers lacking backend support. A
+	// kernel is lowered as the function it is: the device compile takes
+	// it, and what it reaches, from here (vsc's gpu.go).
+	if d.Sig != nil && d.Sig.Exec != ast.ExecNone && d.Sig.Exec != ast.ExecKernel {
 		g.errorAt(d.Name, "cannot lower a "+d.Sig.Exec.String()+
 			" function yet: the modifier is reserved and has no backend")
 		return
@@ -1029,6 +1043,10 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	name := symbol
 	if name == "" {
 		name = g.symbol(sym)
+	}
+	// A kernel says so, for the device compile to find it.
+	if d.Sig != nil && d.Sig.Exec == ast.ExecKernel {
+		defer g.m.Func(name).SetAttr(AttrKernel)
 	}
 	entryName := name
 	if asyncEntry {

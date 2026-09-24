@@ -85,6 +85,11 @@ func (g *gen) slots(t types.Type) []slot {
 			if m == nil || m.Sig == nil {
 				continue
 			}
+			// A method with type parameters of its own is specialized
+			// where it is called, and has no one row to be.
+			if len(m.Sig.TypeParams) > 0 {
+				continue
+			}
 			ref := &analyzer.MethodRef{Recv: c, Method: m}
 			var impl string
 			switch {

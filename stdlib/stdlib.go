@@ -21,6 +21,20 @@ import (
 //go:embed runtime
 var files embed.FS
 
+//go:embed gpu
+var gpuFiles embed.FS
+
+// GPU is the source of the built-in gpu module: its .vs files at the
+// root. `import "gpu"` is answered with it, not fetched; see
+// proposed_vertex_kernel.md §3.
+func GPU() fs.FS {
+	sub, err := fs.Sub(gpuFiles, "gpu")
+	if err != nil {
+		panic("stdlib: the embedded gpu module is missing: " + err.Error())
+	}
+	return sub
+}
+
 // The runtime's entry points: what compiled code calls, spelled once so
 // that the compiler and the runtime cannot disagree about them. The
 // target's symbol prefix goes in front of each.

@@ -596,6 +596,20 @@ func (c *checker) declareGenericParams(g *ast.GenericParams, scope *Scope) []*ty
 			continue
 		}
 		name := p.Name.Text(c.file)
+		// A declaration read twice -- an imported module's generic method
+		// is declared with its type, and again where a client checks its
+		// body to specialize it -- keeps the parameters it was given the
+		// first time: the signature and whatever was inferred against it
+		// name those.
+		if prev, ok := c.info.Defs[p.Name].(*TypeNameSymbol); ok {
+			if tp, ok := prev.Type().(*types.TypeParam); ok {
+				if scope.LookupLocal(name) == nil {
+					scope.Insert(prev)
+				}
+				out = append(out, tp)
+				continue
+			}
+		}
 		tp := &types.TypeParam{Name: name}
 		scope.Insert(NewTypeName(name, tp, p.Name.Pos()))
 		c.info.Defs[p.Name] = NewTypeName(name, tp, p.Name.Pos())

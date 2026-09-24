@@ -153,23 +153,45 @@ func (c *fn) convertBuiltin(name string, args []ir.Value) ([]ir.Value, bool, err
 		return out, true, err
 	}
 
+	// A narrow integer's register holds its bits and whatever the last
+	// operation left above them -- sign or zero, by that operation's
+	// signedness -- so a conversion out of one extends from its width,
+	// and one into one keeps its width's worth.
 	switch {
 	case from.reg == to.reg:
-		// Same register class: Int8, Int16 and Int32 share one, and
-		// the value already fits.
-		return []ir.Value{args[0]}, true, nil
+		// Same register class: Int8, Int16 and Int32 share one.
+		a, isI32 := args[0].(ir.I32)
+		if !isI32 {
+			return []ir.Value{args[0]}, true, nil
+		}
+		switch {
+		case verb == "sextOrBitCast" && from.narrow():
+			return []ir.Value{c.narrow(a, from.width, true)}, true, nil
+		case verb == "zextOrBitCast" && from.narrow():
+			return []ir.Value{c.narrow(a, from.width, false)}, true, nil
+		case verb == "truncOrBitCast" && to.narrow():
+			return []ir.Value{c.narrow(a, to.width, true)}, true, nil
+		}
+		return []ir.Value{a}, true, nil
 
 	case from.reg == ir.TypeI64 && to.reg == ir.TypeI32:
 		a, ok := args[0].(ir.I64)
 		if !ok {
 			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an i64")
 		}
-		return []ir.Value{c.b.I32.WrapI64(a)}, true, nil
+		w := c.b.I32.WrapI64(a)
+		if to.narrow() {
+			w = c.narrow(w, to.width, true)
+		}
+		return []ir.Value{w}, true, nil
 
 	case from.reg == ir.TypeI32 && to.reg == ir.TypeI64:
 		a, ok := args[0].(ir.I32)
 		if !ok {
 			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an i32")
+		}
+		if from.narrow() {
+			a = c.narrow(a, from.width, verb != "zextOrBitCast")
 		}
 		if verb == "zextOrBitCast" {
 			return []ir.Value{c.b.I64.ZExtI32(a)}, true, nil

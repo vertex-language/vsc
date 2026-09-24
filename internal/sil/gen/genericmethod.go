@@ -31,16 +31,22 @@ type genericMethodKey struct {
 func genericMethodDecls(files []*ast.File, info *analyzer.Info) map[genericMethodKey][]*ast.FuncDecl {
 	out := map[genericMethodKey][]*ast.FuncDecl{}
 	add := func(t types.Type, body *ast.MemberBlock) {
-		_, isProtocol := t.(*types.Protocol)
-		if t == nil || body == nil || (len(nominalTypeParams(t)) == 0 && builtinOf(info, t) == nil && !isProtocol) {
+		if t == nil || body == nil {
 			return
 		}
+		_, isProtocol := t.(*types.Protocol)
+		// A type that is not generic has its methods lowered ahead of
+		// time, all but those with type parameters of their own.
+		ownOnly := len(nominalTypeParams(t)) == 0 && builtinOf(info, t) == nil && !isProtocol
 		for _, mem := range body.Members {
 			fd, ok := mem.(*ast.FuncDecl)
 			if !ok || fd.Name == nil {
 				continue
 			}
 			if fs, ok := info.Defs[fd.Name].(*analyzer.FuncSymbol); ok {
+				if ownOnly && len(fs.Signature().TypeParams) == 0 {
+					continue
+				}
 				key := genericMethodKey{typ: t, name: fs.Name()}
 				out[key] = append(out[key], fd)
 			}
@@ -180,7 +186,7 @@ func (g *gen) genericMethod(e *ast.CallExpr, ref *analyzer.MethodRef) (*analyzer
 	}
 	params := nominalTypeParams(base)
 	if len(params) == 0 {
-		return nil, "", false
+		return g.ownGenericMethod(e, ref, base)
 	}
 	if inst == nil || len(inst.Args) != len(params) {
 		g.refuse(e, "a method of a generic type on something whose type arguments are not known")
@@ -483,4 +489,76 @@ func (g *gen) protocolExtensionMethod(e *ast.CallExpr, ref *analyzer.MethodRef, 
 	}}
 	g.emitMethodSpecialization(decl, recv, name.String(), subst)
 	return spec, name.String(), true
+}
+
+// ownGenericMethod is a call's method with type parameters of its own, of
+// a type that has none, specialized for what the call inferred them to
+// be: `device.CreateBuffer(of: Float.self, count: n)`. generic is false
+// for a method that has none either.
+func (g *gen) ownGenericMethod(e *ast.CallExpr, ref *analyzer.MethodRef, base types.Type) (*analyzer.MethodRef, string, bool) {
+	spec, ok := g.info.Specializations[e]
+	if !ok || len(spec.Params) == 0 || len(ref.Method.Sig.TypeParams) == 0 {
+		return nil, "", false
+	}
+	if base == nil {
+		return nil, "", false
+	}
+	if meta, ok := base.(*types.Metatype); ok {
+		base = meta.Instance
+	}
+	decl := g.genericMethodDecl(genericMethodKey{typ: base, name: ref.Method.Name}, ref.Method)
+	if decl == nil {
+		return nil, "", false
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+len(spec.Params))
+	for k, v := range g.subst {
+		subst[k] = v
+	}
+	var own []types.Type
+	for i, p := range spec.Params {
+		if i >= len(spec.Args) || spec.Args[i] == nil {
+			g.refuse(e, "a call whose type arguments could not be inferred")
+			return nil, "", true
+		}
+		arg := spec.Args[i]
+		if len(g.subst) > 0 {
+			arg = types.Substitute(arg, g.subst)
+		}
+		subst[p] = arg
+		own = append(own, arg)
+	}
+	sig, ok := types.Substitute(ref.Method.Sig, subst).(*types.Signature)
+	if !ok {
+		g.refuse(e, "a generic method whose signature this cannot substitute")
+		return nil, "", true
+	}
+	mangled, err := mangle.Function(mangle.Decl{
+		Module:    g.memberModule(base, ref.Method),
+		Context:   memberChain(base),
+		Extended:  extendedBuiltin(base),
+		Name:      ref.Method.Name,
+		Signature: sig,
+		Static:    ref.Method.IsStatic,
+		ModuleOf:  g.moduleOfType,
+	})
+	if err != nil {
+		g.refuse(e, "a generic method this compiler cannot name: "+err.Error())
+		return nil, "", true
+	}
+	var b strings.Builder
+	b.WriteString(mangled)
+	b.WriteString("Tv")
+	for _, a := range own {
+		b.WriteString("_")
+		b.WriteString(identifierSafe(a.String()))
+	}
+	name := b.String()
+	out := &analyzer.MethodRef{Recv: base, Method: &types.Method{
+		Name:       ref.Method.Name,
+		Sig:        sig,
+		IsStatic:   ref.Method.IsStatic,
+		IsMutating: ref.Method.IsMutating,
+	}}
+	g.emitMethodSpecialization(decl, base, name, subst)
+	return out, name, true
 }

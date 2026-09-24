@@ -1145,6 +1145,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if t, ok := c.optionalSome(e, expected, scope); ok {
 			return t
 		}
+		// `k.Launch(...)` on a kernel, and a kernel called as a function.
+		if t, ok := c.kernelCall(e, scope); ok {
+			return t
+		}
 		// `Task.detached { … }` is a Task of what its operation returns,
 		// as `Task { … }` is; see the initializer below.
 		if mem, ok := e.Fun.(*ast.MemberExpr); ok && mem.Name != nil && mem.Name.Text(c.file) == "detached" &&
@@ -2376,7 +2380,17 @@ func (c *checker) moduleMemberValue(e *ast.MemberExpr, scope *Scope) (types.Type
 	}
 	c.info.Uses[e.Name] = sym
 	if _, ok := sym.(*TypeNameSymbol); ok {
-		return &types.Metatype{Instance: sym.Type()}, true
+		instance := sym.Type()
+		// `gpu.Shared<Int32>(count: 4)` names its instance outright, as
+		// `Shared<Int32>(count: 4)` does unqualified.
+		if e.Args != nil && len(e.Args.Args) > 0 {
+			args := make([]types.Type, len(e.Args.Args))
+			for i, a := range e.Args.Args {
+				args[i] = c.resolveType(a, scope)
+			}
+			instance = &types.GenericInstance{Base: instance, Args: args}
+		}
+		return &types.Metatype{Instance: instance}, true
 	}
 	return sym.Type(), true
 }

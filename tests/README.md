@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`258` in the order the
+A ladder: one small thing per file, numbered `001`–`259` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -11,13 +11,13 @@ definition.
 
 | Ladder | Files | The oracle | Compared |
 | --- | --- | --- | --- |
-| `tests/` | `001`–`258` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
+| `tests/` | `001`–`259` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
 
 Each file is a `main.swift` of top-level code, and both compilers are
 given it unchanged. There is no entry point to rename and no harness
 around it.
 
-## `001`–`258`
+## `001`–`259`
 
 | | |
 | --- | --- |
@@ -36,7 +36,7 @@ around it.
 | 221–230 | functions and values, further: stored closures, recursion through local functions and a fixed point, currying, closures inferred through generics, method and initializer references, static subscripts, tuple destructuring, `inout` writeback through properties and subscripts, mutation deep inside nested values |
 | 231–240 | types, further: generic enums, recursive structs, associated type defaults, opening an existential, generic class inheritance, class-only protocols and weak delegates, `Identifiable`, static factories, raw values of every kind, a struct holding a class |
 | 241–250 | programs: a Caesar cipher over Unicode scalars, word frequencies, a multi-key sort, generic binary search and insertion sort, matrices, a tokenizer, a linked list freed in order, a stack-machine interpreter, an async pipeline, and a closing program replaying a transaction log |
-| 251–258 | what the packages needed: an existential as a result and as a stored property, casts to a protocol, `if let` of a tuple, an optional of a struct holding a `Bool`, pointer and buffer-pointer subscripts, `append(contentsOf:)` of a slice, an `AsyncSequence` that is its own iterator |
+| 251–259 | what the packages needed: an existential as a result and as a stored property, casts to a protocol, `if let` of a tuple, an optional of a struct holding a `Bool`, pointer and buffer-pointer subscripts, `append(contentsOf:)` of a slice, an `AsyncSequence` that is its own iterator, a conversion through a narrow integer nested in one expression |
 
 ## Rules
 
@@ -70,6 +70,7 @@ them:
 | `build/testdata/interop` | is what vsc builds the same thing swiftc builds, linked in one process? | `build`, `TestInteropCorpus` |
 | `build/testdata/cinterop` | can C call what vsc builds, and can it call C? | `build`, `TestCInteropCorpus` |
 | `build/testdata/packages` | does a SwiftPM package build as `swift build` builds it? | `build`, `TestPackagesMatchSwiftPM`; `pkg` |
+| `tests/kernel` | does a kernel print what it says, on the CPU device and on Metal alike? | the root package, `TestKernels`; see its README |
 
 ## Running
 

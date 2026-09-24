@@ -15,6 +15,14 @@ import (
 type Options struct {
 	// SymbolPrefix is prepended to object file symbols ("_" on Mach-O, empty on ELF/COFF).
 	SymbolPrefix string
+	// Kernels is this module's kernels, by SIL name, with what the
+	// device compile built for each: each gets a descriptor and a CPU
+	// thunk beside it. See gpu.go.
+	Kernels map[string]*KernelImage
+	// Device lowers for a GPU: the gpu intrinsics as the VIR verbs they
+	// name, and an entry point for each of DeviceKernels.
+	Device        bool
+	DeviceKernels []string
 }
 
 // Module translates a lowered SIL module (sil.StageLowered) into a VIR module for the target.
@@ -30,6 +38,9 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 		defs:   make(map[string]*ir.Func),
 	}
 	l.ms = l.out.Layout().ABI == "ms"
+	l.kernels = opts.Kernels
+	l.device = opts.Device
+	l.deviceKernels = opts.DeviceKernels
 	// How big a context each async function wants, before anything is
 	// lowered: a caller allocates the callee's, so it has to know.
 	l.asyncSizes = map[string]int64{}
@@ -78,6 +89,19 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 			return nil, err
 		}
 	}
+	// Each kernel's descriptor, whether or not this module launches it:
+	// another module may. For a device, each kernel's entry.
+	if l.device {
+		if err := l.kernelEntries(); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, f := range m.Funcs() {
+			if _, ok := l.kernels[f.Name()]; ok {
+				l.kernelDescriptor(f.Name())
+			}
+		}
+	}
 	if err := l.out.Err(); err != nil {
 		return nil, &Error{Err: ErrIR, What: err.Error()}
 	}
@@ -93,8 +117,16 @@ type lowerer struct {
 	globalStore map[string]*ir.Global    // module-level variables, by symbol
 	out         *ir.Module
 	prefix      string
-	callee      map[string]ir.Callee
-	defs        map[string]*ir.Func
+	// The gpu's: this module's kernels and what was built for them,
+	// whether this is a device's lowering and of which kernels, and the
+	// descriptors made or imported. See gpu.go.
+	kernels       map[string]*KernelImage
+	device        bool
+	deviceKernels []string
+	kernelDescs   map[string]ir.Symbol
+	kernelRecord  *ir.Type
+	callee        map[string]ir.Callee
+	defs          map[string]*ir.Func
 
 	witness     map[string]*ir.Global
 	witnessRows map[string][]string

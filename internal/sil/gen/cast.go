@@ -36,9 +36,19 @@ func (g *gen) cast(e *ast.CastExpr) *sil.Value {
 		}
 		return g.existentialFor(e.X, v, from, to)
 	}
-	v := g.rvalue(e.X)
+	// `x as T` where x already is one: the value as it is, with the
+	// cleanup it came with. One wrapped in an optional hands its cleanup
+	// to the optional, as an argument boxed for a parameter does.
+	v := g.expr(e.X)
 	if v == nil {
 		return nil
+	}
+	if _, wraps := optionalOf(to); wraps && v.Ownership() != sil.None {
+		if _, already := optionalOf(from); !already {
+			some := g.optionalFor(e.X, g.consume(v), from, to)
+			g.destroyLater(some)
+			return some
+		}
 	}
 	return g.optionalFor(e.X, v, from, to)
 }

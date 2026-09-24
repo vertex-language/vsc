@@ -40,6 +40,13 @@ func SwiftBridge(target ir.Target) (Input, error) {
 	return compileRuntime(target, unit, "vertex_swift_bridge.o", false)
 }
 
+// GPURuntime compiles the gpu runtime unit: devices, buffers and launches
+// for the built-in gpu module, and its intrinsics for the CPU device.
+// It is linked only into a program that imports gpu (GUIDELINES.md §1.1).
+func GPURuntime(target ir.Target) (Input, error) {
+	return compileRuntime(target, "gpu/gpu.cpp", "vertex_gpu_runtime.o", false)
+}
+
 // compileRuntime compiles one translation unit of stdlib's runtime.
 func compileRuntime(target ir.Target, unit, object string, asm bool) (Input, error) {
 	return compileRuntimeDefining(target, unit, object, asm, nil)

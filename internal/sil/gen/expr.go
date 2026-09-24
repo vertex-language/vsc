@@ -35,6 +35,14 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 	if sig := g.info.Autoclosures[e]; sig != nil {
 		return g.autoclosure(e, sig)
 	}
+	if call, ok := e.(*ast.CallExpr); ok {
+		if k := g.info.KernelDescriptors[call]; k != nil {
+			if mask, isMap := g.info.KernelMaps[call]; isMap {
+				return g.kernelMapDescriptor(k, mask)
+			}
+			return g.kernelDescriptor(k)
+		}
+	}
 	switch n := e.(type) {
 	case *ast.StringLit:
 		return g.stringLiteral(n)
@@ -843,10 +851,13 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 		g.endReceiverTemp(copied)
 		return v
 	}
-	// Pointer type conversions.
-	if _, ok := pointerOf(g.typeOf(e)); ok {
-		if v, isConversion := g.convert(e, g.typeOf(e)); isConversion {
-			return v
+	// Pointer type conversions: `UnsafeRawPointer(p)`, a type named, not
+	// a function that returns a pointer.
+	if _, isFunc := g.info.Uses[id.Name].(*analyzer.FuncSymbol); !isFunc {
+		if _, ok := pointerOf(g.typeOf(e)); ok {
+			if v, isConversion := g.convert(e, g.typeOf(e)); isConversion {
+				return v
+			}
 		}
 	}
 	// Type constructor call.

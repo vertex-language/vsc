@@ -372,6 +372,9 @@ func (c *fn) floatLiteral(in *sil.Inst) error {
 }
 
 func (c *fn) builtinCall(in *sil.Inst) error {
+	if done, err := c.kernelDescriptorCall(in); done || err != nil {
+		return err
+	}
 	operands := in.Args()
 	if verb, _, ok := splitBuiltin(in.Aux().Name); ok &&
 		strings.HasSuffix(verb, "_with_overflow") && len(operands) > 2 {
@@ -1215,6 +1218,9 @@ func (c *fn) countExistentialWords(in *sil.Inst, words []ir.Value, retain bool) 
 }
 
 func (c *fn) apply(in *sil.Inst) error {
+	if done, err := c.gpuIntrinsic(in); done || err != nil {
+		return err
+	}
 	if done, err := c.smallStringLiteral(in); done || err != nil {
 		return err
 	}

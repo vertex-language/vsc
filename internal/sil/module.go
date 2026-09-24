@@ -75,6 +75,17 @@ func (m *Module) Func(name string) *Func {
 	return f
 }
 
+// Adopt adds a function of another module to this one as it is, sharing
+// it: a module made of functions chosen from others, as the device
+// compile's is. A function of the name already here is kept.
+func (m *Module) Adopt(f *Func) {
+	if _, ok := m.byName[f.name]; ok {
+		return
+	}
+	m.funcs = append(m.funcs, f)
+	m.byName[f.name] = f
+}
+
 // Lookup finds a function by name, or returns nil.
 func (m *Module) Lookup(name string) *Func { return m.byName[name] }
 

@@ -245,6 +245,17 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		}
 	}
 
+	// A program that imports gpu gets the gpu runtime unit, and no
+	// other program does.
+	if vsc.ImportsGPU(u.Packages) {
+		rt, err := build.GPURuntime(target)
+		if err != nil {
+			fmt.Fprintln(stderr, "vsc:", err)
+			return "", exitUsage
+		}
+		inputs = append(inputs, rt)
+	}
+
 	link := build.LinkOptions{
 		Target:       target,
 		Entry:        bf.entry,

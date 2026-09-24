@@ -52,7 +52,12 @@ type checker struct {
 	// each declare a Cursor, and a name keeps only the last of them.
 	scopesByType map[types.Type]*Scope
 	// modules maps module names to their scopes for qualified lookup.
-	modules   map[string]*Scope
+	modules map[string]*Scope
+	// gpuAlias is the name the built-in gpu module is imported as here,
+	// "" where it is not. See kernel.go.
+	gpuAlias string
+	// inKernel is whether the body being checked is a kernel's.
+	inKernel  bool
 	currActor *types.Class
 	inAwait   bool
 	// currAsync is whether the function or closure being checked is
@@ -498,21 +503,50 @@ func (c *checker) checkImportedGenerics(decls []ast.Decl, scope *Scope) {
 		case *ast.StructDecl:
 			if d.Generics != nil {
 				c.checkDecl(d, scope)
+			} else if own := ownGenericMethods(d.Body); own != nil {
+				c.checkMembers(d, own, c.declaredType(d.Name, scope))
 			}
 		case *ast.ClassDecl:
 			if d.Generics != nil {
 				c.checkDecl(d, scope)
+			} else if own := ownGenericMethods(d.Body); own != nil {
+				c.checkMembers(d, own, c.declaredType(d.Name, scope))
 			}
 		case *ast.EnumDecl:
 			if d.Generics != nil {
 				c.checkDecl(d, scope)
+			} else if own := ownGenericMethods(d.Body); own != nil {
+				c.checkMembers(d, own, c.declaredType(d.Name, scope))
 			}
 		case *ast.ExtensionDecl:
 			if c.namesGenericType(d.Type, scope) {
 				c.checkDecl(d, scope)
+			} else if own := ownGenericMethods(d.Body); own != nil {
+				c.checkMembers(d, own, c.extensionType(d, scope))
 			}
 		}
 	}
+}
+
+// ownGenericMethods is a type body cut down to the methods with type
+// parameters of their own, which a client specializes, of a type that has
+// none: nil where it has no such method.
+func ownGenericMethods(body *ast.MemberBlock) *ast.MemberBlock {
+	if body == nil {
+		return nil
+	}
+	var own []ast.Node
+	for _, m := range body.Members {
+		if fd, ok := m.(*ast.FuncDecl); ok && fd.Generics != nil && fd.Body != nil {
+			own = append(own, fd)
+		}
+	}
+	if len(own) == 0 {
+		return nil
+	}
+	cut := *body
+	cut.Members = own
+	return &cut
 }
 
 // namesGenericType reports whether a written type names a nominal type
@@ -566,6 +600,9 @@ func (c *checker) declareImportedVars(decls []ast.Decl, scope *Scope) {
 func (c *checker) recordModule(imp Import, staging, scope *Scope) {
 	own := NewScope(nil, token.NoPos, token.NoPos)
 	c.modules[imp.bound()] = own
+	if imp.Name == "gpu" {
+		c.gpuAlias = imp.bound()
+	}
 	for _, u := range imp.Units {
 		if u != nil && bytes.HasPrefix(u.Text(), []byte("// swift-interface-format-version")) {
 			c.info.SwiftModules[imp.Name] = true

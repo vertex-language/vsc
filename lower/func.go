@@ -768,7 +768,8 @@ func (c *fn) args(vs []*sil.Value) []ir.Value {
 // it hands the message to the runtime, which flushes what was printed and
 // writes `Fatal error: ...` as Swift does, and then traps.
 func (c *fn) trapBlockFor(message string) *ir.Block {
-	if message == "" {
+	// A device has no runtime to say it with: the trap alone.
+	if message == "" || c.l.device {
 		return c.trapBlock()
 	}
 	if b, ok := c.traps[message]; ok {
