@@ -366,6 +366,9 @@ func (g *gen) constant(e ast.Expr) *sil.Value {
 		return nil
 	}
 	t := g.typeOf(e)
+	if g.literalAs != nil {
+		t = g.literalAs
+	}
 	// A literal typed as an optional, however deep, is the number
 	// wrapped that deep.
 	payload := t

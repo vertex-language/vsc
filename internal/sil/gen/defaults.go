@@ -55,7 +55,15 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 			g.refuse(e, "a call leaving out '"+p.Name+"', whose default this cannot reach")
 			return nil, false
 		}
+		// A default written for a type parameter is that parameter's
+		// type at this call.
+		if _, generic := g.typeOf(def).(*types.TypeParam); generic {
+			if _, still := p.Type.(*types.TypeParam); !still && p.Type != nil {
+				g.literalAs = p.Type
+			}
+		}
 		v := g.defaultValue(e, def)
+		g.literalAs = nil
 		if v == nil {
 			return nil, false
 		}

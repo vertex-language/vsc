@@ -442,6 +442,10 @@ type gen struct {
 	// the function is public_external, available here to inline and to
 	// run on a device, and its symbol is still the other module's.
 	inlinable bool
+	// literalAs types a default argument's literal where the default was
+	// written for a type parameter -- `scale: T = 1` -- as the call's
+	// type for it: Float, at a call with T Float.
+	literalAs types.Type
 	// memberOf is the module an imported extension's member is lowered
 	// for (inlinableExtension): its symbol is that module's.
 	memberOf string
