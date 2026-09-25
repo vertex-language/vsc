@@ -1136,7 +1136,9 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	if g.entry {
 		linkage = sil.Public
 	}
-	if g.inlinable {
+	// Another module's @inlinable function is its; a specialization made
+	// while lowering one is this module's own, as every specialization is.
+	if g.inlinable && !g.specializing {
 		linkage = sil.PublicExternal
 	}
 	// Reject symbol collisions.

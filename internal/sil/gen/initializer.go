@@ -1167,7 +1167,7 @@ func (g *gen) initLinkage() sil.Linkage {
 	if g.specializing {
 		return sil.Private
 	}
-	if g.inlinable {
+	if g.inlinable && !g.specializing {
 		return sil.PublicExternal
 	}
 	return sil.Public
