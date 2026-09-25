@@ -119,6 +119,12 @@ struct Device {
   i64 waveSize;
   Pipeline* pipelines;
   Lock lock;
+  // Launches not yet run: an open command buffer and its serial compute
+  // encoder, retained. A launch encodes into them and returns; the host
+  // asking for a buffer's memory runs them and waits (syncDevice).
+  void* pendingBuffer;   // id<MTLCommandBuffer>
+  void* pendingEncoder;  // id<MTLComputeCommandEncoder>
+  Lock pendingLock;
 };
 
 // ---- Metal, through the Objective-C runtime ----
@@ -222,6 +228,7 @@ Device* metal() {
 // and the caller's slot is its executor's.
 
 struct Launch;
+i32 syncDevice(Device* d);
 
 // A place in a kernel that asks for workgroup storage, and where in the
 // group's storage its allocation is.
@@ -524,6 +531,9 @@ void waitFor(Launch* l, u32 target) {
 }
 
 i32 runCPU(Launch* l) {
+  // On a Metal device -- a kernel with no Metal image -- the host runs it
+  // over the buffers' memory, so what was launched before runs first.
+  if (syncDevice(l->device) != 0) return 7;
   poolLock.lock();
   i64 total = l->groups[0] * l->groups[1] * l->groups[2];
 #if VERTEX_GPU_FIBERS
@@ -643,6 +653,34 @@ Pipeline* pipelineFor(Device* d, const vertex_gpu_kernel* k) {
   return made;
 }
 
+// syncDevice runs what has been encoded on d and waits for it: what the
+// host reads from a buffer, or writes to one, is then what the launches
+// before made of it. 0 when they ran; 7 when one failed.
+i32 syncDevice(Device* d) {
+  if (!d || d->kind != KindMetal) return 0;
+  d->pendingLock.lock();
+  objc::id cb = d->pendingBuffer;
+  objc::id enc = d->pendingEncoder;
+  d->pendingBuffer = nullptr;
+  d->pendingEncoder = nullptr;
+  d->pendingLock.unlock();
+  if (!cb) return 0;
+  void* pool = objc::poolPush();
+  objc::send<void>(enc, "endEncoding");
+  objc::send<void>(cb, "commit");
+  objc::send<void>(cb, "waitUntilCompleted");
+  i64 status = static_cast<i64>(objc::send<u64>(cb, "status"));
+  i32 result = 0;
+  if (status == 5) {  // MTLCommandBufferStatusError
+    objc::report("a launch failed", objc::send<objc::id>(cb, "error"));
+    result = 7;
+  }
+  objc::send<void>(enc, "release");
+  objc::send<void>(cb, "release");
+  objc::poolPop(pool);
+  return result;
+}
+
 i32 runMetal(Launch* l) {
   void* pool = objc::poolPush();
   Pipeline* p = pipelineFor(l->device, l->kernel);
@@ -657,8 +695,18 @@ i32 runMetal(Launch* l) {
     objc::poolPop(pool);
     return 6;
   }
-  objc::id cb = objc::send<objc::id>(l->device->queue, "commandBuffer");
-  objc::id enc = objc::send<objc::id>(cb, "computeCommandEncoder");
+  // Encode into the device's open command buffer, starting one if there
+  // is none. A serial encoder runs each dispatch after the one before, its
+  // writes seen, so launches keep their order without a wait between them.
+  Device* d = l->device;
+  d->pendingLock.lock();
+  if (!d->pendingBuffer) {
+    objc::id made = objc::send<objc::id>(d->queue, "commandBuffer");
+    d->pendingBuffer = objc::send<objc::id>(made, "retain");
+    objc::id menc = objc::send<objc::id>(made, "computeCommandEncoder");
+    d->pendingEncoder = objc::send<objc::id>(menc, "retain");
+  }
+  objc::id enc = d->pendingEncoder;
   objc::send<void>(enc, "setComputePipelineState:", p->state);
   for (i64 i = 0; i < l->count; i++) {
     if (l->buffers[i]) {
@@ -672,23 +720,13 @@ i32 runMetal(Launch* l) {
   objc::Size grid = {static_cast<u64>(l->grid[0]), static_cast<u64>(l->grid[1]), static_cast<u64>(l->grid[2])};
   objc::Size group = {static_cast<u64>(l->per[0]), static_cast<u64>(l->per[1]), static_cast<u64>(l->per[2])};
   objc::send<void>(enc, "dispatchThreads:threadsPerThreadgroup:", grid, group);
-  objc::send<void>(enc, "endEncoding");
-  objc::send<void>(cb, "commit");
-  objc::send<void>(cb, "waitUntilCompleted");
-  i64 status = static_cast<i64>(objc::send<u64>(cb, "status"));
-  if (vertex_pal_getenv("VERTEX_GPU_DEBUG")) {
-    say("gpu: metal launch ran; status ");
-    char digits[2] = {static_cast<char>('0' + (status % 10)), 0};
-    say(digits);
-    say(" slots ");
-    char n[2] = {static_cast<char>('0' + (l->count % 10)), 0};
-    say(n);
-    say("\n");
-  }
+  d->pendingLock.unlock();
   i32 result = 0;
-  if (status == 5) {  // MTLCommandBufferStatusError
-    objc::report("the launch failed", objc::send<objc::id>(cb, "error"));
-    result = 7;
+  // VERTEX_GPU_SYNC=1 waits after every launch, as launches once did: a
+  // failure is then reported at the launch that caused it.
+  if (vertex_pal_getenv("VERTEX_GPU_SYNC") || vertex_pal_getenv("VERTEX_GPU_DEBUG")) {
+    result = syncDevice(d);
+    if (vertex_pal_getenv("VERTEX_GPU_DEBUG")) say(result == 0 ? "gpu: metal launch ran\n" : "gpu: metal launch failed\n");
   }
   objc::poolPop(pool);
   return result;
@@ -820,7 +858,21 @@ void vertex_gpu_buffer_release(void* buf) {
   release(b, sizeof(Buffer), alignof(Buffer));
 }
 
-void* vertex_gpu_buffer_contents(void* buf) { return static_cast<Buffer*>(buf)->contents; }
+// Copies bytes between host memory and a buffer's (after any pending
+// launches: callers ask for the buffer's contents first). What Upload and
+// Download are, for element types that are plain data.
+void vertex_gpu_copy(void* dst, const void* src, i64 bytes) {
+  if (bytes > 0) vertex_pal_copy(dst, src, static_cast<usize>(bytes));
+}
+
+// The host's view of a buffer's memory. What was launched before is run
+// first, so the host reads what it wrote and writes nothing a pending
+// launch has yet to read.
+void* vertex_gpu_buffer_contents(void* buf) {
+  Buffer* b = static_cast<Buffer*>(buf);
+  if (syncDevice(b->device) != 0) vertex_pal_abort();
+  return b->contents;
+}
 void* vertex_gpu_buffer_device(void* buf) { return static_cast<Buffer*>(buf)->device; }
 
 // ---- launches ----

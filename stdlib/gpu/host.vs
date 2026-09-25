@@ -17,6 +17,7 @@ package gpu
 @_silgen_name("vertex_gpu_buffer_release") func _bufferRelease(_ b: UnsafeMutableRawPointer)
 @_silgen_name("vertex_gpu_buffer_contents") func _bufferContents(_ b: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
 @_silgen_name("vertex_gpu_buffer_device") func _bufferDevice(_ b: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_gpu_copy") func _copyBytes(_ dst: UnsafeMutableRawPointer, _ src: UnsafeRawPointer, _ bytes: int)
 @_silgen_name("vertex_gpu_launch_begin") func _launchBegin(_ kernel: UnsafeRawPointer) -> UnsafeMutableRawPointer
 @_silgen_name("vertex_gpu_launch_buffer") func _launchBuffer(_ l: UnsafeMutableRawPointer, _ b: UnsafeMutableRawPointer, _ offset: int)
 @_silgen_name("vertex_gpu_launch_i8") func _launchI8(_ l: UnsafeMutableRawPointer, _ v: int8)
@@ -159,10 +160,12 @@ public final class Buffer<T> {
     public func Upload(_ host: [T]) async throws {
         if host.count != count { throw DeviceError.badCount }
         let p = _elements
-        var i = 0
-        while i < count {
-            p[i] = host[i]
-            i += 1
+        // A buffer's elements are plain data -- numbers, and structs of
+        // them -- so the array's bytes are the buffer's.
+        host.withUnsafeBufferPointer { h in
+            if let base = h.baseAddress {
+                _copyBytes(UnsafeMutableRawPointer(p), UnsafeRawPointer(base), count * MemoryLayout<T>.stride)
+            }
         }
     }
 
@@ -170,12 +173,7 @@ public final class Buffer<T> {
     /// bytes, say -- into the buffer, which must hold count.
     public func Upload(from host: UnsafePointer<T>, count n: int) async throws {
         if n != count { throw DeviceError.badCount }
-        let p = _elements
-        var i = 0
-        while i < count {
-            p[i] = host[i]
-            i += 1
-        }
+        _copyBytes(UnsafeMutableRawPointer(_elements), UnsafeRawPointer(host), count * MemoryLayout<T>.stride)
     }
 
     /// View is the same memory read as elements of U: no copy. The
@@ -195,12 +193,10 @@ public final class Buffer<T> {
     /// Download is the buffer's elements, copied to the host.
     public func Download() async throws -> [T] {
         let p = _elements
-        var out: [T] = []
-        out.reserveCapacity(count)
-        var i = 0
-        while i < count {
-            out.append(p[i])
-            i += 1
+        if count == 0 { return [] }
+        var out = [T](repeating: p[0], count: count)
+        out.withUnsafeMutableBufferPointer { o in
+            _copyBytes(UnsafeMutableRawPointer(o.baseAddress!), UnsafeRawPointer(p), count * MemoryLayout<T>.stride)
         }
         return out
     }
