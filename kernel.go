@@ -124,6 +124,9 @@ func compileKernel(name string, k *sil.Func, m, gpuSIL *sil.Module) (*lower.Kern
 			return true
 		})
 	}
+	// f16 and bf16 in f32 until the AIR lowering selects Metal's own half
+	// instructions (see ir.Module.LegalizeHalf).
+	vir.LegalizeHalf()
 	if err := vir.Err(); err != nil {
 		return nil, []Diagnostic{kernelError(k, "cannot be lowered for a device: "+err.Error())}
 	}

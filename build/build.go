@@ -29,6 +29,13 @@ type Options struct {
 // Object lowers a VIR module and returns the bytes of an object file
 // for its target.
 func Object(m *ir.Module, opts Options) ([]byte, error) {
+	// f16 and bf16 before any backend sees them: none of these selects
+	// half instructions, and the IR's legalizer carries each in an i32
+	// and does its arithmetic in f32 (see ir.Module.LegalizeHalf).
+	m.LegalizeHalf()
+	if err := m.Err(); err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
 	switch m.Use() {
 	case "aarch64/macos":
 		return aarch64MachO(m, opts)

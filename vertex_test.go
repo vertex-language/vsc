@@ -107,20 +107,23 @@ func use() -> int32 { return label(a: 1) + label(b: 2) }
 	}
 }
 
-// TestExecModifierRefused says a kernel is refused rather than
-// lowered as an ordinary function. Lowering it would produce a
-// program that runs on the CPU and returns a right-looking answer,
-// which is the failure worth having a test for.
+// TestExecModifierRefused says a function vsc cannot run where it was
+// written for is refused rather than lowered as an ordinary one. That would
+// produce a program that runs on the CPU and returns a right-looking
+// answer, which is the failure worth having a test for. A `graph` is
+// refused at lowering. A `kernel` is lowered for a device now, and
+// needs `import "gpu"` to be one.
 func TestExecModifierRefused(t *testing.T) {
-	for _, word := range []string{"kernel", "graph"} {
-		src := "func f(_ a: float32) " + word + " -> float32 { return a }"
-		if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
-			t.Errorf("%s did not typecheck: %v", word, diags)
-		}
-		_, diags := compile(t, src, vsc.Options{})
-		if !vsc.Errors(diags) {
-			t.Errorf("%s was lowered as an ordinary function", word)
-		}
+	src := "func f(_ a: float32) graph -> float32 { return a }"
+	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
+		t.Errorf("graph did not typecheck: %v", diags)
+	}
+	if _, diags := compile(t, src, vsc.Options{}); !vsc.Errors(diags) {
+		t.Errorf("graph was lowered as an ordinary function")
+	}
+	src = "func f(_ a: float32) kernel -> float32 { return a }"
+	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); !vsc.Errors(diags) {
+		t.Errorf("a kernel without import \"gpu\" typechecked")
 	}
 }
 
