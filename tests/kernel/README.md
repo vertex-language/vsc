@@ -1,7 +1,7 @@
 # tests/kernel
 
 The kernel ladder: one small thing a kernel does per file, numbered
-`001`–`077` in the order the rungs climb, from an empty kernel to programs
+`001`–`078` in the order the rungs climb, from an empty kernel to programs
 (see `proposed_vertex_kernel.md` on the Desktop for the design).
 
 There is no swiftc to compare with here, so each file says what it prints:
@@ -19,9 +19,9 @@ says so there and runs where it can instead.
 
 | | Files | The oracle | Compared |
 | --- | --- | --- | --- |
-| `tests/kernel/` | `001`–`077` `.vs` | the file's `// want:` lines | stdout, on the CPU device and on Metal |
+| `tests/kernel/` | `001`–`078` `.vs` | the file's `// want:` lines | stdout, on the CPU device and on Metal |
 
-## `001`–`077`
+## `001`–`078`
 
 | | |
 | --- | --- |
@@ -41,6 +41,7 @@ says so there and runs where it can instead.
 | 075 | `float16` and `bfloat16`: spans, parameters and element kernels of them, narrowing from `float32` included |
 | 076 | `gpu.Atomic.Add` of a `float16` and a `bfloat16`, neighbours sharing a word |
 | 077 | a generic kernel specialized over a struct with no stored properties (a tag type): nothing passed, the buffers after it bound right |
+| 078 | a buffer filled from host memory by pointer (`Upload(from:count:)`), and a slice of its bytes viewed as `float32` without a copy (`View(as:)`) |
 
 ## Rules
 

@@ -1477,6 +1477,71 @@ extension Substring {
     func hasPrefix(_ prefix: String) -> Bool { return _string.hasPrefix(prefix) }
     func hasSuffix(_ suffix: String) -> Bool { return _string.hasSuffix(suffix) }
 
+    // Indices are the base's, as Swift's are: a Substring's startIndex is
+    // where it begins in the String it was cut from.
+    func index(after i: _StringIndex) -> _StringIndex {
+        if i._offset < _start || i._offset >= _end { fatalError("Substring index is out of bounds") }
+        return _StringIndex(_offset: _characterEnd(_base, i._offset))
+    }
+
+    func index(before i: _StringIndex) -> _StringIndex {
+        if i._offset <= _start || i._offset > _end { fatalError("Substring index is out of bounds") }
+        return _StringIndex(_offset: _characterStart(_base, i._offset))
+    }
+
+    func index(_ i: _StringIndex, offsetBy distance: Int) -> _StringIndex {
+        var at = i
+        var n = distance
+        while n > 0 { at = index(after: at); n -= 1 }
+        while n < 0 { at = index(before: at); n += 1 }
+        return at
+    }
+
+    func distance(from start: _StringIndex, to end: _StringIndex) -> Int {
+        return _base.distance(from: start, to: end)
+    }
+
+    subscript(r: Range<_StringIndex>) -> Substring {
+        if r.lowerBound._offset < _start || r.upperBound._offset > _end { fatalError("Substring index is out of bounds") }
+        return Substring(_base: _base, _start: r.lowerBound._offset, _end: r.upperBound._offset)
+    }
+
+    subscript(r: ClosedRange<_StringIndex>) -> Substring {
+        return self[r.lowerBound..<index(after: r.upperBound)]
+    }
+
+    // The first maxLength Characters, or all of them.
+    func prefix(_ maxLength: Int) -> Substring {
+        var at = _start
+        var n = 0
+        while n < maxLength && at < _end {
+            at = _characterEnd(_base, at)
+            n += 1
+        }
+        return Substring(_base: _base, _start: _start, _end: at)
+    }
+
+    // The last maxLength Characters, or all of them.
+    func suffix(_ maxLength: Int) -> Substring {
+        var at = _end
+        var n = 0
+        while n < maxLength && at > _start {
+            at = _characterStart(_base, at)
+            n += 1
+        }
+        return Substring(_base: _base, _start: at, _end: _end)
+    }
+
+    // All but the first k Characters.
+    func dropFirst(_ k: Int = 1) -> Substring {
+        return Substring(_base: _base, _start: prefix(k)._end, _end: _end)
+    }
+
+    // All but the last k Characters.
+    func dropLast(_ k: Int = 1) -> Substring {
+        return Substring(_base: _base, _start: _start, _end: suffix(k)._start)
+    }
+
     // String's split over this substring's characters: the pieces are
     // Substrings of the same base, as Swift's Collection.split makes them.
     func split(separator: Character, maxSplits: Int = Int.max, omittingEmptySubsequences: Bool = true) -> [Substring] {
@@ -1501,6 +1566,13 @@ extension Substring {
         return out
     }
 }
+
+// A String and a Substring are equal when their Characters are, as
+// StringProtocol's == makes them in Swift.
+func == (lhs: String, rhs: Substring) -> Bool { return lhs == rhs._string }
+func == (lhs: Substring, rhs: String) -> Bool { return lhs._string == rhs }
+func != (lhs: String, rhs: Substring) -> Bool { return lhs != rhs._string }
+func != (lhs: Substring, rhs: String) -> Bool { return lhs._string != rhs }
 
 // A string and the characters of a substring after it.
 func + (lhs: String, rhs: Substring) -> String { return lhs + String(rhs) }

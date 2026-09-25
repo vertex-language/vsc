@@ -293,8 +293,10 @@ func (g *gen) tryExpr(e *ast.TryExpr) *sil.Value {
 	}
 	sym, _ := g.info.Uses[name].(*analyzer.FuncSymbol)
 	if sym == nil {
-		g.refuse(e, keyword+" on a call this compiler could not resolve")
-		return nil
+		// A type's initializer -- `try? Tensor(shape)` -- or anything
+		// else named that is not a function: the call inside a scope that
+		// catches what it throws.
+		return g.tryScope(e, x, optional)
 	}
 	g.tryBang = bang
 	v := g.callFuncTry(call, sym, optional)

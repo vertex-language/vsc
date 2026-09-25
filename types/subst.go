@@ -295,6 +295,14 @@ func Unify(param, arg Type, subst map[*TypeParam]Type) bool {
 	case *Set:
 		a, ok := arg.(*Set)
 		return ok && Unify(p.Elem, a.Elem, subst)
+	case *Pointer:
+		// An UnsafePointer<T> given an UnsafePointer<UInt8> -- or a mutable
+		// one, which converts -- is one of UInt8s. Raw pointers have no T.
+		a, ok := arg.(*Pointer)
+		if !ok || p.Elem == nil || a.Elem == nil {
+			return ok && p.Elem == nil && a.Elem == nil
+		}
+		return Unify(p.Elem, a.Elem, subst)
 	case *Metatype:
 		a, ok := arg.(*Metatype)
 		return ok && Unify(p.Instance, a.Instance, subst)

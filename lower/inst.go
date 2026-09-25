@@ -165,6 +165,20 @@ func (c *fn) inst(in *sil.Inst) error {
 	case sil.AllocRef:
 		return c.allocRef(in)
 
+	case sil.DeallocRef:
+		// An instance never finished -- its initializer threw -- given
+		// back without its deinit and without its fields' releases.
+		obj, err := c.operand(in, in.Args()[0])
+		if err != nil {
+			return err
+		}
+		p, ok := obj.(ir.Ptr)
+		if !ok {
+			return c.fail(ErrType, in.Op(), "dealloc_ref of something not a reference")
+		}
+		c.b.Call(c.l.runtimeFunc(stdlib.Dealloc, ir.NewSig().Param(ir.TypePtr)), p)
+		return nil
+
 	case sil.AllocStack:
 		// The slot was reserved in the entry block before any block
 		// was walked, because VIR admits a frame allocation there and

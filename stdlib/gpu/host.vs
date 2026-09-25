@@ -80,6 +80,14 @@ public final class Device {
         return Buffer<T>(_memory: _Memory(_h: h), device: self, offset: 0, count: count)
     }
 
+    /// Upload is a new buffer holding count elements copied from host
+    /// memory.
+    public func Upload<T>(from host: UnsafePointer<T>, count: int) async throws -> Buffer<T> {
+        let b = try CreateBuffer(of: T.self, count: count)
+        try await b.Upload(from: host, count: count)
+        return b
+    }
+
     /// Upload is a new buffer holding host's elements.
     public func Upload<T>(_ host: [T]) async throws -> Buffer<T> {
         let b = try CreateBuffer(of: T.self, count: host.count)
@@ -156,6 +164,32 @@ public final class Buffer<T> {
             p[i] = host[i]
             i += 1
         }
+    }
+
+    /// Upload copies count elements from host memory -- a mapped file's
+    /// bytes, say -- into the buffer, which must hold count.
+    public func Upload(from host: UnsafePointer<T>, count n: int) async throws {
+        if n != count { throw DeviceError.badCount }
+        let p = _elements
+        var i = 0
+        while i < count {
+            p[i] = host[i]
+            i += 1
+        }
+    }
+
+    /// View is the same memory read as elements of U: no copy. The
+    /// buffer's start must be aligned for U, and its bytes a whole number
+    /// of U. What a weight tensor's bytes are, read as the floats they
+    /// hold.
+    public func View<U>(as: U.Type) -> Buffer<U> {
+        let size = MemoryLayout<T>.stride
+        let usize = MemoryLayout<U>.stride
+        let start = _offset * size
+        let bytes = count * size
+        if start % usize != 0 { fatalError("gpu.Buffer.View: the buffer's start is not aligned for the new type") }
+        if bytes % usize != 0 { fatalError("gpu.Buffer.View: the buffer's bytes are not a whole number of the new type") }
+        return Buffer<U>(_memory: _memory, device: Device, offset: start / usize, count: bytes / usize)
     }
 
     /// Download is the buffer's elements, copied to the host.

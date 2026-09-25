@@ -280,6 +280,12 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 	g.locals = map[analyzer.Symbol]*local{}
 	g.scopes, g.loops, g.pending = nil, nil, ""
 	g.recv, g.self, g.initReturn = recv, nil, nil
+	// A throwing initializer's error leaves through its error result; the
+	// allocator that called it frees the instance (classAllocator).
+	g.throws, g.catches = sig.Throws, nil
+	if sig.Throws {
+		f.SetThrows(sil.Object(sil.BuiltinNativeObj))
+	}
 	g.push()
 	g.blk = f.Entry()
 
@@ -402,6 +408,9 @@ func (g *gen) callSuperInit(at ast.Node, recv types.Type, sig *types.Signature, 
 			sil.Param{Type: st, Convention: sil.ParamGuaranteed})
 		callee.Type().Convention = sil.Method
 		callee.SetResult(st, resultConvention(st))
+		if out.Throws {
+			callee.SetThrows(errorBoxType())
+		}
 	}
 	var vals []*sil.Value
 	if call, ok := at.(*ast.CallExpr); ok {
@@ -412,7 +421,19 @@ func (g *gen) callSuperInit(at ast.Node, recv types.Type, sig *types.Signature, 
 	}
 	self := g.blk.Upcast(g.selfValue(), st)
 	vals = append(vals, self)
-	made := g.blk.Apply(g.blk.FunctionRef(callee), st, vals...)
+	if !out.Throws {
+		made := g.blk.Apply(g.blk.FunctionRef(callee), st, vals...)
+		g.blk.DestroyValue(made)
+		return true
+	}
+	// `try super.init(…)`: its error is this initializer's to raise.
+	normal, failed := g.fn.Block(), g.fn.Block()
+	made := normal.Arg(st, sil.Owned)
+	box := failed.Arg(errorBoxType(), sil.Owned)
+	g.blk.TryApply(g.blk.FunctionRef(callee), normal, failed, vals...)
+	g.blk = failed
+	g.raise(at, box)
+	g.blk = normal
 	g.blk.DestroyValue(made)
 	return true
 }
@@ -515,6 +536,9 @@ func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body s
 	f.Param(sil.ThinMetatype(recv), sil.ParamUnowned)
 	f.Type().Convention = sil.Method
 	f.SetResult(t, resultConvention(t))
+	if sig.Throws {
+		f.SetThrows(errorBoxType())
+	}
 
 	callee := g.m.Func(body).SetSourceName("init")
 	if g.needsType(callee) {
@@ -527,12 +551,31 @@ func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body s
 			sil.Param{Type: t, Convention: sil.ParamGuaranteed})
 		callee.Type().Convention = sil.Method
 		callee.SetResult(t, resultConvention(t))
+		if sig.Throws {
+			callee.SetThrows(errorBoxType())
+		}
 	}
 	obj := g.blk.AllocRef(t)
 	args = append(args, obj)
-	made := g.blk.Apply(g.blk.FunctionRef(callee), t, args...)
+	if !sig.Throws {
+		made := g.blk.Apply(g.blk.FunctionRef(callee), t, args...)
+		g.blk.DestroyValue(obj)
+		g.blk.Return(made)
+		return
+	}
+	// The body threw: the instance was never finished, so its memory is
+	// given back without running deinit, as Swift's dealloc_partial_ref
+	// does. The error goes on to the caller.
+	normal, failed := f.Block(), f.Block()
+	made := normal.Arg(t, sil.Owned)
+	err := failed.Arg(errorBoxType(), sil.Owned)
+	g.blk.TryApply(g.blk.FunctionRef(callee), normal, failed, args...)
+	g.blk = normal
 	g.blk.DestroyValue(obj)
 	g.blk.Return(made)
+	g.blk = failed
+	g.blk.DeallocRef(obj)
+	g.blk.Throw(err)
 }
 
 // classInitSignature is the initializer's type among the ones the
@@ -557,12 +600,14 @@ func (g *gen) saveFunction() func() {
 	loops, pending := g.loops, g.pending
 	recv, self := g.recv, g.self
 	initRet := g.initReturn
+	throws, catches := g.throws, g.catches
 	return func() {
 		g.fn, g.entry, g.blk = fn, entry, blk
 		g.scopes, g.locals = scopes, locals
 		g.loops, g.pending = loops, pending
 		g.recv, g.self = recv, self
 		g.initReturn = initRet
+		g.throws, g.catches = throws, catches
 	}
 }
 

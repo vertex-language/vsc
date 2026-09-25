@@ -102,10 +102,33 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 			}
 		}
 	}
+	l.weakenCoreRecords()
 	if err := l.out.Err(); err != nil {
 		return nil, &Error{Err: ErrIR, What: err.Error()}
 	}
 	return l.out, nil
+}
+
+// weakenCoreRecords makes every exported definition of a core type's --
+// its metadata, descriptor, value witnesses and accessor, mangled in the
+// standard library's module ($sS…, $ss…) -- a weak one. Core is compiled
+// into each module that uses it, so two modules both needing Character's
+// metadata both define it, alike, and the linker keeps one, as it keeps one
+// copy of a C++ inline function.
+func (l *lowerer) weakenCoreRecords() {
+	core := func(name string) bool {
+		return strings.HasPrefix(name, l.sym("$sS")) || strings.HasPrefix(name, l.sym("$ss"))
+	}
+	for _, g := range l.out.Globals() {
+		if g.Linkage() == ir.Export && core(g.Name()) {
+			g.Weak()
+		}
+	}
+	for _, f := range l.out.Funcs() {
+		if f.Linkage() == ir.Export && core(f.Name()) {
+			f.Weak()
+		}
+	}
 }
 
 // lowerer maintains translation state across a lowered module.
@@ -562,6 +585,15 @@ func (l *lowerer) funcSig(sig *types.Signature) (*ir.Sig, error) {
 		// inst.go, which is the same code for both.
 		if _, wide := indirect(sil.Object(p.Type)); wide {
 			s.Param(ir.TypePtr)
+			continue
+		}
+		// A tuple goes as its elements, each in its own register, as a
+		// direct call's parameter does (lowerer.signature) and as the call
+		// site gathers it (gatherArg): an (Int, Double) is an i64 and an f64.
+		if rs, ok := tupleParts(sil.Object(p.Type)); ok {
+			for _, r := range rs {
+				s.Param(r.reg)
+			}
 			continue
 		}
 		if n, ok := directWords(sil.Object(p.Type)); ok {

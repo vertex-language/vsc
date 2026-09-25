@@ -432,13 +432,24 @@ func (p *printer) enum(n *ast.EnumDecl) {
 	prevIsolated := p.isolated
 	p.isolated = isolated
 	defer func() { p.isolated = prevIsolated }()
-	p.line("%s enum %s%s {", acc, p.ident(n.Name), inheritText(protocolNames(e.Conformances)))
+	// A raw type is written first, and each case's raw value after it, as
+	// a swiftinterface has them: a client's init(rawValue:) and rawValue
+	// are lowered from these.
+	inherits := protocolNames(e.Conformances)
+	if e.RawType != nil {
+		inherits = append([]string{typeText(e.RawType)}, inherits...)
+	}
+	p.line("%s enum %s%s {", acc, p.ident(n.Name), inheritText(inherits))
 	for _, c := range e.Cases {
 		if c == nil {
 			continue
 		}
 		if c.AssociatedType != nil {
 			p.line("  case %s(%s)", escape(c.Name), typeText(c.AssociatedType))
+			continue
+		}
+		if raw := p.rawValueText(c); raw != "" {
+			p.line("  case %s = %s", escape(c.Name), raw)
 			continue
 		}
 		p.line("  case %s", escape(c.Name))
@@ -452,6 +463,18 @@ func (p *printer) enum(n *ast.EnumDecl) {
 	p.methods(e.Methods)
 	p.line("}")
 	p.line("")
+}
+
+// rawValueText is a case's raw value as its declaration wrote it, or the
+// number counted for it, or "" where it is the case's name (a String's).
+func (p *printer) rawValueText(c *types.EnumCase) string {
+	if x := p.m.Info.RawValues[c]; x != nil && p.file != nil && p.file.Contains(x.Pos()) {
+		return string(p.file.Slice(x.Pos(), x.End()))
+	}
+	if c.HasRawInt {
+		return fmt.Sprint(c.RawInt)
+	}
+	return ""
 }
 
 // function formats a function declaration signature without a body.

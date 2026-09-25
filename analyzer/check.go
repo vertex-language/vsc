@@ -447,6 +447,15 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 			c.resolveAssociatedTypes(decls, staging)
 			c.declareFunctions(decls, staging)
 		}
+		// Its enums' raw values, which a client's init(rawValue:) and
+		// rawValue are lowered from: recorded here as they are when the
+		// module itself is checked.
+		for i, f := range imp.Files {
+			if i < len(imp.Units) {
+				c.file = imp.Units[i]
+			}
+			c.recordImportedRawValues(declsOf(f.Stmts), staging)
+		}
 		// What its types get by conforming, where it does not say already:
 		// a source package's, or an interface's written before it did.
 		for i, f := range imp.Files {
@@ -681,4 +690,49 @@ func (c *checker) checkPendingDefaults() {
 	}
 	c.pendingDefaults = nil
 	c.file = prev
+}
+
+// recordImportedRawValues records the raw value each case of an imported
+// enum declares, and numbers the rest, for enums at any depth.
+func (c *checker) recordImportedRawValues(decls []ast.Decl, scope *Scope) {
+	for _, d := range decls {
+		var body *ast.MemberBlock
+		var self types.Type
+		switch d := d.(type) {
+		case *ast.EnumDecl:
+			body, self = d.Body, c.declaredType(d.Name, scope)
+		case *ast.StructDecl:
+			body, self = d.Body, c.declaredType(d.Name, scope)
+		case *ast.ClassDecl:
+			body, self = d.Body, c.declaredType(d.Name, scope)
+		default:
+			continue
+		}
+		if body == nil || self == nil {
+			continue
+		}
+		inner := c.info.Scopes[d]
+		if inner == nil {
+			inner = scope
+		}
+		var nested []ast.Decl
+		for _, m := range body.Members {
+			if cd, ok := m.(*ast.EnumCaseDecl); ok {
+				for _, el := range cd.Elements {
+					if el.Value != nil {
+						c.checkExpr(el.Value, rawValueOf(self), inner)
+						c.recordRawValue(self, el)
+					}
+				}
+				continue
+			}
+			if nd, ok := m.(ast.Decl); ok {
+				nested = append(nested, nd)
+			}
+		}
+		if _, isEnum := d.(*ast.EnumDecl); isEnum {
+			numberRawCases(self)
+		}
+		c.recordImportedRawValues(nested, inner)
+	}
 }
