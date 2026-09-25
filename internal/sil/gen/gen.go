@@ -165,7 +165,12 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 				}
 				switch d := decl.D.(type) {
 				case *ast.FuncDecl:
-					if ast.IsInlinable(d, f.Unit) {
+					// A generic one is specialized where it is called,
+					// and a kernel is its own module's to build: a
+					// launch of it names the defining module's
+					// descriptor. A generic kernel is both.
+					if ast.IsInlinable(d, f.Unit) && d.Generics == nil &&
+						(d.Sig == nil || d.Sig.Exec != ast.ExecKernel) {
 						g.function(d, nil)
 					}
 				case *ast.StructDecl:
@@ -174,6 +179,8 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 					g.inlinableMembers(d.Name, d.Body)
 				case *ast.EnumDecl:
 					g.inlinableMembers(d.Name, d.Body)
+				case *ast.ExtensionDecl:
+					g.inlinableExtension(d)
 				}
 			}
 			diags = append(diags, g.diags...)
@@ -435,6 +442,9 @@ type gen struct {
 	// the function is public_external, available here to inline and to
 	// run on a device, and its symbol is still the other module's.
 	inlinable bool
+	// memberOf is the module an imported extension's member is lowered
+	// for (inlinableExtension): its symbol is that module's.
+	memberOf string
 	// specializing is set while a generic function, method, initializer
 	// or accessor is lowered for particular types: what is emitted then
 	// is private to this module (see functionNamed and accessLinkage).
@@ -1491,4 +1501,64 @@ func (g *gen) inlinableMembers(name *ast.Ident, body *ast.MemberBlock) {
 			g.initializer(m, sym.Type())
 		}
 	}
+}
+
+// inlinableExtension is inlinableMembers for an imported extension: its
+// @inlinable methods and initializers, on the type it extends. A
+// protocol's extension, or a generic type's, is lowered where it is used.
+func (g *gen) inlinableExtension(d *ast.ExtensionDecl) {
+	recv := g.info.Extensions[d]
+	if recv == nil || d.Body == nil {
+		return
+	}
+	if _, isProtocol := recv.(*types.Protocol); isProtocol {
+		return
+	}
+	if builtinParams(g.info, recv) != nil || len(nominalTypeParams(recv)) > 0 {
+		return
+	}
+	for _, mem := range d.Body.Members {
+		if !ast.InlinableMember(mem, g.file) {
+			continue
+		}
+		switch m := mem.(type) {
+		case *ast.FuncDecl:
+			// The member's own symbol is its module's; what its body
+			// calls is named as it always is.
+			name := ""
+			if sym, ok := g.info.Defs[m.Name].(*analyzer.FuncSymbol); ok {
+				g.memberOf = g.extensionMemberModule(recv, m)
+				name = g.methodSymbol(&analyzer.MethodRef{
+					Recv:   recv,
+					Method: &types.Method{Name: sym.Name(), Sig: sym.Signature(), IsStatic: isStaticDecl(m.Mods)},
+				})
+				g.memberOf = ""
+			}
+			g.functionNamed(m, recv, name)
+		case *ast.InitDecl:
+			g.initializer(m, recv)
+		}
+	}
+}
+
+// extensionMemberModule is the module that declared an extension's method
+// of a built-in type: what the checker recorded for it on import.
+func (g *gen) extensionMemberModule(recv types.Type, d *ast.FuncDecl) string {
+	sym, ok := g.info.Defs[d.Name].(*analyzer.FuncSymbol)
+	if !ok {
+		return ""
+	}
+	if m := g.info.Imported[sym]; m != "" {
+		return m
+	}
+	b := g.info.Builtins[analyzer.BuiltinKey(recv)]
+	if b == nil {
+		return ""
+	}
+	for _, m := range b.Methods {
+		if m != nil && m.Sig == sym.Signature() {
+			return b.Modules[m]
+		}
+	}
+	return ""
 }

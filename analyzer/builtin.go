@@ -201,8 +201,16 @@ func (c *checker) extendedBuiltin(t ast.Type, scope *Scope) (*BuiltinMembers, bo
 	if genericBuiltin(name) {
 		return c.builtinMembers(name, scope), true
 	}
-	if u := types.LookupUniverse(name); u != nil && BuiltinKey(u) == name {
-		return c.builtinMembers(name, scope), true
+	if u := types.LookupUniverse(name); u != nil {
+		key := BuiltinKey(u)
+		if key == name {
+			return c.builtinMembers(name, scope), true
+		}
+		// Vertex's spelling of a built-in type is the type: `extension
+		// float32` extends Float, as `extension Float` does.
+		if v, ok := types.VertexName(key); ok && v == name {
+			return c.builtinMembers(key, scope), true
+		}
 	}
 	return nil, false
 }

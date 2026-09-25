@@ -234,7 +234,7 @@ public struct Box {
 		t.Fatal(err)
 	}
 	out := b.String()
-	if !strings.Contains(out, "@inlinable public func twice(_ x: int32) -> int32 { return x + x }") {
+	if !strings.Contains(out, "@inlinable public func twice(_ x: Int32) -> Int32 { return x + x }") {
 		t.Errorf("the inlinable body is missing:\n%s", out)
 	}
 	for _, want := range []string{
@@ -250,5 +250,61 @@ public struct Box {
 	}
 	if strings.Contains(out, "x * 3") {
 		t.Errorf("a body that is not @inlinable was written:\n%s", out)
+	}
+}
+
+// TestGenericKernelFromAnotherModule: a package's @inlinable generic
+// function launches its @inlinable generic kernel over a protocol the
+// package declares and conforms float32 to; the client specializes both.
+func TestGenericKernelFromAnotherModule(t *testing.T) {
+	root := t.TempDir()
+	writePackage(t, filepath.Join(root, "acc", "ops"), "ops", `
+import "gpu"
+public protocol Scalable: Numeric { static func Twice(_ x: Self) -> Self }
+extension float32: Scalable { @inlinable public static func Twice(_ x: float32) -> float32 { return x + x } }
+@inlinable public func _k<T: Scalable>(_ y: gpu.MutableSpan<T>, _ a: T) kernel { y[gpu.Index.x] = T.Twice(y[gpu.Index.x]) * a }
+@inlinable public func Apply<T: Scalable>(_ b: gpu.Buffer<T>, _ a: T) async throws { try await _k.Launch(b, a, over: b.count) }
+`)
+	_, diags := compile(t, `
+import "gpu"
+import "acc/ops"
+func main() async throws {
+    let b = try await gpu.CPU().Upload([float32(1), 2])
+    try await ops.Apply(b, 3)
+}
+`, vsc.Options{PackagePaths: []string{root}, Packages: &fakePackages{}})
+	for _, d := range diags {
+		if d.Severity == token.Error {
+			t.Fatalf("compile: %v", d)
+		}
+	}
+}
+
+// TestInterfaceCarriesProtocolsAndExtensions: what a client needs of a
+// module's protocols -- the protocol, the conformances extensions give,
+// the packages they come from -- is in its interface.
+func TestInterfaceCarriesProtocolsAndExtensions(t *testing.T) {
+	u, diags := compile(t, `
+import "gpu"
+public protocol Shape { static func Sides() -> Int32 }
+extension float32: Shape { @inlinable public static func Sides() -> Int32 { return 3 } }
+`, vsc.Options{Module: "lib", Stop: vsc.Checked})
+	for _, d := range diags {
+		t.Fatalf("compile: %v", d)
+	}
+	var b strings.Builder
+	if err := iface.Print(&b, iface.Module{Name: "lib", Files: u.Files, Units: u.Positions, Info: u.Info}); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	for _, want := range []string{
+		`import "gpu"`,
+		"public protocol Shape { static func Sides() -> Int32 }",
+		"extension float32: Shape {",
+		"@inlinable public static func Sides() -> Int32 { return 3 }",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
 	}
 }

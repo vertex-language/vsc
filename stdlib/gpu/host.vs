@@ -232,6 +232,28 @@ public final class _Launch {
     public func _int(_ v: int) -> _Launch { _launchI64(_h, v); return self }
     public func _uint(_ v: uint) -> _Launch { _launchI64(_h, int(bitPattern: v)); return self }
     public func _int64(_ v: int64) -> _Launch { _launchI64(_h, int(v)); return self }
+
+    /// _value is the launch step for a parameter whose type is a type
+    /// parameter where the launch is written: a generic function launching
+    /// a generic kernel. The type is one of the others' by the time the
+    /// launch runs.
+    public func _value<T>(_ v: T) -> _Launch {
+        if let x = v as? float32 { return _float32(x) }
+        if let x = v as? float64 { return _float64(x) }
+        if let x = v as? int32 { return _int32(x) }
+        if let x = v as? uint32 { return _uint32(x) }
+        if let x = v as? int { return _int(x) }
+        if let x = v as? uint { return _uint(x) }
+        if let x = v as? int64 { return _int64(x) }
+        if let x = v as? uint64 { return _uint64(x) }
+        if let x = v as? int16 { return _int16(x) }
+        if let x = v as? uint16 { return _uint16(x) }
+        if let x = v as? int8 { return _int8(x) }
+        if let x = v as? uint8 { return _uint8(x) }
+        if let x = v as? bool { return _bool(x) }
+        _launchI64(_h, 0)
+        return self
+    }
     public func _uint64(_ v: uint64) -> _Launch { _launchI64(_h, int(bitPattern: uint(v))); return self }
     public func _float32(_ v: float32) -> _Launch { _launchF32(_h, v); return self }
     public func _float64(_ v: float64) -> _Launch { _launchF64(_h, v); return self }

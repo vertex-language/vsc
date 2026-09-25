@@ -40,7 +40,7 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 			if mask, isMap := g.info.KernelMaps[call]; isMap {
 				return g.kernelMapDescriptor(k, mask)
 			}
-			return g.kernelDescriptor(k)
+			return g.kernelDescriptor(call, k)
 		}
 	}
 	switch n := e.(type) {
@@ -2707,6 +2707,9 @@ func (g *gen) basicInit(e *ast.CallExpr, t types.Type) (*sil.Value, bool) {
 // memberModule is the module a member of recv is declared in: the type's,
 // or for a member an extension gives a built-in type, the extension's.
 func (g *gen) memberModule(recv types.Type, member any) string {
+	if g.memberOf != "" {
+		return g.memberOf
+	}
 	if meta, ok := recv.(*types.Metatype); ok {
 		recv = meta.Instance
 	}

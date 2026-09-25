@@ -22,11 +22,10 @@ func HasAttr(attrs []*Attr, file *token.File, name string) bool {
 const Inlinable = "inlinable"
 
 // IsInlinable reports whether d is a module-scope function marked
-// @inlinable, with a body, and not generic: the kind an interface keeps
-// the body of and a client compiles.
+// @inlinable, with a body: the kind an interface keeps whole and a client
+// compiles -- as it is, or, if it is generic, for the types it is used at.
 func IsInlinable(d *FuncDecl, file *token.File) bool {
-	return d != nil && d.Recv == nil && d.Body != nil && d.Generics == nil &&
-		HasAttr(d.Attrs, file, Inlinable)
+	return d != nil && d.Recv == nil && d.Body != nil && HasAttr(d.Attrs, file, Inlinable)
 }
 
 // InlinableMember reports whether n is a method or initializer of a type

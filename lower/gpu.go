@@ -146,7 +146,15 @@ func (l *lowerer) writeKernelDescriptor(kernel, name string, img *KernelImage, p
 			ir.Val("params", ir.Lit(ir.Int(int64(params)))),
 		)).
 		Align(8)
-	g.Export()
+	// A kernel private to this module -- a generic one's specialization,
+	// which another module makes its own copy of -- has a private
+	// descriptor and thunk too.
+	if fn != nil && fn.Linkage() == ir.Internal {
+		g.Internal()
+		thunk.Internal()
+	} else {
+		g.Export()
+	}
 	return g
 }
 

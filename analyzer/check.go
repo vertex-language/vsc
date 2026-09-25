@@ -498,7 +498,7 @@ func (c *checker) checkImportedGenerics(decls []ast.Decl, scope *Scope) {
 				continue
 			}
 			if d.Generics != nil || (d.Recv != nil && c.namesGenericType(d.Recv.Type, scope)) ||
-				ast.IsInlinable(d, c.file) {
+				(ast.IsInlinable(d, c.file) && (d.Sig == nil || d.Sig.Exec != ast.ExecKernel)) {
 				c.checkDecl(d, scope)
 			}
 		case *ast.StructDecl:

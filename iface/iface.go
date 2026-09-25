@@ -52,7 +52,22 @@ func Print(w io.Writer, m Module) error {
 				continue
 			}
 			imp, ok := decl.D.(*ast.ImportDecl)
-			if !ok || len(imp.Path) == 0 || p.file == nil {
+			if !ok || p.file == nil {
+				continue
+			}
+			// A string import names a package: the client resolves it the
+			// same way, and needs it for what this module's declarations
+			// name of it -- a protocol a generic function requires, the
+			// conformances an extension there gives.
+			for _, spec := range imp.Paths {
+				text := string(p.file.Slice(spec.Pos(), spec.End()))
+				if text == "" || seen[text] {
+					continue
+				}
+				seen[text] = true
+				p.line("import %s", text)
+			}
+			if len(imp.Path) == 0 {
 				continue
 			}
 			name := imp.Path[0].Text(p.file)
@@ -120,9 +135,10 @@ func (p *printer) decl(d ast.Decl) {
 		// An @inlinable function keeps its body: a client compiles it
 		// (sil/gen, importedInlinable), which is what lets a kernel in
 		// another module call it on a device.
-		if ast.IsInlinable(n, p.file) && p.file != nil {
-			body := p.file.Slice(n.Body.Pos(), n.Body.End())
-			p.line("@inlinable %s %s", p.function(acc, sym.Name(), sym.Signature()), body)
+		// It is written as it was: generics, where clause, the kernel
+		// modifier and all.
+		if p.file != nil && ast.IsInlinable(n, p.file) {
+			p.line("%s", p.file.Slice(n.Pos(), n.End()))
 			p.line("")
 			return
 		}
@@ -146,7 +162,68 @@ func (p *printer) decl(d ast.Decl) {
 			return
 		}
 		p.enum(n)
+
+	case *ast.ProtocolDecl:
+		// A protocol is all declaration: it is written as it was.
+		if !p.exported(n.Mods) || p.file == nil {
+			return
+		}
+		p.line("%s", p.file.Slice(n.Pos(), n.End()))
+		p.line("")
+
+	case *ast.ExtensionDecl:
+		p.extension(n)
 	}
+}
+
+// extension writes a public extension, or the public part of one: what it
+// conforms the type to, and the members another module may call -- an
+// @inlinable one as it was written, the others as declarations.
+func (p *printer) extension(n *ast.ExtensionDecl) {
+	if p.file == nil || n.Body == nil {
+		return
+	}
+	public := p.exported(n.Mods)
+	var members []string
+	for _, mem := range n.Body.Members {
+		fd, ok := mem.(*ast.FuncDecl)
+		id, isInit := mem.(*ast.InitDecl)
+		switch {
+		case ok:
+			if !public && !p.exported(fd.Mods) {
+				continue
+			}
+			if ast.InlinableMember(fd, p.file) {
+				members = append(members, string(p.file.Slice(fd.Pos(), fd.End())))
+				continue
+			}
+			sym, _ := p.m.Info.Defs[fd.Name].(*analyzer.FuncSymbol)
+			if sym == nil {
+				continue
+			}
+			acc := "public"
+			for _, m := range p.text(fd.Mods) {
+				if m == "static" || m == "mutating" {
+					acc += " " + m
+				}
+			}
+			members = append(members, p.function(acc, sym.Name(), sym.Signature()))
+		case isInit:
+			if (public || p.exported(id.Mods)) && ast.InlinableMember(id, p.file) {
+				members = append(members, string(p.file.Slice(id.Pos(), id.End())))
+			}
+		}
+	}
+	if len(members) == 0 && n.Inherit == nil {
+		return
+	}
+	header := strings.TrimSpace(string(p.file.Slice(n.Pos(), n.Body.Lbrace)))
+	p.line("%s {", header)
+	for _, m := range members {
+		p.line("  %s", m)
+	}
+	p.line("}")
+	p.line("")
 }
 
 // nominal writes a struct or class declaration with stored properties and methods in declaration order.

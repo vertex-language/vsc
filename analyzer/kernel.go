@@ -129,9 +129,12 @@ func (c *checker) checkKernelDecl(d *ast.FuncDecl, sig *types.Signature) {
 		c.errorf(at, "'%s' is a kernel, and a kernel cannot throw: there is nothing on a device to catch it. "+
 			"Report failure through a buffer, or trap", name)
 	}
-	if len(sig.TypeParams) > 0 {
-		c.errorf(at, "'%s' is a generic kernel, which this compiler does not build yet: "+
-			"write one kernel per element type", name)
+	// A generic kernel is built for each set of type arguments it is
+	// launched with (kernelLaunch): a parameter of a type parameter's type,
+	// or a span of one, is checked there, once the type is known.
+	generic := func(t types.Type) bool {
+		_, ok := t.(*types.TypeParam)
+		return ok
 	}
 	for _, p := range sig.Params {
 		if p == nil {
@@ -142,9 +145,15 @@ func (c *checker) checkKernelDecl(d *ast.FuncDecl, sig *types.Signature) {
 			continue
 		}
 		if elem, ok := c.spanElement(p.Type); ok {
+			if generic(elem) {
+				continue
+			}
 			if _, scalar := kernelScalarOf(elem); !scalar {
 				c.errorf(at, "kernel '%s' takes a span of '%s'; a span on a device holds numbers or bools", name, elem)
 			}
+			continue
+		}
+		if generic(p.Type) {
 			continue
 		}
 		if _, ok := kernelScalarOf(p.Type); !ok {
@@ -152,7 +161,7 @@ func (c *checker) checkKernelDecl(d *ast.FuncDecl, sig *types.Signature) {
 				"gpu.Span and gpu.MutableSpan", name, p.Name, p.Type)
 		}
 	}
-	if sig.Results != nil && !isVoidType(sig.Results) {
+	if sig.Results != nil && !isVoidType(sig.Results) && !generic(sig.Results) {
 		if _, ok := kernelScalarOf(sig.Results); !ok {
 			c.errorf(at, "kernel '%s' returns '%s'; an element kernel returns a number or a bool", name, sig.Results)
 		}
@@ -220,6 +229,23 @@ func (c *checker) kernelLaunch(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) t
 		return a.Label.Text(c.file)
 	}
 	n := len(sig.Params)
+	// A generic kernel's type arguments come from the arguments, as a
+	// generic function's do: a gpu.Buffer<X> passed for a span of T, or
+	// an X passed for a T, makes T X. The launch is of that specialization.
+	var spec *Specialization
+	if len(sig.TypeParams) > 0 && len(args) >= n {
+		inferred, ok := c.inferKernelArgs(sym, sig, args[:n], scope)
+		if !ok {
+			return invalid
+		}
+		spec = inferred
+		c.checkConstraints(e, sig.TypeParams, spec.Subst(), scope)
+		concrete, isSig := types.Substitute(sig, spec.Subst()).(*types.Signature)
+		if !isSig {
+			return invalid
+		}
+		sig = concrete
+	}
 	if len(args) < n+1 || label(args[n]) != "over" {
 		c.errorf(e.Pos(), "%s.Launch takes %s's %d argument(s), then over: the grid", sym.Name(), sym.Name(), n)
 		return invalid
@@ -286,6 +312,10 @@ func (c *checker) kernelLaunch(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) t
 			method, expect = "_buffer", &types.GenericInstance{Base: buffer, Args: []types.Type{elem}}
 		} else if m, scalar := kernelScalarOf(p.Type); scalar {
 			method, expect = m, p.Type
+		} else if _, outer := p.Type.(*types.TypeParam); outer {
+			// A generic function's own type parameter, a number once
+			// it is specialized: gpu._Launch._value.
+			method, expect = "_value", p.Type
 		} else {
 			// The declaration said why already.
 			ok = false
@@ -343,6 +373,9 @@ func (c *checker) kernelLaunch(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) t
 
 	desc := call(gpu(), "_kernelDescriptor", "", nil)
 	c.info.KernelDescriptors[desc] = sym
+	if spec != nil {
+		c.info.Specializations[desc] = *spec
+	}
 	chain := call(gpu(), "_Launch", "_kernel", desc)
 	for _, s := range steps {
 		chain = call(chain, s.method, "", s.x)
@@ -501,4 +534,69 @@ func (c *checker) kernelMap(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) type
 	}
 	c.info.ImplicitSelf[e] = chain
 	return c.checkExpr(chain, nil, scope)
+}
+
+// inferKernelArgs works out a generic kernel's type arguments from the
+// arguments of a launch of it, and checks each: it satisfies its type
+// parameter's constraints, and it is a type a device has.
+func (c *checker) inferKernelArgs(sym *FuncSymbol, sig *types.Signature, args []*ast.CallArg, scope *Scope) (*Specialization, bool) {
+	subst := map[*types.TypeParam]types.Type{}
+	buffer := c.gpuType("Buffer")
+	// Buffers first: what a buffer holds is its type, where a literal
+	// passed for a T would only be a default. Then the rest, each checked
+	// against what its type parameter is already, if anything.
+	for pass := 0; pass < 2; pass++ {
+		for i, p := range sig.Params {
+			var tp *types.TypeParam
+			span := false
+			if elem, ok := c.spanElement(p.Type); ok {
+				tp, _ = elem.(*types.TypeParam)
+				span = true
+			} else {
+				tp, _ = p.Type.(*types.TypeParam)
+			}
+			if tp == nil || span != (pass == 0) {
+				continue
+			}
+			got := c.checkExpr(args[i].X, subst[tp], scope)
+			if isInvalid(got) {
+				return nil, false
+			}
+			arg := got
+			if span {
+				gi, ok := got.(*types.GenericInstance)
+				if !ok || buffer == nil || !types.Identical(gi.Base, buffer) || len(gi.Args) != 1 {
+					c.typeErrorf(args[i].X.Pos(), "cannot launch %s with '%s' for '%s': it takes a gpu.Buffer",
+						sym.Name(), got, p.Name)
+					return nil, false
+				}
+				arg = gi.Args[0]
+			}
+			if was, bound := subst[tp]; bound && !types.Identical(was, arg) {
+				c.typeErrorf(args[i].X.Pos(), "cannot launch %s: '%s' is '%s' here and '%s' before",
+					sym.Name(), tp, arg, was)
+				return nil, false
+			}
+			subst[tp] = arg
+		}
+	}
+	spec := &Specialization{Params: sig.TypeParams}
+	for _, tp := range sig.TypeParams {
+		t, ok := subst[tp]
+		if !ok {
+			c.errorf(args[0].Pos(), "cannot launch %s: nothing it is passed says what '%s' is", sym.Name(), tp)
+			return nil, false
+		}
+		// A launch inside a generic function passes that function's own
+		// type parameter, which is a number once the function is
+		// specialized, and checked then.
+		_, outer := t.(*types.TypeParam)
+		if _, scalar := kernelScalarOf(t); !scalar && !outer {
+			c.typeErrorf(args[0].Pos(), "cannot launch %s with '%s' as '%s': a kernel's types are numbers and bools",
+				sym.Name(), t, tp)
+			return nil, false
+		}
+		spec.Args = append(spec.Args, t)
+	}
+	return spec, true
 }
