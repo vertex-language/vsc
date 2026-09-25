@@ -231,6 +231,8 @@ public final class _Launch {
     public func _uint32(_ v: uint32) -> _Launch { _launchI32(_h, int32(bitPattern: v)); return self }
     public func _int(_ v: int) -> _Launch { _launchI64(_h, v); return self }
     public func _uint(_ v: uint) -> _Launch { _launchI64(_h, int(bitPattern: v)); return self }
+    public func _int64(_ v: int64) -> _Launch { _launchI64(_h, int(v)); return self }
+    public func _uint64(_ v: uint64) -> _Launch { _launchI64(_h, int(bitPattern: uint(v))); return self }
     public func _float32(_ v: float32) -> _Launch { _launchF32(_h, v); return self }
     public func _float64(_ v: float64) -> _Launch { _launchF64(_h, v); return self }
     public func _bool(_ v: bool) -> _Launch { _launchI8(_h, v ? 1 : 0); return self }

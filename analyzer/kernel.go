@@ -35,6 +35,8 @@ var kernelScalar = map[types.BasicKind]string{
 	types.UInt32: "_uint32",
 	types.Int:    "_int",
 	types.UInt:   "_uint",
+	types.Int64:  "_int64",
+	types.UInt64: "_uint64",
 	types.Float:  "_float32",
 	types.Double: "_float64",
 	types.Bool:   "_bool",
