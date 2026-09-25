@@ -114,6 +114,17 @@ String vertex_float16_description(u32 bits) {
   return s;
 }
 
+// vertex_bfloat16_description is a BFloat16's: its shortest digits, with
+// eight bits of significand and Float's eight of exponent.
+String vertex_bfloat16_description(u32 bits) {
+  Text t;
+  textInit(t);
+  describeFloat(t, bits & 0xFFFF, 8, 8);
+  String s = makeString(t.bytes, t.count);
+  textFree(t);
+  return s;
+}
+
 // vertex_describe is `String(describing:)`: the value by address, since
 // its size is known only to its metadata, which follows it.
 String vertex_describe(const void* value, const Metadata* type) {

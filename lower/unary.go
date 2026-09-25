@@ -89,54 +89,13 @@ func (c *fn) floatUnary(name, verb string, r repr, args []ir.Value) ([]ir.Value,
 	if len(args) < want {
 		return nil, true, c.fail(ErrBuiltin, "builtin", name+": too few operands")
 	}
-	if r.reg == ir.TypeF64 {
-		ns := c.b.F64
-		a, ok := args[0].(ir.F64)
-		if !ok {
-			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an f64")
-		}
-		switch verb {
-		case "int_sqrt":
-			return []ir.Value{ns.Sqrt(a)}, true, nil
-		case "int_floor":
-			return []ir.Value{ns.Floor(a)}, true, nil
-		case "int_ceil":
-			return []ir.Value{ns.Ceil(a)}, true, nil
-		case "int_trunc":
-			return []ir.Value{ns.Trunc(a)}, true, nil
-		case "int_rint":
-			return []ir.Value{ns.Nearest(a)}, true, nil
-		case "int_fabs":
-			return []ir.Value{ns.Abs(a)}, true, nil
-		}
-		b, ok := args[1].(ir.F64)
-		if !ok {
-			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an f64")
-		}
-		return []ir.Value{ns.CopySign(a, b)}, true, nil
+	switch r.reg {
+	case ir.TypeF64:
+		return floatUnaryIn[ir.F64](c, c.b.F64, name, verb, args)
+	case ir.TypeF16:
+		return floatUnaryIn[ir.F16](c, c.b.F16(), name, verb, args)
+	case ir.TypeBF16:
+		return floatUnaryIn[ir.BF16](c, c.b.BF16(), name, verb, args)
 	}
-	ns := c.b.F32
-	a, ok := args[0].(ir.F32)
-	if !ok {
-		return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an f32")
-	}
-	switch verb {
-	case "int_sqrt":
-		return []ir.Value{ns.Sqrt(a)}, true, nil
-	case "int_floor":
-		return []ir.Value{ns.Floor(a)}, true, nil
-	case "int_ceil":
-		return []ir.Value{ns.Ceil(a)}, true, nil
-	case "int_trunc":
-		return []ir.Value{ns.Trunc(a)}, true, nil
-	case "int_rint":
-		return []ir.Value{ns.Nearest(a)}, true, nil
-	case "int_fabs":
-		return []ir.Value{ns.Abs(a)}, true, nil
-	}
-	b, ok := args[1].(ir.F32)
-	if !ok {
-		return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an f32")
-	}
-	return []ir.Value{ns.CopySign(a, b)}, true, nil
+	return floatUnaryIn[ir.F32](c, c.b.F32, name, verb, args)
 }

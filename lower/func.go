@@ -624,6 +624,10 @@ func (c *fn) loadReg(r ir.RegType, at ir.Ptr) ir.Value {
 		return c.b.F64.Load(at)
 	case ir.TypeF32:
 		return c.b.F32.Load(at)
+	case ir.TypeF16:
+		return c.b.F16().Load(at)
+	case ir.TypeBF16:
+		return c.b.BF16().Load(at)
 	}
 	return c.b.I64.Load(at)
 }

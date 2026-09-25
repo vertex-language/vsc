@@ -227,21 +227,23 @@ func (g *gen) stdlibMetadata(at ast.Node, t types.Type) (*sil.Value, bool) {
 // metadataRecords is the name of the record the runtime exports for a
 // type the core declares. See stdlib.Metadata.
 var metadataRecords = map[types.BasicKind]string{
-	types.Int:    "Int",
-	types.UInt:   "UInt",
-	types.Int8:   "Int8",
-	types.Int16:  "Int16",
-	types.Int32:  "Int32",
-	types.Int64:  "Int64",
-	types.UInt8:  "UInt8",
-	types.UInt16: "UInt16",
-	types.UInt32: "UInt32",
-	types.UInt64: "UInt64",
-	types.Bool:   "Bool",
-	types.Float:  "Float",
-	types.Double: "Double",
-	types.String: "String",
-	types.Void:   "Void",
+	types.Int:      "Int",
+	types.UInt:     "UInt",
+	types.Int8:     "Int8",
+	types.Int16:    "Int16",
+	types.Int32:    "Int32",
+	types.Int64:    "Int64",
+	types.UInt8:    "UInt8",
+	types.UInt16:   "UInt16",
+	types.UInt32:   "UInt32",
+	types.UInt64:   "UInt64",
+	types.Bool:     "Bool",
+	types.Float:    "Float",
+	types.Double:   "Double",
+	types.Float16:  "Float16",
+	types.BFloat16: "BFloat16",
+	types.String:   "String",
+	types.Void:     "Void",
 }
 
 // subscript lowers an array or dictionary element read.

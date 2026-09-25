@@ -39,7 +39,7 @@ func Alignof(t Type, target *Target) int64 {
 		switch tt.kind {
 		case Bool, Int8, UInt8:
 			return 1
-		case Int16, UInt16:
+		case Int16, UInt16, Float16, BFloat16:
 			return 2
 		case Int32, UInt32, Float:
 			return 4
@@ -111,7 +111,7 @@ func Sizeof(t Type, target *Target) int64 {
 			return 0
 		case Bool, Int8, UInt8:
 			return 1
-		case Int16, UInt16:
+		case Int16, UInt16, Float16, BFloat16:
 			return 2
 		case Int32, UInt32, Float:
 			return 4

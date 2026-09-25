@@ -9,7 +9,6 @@ import (
 	"github.com/vertex-language/vsc/stdlib"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
-	"math"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -386,10 +385,7 @@ func (g *gen) constant(e ast.Expr) *sil.Value {
 			// The value is two's complement: -1000 is held as its bits, and
 			// read unsigned it is a number near 2^64.
 			n := int64(v.Int)
-			bits := int64(math.Float64bits(float64(n)))
-			if b, ok := payload.Underlying().(*types.Basic); ok && b.Kind() == types.Float {
-				bits = int64(math.Float32bits(float32(n)))
-			}
+			bits := floatLiteralBits(payload, float64(n))
 			made = g.blk.Struct(lowerType(payload),
 				g.blk.FloatLiteral(sil.Object(builtinFor(payload)), bits))
 			break
@@ -397,10 +393,7 @@ func (g *gen) constant(e ast.Expr) *sil.Value {
 		raw := g.blk.IntegerLiteral(sil.Object(builtinFor(payload)), int64(v.Int))
 		made = g.blk.Struct(lowerType(payload), raw)
 	case analyzer.FloatValue:
-		bits := int64(math.Float64bits(v.Float))
-		if b, ok := payload.Underlying().(*types.Basic); ok && b.Kind() == types.Float {
-			bits = int64(math.Float32bits(float32(v.Float)))
-		}
+		bits := floatLiteralBits(payload, v.Float)
 		raw := g.blk.FloatLiteral(sil.Object(builtinFor(payload)), bits)
 		made = g.blk.Struct(lowerType(payload), raw)
 	case analyzer.BoolValue:
@@ -438,6 +431,10 @@ func builtinFor(t types.Type) types.Type {
 		return sil.BuiltinFPIEEE32
 	case types.Double:
 		return sil.BuiltinFPIEEE64
+	case types.Float16:
+		return sil.BuiltinFPIEEE16
+	case types.BFloat16:
+		return sil.BuiltinBFloat16
 	}
 	return sil.BuiltinInt64
 }
@@ -2312,6 +2309,10 @@ func builtinNamed(name string) types.Type {
 		return sil.BuiltinFPIEEE32
 	case "FPIEEE64":
 		return sil.BuiltinFPIEEE64
+	case "FPIEEE16":
+		return sil.BuiltinFPIEEE16
+	case "BFloat16":
+		return sil.BuiltinBFloat16
 	}
 	return sil.BuiltinInt64
 }

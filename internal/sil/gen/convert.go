@@ -3,6 +3,8 @@ package gen
 import (
 	"math"
 
+	"github.com/vertex-language/ir"
+
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/internal/sil"
@@ -240,16 +242,26 @@ func isFloat(t types.Type) bool {
 
 // floatBuiltinName is what SIL calls a floating-point type.
 func floatBuiltinName(t types.Type) string {
-	if b, ok := t.Underlying().(*types.Basic); ok && b.Kind() == types.Float {
-		return "FPIEEE32"
+	if b, ok := t.Underlying().(*types.Basic); ok {
+		switch b.Kind() {
+		case types.Float:
+			return "FPIEEE32"
+		case types.Float16:
+			return "FPIEEE16"
+		case types.BFloat16:
+			return "BFloat16"
+		}
 	}
 	return "FPIEEE64"
 }
 
 // floatBits is how wide one is.
 func floatBits(t types.Type) int {
-	if floatBuiltinName(t) == "FPIEEE32" {
+	switch floatBuiltinName(t) {
+	case "FPIEEE32":
 		return 32
+	case "FPIEEE16", "BFloat16":
+		return 16
 	}
 	return 64
 }
@@ -323,8 +335,15 @@ func floatBounds(dst intRange) (lo, hi float64) {
 // source's own floating-point type, which is what a float literal
 // carries.
 func floatLiteralBits(from types.Type, v float64) int64 {
-	if b, ok := from.Underlying().(*types.Basic); ok && b.Kind() == types.Float {
-		return int64(math.Float32bits(float32(v)))
+	if b, ok := from.Underlying().(*types.Basic); ok {
+		switch b.Kind() {
+		case types.Float:
+			return int64(math.Float32bits(float32(v)))
+		case types.Float16:
+			return int64(ir.HalfBits(ir.TypeF16, v))
+		case types.BFloat16:
+			return int64(ir.HalfBits(ir.TypeBF16, v))
+		}
 	}
 	return int64(math.Float64bits(v))
 }

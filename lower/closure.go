@@ -294,6 +294,10 @@ func (c *fn) storeRegister(in *sil.Inst, v ir.Value, p ir.Ptr) error {
 		c.b.F64.Store(r, p)
 	case ir.F32:
 		c.b.F32.Store(r, p)
+	case ir.F16:
+		c.b.F16().Store(r, p)
+	case ir.BF16:
+		c.b.BF16().Store(r, p)
 	case ir.Ptr:
 		c.b.Ptr.Store(r, p)
 	default:
@@ -480,6 +484,10 @@ func (l *lowerer) forwarder(name string, body *sil.Func, sig *types.Signature, c
 				v = b.F64.Load(at)
 			case ir.TypeF32:
 				v = b.F32.Load(at)
+			case ir.TypeF16:
+				v = b.F16().Load(at)
+			case ir.TypeBF16:
+				v = b.BF16().Load(at)
 			case ir.TypePtr:
 				v = b.Ptr.Load(at)
 			default:
@@ -517,6 +525,10 @@ func forwarderParam(f *ir.Func, name string, t ir.RegType, attrs []ir.ParamAttr)
 		return f.ParamI64(name, attrs...), nil
 	case ir.TypeF32:
 		return f.ParamF32(name, attrs...), nil
+	case ir.TypeF16:
+		return f.ParamF16(name, attrs...), nil
+	case ir.TypeBF16:
+		return f.ParamBF16(name, attrs...), nil
 	case ir.TypeF64:
 		return f.ParamF64(name, attrs...), nil
 	case ir.TypePtr:
@@ -535,6 +547,10 @@ func forwarderRet(f *ir.Func, t ir.RegType, attrs []ir.ParamAttr) error {
 		f.ReturnsI64(attrs...)
 	case ir.TypeF32:
 		f.ReturnsF32(attrs...)
+	case ir.TypeF16:
+		f.ReturnsF16(attrs...)
+	case ir.TypeBF16:
+		f.ReturnsBF16(attrs...)
 	case ir.TypeF64:
 		f.ReturnsF64(attrs...)
 	case ir.TypePtr:

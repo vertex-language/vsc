@@ -8,7 +8,7 @@
 extern "C" {
 extern const vertex::FullMetadata vertex_metadata_Bool, vertex_metadata_Int8,
     vertex_metadata_UInt8, vertex_metadata_Int16, vertex_metadata_UInt16,
-    vertex_metadata_Int32, vertex_metadata_UInt32, vertex_metadata_Float,
+    vertex_metadata_Int32, vertex_metadata_UInt32, vertex_metadata_Float, vertex_metadata_Float16, vertex_metadata_BFloat16,
     vertex_metadata_Int, vertex_metadata_UInt, vertex_metadata_Int64,
     vertex_metadata_UInt64, vertex_metadata_Double, vertex_metadata_String,
     vertex_metadata_Any;
@@ -367,7 +367,8 @@ void typeName(Text& t, const Metadata* type) {
       {&vertex_metadata_Int, "Int"},       {&vertex_metadata_UInt, "UInt"},
       {&vertex_metadata_Int64, "Int64"},   {&vertex_metadata_UInt64, "UInt64"},
       {&vertex_metadata_Double, "Double"}, {&vertex_metadata_String, "String"},
-      {&vertex_metadata_Any, "Any"},
+      {&vertex_metadata_Any, "Any"},       {&vertex_metadata_Float16, "Float16"},
+      {&vertex_metadata_BFloat16, "BFloat16"},
   };
   if (type == nullptr) {
     textString(t, "<unknown>");
@@ -487,6 +488,14 @@ void describe(Text& t, const void* value, const Metadata* type) {
   }
   if (is(type, vertex_metadata_Float)) {
     describeFloat(t, *static_cast<const u32*>(value), 24, 8);
+    return;
+  }
+  if (is(type, vertex_metadata_Float16)) {
+    describeFloat(t, *static_cast<const u16*>(value), 11, 5);
+    return;
+  }
+  if (is(type, vertex_metadata_BFloat16)) {
+    describeFloat(t, *static_cast<const u16*>(value), 8, 8);
     return;
   }
   if (type->kind == kindOptional) {

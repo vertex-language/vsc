@@ -180,14 +180,18 @@ func (b *Builtin) Name() string           { return b.name }
 
 // Common builtin types.
 var (
-	BuiltinInt1       = &Builtin{"Int1"}
-	BuiltinInt8       = &Builtin{"Int8"}
-	BuiltinInt16      = &Builtin{"Int16"}
-	BuiltinInt32      = &Builtin{"Int32"}
-	BuiltinInt64      = &Builtin{"Int64"}
-	BuiltinWord       = &Builtin{"Word"}
-	BuiltinFPIEEE32   = &Builtin{"FPIEEE32"}
-	BuiltinFPIEEE64   = &Builtin{"FPIEEE64"}
+	BuiltinInt1     = &Builtin{"Int1"}
+	BuiltinInt8     = &Builtin{"Int8"}
+	BuiltinInt16    = &Builtin{"Int16"}
+	BuiltinInt32    = &Builtin{"Int32"}
+	BuiltinInt64    = &Builtin{"Int64"}
+	BuiltinWord     = &Builtin{"Word"}
+	BuiltinFPIEEE32 = &Builtin{"FPIEEE32"}
+	BuiltinFPIEEE64 = &Builtin{"FPIEEE64"}
+	BuiltinFPIEEE16 = &Builtin{"FPIEEE16"}
+	// BuiltinBFloat16 is bfloat16, which Swift's SIL has no name for: the
+	// name is LLVM's type's.
+	BuiltinBFloat16   = &Builtin{"BFloat16"}
 	BuiltinIntLiteral = &Builtin{"IntLiteral"}
 	BuiltinNativeObj  = &Builtin{"NativeObject"}
 	BuiltinRawPointer = &Builtin{"RawPointer"}

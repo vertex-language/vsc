@@ -56,7 +56,7 @@ func BuiltinKey(t types.Type) string {
 		switch u.Kind() {
 		case types.Bool, types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
 			types.UInt, types.UInt8, types.UInt16, types.UInt32, types.UInt64,
-			types.Float, types.Double, types.String, types.Character:
+			types.Float, types.Double, types.Float16, types.BFloat16, types.String, types.Character:
 			return u.Name()
 		}
 		return ""

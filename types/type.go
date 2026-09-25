@@ -42,6 +42,13 @@ const (
 	UntypedFloat
 	UntypedString
 	UntypedNil
+
+	// Float16 is IEEE binary16, Swift's Float16. BFloat16 is bfloat16 --
+	// Float's sign and exponent with seven bits of fraction -- which
+	// Swift does not have and Vertex does, because a model's weights are
+	// in it. They come last so that no other kind's number moves.
+	Float16
+	BFloat16
 )
 
 // BasicInfo flags describing basic type properties.
@@ -327,7 +334,7 @@ type Subscript struct {
 	// NonmutatingSet is a `nonmutating set`: it writes through self --
 	// a buffer pointer's elements -- rather than to it, so a `let` may.
 	NonmutatingSet bool
-	Exported bool
+	Exported       bool
 }
 
 // Requirement represents a protocol requirement.

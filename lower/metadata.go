@@ -680,8 +680,15 @@ func (l *lowerer) fieldTypeRecord(t types.Type) (ir.Symbol, bool) {
 	}
 	if b, ok := t.Underlying().(*types.Basic); ok {
 		name, known := bridgeableElements[b.Kind()]
-		if b.Kind() == types.String {
+		switch b.Kind() {
+		case types.String:
 			name, known = "String", true
+		case types.Float16:
+			// The runtime's records, as for every basic type; not in
+			// bridgeableElements only because BFloat16 has no Swift twin.
+			name, known = "Float16", true
+		case types.BFloat16:
+			name, known = "BFloat16", true
 		}
 		if !known {
 			return nil, false

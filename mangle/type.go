@@ -82,15 +82,19 @@ var stdlib = map[types.BasicKind]struct {
 	name string
 	kind NominalKind
 }{
-	types.Int8:   {"Int8", Struct},
-	types.Int16:  {"Int16", Struct},
-	types.Int32:  {"Int32", Struct},
-	types.Int64:  {"Int64", Struct},
-	types.UInt8:  {"UInt8", Struct},
-	types.UInt16: {"UInt16", Struct},
-	types.UInt32: {"UInt32", Struct},
-	types.UInt64: {"UInt64", Struct},
-	types.Never:  {"Never", Enum},
+	types.Int8:    {"Int8", Struct},
+	types.Int16:   {"Int16", Struct},
+	types.Int32:   {"Int32", Struct},
+	types.Int64:   {"Int64", Struct},
+	types.UInt8:   {"UInt8", Struct},
+	types.UInt16:  {"UInt16", Struct},
+	types.UInt32:  {"UInt32", Struct},
+	types.UInt64:  {"UInt64", Struct},
+	types.Never:   {"Never", Enum},
+	types.Float16: {"Float16", Struct},
+	// Vertex's own: a struct of the standard library, as Float16 is,
+	// under the name Swift would give it if it had one.
+	types.BFloat16: {"BFloat16", Struct},
 }
 
 // extendedType writes the standard library type an extension extends, as

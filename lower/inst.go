@@ -365,6 +365,15 @@ func (c *fn) floatLiteral(in *sil.Inst) error {
 		c.def(res, c.b.F64.Const(math.Float64frombits(bits)))
 	case ir.TypeF32:
 		c.def(res, c.b.F32.Const(float64(math.Float32frombits(uint32(bits)))))
+	case ir.TypeF16, ir.TypeBF16:
+		// A half literal's bits are its encoding; the value they make is
+		// exact in the f64 a constant is written as.
+		v := ir.HalfValue(r.reg, uint16(bits))
+		if r.reg == ir.TypeF16 {
+			c.def(res, c.b.F16().Const(v))
+		} else {
+			c.def(res, c.b.BF16().Const(v))
+		}
 	default:
 		return c.fail(ErrType, in.Op(), r.reg.String())
 	}
@@ -958,6 +967,10 @@ func (c *fn) loadScalar(in *sil.Inst, p ir.Ptr, r repr) (ir.Value, error) {
 		return c.b.F32.Load(p), nil
 	case ir.TypeF64:
 		return c.b.F64.Load(p), nil
+	case ir.TypeF16:
+		return c.b.F16().Load(p), nil
+	case ir.TypeBF16:
+		return c.b.BF16().Load(p), nil
 	case ir.TypePtr:
 		return c.b.Ptr.Load(p), nil
 	case ir.TypeI1:
@@ -1075,6 +1088,10 @@ func (c *fn) storeScalar(in *sil.Inst, v ir.Value, p ir.Ptr, r repr) error {
 		c.b.F32.Store(v, p)
 	case ir.F64:
 		c.b.F64.Store(v, p)
+	case ir.F16:
+		c.b.F16().Store(v, p)
+	case ir.BF16:
+		c.b.BF16().Store(v, p)
 	case ir.Ptr:
 		c.b.Ptr.Store(v, p)
 	case ir.I1:
@@ -1620,6 +1637,10 @@ func (c *fn) throwInst(in *sil.Inst) error {
 			vals = append(vals, c.b.I64.Const(0))
 		case ir.TypeF32:
 			vals = append(vals, c.b.F32.Const(0))
+		case ir.TypeF16:
+			vals = append(vals, c.b.F16().Const(0))
+		case ir.TypeBF16:
+			vals = append(vals, c.b.BF16().Const(0))
 		case ir.TypeF64:
 			vals = append(vals, c.b.F64.Const(0))
 		case ir.TypePtr:
@@ -1703,6 +1724,10 @@ func zeroOf(b *ir.Block, r ir.RegType) (ir.Value, bool) {
 		return b.I64.Const(0), true
 	case ir.TypeF32:
 		return b.F32.Const(0), true
+	case ir.TypeF16:
+		return b.F16().Const(0), true
+	case ir.TypeBF16:
+		return b.BF16().Const(0), true
 	case ir.TypeF64:
 		return b.F64.Const(0), true
 	case ir.TypePtr:
@@ -2591,6 +2616,10 @@ func (c *fn) zeroOf(in *sil.Inst, t types.Type) (ir.Value, error) {
 		return c.b.I64.Const(0), nil
 	case ir.TypeF32:
 		return c.b.F32.Const(0), nil
+	case ir.TypeF16:
+		return c.b.F16().Const(0), nil
+	case ir.TypeBF16:
+		return c.b.BF16().Const(0), nil
 	case ir.TypeF64:
 		return c.b.F64.Const(0), nil
 	case ir.TypePtr:

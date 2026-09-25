@@ -225,7 +225,8 @@ inline void describeFloat(Text& t, u64 bits, i32 precision, i32 exponentBits) {
 
   // A half that is a whole number -- past 2^11 every one is -- is
   // written exactly, as Swift writes 65504.0 and not 65500.0.
-  if (precision < 24 && e >= 0) {
+  // bfloat16 has Float's exponent, and follows Float's rules instead.
+  if (precision < 24 && exponentBits < 8 && e >= 0) {
     textUnsigned(t, f << e);
     textString(t, ".0");
     return;

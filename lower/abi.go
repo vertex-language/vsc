@@ -162,6 +162,10 @@ func (c *fn) toWord(v ir.Value, width uint) (ir.I64, bool) {
 		wide = c.b.I64.BitcastF64(got)
 	case ir.F32:
 		wide = c.b.I64.ZExtI32(c.b.I32.BitcastF32(got))
+	case ir.F16:
+		wide = c.b.I64.ZExtI32(c.b.I32.BitcastF16(got))
+	case ir.BF16:
+		wide = c.b.I64.ZExtI32(c.b.I32.BitcastBF16(got))
 	default:
 		return ir.I64{}, false
 	}
@@ -200,6 +204,10 @@ func (c *fn) fromWord(bits ir.I64, t types.Type, width uint) (ir.Value, bool) {
 		return c.b.F64.BitcastI64(bits), true
 	case ir.TypeF32:
 		return c.b.F32.BitcastI32(c.b.I32.WrapI64(bits)), true
+	case ir.TypeF16:
+		return c.b.F16().BitcastI32(c.b.I32.WrapI64(bits)), true
+	case ir.TypeBF16:
+		return c.b.BF16().BitcastI32(c.b.I32.WrapI64(bits)), true
 	}
 	return nil, false
 }

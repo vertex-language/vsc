@@ -178,6 +178,10 @@ func (l *lowerer) kernelThunk(kernel string, fn *ir.Func) *ir.Func {
 			args = append(args, b.F32.Load(at))
 		case ir.TypeF64:
 			args = append(args, b.F64.Load(at))
+		case ir.TypeF16:
+			args = append(args, b.F16().Load(at))
+		case ir.TypeBF16:
+			args = append(args, b.BF16().Load(at))
 		case ir.TypePtr:
 			args = append(args, b.Ptr.Load(at))
 		}
@@ -477,6 +481,8 @@ func elemStride(r repr) int64 {
 	switch r.reg {
 	case ir.TypeI1:
 		return 1
+	case ir.TypeF16, ir.TypeBF16:
+		return 2
 	case ir.TypeI32, ir.TypeF32:
 		return 4
 	case ir.TypeI64, ir.TypeF64, ir.TypePtr:
@@ -510,6 +516,10 @@ func loadElem(b *ir.Block, p ir.Ptr, r repr) ir.Value {
 		return b.F32.Load(p)
 	case ir.TypeF64:
 		return b.F64.Load(p)
+	case ir.TypeF16:
+		return b.F16().Load(p)
+	case ir.TypeBF16:
+		return b.BF16().Load(p)
 	}
 	return b.Ptr.Load(p)
 }
@@ -536,6 +546,10 @@ func storeElem(b *ir.Block, v ir.Value, p ir.Ptr, r repr) {
 		b.F32.Store(v, p)
 	case ir.F64:
 		b.F64.Store(v, p)
+	case ir.F16:
+		b.F16().Store(v, p)
+	case ir.BF16:
+		b.BF16().Store(v, p)
 	case ir.Ptr:
 		b.Ptr.Store(v, p)
 	}
@@ -648,6 +662,10 @@ func (l *lowerer) mapThunk(kernel, base string, mask uint64) *ir.Func {
 			return b.F32.Load(at)
 		case ir.TypeF64:
 			return b.F64.Load(at)
+		case ir.TypeF16:
+			return b.F16().Load(at)
+		case ir.TypeBF16:
+			return b.BF16().Load(at)
 		}
 		return b.Ptr.Load(at)
 	}

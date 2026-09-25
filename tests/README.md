@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`260` in the order the
+A ladder: one small thing per file, numbered `001`–`261` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -11,13 +11,13 @@ definition.
 
 | Ladder | Files | The oracle | Compared |
 | --- | --- | --- | --- |
-| `tests/` | `001`–`260` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
+| `tests/` | `001`–`261` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
 
 Each file is a `main.swift` of top-level code, and both compilers are
 given it unchanged. There is no entry point to rename and no harness
 around it.
 
-## `001`–`260`
+## `001`–`261`
 
 | | |
 | --- | --- |
@@ -38,6 +38,7 @@ around it.
 | 241–250 | programs: a Caesar cipher over Unicode scalars, word frequencies, a multi-key sort, generic binary search and insertion sort, matrices, a tokenizer, a linked list freed in order, a stack-machine interpreter, an async pipeline, and a closing program replaying a transaction log |
 | 251–259 | what the packages needed: an existential as a result and as a stored property, casts to a protocol, `if let` of a tuple, an optional of a struct holding a `Bool`, pointer and buffer-pointer subscripts, `append(contentsOf:)` of a slice, an `AsyncSequence` that is its own iterator, a conversion through a narrow integer nested in one expression |
 | 260 | a default argument written for a type parameter, typed at each call by what the call makes it |
+| 261 | `Float16` built in: arithmetic rounding once, comparisons, conversions both ways, rounding, special values, bit patterns, in generic code and arrays |
 
 ## Rules
 

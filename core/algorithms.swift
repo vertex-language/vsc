@@ -3258,142 +3258,157 @@ extension Task {
     func cancel() { _vertexTaskCancel(handle) }
 }
 
-// ---- Float16 ----
+// ---- Float16 and BFloat16 ----
+//
+// Built in, as Float is (core.swift): each operation is one instruction
+// of the machine's, where it has one. What a half float is beyond its
+// arithmetic is written here the way Float's is.
 
 extension Float16 {
-    init(bitPattern: UInt16) { _bits = bitPattern }
-    var bitPattern: UInt16 { _bits }
+    static var greatestFiniteMagnitude: Float16 { _float16(0x7BFF) }
+    static var leastNormalMagnitude: Float16 { _float16(0x0400) }
+    static var leastNonzeroMagnitude: Float16 { _float16(0x0001) }
+    static var infinity: Float16 { _float16(0x7C00) }
+    static var nan: Float16 { _float16(0x7E00) }
+    static var ulpOfOne: Float16 { _float16(0x1400) }
+    static var pi: Float16 { _float16(0x4248) }
 
-    // The half nearest a Float's value, ties to even; past the largest
-    // finite half, infinity.
-    static func _fromFloatBits(_ f: UInt32) -> UInt16 {
-        let sign = UInt16(truncatingIfNeeded: (f >> 16) & 0x8000)
-        let exp = Int((f >> 23) & 0xFF)
-        var mant = f & 0x7FFFFF
-        if exp == 0xFF {
-            return sign | 0x7C00 | (mant != 0 ? 0x200 : 0)
+    init(bitPattern bits: UInt16) { self = _float16(bits) }
+    var bitPattern: UInt16 { _bits(self) }
+
+    var isNaN: Bool { self != self }
+    var isInfinite: Bool { bitPattern & 0x7FFF == 0x7C00 }
+    var isFinite: Bool { bitPattern & 0x7c00 != 0x7c00 }
+    var isZero: Bool { bitPattern & 0x7FFF == 0 }
+    var isNormal: Bool {
+        let e = bitPattern & 0x7c00
+        return e != 0 && e != 0x7c00
+    }
+    var isSubnormal: Bool { bitPattern & 0x7c00 == 0 && bitPattern & 0x3ff != 0 }
+    var magnitude: Float16 { _fabs(self) }
+    var sign: FloatingPointSign { bitPattern >> 15 == 0 ? .plus : .minus }
+    var isSignMinus: Bool { bitPattern >> 15 != 0 }
+
+    func squareRoot() -> Float16 { _sqrt(self) }
+    mutating func formSquareRoot() { self = _sqrt(self) }
+
+    func rounded(_ rule: FloatingPointRoundingRule) -> Float16 {
+        switch rule {
+        case .toNearestOrAwayFromZero:
+            let t = _trunc(self)
+            if _fabs(self - t) >= 0.5 { return t + _copysign(1, self) }
+            return t
+        case .toNearestOrEven:
+            return _rint(self)
+        case .up:
+            return _ceil(self)
+        case .down:
+            return _floor(self)
+        case .towardZero:
+            return _trunc(self)
+        case .awayFromZero:
+            let t = _trunc(self)
+            return t == self ? self : t + _copysign(1, self)
         }
-        let e = exp - 127 + 15
-        if e >= 0x1F { return sign | 0x7C00 }
-        if e <= 0 {
-            if e < -10 { return sign }
-            mant |= 0x800000
-            let shift = UInt32(14 - e)
-            let half = mant >> shift
-            let rem = mant & ((UInt32(1) << shift) - 1)
-            let halfway = UInt32(1) << (shift - 1)
-            var r = half
-            if rem > halfway || (rem == halfway && (half & 1) != 0) { r += 1 }
-            return sign | UInt16(truncatingIfNeeded: r)
-        }
-        var h = (UInt32(e) << 10) | (mant >> 13)
-        let rem = mant & 0x1FFF
-        if rem > 0x1000 || (rem == 0x1000 && (h & 1) != 0) { h += 1 }
-        return sign | UInt16(truncatingIfNeeded: h)
+    }
+    func rounded() -> Float16 { rounded(.toNearestOrAwayFromZero) }
+    mutating func round() { self = rounded() }
+    mutating func round(_ rule: FloatingPointRoundingRule) { self = rounded(rule) }
+
+    var nextUp: Float16 {
+        if isNaN || self == Float16.infinity { return self }
+        if self == 0 { return Float16.leastNonzeroMagnitude }
+        return Float16(bitPattern: self > 0 ? bitPattern + 1 : bitPattern - 1)
+    }
+    var nextDown: Float16 { -(-self).nextUp }
+    var ulp: Float16 {
+        if !isFinite { return Float16.nan }
+        let a = _fabs(self)
+        if a == Float16.greatestFiniteMagnitude { return a - a.nextDown }
+        return a.nextUp - a
     }
 
-    // The half nearest a Double's value, rounded once.
-    static func _fromDoubleBits(_ d: UInt64) -> UInt16 {
-        let sign = UInt16(truncatingIfNeeded: (d >> 48) & 0x8000)
-        let exp = Int((d >> 52) & 0x7FF)
-        var mant = d & 0xFFFFFFFFFFFFF
-        if exp == 0x7FF {
-            return sign | 0x7C00 | (mant != 0 ? 0x200 : 0)
-        }
-        let e = exp - 1023 + 15
-        if e >= 0x1F { return sign | 0x7C00 }
-        if e <= 0 {
-            if e < -10 { return sign }
-            mant |= 0x10000000000000
-            let shift = UInt64(43 - e)
-            let half = mant >> shift
-            let rem = mant & ((UInt64(1) << shift) - 1)
-            let halfway = UInt64(1) << (shift - 1)
-            var r = half
-            if rem > halfway || (rem == halfway && (half & 1) != 0) { r += 1 }
-            return sign | UInt16(truncatingIfNeeded: r)
-        }
-        var h = (UInt64(e) << 10) | (mant >> 42)
-        let rem = mant & 0x3FFFFFFFFFF
-        if rem > 0x20000000000 || (rem == 0x20000000000 && (h & 1) != 0) { h += 1 }
-        return sign | UInt16(truncatingIfNeeded: h)
-    }
-
-    // The Float a half is, exactly.
-    static func _toFloatBits(_ h: UInt16) -> UInt32 {
-        let sign = UInt32(h & 0x8000) << 16
-        let exp = Int((h >> 10) & 0x1F)
-        let mant = UInt32(h & 0x3FF)
-        if exp == 0x1F { return sign | 0x7F800000 | (mant << 13) }
-        if exp == 0 {
-            if mant == 0 { return sign }
-            var m = mant
-            var e = -14
-            while (m & 0x400) == 0 {
-                m <<= 1
-                e -= 1
-            }
-            m &= 0x3FF
-            return sign | (UInt32(e + 127) << 23) | (m << 13)
-        }
-        return sign | (UInt32(exp - 15 + 127) << 23) | (mant << 13)
-    }
-
-    init(_ value: Float) { _bits = Float16._fromFloatBits(value.bitPattern) }
-    init(_ value: Double) { _bits = Float16._fromDoubleBits(value.bitPattern) }
-    init(_ value: Int) { _bits = Float16._fromDoubleBits(Double(value).bitPattern) }
-    init(_ value: Float16) { _bits = value._bits }
-
-    var _float: Float { Float(bitPattern: Float16._toFloatBits(_bits)) }
-
-    static var greatestFiniteMagnitude: Float16 { Float16(bitPattern: 0x7BFF) }
-    static var leastNormalMagnitude: Float16 { Float16(bitPattern: 0x0400) }
-    static var leastNonzeroMagnitude: Float16 { Float16(bitPattern: 0x0001) }
-    static var infinity: Float16 { Float16(bitPattern: 0x7C00) }
-    static var nan: Float16 { Float16(bitPattern: 0x7E00) }
-    static var ulpOfOne: Float16 { Float16(bitPattern: 0x1400) }
-
-    var isInfinite: Bool { (_bits & 0x7FFF) == 0x7C00 }
-    var isNaN: Bool { (_bits & 0x7C00) == 0x7C00 && (_bits & 0x3FF) != 0 }
-    var isFinite: Bool { (_bits & 0x7C00) != 0x7C00 }
-    var isZero: Bool { (_bits & 0x7FFF) == 0 }
-    var isNormal: Bool { (_bits & 0x7C00) != 0 && (_bits & 0x7C00) != 0x7C00 }
-    var isSubnormal: Bool { (_bits & 0x7C00) == 0 && (_bits & 0x3FF) != 0 }
-    var magnitude: Float16 { Float16(bitPattern: _bits & 0x7FFF) }
-
-    static func + (a: Float16, b: Float16) -> Float16 { Float16(a._float + b._float) }
-    static func - (a: Float16, b: Float16) -> Float16 { Float16(a._float - b._float) }
-    static func * (a: Float16, b: Float16) -> Float16 { Float16(a._float * b._float) }
-    static func / (a: Float16, b: Float16) -> Float16 { Float16(a._float / b._float) }
-    static prefix func - (a: Float16) -> Float16 { Float16(bitPattern: a._bits ^ 0x8000) }
-    static func += (a: inout Float16, b: Float16) { a = a + b }
-    static func -= (a: inout Float16, b: Float16) { a = a - b }
-    static func *= (a: inout Float16, b: Float16) { a = a * b }
-    static func /= (a: inout Float16, b: Float16) { a = a / b }
-}
-
-extension Float16: ExpressibleByFloatLiteral, ExpressibleByIntegerLiteral {
-    init(floatLiteral value: Double) { _bits = Float16._fromDoubleBits(value.bitPattern) }
-    init(integerLiteral value: Int) { _bits = Float16._fromDoubleBits(Double(value).bitPattern) }
-}
-
-extension Float16: Equatable, Comparable {
-    static func == (a: Float16, b: Float16) -> Bool { a._float == b._float }
-    static func < (a: Float16, b: Float16) -> Bool { a._float < b._float }
 }
 
 extension Float16: CustomStringConvertible, CustomDebugStringConvertible {
-    var description: String { _float16Description(UInt32(_bits)) }
-    var debugDescription: String { _float16Description(UInt32(_bits)) }
+    var description: String { _float16Description(UInt32(bitPattern)) }
+    var debugDescription: String { _float16Description(UInt32(bitPattern)) }
 }
 
-extension Float {
-    init(_ value: Float16) { self = Float(bitPattern: Float16._toFloatBits(value._bits)) }
+func abs(_ x: Float16) -> Float16 { _fabs(x) }
+
+extension BFloat16 {
+    static var greatestFiniteMagnitude: BFloat16 { _bfloat16(0x7F7F) }
+    static var leastNormalMagnitude: BFloat16 { _bfloat16(0x0080) }
+    static var leastNonzeroMagnitude: BFloat16 { _bfloat16(0x0001) }
+    static var infinity: BFloat16 { _bfloat16(0x7F80) }
+    static var nan: BFloat16 { _bfloat16(0x7FC0) }
+    static var ulpOfOne: BFloat16 { _bfloat16(0x3C00) }
+    static var pi: BFloat16 { _bfloat16(0x4049) }
+
+    init(bitPattern bits: UInt16) { self = _bfloat16(bits) }
+    var bitPattern: UInt16 { _bits(self) }
+
+    var isNaN: Bool { self != self }
+    var isInfinite: Bool { bitPattern & 0x7FFF == 0x7F80 }
+    var isFinite: Bool { bitPattern & 0x7f80 != 0x7f80 }
+    var isZero: Bool { bitPattern & 0x7FFF == 0 }
+    var isNormal: Bool {
+        let e = bitPattern & 0x7f80
+        return e != 0 && e != 0x7f80
+    }
+    var isSubnormal: Bool { bitPattern & 0x7f80 == 0 && bitPattern & 0x7f != 0 }
+    var magnitude: BFloat16 { _fabs(self) }
+    var sign: FloatingPointSign { bitPattern >> 15 == 0 ? .plus : .minus }
+    var isSignMinus: Bool { bitPattern >> 15 != 0 }
+
+    func squareRoot() -> BFloat16 { _sqrt(self) }
+    mutating func formSquareRoot() { self = _sqrt(self) }
+
+    func rounded(_ rule: FloatingPointRoundingRule) -> BFloat16 {
+        switch rule {
+        case .toNearestOrAwayFromZero:
+            let t = _trunc(self)
+            if _fabs(self - t) >= 0.5 { return t + _copysign(1, self) }
+            return t
+        case .toNearestOrEven:
+            return _rint(self)
+        case .up:
+            return _ceil(self)
+        case .down:
+            return _floor(self)
+        case .towardZero:
+            return _trunc(self)
+        case .awayFromZero:
+            let t = _trunc(self)
+            return t == self ? self : t + _copysign(1, self)
+        }
+    }
+    func rounded() -> BFloat16 { rounded(.toNearestOrAwayFromZero) }
+    mutating func round() { self = rounded() }
+    mutating func round(_ rule: FloatingPointRoundingRule) { self = rounded(rule) }
+
+    var nextUp: BFloat16 {
+        if isNaN || self == BFloat16.infinity { return self }
+        if self == 0 { return BFloat16.leastNonzeroMagnitude }
+        return BFloat16(bitPattern: self > 0 ? bitPattern + 1 : bitPattern - 1)
+    }
+    var nextDown: BFloat16 { -(-self).nextUp }
+    var ulp: BFloat16 {
+        if !isFinite { return BFloat16.nan }
+        let a = _fabs(self)
+        if a == BFloat16.greatestFiniteMagnitude { return a - a.nextDown }
+        return a.nextUp - a
+    }
+
 }
 
-extension Double {
-    init(_ value: Float16) { self = Double(Float(bitPattern: Float16._toFloatBits(value._bits))) }
+extension BFloat16: CustomStringConvertible, CustomDebugStringConvertible {
+    var description: String { _bfloat16Description(UInt32(bitPattern)) }
+    var debugDescription: String { _bfloat16Description(UInt32(bitPattern)) }
 }
+
+func abs(_ x: BFloat16) -> BFloat16 { _fabs(x) }
 
 // ---- OptionSet ----
 

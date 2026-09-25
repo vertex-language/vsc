@@ -27,19 +27,21 @@ import (
 // kernelScalar is what a kernel parameter of a scalar type is launched
 // with: the _Launch method that takes it.
 var kernelScalar = map[types.BasicKind]string{
-	types.Int8:   "_int8",
-	types.UInt8:  "_uint8",
-	types.Int16:  "_int16",
-	types.UInt16: "_uint16",
-	types.Int32:  "_int32",
-	types.UInt32: "_uint32",
-	types.Int:    "_int",
-	types.UInt:   "_uint",
-	types.Int64:  "_int64",
-	types.UInt64: "_uint64",
-	types.Float:  "_float32",
-	types.Double: "_float64",
-	types.Bool:   "_bool",
+	types.Int8:     "_int8",
+	types.UInt8:    "_uint8",
+	types.Int16:    "_int16",
+	types.UInt16:   "_uint16",
+	types.Int32:    "_int32",
+	types.UInt32:   "_uint32",
+	types.Int:      "_int",
+	types.UInt:     "_uint",
+	types.Int64:    "_int64",
+	types.UInt64:   "_uint64",
+	types.Float:    "_float32",
+	types.Double:   "_float64",
+	types.Float16:  "_float16",
+	types.BFloat16: "_bfloat16",
+	types.Bool:     "_bool",
 }
 
 // kernelOf is the kernel an expression names, if it names one.

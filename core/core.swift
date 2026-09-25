@@ -90,6 +90,18 @@ func - (lhs: Double, rhs: Double) -> Double
 func * (lhs: Double, rhs: Double) -> Double
 func / (lhs: Double, rhs: Double) -> Double
 
+// The half floats' own arithmetic: one VIR instruction each, f16.add and
+// bf16.add, on a target that has it, and computed in f32 and rounded once
+// on one that does not (ir.Module.LegalizeHalf) -- the same bits either way.
+func + (lhs: Float16, rhs: Float16) -> Float16
+func - (lhs: Float16, rhs: Float16) -> Float16
+func * (lhs: Float16, rhs: Float16) -> Float16
+func / (lhs: Float16, rhs: Float16) -> Float16
+func + (lhs: BFloat16, rhs: BFloat16) -> BFloat16
+func - (lhs: BFloat16, rhs: BFloat16) -> BFloat16
+func * (lhs: BFloat16, rhs: BFloat16) -> BFloat16
+func / (lhs: BFloat16, rhs: BFloat16) -> BFloat16
+
 // Concatenation is the one `+` that allocates.
 func + (lhs: String, rhs: String) -> String
 
@@ -177,6 +189,19 @@ func < (lhs: Float, rhs: Float) -> Bool
 func <= (lhs: Float, rhs: Float) -> Bool
 func > (lhs: Float, rhs: Float) -> Bool
 func >= (lhs: Float, rhs: Float) -> Bool
+
+func == (lhs: Float16, rhs: Float16) -> Bool
+func != (lhs: Float16, rhs: Float16) -> Bool
+func < (lhs: Float16, rhs: Float16) -> Bool
+func <= (lhs: Float16, rhs: Float16) -> Bool
+func > (lhs: Float16, rhs: Float16) -> Bool
+func >= (lhs: Float16, rhs: Float16) -> Bool
+func == (lhs: BFloat16, rhs: BFloat16) -> Bool
+func != (lhs: BFloat16, rhs: BFloat16) -> Bool
+func < (lhs: BFloat16, rhs: BFloat16) -> Bool
+func <= (lhs: BFloat16, rhs: BFloat16) -> Bool
+func > (lhs: BFloat16, rhs: BFloat16) -> Bool
+func >= (lhs: BFloat16, rhs: BFloat16) -> Bool
 
 func == (lhs: Double, rhs: Double) -> Bool
 func != (lhs: Double, rhs: Double) -> Bool
@@ -349,6 +374,8 @@ prefix func - (operand: Int32) -> Int32
 prefix func - (operand: Int64) -> Int64
 prefix func - (operand: Float) -> Float
 prefix func - (operand: Double) -> Double
+prefix func - (operand: Float16) -> Float16
+prefix func - (operand: BFloat16) -> BFloat16
 
 prefix func + (operand: Int) -> Int
 prefix func + (operand: Double) -> Double
@@ -676,16 +703,14 @@ struct KeyPath<Root, Value> {
     let _set: ((inout Root, Value) -> Void)?
 }
 
-// A binary16 floating-point number: its sixteen bits, IEEE 754's half
-// precision. algorithms.swift gives it its conversions and arithmetic;
-// each operation is done in Float, which holds every result exactly
-// enough to round once to Float16 as Swift's own does.
-struct Float16 {
-    var _bits: UInt16
-}
-
+// Float16 and BFloat16 are built in, as Float is: universe types whose
+// machine type is Builtin.FPIEEE16 and Builtin.BFloat16. What they are
+// printed as is the runtime's: the shortest digits that read back as the
+// same half.
 @_silgen_name("vertex_float16_description")
 func _float16Description(_ bits: UInt32) -> String
+@_silgen_name("vertex_bfloat16_description")
+func _bfloat16Description(_ bits: UInt32) -> String
 
 // A value or the error that stood in for it.
 enum Result<Success, Failure: Error> {
@@ -896,6 +921,42 @@ func _double(_ bits: UInt64) -> Double
 func _bits(_ x: Float) -> UInt32
 @_builtin("bitcast")
 func _float(_ bits: UInt32) -> Float
+@_builtin("int_sqrt")
+func _sqrt(_ x: Float16) -> Float16
+@_builtin("int_floor")
+func _floor(_ x: Float16) -> Float16
+@_builtin("int_ceil")
+func _ceil(_ x: Float16) -> Float16
+@_builtin("int_trunc")
+func _trunc(_ x: Float16) -> Float16
+@_builtin("int_rint")
+func _rint(_ x: Float16) -> Float16
+@_builtin("int_fabs")
+func _fabs(_ x: Float16) -> Float16
+@_builtin("int_copysign")
+func _copysign(_ x: Float16, _ y: Float16) -> Float16
+@_builtin("bitcast")
+func _bits(_ x: Float16) -> UInt16
+@_builtin("int_sqrt")
+func _sqrt(_ x: BFloat16) -> BFloat16
+@_builtin("int_floor")
+func _floor(_ x: BFloat16) -> BFloat16
+@_builtin("int_ceil")
+func _ceil(_ x: BFloat16) -> BFloat16
+@_builtin("int_trunc")
+func _trunc(_ x: BFloat16) -> BFloat16
+@_builtin("int_rint")
+func _rint(_ x: BFloat16) -> BFloat16
+@_builtin("int_fabs")
+func _fabs(_ x: BFloat16) -> BFloat16
+@_builtin("int_copysign")
+func _copysign(_ x: BFloat16, _ y: BFloat16) -> BFloat16
+@_builtin("bitcast")
+func _bits(_ x: BFloat16) -> UInt16
+@_builtin("bitcast")
+func _float16(_ bits: UInt16) -> Float16
+@_builtin("bitcast")
+func _bfloat16(_ bits: UInt16) -> BFloat16
 prefix func - (operand: Int8) -> Int8
 prefix func - (operand: Int16) -> Int16
 @_builtin("sadd_with_overflow")

@@ -224,6 +224,10 @@ func storeWord(b *ir.Block, v ir.Value, at ir.Ptr) error {
 		b.F64.Store(x, at)
 	case ir.F32:
 		b.F32.Store(x, at)
+	case ir.F16:
+		b.F16().Store(x, at)
+	case ir.BF16:
+		b.BF16().Store(x, at)
 	}
 	return nil
 }

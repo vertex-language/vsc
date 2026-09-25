@@ -232,6 +232,8 @@ public final class _Launch {
     public func _int(_ v: int) -> _Launch { _launchI64(_h, v); return self }
     public func _uint(_ v: uint) -> _Launch { _launchI64(_h, int(bitPattern: v)); return self }
     public func _int64(_ v: int64) -> _Launch { _launchI64(_h, int(v)); return self }
+    public func _float16(_ v: float16) -> _Launch { _launchI16(_h, int16(bitPattern: v.bitPattern)); return self }
+    public func _bfloat16(_ v: bfloat16) -> _Launch { _launchI16(_h, int16(bitPattern: v.bitPattern)); return self }
 
     /// _value is the launch step for a parameter whose type is a type
     /// parameter where the launch is written: a generic function launching
@@ -251,6 +253,8 @@ public final class _Launch {
         if let x = v as? int8 { return _int8(x) }
         if let x = v as? uint8 { return _uint8(x) }
         if let x = v as? bool { return _bool(x) }
+        if let x = v as? float16 { return _float16(x) }
+        if let x = v as? bfloat16 { return _bfloat16(x) }
         _launchI64(_h, 0)
         return self
     }
@@ -323,6 +327,8 @@ public final class _Launch {
     public func _mapRun_int() async throws -> Buffer<int> { let m = try _makeOut(8); try await _run(); return Buffer<int>(_memory: m, device: _outDevice!, offset: 0, count: _count) }
     public func _mapRun_uint() async throws -> Buffer<uint> { let m = try _makeOut(8); try await _run(); return Buffer<uint>(_memory: m, device: _outDevice!, offset: 0, count: _count) }
     public func _mapRun_float32() async throws -> Buffer<float32> { let m = try _makeOut(4); try await _run(); return Buffer<float32>(_memory: m, device: _outDevice!, offset: 0, count: _count) }
+    public func _mapRun_float16() async throws -> Buffer<float16> { let m = try _makeOut(2); try await _run(); return Buffer<float16>(_memory: m, device: _outDevice!, offset: 0, count: _count) }
+    public func _mapRun_bfloat16() async throws -> Buffer<bfloat16> { let m = try _makeOut(2); try await _run(); return Buffer<bfloat16>(_memory: m, device: _outDevice!, offset: 0, count: _count) }
     public func _mapRun_float64() async throws -> Buffer<float64> { let m = try _makeOut(8); try await _run(); return Buffer<float64>(_memory: m, device: _outDevice!, offset: 0, count: _count) }
     public func _mapRun_bool() async throws -> Buffer<bool> { let m = try _makeOut(1); try await _run(); return Buffer<bool>(_memory: m, device: _outDevice!, offset: 0, count: _count) }
 }

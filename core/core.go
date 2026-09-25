@@ -75,6 +75,10 @@ func Layout(t types.Type) (field, machine string, ok bool) {
 		return "_value", "FPIEEE32", true
 	case types.Double:
 		return "_value", "FPIEEE64", true
+	case types.Float16:
+		return "_value", "FPIEEE16", true
+	case types.BFloat16:
+		return "_value", "BFloat16", true
 	}
 	return "", "", false
 }

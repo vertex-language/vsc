@@ -38,7 +38,7 @@ func (c *fn) builtin(name string, args []ir.Value) ([]ir.Value, error) {
 		if out, ok, err := c.intUnary(name, verb, r, args); ok {
 			return out, err
 		}
-	case ir.TypeF32, ir.TypeF64:
+	case ir.TypeF32, ir.TypeF64, ir.TypeF16, ir.TypeBF16:
 		if out, ok, err := c.floatUnary(name, verb, r, args); ok {
 			return out, err
 		}
@@ -48,7 +48,7 @@ func (c *fn) builtin(name string, args []ir.Value) ([]ir.Value, error) {
 		return c.boolBuiltin(name, verb, args)
 	case ir.TypeI32, ir.TypeI64:
 		return c.intBuiltin(name, verb, r, args)
-	case ir.TypeF32, ir.TypeF64:
+	case ir.TypeF32, ir.TypeF64, ir.TypeF16, ir.TypeBF16:
 		return c.floatBuiltin(name, verb, r, args)
 	case ir.TypePtr:
 		return c.ptrBuiltin(name, verb, args)
@@ -244,6 +244,16 @@ func (c *fn) floatConvertBuiltin(verb string, from, to repr, a ir.Value) ([]ir.V
 				return []ir.Value{c.b.F32.SCvtI64(n)}, true, nil
 			}
 			return []ir.Value{c.b.F32.UCvtI64(n)}, true, nil
+		case ir.TypeF16:
+			if signed {
+				return []ir.Value{c.b.F16().SCvtI64(n)}, true, nil
+			}
+			return []ir.Value{c.b.F16().UCvtI64(n)}, true, nil
+		case ir.TypeBF16:
+			if signed {
+				return []ir.Value{c.b.BF16().SCvtI64(n)}, true, nil
+			}
+			return []ir.Value{c.b.BF16().UCvtI64(n)}, true, nil
 		}
 		return fail()
 
@@ -270,22 +280,32 @@ func (c *fn) floatConvertBuiltin(verb string, from, to repr, a ir.Value) ([]ir.V
 			if to.reg == ir.TypeF32 && !from.narrow() {
 				return []ir.Value{c.b.F32.BitcastI32(v)}, true, nil
 			}
+			// A half's encoding from a UInt16, held in an i32.
+			if to.reg == ir.TypeF16 {
+				return []ir.Value{c.b.F16().BitcastI32(v)}, true, nil
+			}
+			if to.reg == ir.TypeBF16 {
+				return []ir.Value{c.b.BF16().BitcastI32(v)}, true, nil
+			}
+		case ir.F16:
+			if to.reg == ir.TypeI32 {
+				return []ir.Value{c.b.I32.BitcastF16(v)}, true, nil
+			}
+		case ir.BF16:
+			if to.reg == ir.TypeI32 {
+				return []ir.Value{c.b.I32.BitcastBF16(v)}, true, nil
+			}
 		}
 		return fail()
 
-	case "fpext":
-		f, ok := a.(ir.F32)
-		if !ok || to.reg != ir.TypeF64 {
-			return fail()
+	case "fpext", "fptrunc":
+		// Between any two float namespaces: widening is exact, narrowing
+		// rounds once. f16 and bf16 are the same width and neither holds
+		// the other, so either verb may name that pair.
+		if v, ok := c.floatToFloat(a, to.reg); ok {
+			return []ir.Value{v}, true, nil
 		}
-		return []ir.Value{c.b.F64.FCvtF32(f)}, true, nil
-
-	case "fptrunc":
-		f, ok := a.(ir.F64)
-		if !ok || to.reg != ir.TypeF32 {
-			return fail()
-		}
-		return []ir.Value{c.b.F32.FCvtF64(f)}, true, nil
+		return fail()
 
 	case "fptosi", "fptoui":
 		// Truncation toward zero into destination integer register.
@@ -317,8 +337,78 @@ func (c *fn) floatConvertBuiltin(verb string, from, to repr, a ir.Value) ([]ir.V
 				}
 				return []ir.Value{c.b.I32.UCvtF32(f)}, true, nil
 			}
+		case ir.F16:
+			switch to.reg {
+			case ir.TypeI64:
+				if signed {
+					return []ir.Value{c.b.I64.SCvtF16(f)}, true, nil
+				}
+				return []ir.Value{c.b.I64.UCvtF16(f)}, true, nil
+			case ir.TypeI32:
+				if signed {
+					return []ir.Value{c.b.I32.SCvtF16(f)}, true, nil
+				}
+				return []ir.Value{c.b.I32.UCvtF16(f)}, true, nil
+			}
+		case ir.BF16:
+			switch to.reg {
+			case ir.TypeI64:
+				if signed {
+					return []ir.Value{c.b.I64.SCvtBF16(f)}, true, nil
+				}
+				return []ir.Value{c.b.I64.UCvtBF16(f)}, true, nil
+			case ir.TypeI32:
+				if signed {
+					return []ir.Value{c.b.I32.SCvtBF16(f)}, true, nil
+				}
+				return []ir.Value{c.b.I32.UCvtBF16(f)}, true, nil
+			}
 		}
 		return fail()
 	}
 	return nil, false, nil
+}
+
+// floatToFloat converts between two float namespaces.
+func (c *fn) floatToFloat(a ir.Value, to ir.RegType) (ir.Value, bool) {
+	b := c.b
+	switch v := a.(type) {
+	case ir.F32:
+		switch to {
+		case ir.TypeF64:
+			return b.F64.FCvtF32(v), true
+		case ir.TypeF16:
+			return b.F16().FCvtF32(v), true
+		case ir.TypeBF16:
+			return b.BF16().FCvtF32(v), true
+		}
+	case ir.F64:
+		switch to {
+		case ir.TypeF32:
+			return b.F32.FCvtF64(v), true
+		case ir.TypeF16:
+			return b.F16().FCvtF64(v), true
+		case ir.TypeBF16:
+			return b.BF16().FCvtF64(v), true
+		}
+	case ir.F16:
+		switch to {
+		case ir.TypeF32:
+			return b.F32.FCvtF16(v), true
+		case ir.TypeF64:
+			return b.F64.FCvtF16(v), true
+		case ir.TypeBF16:
+			return b.BF16().FCvtF16(v), true
+		}
+	case ir.BF16:
+		switch to {
+		case ir.TypeF32:
+			return b.F32.FCvtBF16(v), true
+		case ir.TypeF64:
+			return b.F64.FCvtBF16(v), true
+		case ir.TypeF16:
+			return b.F16().FCvtBF16(v), true
+		}
+	}
+	return nil, false
 }

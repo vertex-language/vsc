@@ -177,6 +177,10 @@ func basicRepr(k types.BasicKind) (repr, bool) {
 		return repr{reg: ir.TypeF32}, true
 	case types.Double:
 		return repr{reg: ir.TypeF64}, true
+	case types.Float16:
+		return repr{reg: ir.TypeF16}, true
+	case types.BFloat16:
+		return repr{reg: ir.TypeBF16}, true
 	}
 	return repr{}, false
 }
@@ -197,6 +201,10 @@ func builtinRepr(name string) (repr, bool) {
 		return repr{reg: ir.TypeF32}, true
 	case "FPIEEE64":
 		return repr{reg: ir.TypeF64}, true
+	case "FPIEEE16":
+		return repr{reg: ir.TypeF16}, true
+	case "BFloat16":
+		return repr{reg: ir.TypeBF16}, true
 	case "NativeObject", "RawPointer":
 		return repr{reg: ir.TypePtr}, true
 	}

@@ -414,6 +414,10 @@ func (l *lowerer) applySig(f *sil.Func, out *ir.Func, sig *ir.Sig) error {
 			out.ParamI64(name, attrs...)
 		case ir.TypeF32:
 			out.ParamF32(name, attrs...)
+		case ir.TypeF16:
+			out.ParamF16(name, attrs...)
+		case ir.TypeBF16:
+			out.ParamBF16(name, attrs...)
 		case ir.TypeF64:
 			out.ParamF64(name, attrs...)
 		case ir.TypePtr:
@@ -432,6 +436,10 @@ func (l *lowerer) applySig(f *sil.Func, out *ir.Func, sig *ir.Sig) error {
 			out.ReturnsI64(r.Attrs...)
 		case ir.TypeF32:
 			out.ReturnsF32(r.Attrs...)
+		case ir.TypeF16:
+			out.ReturnsF16(r.Attrs...)
+		case ir.TypeBF16:
+			out.ReturnsBF16(r.Attrs...)
 		case ir.TypeF64:
 			out.ReturnsF64(r.Attrs...)
 		case ir.TypePtr:
