@@ -44,7 +44,12 @@ func SwiftBridge(target ir.Target) (Input, error) {
 // for the built-in gpu module, and its intrinsics for the CPU device.
 // It is linked only into a program that imports gpu (GUIDELINES.md §1.1).
 func GPURuntime(target ir.Target) (Input, error) {
-	return compileRuntime(target, "gpu/gpu.cpp", "vertex_gpu_runtime.o", false)
+	asm, fibers := stdlib.GPUAsm(targetName(target))
+	var defs []string
+	if fibers {
+		defs = []string{"VERTEX_GPU_FIBERS=1"}
+	}
+	return compileRuntimeWith(target, "gpu/gpu.cpp", "vertex_gpu_runtime.o", false, defs, asm)
 }
 
 // compileRuntime compiles one translation unit of stdlib's runtime.
@@ -54,6 +59,12 @@ func compileRuntime(target ir.Target, unit, object string, asm bool) (Input, err
 
 // compileRuntimeDefining is compileRuntime with macros defined for the unit.
 func compileRuntimeDefining(target ir.Target, unit, object string, asm bool, defs []string) (Input, error) {
+	return compileRuntimeWith(target, unit, object, asm, defs, "")
+}
+
+// compileRuntimeWith is compileRuntimeDefining with assembly of the unit's
+// own appended to its module.
+func compileRuntimeWith(target ir.Target, unit, object string, asm bool, defs []string, own string) (Input, error) {
 	src := stdlib.Runtime()
 	text, err := fs.ReadFile(src, unit)
 	if err != nil {
@@ -87,6 +98,9 @@ func compileRuntimeDefining(target ir.Target, unit, object string, asm bool, def
 		if text, ok := stdlib.TaskAsm(targetName(target)); ok {
 			m.Asm(text)
 		}
+	}
+	if own != "" {
+		m.Asm(own)
 	}
 	obj, err := Object(m, Options{})
 	if err != nil {

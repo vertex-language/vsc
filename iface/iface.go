@@ -117,6 +117,15 @@ func (p *printer) decl(d ast.Decl) {
 		if sym.Signature().Isolated {
 			acc = "@MainActor " + acc
 		}
+		// An @inlinable function keeps its body: a client compiles it
+		// (sil/gen, importedInlinable), which is what lets a kernel in
+		// another module call it on a device.
+		if ast.IsInlinable(n, p.file) && p.file != nil {
+			body := p.file.Slice(n.Body.Pos(), n.Body.End())
+			p.line("@inlinable %s %s", p.function(acc, sym.Name(), sym.Signature()), body)
+			p.line("")
+			return
+		}
 		p.line("%s", p.function(acc, sym.Name(), sym.Signature()))
 		p.line("")
 
@@ -124,13 +133,13 @@ func (p *printer) decl(d ast.Decl) {
 		if !p.exported(n.Mods) {
 			return
 		}
-		p.nominal("struct", n.Name, n.Mods)
+		p.nominal("struct", n.Name, n.Mods, n.Body)
 
 	case *ast.ClassDecl:
 		if !p.exported(n.Mods) {
 			return
 		}
-		p.nominal("class", n.Name, n.Mods)
+		p.nominal("class", n.Name, n.Mods, n.Body)
 
 	case *ast.EnumDecl:
 		if !p.exported(n.Mods) {
@@ -141,7 +150,7 @@ func (p *printer) decl(d ast.Decl) {
 }
 
 // nominal writes a struct or class declaration with stored properties and methods in declaration order.
-func (p *printer) nominal(keyword string, name *ast.Ident, mods []*ast.Modifier) {
+func (p *printer) nominal(keyword string, name *ast.Ident, mods []*ast.Modifier, body *ast.MemberBlock) {
 	sym, _ := p.m.Info.Defs[name].(*analyzer.TypeNameSymbol)
 	if sym == nil {
 		return
@@ -192,15 +201,23 @@ func (p *printer) nominal(keyword string, name *ast.Ident, mods []*ast.Modifier)
 	for _, f := range statics {
 		p.property(f, true)
 	}
+	// The @inlinable members are written as they were, bodies and all: a
+	// client compiles them (sil/gen, inlinableMembers). The rest are
+	// written as declarations.
+	inlinable := p.inlinableMembers(body)
 	// Emit declared initializers: the public ones, which are all another
 	// module may call.
 	for _, sig := range inits {
 		if sig == nil || !sig.Exported {
 			continue
 		}
+		if text, ok := inlinable[memberKey("init", sig.Params)]; ok {
+			p.line("  %s", text)
+			continue
+		}
 		p.line("  %s%s", p.isolation(sig.Isolated), p.initializer(sig))
 	}
-	p.methods(methods)
+	p.methodsExcept(methods, inlinable)
 	p.subscripts(subscripts)
 	p.line("}")
 	p.line("")
@@ -245,9 +262,16 @@ func (p *printer) subscripts(subs []*types.Subscript) {
 // methods writes the ones a client may call. A method that is not public
 // is this module's own business, and writing it put internal helpers in
 // the interface for anyone to call.
-func (p *printer) methods(methods []*types.Method) {
+func (p *printer) methods(methods []*types.Method) { p.methodsExcept(methods, nil) }
+
+// methodsExcept writes methods, an @inlinable one as its source.
+func (p *printer) methodsExcept(methods []*types.Method, inlinable map[string]string) {
 	for _, m := range methods {
 		if m == nil || m.Sig == nil || !m.Exported {
+			continue
+		}
+		if text, ok := inlinable[memberKey("func "+m.Name, m.Sig.Params)]; ok {
+			p.line("  %s", text)
 			continue
 		}
 		acc := "public"
@@ -593,4 +617,71 @@ func isOperator(name string) bool {
 		}
 	}
 	return true
+}
+
+// inlinableMembers is the source of each public @inlinable method and
+// initializer in body, by memberKey.
+func (p *printer) inlinableMembers(body *ast.MemberBlock) map[string]string {
+	if body == nil || p.file == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, mem := range body.Members {
+		if !ast.InlinableMember(mem, p.file) {
+			continue
+		}
+		var kind string
+		var sig *ast.FuncSig
+		var mods []*ast.Modifier
+		switch m := mem.(type) {
+		case *ast.FuncDecl:
+			kind, sig, mods = "func "+m.Name.Text(p.file), m.Sig, m.Mods
+		case *ast.InitDecl:
+			kind, sig, mods = "init", m.Sig, m.Mods
+		}
+		if !p.exported(mods) || sig == nil {
+			continue
+		}
+		var labels []string
+		for _, param := range sig.Params {
+			labels = append(labels, p.astLabel(param))
+		}
+		out[kind+"("+strings.Join(labels, ":")+")"] = string(p.file.Slice(mem.Pos(), mem.End()))
+	}
+	return out
+}
+
+// astLabel is a written parameter's argument label: its label, its name
+// where it has none, and empty for `_`.
+func (p *printer) astLabel(param *ast.Param) string {
+	id := param.Label
+	if id == nil {
+		id = param.Name
+	}
+	if id == nil {
+		return ""
+	}
+	if t := id.Text(p.file); t != "_" {
+		return t
+	}
+	return ""
+}
+
+// memberKey names a member by kind, name and argument labels: what tells
+// a checked signature and the declaration it came from apart.
+func memberKey(kind string, params []*types.Param) string {
+	labels := make([]string, len(params))
+	for i, param := range params {
+		// A checked parameter's Label is empty where it is the name, and
+		// `_` where there is none.
+		switch param.Label {
+		case "":
+			labels[i] = param.Name
+		case "_":
+			labels[i] = ""
+		default:
+			labels[i] = param.Label
+		}
+	}
+	return kind + "(" + strings.Join(labels, ":") + ")"
 }

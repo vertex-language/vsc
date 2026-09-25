@@ -10,9 +10,9 @@ import (
 
 	"github.com/vertex-language/air/metallib"
 	"github.com/vertex-language/ir"
-	irtext "github.com/vertex-language/ir/text"
 	airlower "github.com/vertex-language/ir/lower/air"
 	"github.com/vertex-language/ir/lower/inline"
+	irtext "github.com/vertex-language/ir/text"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/internal/sil/gen"
 	"github.com/vertex-language/vsc/lower"
@@ -25,8 +25,9 @@ import (
 // A kernel is found in the module's lowered SIL by its mark
 // (gen.AttrKernel). What it reaches is found by following its calls: a
 // function of this module, a function of the built-in gpu module (whose
-// SIL the compiler makes from its own copy of gpu's source), or a gpu
-// intrinsic. Anything else -- the runtime, a heap, I/O -- cannot run on a
+// SIL the compiler makes from its own copy of gpu's source), another
+// module's @inlinable function (whose body its interface carries, and
+// sil/gen compiles here as public_external), or a gpu intrinsic. Anything else -- the runtime, a heap, I/O -- cannot run on a
 // device, and the kernel is refused with the chain of calls that reached
 // it. This is §5's check, made where every call a kernel makes is known.
 //
@@ -217,8 +218,14 @@ func reachDevice(k *sil.Func, m, gpuSIL *sil.Module, dev *sil.Module) error {
 						seen[name] = true
 						continue
 					}
+					why := whyNotOnDevice(name)
+					if strings.HasPrefix(name, "$s") && why == whyNotOnDevice("") {
+						// Another module's function, whose body its
+						// interface does not carry.
+						why = "is another module's: its body is not in that module's interface. Mark it @inlinable there"
+					}
 					return fmt.Errorf("cannot run on a device: %s, which %s",
-						strings.Join(chain, " calls "), whyNotOnDevice(name))
+						strings.Join(chain, " calls "), why)
 				}
 				stack = append(stack, visit{callee, chain})
 			}

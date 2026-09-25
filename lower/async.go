@@ -135,7 +135,7 @@ func planAsync(l *lowerer, f *sil.Func) (*asyncPlan, error) {
 	// module placed -- see asyncRecordOf. Answering with the header
 	// here would be a guess, and a wrong one for anything that
 	// suspends.
-	if f.IsDeclaration() {
+	if l.declaredHere(f) {
 		return nil, nil
 	}
 	p := &asyncPlan{

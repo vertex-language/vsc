@@ -82,7 +82,7 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 		return nil, err
 	}
 	for _, f := range m.Funcs() {
-		if f.IsDeclaration() {
+		if l.declaredHere(f) {
 			continue
 		}
 		if err := l.define(f); err != nil {
@@ -183,6 +183,18 @@ type lowerer struct {
 	alloc                                 ir.Callee
 }
 
+// declaredHere reports whether f is only declared in this module's
+// output: it has no body, or it is another module's @inlinable function
+// (public_external with a body), which host code calls in the module
+// that defines it. A device compile has no other module to call into,
+// so there the body is the definition.
+func (l *lowerer) declaredHere(f *sil.Func) bool {
+	if f.IsDeclaration() {
+		return true
+	}
+	return !l.device && f.Linkage() == sil.PublicExternal
+}
+
 // sym prepends the platform symbol prefix to a SIL identifier.
 func (l *lowerer) sym(name string) string { return l.prefix + name }
 
@@ -193,7 +205,7 @@ func (l *lowerer) declare(f *sil.Func) error {
 	if err != nil {
 		return err
 	}
-	if f.IsDeclaration() {
+	if l.declaredHere(f) {
 		l.callee[f.Name()] = l.out.ImportFunc(l.sym(f.Name()), sig)
 		return nil
 	}

@@ -415,6 +415,67 @@ func asmNum(n int) string { return string(rune('0' + n)) }
 // TaskAsm is the runtime's assembly for a target, as a module-scope block
 // for the runtime's own object to carry, so that whatever links the
 // runtime has it.
+// GPUAsm is the gpu runtime unit's assembly: vertex_gpu_switch, which
+// moves the CPU device from one fiber's stack to another's (see
+// runtime/gpu/gpu.cpp). Where there is none, the unit runs a group with
+// barriers on a thread per work-item instead.
+func GPUAsm(target string) (string, bool) {
+	if !strings.HasPrefix(target, "arm64-") && !strings.HasPrefix(target, "aarch64-") {
+		return "", false
+	}
+	prefix := ""
+	if strings.HasSuffix(target, "-macos") {
+		prefix = "_"
+	}
+	name := prefix + "vertex_gpu_switch"
+	return "\t.text\n\t.globl " + name + "\n\t.p2align 2\n" + name + ":" + gpuSwitchARM64, true
+}
+
+// gpuSwitchARM64 is vertex_gpu_switch(from, to): what AAPCS64 says a
+// callee keeps -- x19-x28, the frame pointer, the return address, d8-d15
+// -- pushed on this stack, this stack pointer stored through from, the
+// one stored through to loaded, and the same registers popped from it.
+// The ret goes wherever that stack last called vertex_gpu_switch from; a
+// fiber that has not run yet has a frame made for it whose return address
+// is where it starts.
+const gpuSwitchARM64 = `
+	sub sp, sp, #160
+	stp x19, x20, [sp, #0]
+	stp x21, x22, [sp, #16]
+	stp x23, x24, [sp, #32]
+	stp x25, x26, [sp, #48]
+	stp x27, x28, [sp, #64]
+	stp x29, x30, [sp, #80]
+	str d8, [sp, #96]
+	str d9, [sp, #104]
+	str d10, [sp, #112]
+	str d11, [sp, #120]
+	str d12, [sp, #128]
+	str d13, [sp, #136]
+	str d14, [sp, #144]
+	str d15, [sp, #152]
+	mov x9, sp
+	str x9, [x0]
+	ldr x9, [x1]
+	mov sp, x9
+	ldp x19, x20, [sp, #0]
+	ldp x21, x22, [sp, #16]
+	ldp x23, x24, [sp, #32]
+	ldp x25, x26, [sp, #48]
+	ldp x27, x28, [sp, #64]
+	ldp x29, x30, [sp, #80]
+	ldr d8, [sp, #96]
+	ldr d9, [sp, #104]
+	ldr d10, [sp, #112]
+	ldr d11, [sp, #120]
+	ldr d12, [sp, #128]
+	ldr d13, [sp, #136]
+	ldr d14, [sp, #144]
+	ldr d15, [sp, #152]
+	add sp, sp, #160
+	ret
+`
+
 func TaskAsm(target string) (string, bool) {
 	if !strings.HasPrefix(target, "arm64-") && !strings.HasPrefix(target, "aarch64-") {
 		return "", false

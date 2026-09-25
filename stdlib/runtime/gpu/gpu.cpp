@@ -232,6 +232,8 @@ struct Group {
   u32 members;      // work-items still running the kernel
 };
 
+struct Fiber;
+
 struct WorkItem {
   i32 local[3];
   i32 group[3];
@@ -240,7 +242,44 @@ struct WorkItem {
   Group* g;
   i64 sharedCursor;
   Launch* launch;
+  Fiber* fiber;  // the fiber running it, where the group runs on fibers
 };
+
+// ---- fibers: a group's work-items on one thread ----
+//
+// A kernel with a barrier needs every work-item of its group to reach the
+// barrier before any passes it. Running each work-item on a thread of its
+// own does that, and costs a group of 256 two hundred and fifty-six
+// threads waiting on each other at every barrier. Here a group runs on
+// one worker instead, each work-item a fiber with a stack of its own: a
+// barrier switches to the next fiber, and when every fiber has reached
+// it, they all pass. Groups run on as many workers as there are
+// processors, as groups without barriers do. This is how CPU
+// implementations of OpenCL have long run workgroups.
+//
+// A switch is vertex_gpu_switch, assembly the build appends to this unit
+// (vsc/stdlib, GPUAsm), which is also what defines VERTEX_GPU_FIBERS:
+// where there is no switch for the target, a group with barriers runs on
+// a thread per work-item instead.
+#if VERTEX_GPU_FIBERS
+extern "C" void vertex_gpu_switch(void** from, void** to);
+
+// The frame vertex_gpu_switch pops: x19-x28, x29, x30, d8-d15.
+constexpr usize switchFrame = 160;
+constexpr usize switchReturn = 88;  // where x30 is in it
+
+// A work-item's stack. A kernel's host function inlines what it calls,
+// so it needs little; the CPU device's stacks are this size.
+constexpr usize fiberStack = 64 * 1024;
+
+struct Fiber {
+  void* sp;          // its stack pointer, while it is not running
+  void** scheduler;  // where the worker's is, to switch back to
+  WorkItem item;
+  u8* stack;
+  bool done;
+};
+#endif
 
 struct Launch {
   const vertex_gpu_kernel* kernel;
@@ -259,6 +298,11 @@ struct Launch {
   i64 groups[3];
   i64 nextGroup;  // the next group a worker takes (no barrier)
   u32 finished;   // work done, counted in groups or work-items
+  // Workers still holding the launch. The launch outlives its last
+  // group: a worker that finishes one goes back for another, and finds
+  // there are none only by looking -- so the launch is freed only when
+  // every worker it was given to has stopped looking.
+  u32 holders;
 };
 
 // A job a worker runs: one group of a launch without barriers, or one
@@ -308,6 +352,85 @@ bool inGrid(const Launch* l, const Group* g, i64 lx, i64 ly, i64 lz) {
          g->id[2] * l->per[2] + lz < l->grid[2];
 }
 
+#if VERTEX_GPU_FIBERS
+// Where a fiber starts: the kernel, then back to the scheduler for good.
+void fiberMain() {
+  WorkItem* w = static_cast<WorkItem*>(vertex_pal_thread_get());
+  Fiber* f = w->fiber;
+  Launch* l = w->launch;
+  l->kernel->cpu(l->slots);
+  f->done = true;
+  vertex_gpu_switch(&f->sp, f->scheduler);
+}
+
+// A worker's fibers, kept between groups: stacks are made once each.
+struct Fibers {
+  Fiber* all;
+  i64 count;
+};
+
+// runGroupOnFibers runs one group of a kernel with barriers: a fiber per
+// work-item, each run until it reaches a barrier or ends, round and round
+// until all have ended.
+void runGroupOnFibers(Launch* l, i64 index, Fibers* pool, WorkItem* worker) {
+  Group g = {};
+  g.id[0] = index % l->groups[0];
+  g.id[1] = (index / l->groups[0]) % l->groups[1];
+  g.id[2] = index / (l->groups[0] * l->groups[1]);
+  i64 per = l->per[0] * l->per[1] * l->per[2];
+  if (pool->count < per) {
+    Fiber* grown = allocate<Fiber>(static_cast<usize>(per));
+    for (i64 i = 0; i < pool->count; i++) grown[i] = pool->all[i];
+    if (pool->all) release(pool->all, static_cast<usize>(pool->count) * sizeof(Fiber), alignof(Fiber));
+    pool->all = grown;
+    pool->count = per;
+  }
+  void* scheduler = nullptr;
+  i64 n = 0;
+  for (i64 z = 0; z < l->per[2]; z++)
+    for (i64 y = 0; y < l->per[1]; y++)
+      for (i64 x = 0; x < l->per[0]; x++) {
+        if (!inGrid(l, &g, x, y, z)) continue;
+        Fiber* f = &pool->all[n++];
+        if (!f->stack) f->stack = static_cast<u8*>(vertex_pal_alloc(fiberStack, 16));
+        WorkItem* w = &f->item;
+        w->local[0] = static_cast<i32>(x);
+        w->local[1] = static_cast<i32>(y);
+        w->local[2] = static_cast<i32>(z);
+        w->g = &g;
+        w->sharedCursor = 0;
+        for (int a = 0; a < 3; a++) {
+          w->group[a] = static_cast<i32>(g.id[a]);
+          w->size[a] = static_cast<i32>(l->per[a]);
+          w->groups[a] = static_cast<i32>(l->groups[a]);
+        }
+        w->launch = l;
+        w->fiber = f;
+        f->done = false;
+        f->scheduler = &scheduler;
+        // A frame for the first switch to pop: every register zero, and
+        // the return address where the fiber starts.
+        u8* top = f->stack + fiberStack - switchFrame;
+        vertex_pal_fill(top, 0, switchFrame);
+        *reinterpret_cast<void**>(top + switchReturn) = reinterpret_cast<void*>(&fiberMain);
+        f->sp = top;
+      }
+  g.members = static_cast<u32>(n);
+  i64 alive = n;
+  while (alive > 0) {
+    for (i64 i = 0; i < n; i++) {
+      Fiber* f = &pool->all[i];
+      if (f->done) continue;
+      vertex_pal_thread_set(&f->item);
+      vertex_gpu_switch(&scheduler, &f->sp);
+      if (f->done) alive--;
+    }
+  }
+  vertex_pal_thread_set(worker);
+  if (g.shared) release(g.shared, static_cast<usize>(g.sharedSize), 16);
+}
+#endif
+
 void runGroup(Launch* l, i64 index, WorkItem* w) {
   Group g = {};
   g.id[0] = index % l->groups[0];
@@ -326,6 +449,9 @@ void workerMain(void* arg) {
   Worker* me = static_cast<Worker*>(arg);
   WorkItem item = {};
   vertex_pal_thread_set(&item);
+#if VERTEX_GPU_FIBERS
+  Fibers fibers = {};
+#endif
   int idle = 0;
   for (;;) {
     if (__builtin_atomic_load(&me->busy) == 0u) {
@@ -340,9 +466,19 @@ void workerMain(void* arg) {
       for (;;) {
         i64 n = static_cast<i64>(__builtin_atomic_add(reinterpret_cast<u64*>(&l->nextGroup), 1ull));
         if (n >= total) break;
+#if VERTEX_GPU_FIBERS
+        if (l->kernel->flags & kernelUsesBarrier) {
+          runGroupOnFibers(l, n, &fibers, &item);
+        } else {
+          runGroup(l, n, &item);
+        }
+#else
         runGroup(l, n, &item);
+#endif
         __builtin_atomic_add(&l->finished, 1u);
       }
+      // The last this worker touches of the launch.
+      __builtin_atomic_sub(&l->holders, 1u);
     } else {
       runItem(l, job.group, job.local[0], job.local[1], job.local[2], &item);
       __builtin_atomic_sub(&job.group->members, 1u);
@@ -380,9 +516,15 @@ void waitFor(Launch* l, u32 target) {
 i32 runCPU(Launch* l) {
   poolLock.lock();
   i64 total = l->groups[0] * l->groups[1] * l->groups[2];
-  if (!(l->kernel->flags & kernelUsesBarrier)) {
+#if VERTEX_GPU_FIBERS
+  bool byGroups = true;  // a group with barriers runs on one worker's fibers
+#else
+  bool byGroups = !(l->kernel->flags & kernelUsesBarrier);
+#endif
+  if (byGroups) {
     // Groups are independent: as many workers as there are processors,
-    // each taking groups until none are left.
+    // each taking groups until none are left. A group with barriers is
+    // run whole by the worker that takes it, on fibers.
     i64 n = vertex_pal_cpus();
     if (n < 1) n = 1;
     if (n > total) n = total;
@@ -391,6 +533,7 @@ i32 runCPU(Launch* l) {
     for (i64 i = 0; i < n; i++) {
       Worker* w = idleWorker(0);
       if (!w) break;
+      __builtin_atomic_add(&l->holders, 1u);
       give(w, Job{l, nullptr, {0, 0, 0}, true});
       given++;
     }
@@ -399,6 +542,10 @@ i32 runCPU(Launch* l) {
       return 3;
     }
     waitFor(l, static_cast<u32>(total));
+    int spins = 0;
+    while (__builtin_atomic_load(&l->holders) != 0u) {
+      if (++spins > 128) vertex_pal_sleep(1000);
+    }
   } else {
     // A barrier needs every work-item of the group running at once: one
     // worker each, a group at a time.
@@ -781,6 +928,13 @@ bool vertex_gpu_wave_all(bool c) { return c; }
 void vertex_gpu_barrier() {
   WorkItem* w = current();
   if (!(w->launch->kernel->flags & kernelUsesBarrier)) return;
+#if VERTEX_GPU_FIBERS
+  // The next fiber runs; this one resumes when every fiber of the group
+  // has reached a barrier.
+  vertex_gpu_switch(&w->fiber->sp, w->fiber->scheduler);
+  vertex_pal_thread_set(w);
+  return;
+#else
   Group* g = w->g;
   u32 phase = __builtin_atomic_load(&g->phase);
   u32 arrived = __builtin_atomic_add(&g->arrived, 1u) + 1;
@@ -793,6 +947,7 @@ void vertex_gpu_barrier() {
   while (__builtin_atomic_load(&g->phase) == phase) {
     if (++spins > 64) vertex_pal_sleep(spins > 2048 ? 20000 : 0);
   }
+#endif
 }
 
 // The group's workgroup storage: each work-item asks for the same sizes
@@ -835,6 +990,14 @@ void* vertex_gpu_shared(i64 bytes, i64 align) {
   WorkItem* w = current();
   Launch* l = w->launch;
   __builtin_atomic_store(&l->trapped, 1u);
+#if VERTEX_GPU_FIBERS
+  // On fibers, the work-item ends and the rest of its group goes on; the
+  // worker counts the group done when every fiber has ended.
+  if (l->kernel->flags & kernelUsesBarrier) {
+    w->fiber->done = true;
+    vertex_gpu_switch(&w->fiber->sp, w->fiber->scheduler);
+  }
+#endif
   Group* g = w->g;
   if (l->kernel->flags & kernelUsesBarrier) {
     __builtin_atomic_sub(&g->members, 1u);

@@ -497,31 +497,32 @@ func (c *checker) checkImportedGenerics(decls []ast.Decl, scope *Scope) {
 			if d.Body == nil {
 				continue
 			}
-			if d.Generics != nil || (d.Recv != nil && c.namesGenericType(d.Recv.Type, scope)) {
+			if d.Generics != nil || (d.Recv != nil && c.namesGenericType(d.Recv.Type, scope)) ||
+				ast.IsInlinable(d, c.file) {
 				c.checkDecl(d, scope)
 			}
 		case *ast.StructDecl:
 			if d.Generics != nil {
 				c.checkDecl(d, scope)
-			} else if own := ownGenericMethods(d.Body); own != nil {
+			} else if own := compiledHere(d.Body, c.file); own != nil {
 				c.checkMembers(d, own, c.declaredType(d.Name, scope))
 			}
 		case *ast.ClassDecl:
 			if d.Generics != nil {
 				c.checkDecl(d, scope)
-			} else if own := ownGenericMethods(d.Body); own != nil {
+			} else if own := compiledHere(d.Body, c.file); own != nil {
 				c.checkMembers(d, own, c.declaredType(d.Name, scope))
 			}
 		case *ast.EnumDecl:
 			if d.Generics != nil {
 				c.checkDecl(d, scope)
-			} else if own := ownGenericMethods(d.Body); own != nil {
+			} else if own := compiledHere(d.Body, c.file); own != nil {
 				c.checkMembers(d, own, c.declaredType(d.Name, scope))
 			}
 		case *ast.ExtensionDecl:
 			if c.namesGenericType(d.Type, scope) {
 				c.checkDecl(d, scope)
-			} else if own := ownGenericMethods(d.Body); own != nil {
+			} else if own := compiledHere(d.Body, c.file); own != nil {
 				c.checkMembers(d, own, c.extensionType(d, scope))
 			}
 		}
@@ -532,6 +533,15 @@ func (c *checker) checkImportedGenerics(decls []ast.Decl, scope *Scope) {
 // parameters of their own, which a client specializes, of a type that has
 // none: nil where it has no such method.
 func ownGenericMethods(body *ast.MemberBlock) *ast.MemberBlock {
+	return compiledHere(body, nil)
+}
+
+// compiledHere is a type body cut down to the members a client compiles
+// itself: methods with type parameters of their own, which it
+// specializes, and -- given the interface's file -- @inlinable methods and
+// initializers, whose bodies the interface carries. nil where there are
+// none.
+func compiledHere(body *ast.MemberBlock, file *token.File) *ast.MemberBlock {
 	if body == nil {
 		return nil
 	}
@@ -539,6 +549,8 @@ func ownGenericMethods(body *ast.MemberBlock) *ast.MemberBlock {
 	for _, m := range body.Members {
 		if fd, ok := m.(*ast.FuncDecl); ok && fd.Generics != nil && fd.Body != nil {
 			own = append(own, fd)
+		} else if file != nil && ast.InlinableMember(m, file) {
+			own = append(own, m)
 		}
 	}
 	if len(own) == 0 {

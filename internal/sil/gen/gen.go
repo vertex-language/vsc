@@ -150,6 +150,36 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 		sawEntry = true
 	}
 
+	// The imported modules' @inlinable functions, whose bodies their
+	// interfaces carry: compiled here as public_external, so that host
+	// code still calls the defining module's symbol while a kernel's
+	// device compile, which cannot call into another module's object
+	// code, has the body to inline. Swift's available_externally.
+	if info != nil {
+		for _, f := range info.ImportedFiles {
+			g := &gen{m: m, info: info, file: f.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes, inlinable: true}
+			for _, stmt := range f.Stmts {
+				decl, ok := stmt.(*ast.DeclStmt)
+				if !ok {
+					continue
+				}
+				switch d := decl.D.(type) {
+				case *ast.FuncDecl:
+					if ast.IsInlinable(d, f.Unit) {
+						g.function(d, nil)
+					}
+				case *ast.StructDecl:
+					g.inlinableMembers(d.Name, d.Body)
+				case *ast.ClassDecl:
+					g.inlinableMembers(d.Name, d.Body)
+				case *ast.EnumDecl:
+					g.inlinableMembers(d.Name, d.Body)
+				}
+			}
+			diags = append(diags, g.diags...)
+		}
+	}
+
 	// Emit vtables and witness tables after all function symbols exist.
 	tg := &gen{m: m, info: info, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: script != nil}
 	if len(files) > 0 {
@@ -400,6 +430,11 @@ func linkageOf(a analyzer.Access) sil.Linkage {
 
 // A gen lowers one file.
 type gen struct {
+	// inlinable is set while lowering another module's @inlinable
+	// function, whose body this module compiles but does not define:
+	// the function is public_external, available here to inline and to
+	// run on a device, and its symbol is still the other module's.
+	inlinable bool
 	// specializing is set while a generic function, method, initializer
 	// or accessor is lowered for particular types: what is emitted then
 	// is private to this module (see functionNamed and accessLinkage).
@@ -1087,6 +1122,9 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	if g.entry {
 		linkage = sil.Public
 	}
+	if g.inlinable {
+		linkage = sil.PublicExternal
+	}
 	// Reject symbol collisions.
 	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
 		g.errorAt(d, "'"+sym.Name()+"' and something else in this module are "+
@@ -1427,4 +1465,30 @@ func (g *gen) consumingSelf(d *ast.FuncDecl, recv types.Type, sym *analyzer.Func
 		}
 	}
 	return false
+}
+
+// inlinableMembers lowers an imported type's @inlinable methods and
+// initializers, and nothing else of it: the rest -- its accessors, its
+// statics, its metadata -- is the defining module's, and called there.
+// A generic type's are lowered where they are used, as its other members
+// are.
+func (g *gen) inlinableMembers(name *ast.Ident, body *ast.MemberBlock) {
+	if name == nil || body == nil {
+		return
+	}
+	sym, _ := g.info.Defs[name].(*analyzer.TypeNameSymbol)
+	if sym == nil || len(nominalTypeParams(sym.Type())) > 0 {
+		return
+	}
+	for _, mem := range body.Members {
+		if !ast.InlinableMember(mem, g.file) {
+			continue
+		}
+		switch m := mem.(type) {
+		case *ast.FuncDecl:
+			g.function(m, sym.Type())
+		case *ast.InitDecl:
+			g.initializer(m, sym.Type())
+		}
+	}
 }

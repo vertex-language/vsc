@@ -1,7 +1,7 @@
 # tests/kernel
 
 The kernel ladder: one small thing a kernel does per file, numbered
-`001`–`070` in the order the rungs climb, from an empty kernel to programs
+`001`–`071` in the order the rungs climb, from an empty kernel to programs
 (see `proposed_vertex_kernel.md` on the Desktop for the design).
 
 There is no swiftc to compare with here, so each file says what it prints:
@@ -19,9 +19,9 @@ says so there and runs where it can instead.
 
 | | Files | The oracle | Compared |
 | --- | --- | --- | --- |
-| `tests/kernel/` | `001`–`070` `.vs` | the file's `// want:` lines | stdout, on the CPU device and on Metal |
+| `tests/kernel/` | `001`–`071` `.vs` | the file's `// want:` lines | stdout, on the CPU device and on Metal |
 
-## `001`–`070`
+## `001`–`071`
 
 | | |
 | --- | --- |
@@ -34,6 +34,7 @@ says so there and runs where it can instead.
 | 053–058 | what a kernel may not do, refused where it is compiled: print, `async`, a kernel called as a function, a buffer of the wrong element, a `String` parameter, an `Array` |
 | 059–068 | element kernels: `Map` over one buffer and two, a broadcast argument, `into:`, element types in and out, a narrow result, an element kernel called from a grid kernel, a Map's result used again, and the two refusals |
 | 069–070 | programs: a histogram through shared storage and atomics, and a matrix multiply over a 2D grid |
+| 071 | barriers at scale: 64 full groups of 1024 passing 64 barriers each, which the CPU device runs as fibers |
 
 ## Rules
 
