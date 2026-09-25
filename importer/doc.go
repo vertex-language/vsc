@@ -7,8 +7,11 @@
 // so net/tcp is the tcp folder of github.com/vertex-language/net. A path
 // naming a host names its repository itself, as github.com/you/thing does.
 //
-// A package of Vertex alone is just its folders. A manifest, package.vs, is
-// only needed where a package builds C, C++ or Objective-C beside them.
+// A package is a folder, and nothing else says what is in it: its .vs
+// files, and the C++ module beside them where it has native code. A
+// repository may have a vs.mod, which pins the versions of what it imports
+// (and a vs.sum, which holds their hashes); one without is fetched at the
+// default branch of each import.
 //
 // Before anything is fetched, the checkout the importing file is in answers
 // for itself (see Local): a package's tests and examples, and one of its

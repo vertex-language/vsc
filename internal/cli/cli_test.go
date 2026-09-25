@@ -335,39 +335,32 @@ func hostEntry() string {
 	return vsc.EntrySymbol(t)
 }
 
-// TestAnImportedPackageBuildsItsCTargets: a folder that is a target of a
-// package, imported by a program, brings the C target it depends on --
-// which its source imports by module name, so the C target is built before
-// the folder is read, not after. The package declares a later macOS than
-// the default, and the program is linked for that one, as its objects were.
-// This is ui/window's shape: `import cwindow` inside `import "ui/window"`.
-func TestAnImportedPackageBuildsItsCTargets(t *testing.T) {
+// TestAnImportedPackageBuildsItsCxxModule: a folder imported by a program
+// brings its C++ module, whose exports its Vertex calls unqualified -- the
+// module is more of the package -- and whose objects the program links.
+// The vs.mod asks for a later macOS than the default, and the program is
+// linked for that one.
+func TestAnImportedPackageBuildsItsCxxModule(t *testing.T) {
 	hosted(t)
 	if !strings.HasSuffix(vsc.HostName(), "macos") {
-		t.Skip("the package declares a macOS deployment target")
+		t.Skip("the module declares a macOS deployment target")
 	}
 	root := t.TempDir()
-	files := map[string]string{
-		"lib/package.vs": `import PackageDescription
+	writeTree(t, root, map[string]string{
+		"vs.mod": "module github.com/you/answers\n\nplatform macos 14\n",
+		"lib/answers/answers.cpp": `module;
+#include <cstdint>
+#include <string_view>
+export module answers;
 
-let package = Package(
-    name: "answers",
-    platforms: [.macOS(.v14)],
-    products: [.library(name: "answers", targets: ["answers"])],
-    targets: [
-        .target(name: "canswer", path: "answers/canswer", publicHeadersPath: "include"),
-        .target(name: "answers", dependencies: ["canswer"], path: "answers", exclude: ["canswer"]),
-    ]
-)
+export enum class Kind : int32_t { small = 1, large = 40 };
+export int32_t value(Kind k) noexcept { return static_cast<int32_t>(k); }
+export int32_t length(std::string_view s) noexcept { return static_cast<int32_t>(s.size()); }
 `,
-		"lib/answers/canswer/include/canswer.h": "#include <stdint.h>\nint32_t canswer_value(void);\nconst char* canswer_name(void);\n",
-		"lib/answers/canswer/canswer.c":         "#include \"canswer.h\"\nint32_t canswer_value(void) { return 40; }\nconst char* canswer_name(void) { return \"xy\"; }\n",
 		"lib/answers/answers.vs": `package answers
 
-import canswer
-
 public func Answer() -> int32 {
-    return canswer_value() + int32(string(cString: canswer_name()).count)
+    return value(Kind.large) + length("xy")
 }
 `,
 		"main.vs": `package main
@@ -376,16 +369,7 @@ import "./lib/answers"
 
 func main() -> int32 { return answers.Answer() }
 `,
-	}
-	for name, text := range files {
-		path := filepath.Join(root, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	})
 	out := filepath.Join(root, "answer")
 	if code, _, stderr := run(t, "build", "-o", out, filepath.Join(root, "main.vs")); code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
@@ -397,54 +381,87 @@ func main() -> int32 { return answers.Answer() }
 	}
 }
 
-// TestAPackageProgramImportsItsOwnLibraryByPath: `vsc run check` in a
-// package whose program imports the package's library the way any program
-// would -- `import "answers"` -- builds the library from the checkout, with
-// the C target the manifest has it depend on, and fetches nothing. This is
-// the shape of time, net and ui: package.vs only for the C targets.
-func TestAPackageProgramImportsItsOwnLibraryByPath(t *testing.T) {
+// TestAProgramByNameIsItsCmdFolder: `vsc build check` in a checkout is its
+// cmd/check, whose imports of the checkout's own packages -- the root, a C++
+// module, and a folder of it -- are read from disk, and nothing is fetched.
+// A folder imported by path declares the module its path is.
+func TestAProgramByNameIsItsCmdFolder(t *testing.T) {
 	hosted(t)
-	if !strings.HasSuffix(vsc.HostName(), "macos") {
-		t.Skip("the package declares a macOS deployment target")
-	}
 	root := filepath.Join(t.TempDir(), "answers")
-	files := map[string]string{
-		"package.vs": `import PackageDescription
-
-let package = Package(
-    name: "answers",
-    platforms: [.macOS(.v14)],
-    products: [
-        .library(name: "answers", targets: ["answers"]),
-        .executable(name: "check", targets: ["check"]),
-    ],
-    targets: [
-        .target(name: "canswer", path: "answers/canswer", publicHeadersPath: "include"),
-        .target(name: "answers", dependencies: ["canswer"], path: "answers", exclude: ["canswer"]),
-        .executableTarget(name: "check", dependencies: ["answers"], path: "tests/check"),
-    ]
-)
-`,
-		"answers/canswer/include/canswer.h": "#include <stdint.h>\nint32_t canswer_value(void);\n",
-		"answers/canswer/canswer.c":         "#include \"canswer.h\"\nint32_t canswer_value(void) { return 40; }\n",
-		"answers/answers.vs": `package answers
-
-import canswer
-
-public func Answer() -> int32 { return canswer_value() + 2 }
+	writeTree(t, root, map[string]string{
+		"vs.mod": "module github.com/vertex-language/answers\n",
+		"answers.cpp": `export module answers;
+export int answer() { return 40; }
 `,
 		"extra/extra.vs": `package extra
 
 public func Two() -> int32 { return 2 }
 `,
-		"tests/check/main.vs": `package main
+		"cmd/check/main.vs": `package main
 
 import "answers"
 import "answers/extra"
 
-func main() -> int32 { return answers.Answer() - extra.Two() + 2 }
+func main() -> int32 { return answers.answer() + extra.Two() }
 `,
+	})
+	t.Chdir(root)
+	out := filepath.Join(t.TempDir(), "check")
+	code, _, stderr := run(t, "build", "-offline", "-o", out, "check")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 	}
+	cmd := exec.Command(out)
+	_ = cmd.Run()
+	if got := cmd.ProcessState.ExitCode(); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+
+	// The module a folder declares is its path's.
+	writeTree(t, root, map[string]string{"answers.cpp": "export module wrong;\nexport int answer() { return 40; }\n"})
+	code, _, stderr = run(t, "build", "-offline", "-o", out, "check")
+	if code == 0 || !strings.Contains(stderr, "export module answers;") {
+		t.Errorf("a misnamed module built (exit %d):\n%s", code, stderr)
+	}
+}
+
+// TestCxxImportsAnotherPackagesModule: a package's C++ imports another
+// package's module, and the runtime's task module, by name. The program
+// imports only the first package, and still links the second's objects.
+func TestCxxImportsAnotherPackagesModule(t *testing.T) {
+	hosted(t)
+	root := filepath.Join(t.TempDir(), "p")
+	writeTree(t, root, map[string]string{
+		"vs.mod": "module github.com/me/p\n",
+		"math/math.cpp": `export module p.math;
+export int add(int a, int b) { return a + b; }
+`,
+		"calc/calc.cpp": `export module p.calc;
+import p.math;
+import vertex.task;
+export int twice(int x) { return add(x, x) + (vertex_task_workers() >= 0 ? 0 : 100); }
+`,
+		"cmd/t/main.vs": `package main
+
+import "github.com/me/p/calc"
+
+func main() -> int32 { return calc.twice(21) }
+`,
+	})
+	t.Chdir(root)
+	out := filepath.Join(t.TempDir(), "t")
+	if code, _, stderr := run(t, "build", "-offline", "-o", out, "t"); code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	cmd := exec.Command(out)
+	_ = cmd.Run()
+	if got := cmd.ProcessState.ExitCode(); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+}
+
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
 	for name, text := range files {
 		path := filepath.Join(root, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -453,15 +470,5 @@ func main() -> int32 { return answers.Answer() - extra.Two() + 2 }
 		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
-	}
-	out := filepath.Join(t.TempDir(), "check")
-	code, _, stderr := run(t, "build", "-offline", "--package-path", root, "-o", out, "check")
-	if code != 0 {
-		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
-	}
-	cmd := exec.Command(out)
-	_ = cmd.Run()
-	if got := cmd.ProcessState.ExitCode(); got != 42 {
-		t.Errorf("exit status = %d, want 42", got)
 	}
 }

@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
-	"sort"
 	"strings"
 
 	"github.com/vertex-language/vsc/analyzer"
@@ -20,6 +18,7 @@ import (
 	"github.com/vertex-language/vsc/internal/sil/pass"
 	"github.com/vertex-language/vsc/lower"
 	"github.com/vertex-language/vsc/parser"
+	"github.com/vertex-language/vsc/pkg"
 	"github.com/vertex-language/vsc/token"
 )
 
@@ -87,17 +86,17 @@ type PackageResolver interface {
 	Fetch(path string) (string, error)
 }
 
-// A TargetBuilder is a PackageResolver that can also build what a folder
-// of source needs beside it before the folder is read: the C-family
-// targets its package's manifest has it depend on, whose interfaces the
-// folder imports by module name -- `import cwindow` in a target that
-// depends on a C target called cwindow. Without one, such a folder imports
-// only what the import paths already hold.
-type TargetBuilder interface {
-	// TargetModules builds the modules the target in dir depends on and is
-	// the directory their interfaces are in, or "" where dir is no target
-	// of a package or depends on nothing to build.
-	TargetModules(dir string) (string, error)
+// A NativeBinder is a PackageResolver that can also read the C++ module
+// of a package folder: what its exports are to the package's Vertex, as
+// Vertex source that compiles as part of the package. Without one, a
+// folder with C++ in it does not import.
+type NativeBinder interface {
+	// NativeSources is the Vertex source the C++ module in dir gives the
+	// package pkgName. path is the import path the folder was imported
+	// by, and says which module name the C++ must declare; "" is the
+	// program's own folder. public makes the exports the package's API,
+	// as they are for a folder of C++ alone.
+	NativeSources(dir, path, pkgName string, public bool) ([]Source, error)
 }
 
 // A Phase is one step of the compiler pipeline, in execution order.
@@ -144,11 +143,12 @@ type Package struct {
 	Name string
 	// Dir is the directory where the source files were found.
 	Dir string
-	// Sources are the package's source files.
+	// Sources are the package's source files: its .vs files, and the
+	// declarations its C++ module's exports are (see NativeBinder).
 	Sources []Source
-	// ImportPaths are where the modules built for it are, which compiling
-	// it needs beside the program's own; see TargetBuilder.
-	ImportPaths []string
+	// Native says the folder has a C++ module, whose objects the program
+	// links.
+	Native bool
 }
 
 // Compile runs the compiler phases in order, stopping at the first phase that reports
@@ -170,7 +170,7 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	if opts.Stop == Parsed || Errors(diags) {
 		return u, diags
 	}
-	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg)
+	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg, opts.Target)
 	u.Packages = pkgs
 	diags = append(diags, importDiags...)
 	if Errors(diags) {
@@ -272,8 +272,8 @@ var errNoTarget = errors.New("no target: lowering needs a machine to lower for")
 
 // loadImports resolves and loads all transitive module and package imports.
 func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []string,
-	packages PackageResolver, ifcfg ifconfig.Config) ([]analyzer.Import, []Package, []Diagnostic) {
-	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, ifcfg: ifcfg}
+	packages PackageResolver, ifcfg ifconfig.Config, target ir.Target) ([]analyzer.Import, []Package, []Diagnostic) {
+	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, ifcfg: ifcfg, target: target}
 	for i, f := range files {
 		unit := f.Unit
 		if i < len(units) && units[i] != nil {
@@ -287,7 +287,10 @@ func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []strin
 // An importer resolves and loads imported modules and packages.
 type importer struct {
 	// ifcfg settles the `#if`s of what is imported, as of the program.
-	ifcfg    ifconfig.Config
+	ifcfg ifconfig.Config
+	// target decides which of a folder's files are built: those named for
+	// another platform or architecture (net_windows.cpp) are not.
+	target   ir.Target
 	paths    []string
 	pkgPaths []string
 	packages PackageResolver
@@ -588,32 +591,42 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		fail(err.Error())
 		return
 	}
-	sources, err := filepath.Glob(filepath.Join(dir, "*"+SourceExtension))
-	if err != nil || len(sources) == 0 {
-		fail("package '" + path + "' has no " + SourceExtension + " files: " + dir)
+	use := l.target.Use()
+	folder, err := pkg.ReadFolder(dir, pkg.PlatformOf(use), pkg.ArchOf(use))
+	if err != nil {
+		fail("package '" + path + "': " + err.Error())
 		return
 	}
-	sort.Strings(sources)
+	if folder.Empty() {
+		fail("package '" + path + "' has no source for this target: " + dir)
+		return
+	}
 
 	var files []*ast.File
 	var units []*token.File
 	var srcs []Source
-	for _, src := range sources {
-		text, err := os.ReadFile(src)
-		if err != nil {
-			fail("cannot read '" + src + "': " + err.Error())
-			return
-		}
-		tf := token.NewFile(src, text)
+	add := func(src Source) bool {
+		tf := token.NewFile(src.Name, src.Text)
 		parsed, ds := parser.ParseFile(tf, 0)
 		if len(ds) > 0 {
-			fail("package '" + path + "' has a file this compiler cannot read: " + src)
-			return
+			fail("package '" + path + "' has a file this compiler cannot read: " + src.Name)
+			return false
 		}
 		ifconfig.Resolve(parsed, l.ifcfg)
 		files = append(files, parsed)
 		units = append(units, tf)
-		srcs = append(srcs, Source{Name: src, Text: text})
+		srcs = append(srcs, src)
+		return true
+	}
+	for _, name := range folder.Vertex {
+		text, err := os.ReadFile(name)
+		if err != nil {
+			fail("cannot read '" + name + "': " + err.Error())
+			return
+		}
+		if !add(Source{Name: name, Text: text}) {
+			return
+		}
 	}
 
 	name := packageNameOf(files, units)
@@ -633,19 +646,23 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	}
 	l.seen[as] = true
 
-	// What the folder's package builds for it comes first, so that its
-	// imports of those modules are found, here and when it is compiled.
-	var paths []string
-	if tb, ok := l.packages.(TargetBuilder); ok {
-		modules, err := tb.TargetModules(dir)
+	// The folder's C++ module is more of the package: its exports are
+	// declarations the package's Vertex sees, and its API where the folder
+	// has no Vertex of its own.
+	if len(folder.Native) > 0 {
+		nb, ok := l.packages.(NativeBinder)
+		if !ok {
+			fail("package '" + path + "' has C++, which this build does not compile")
+			return
+		}
+		native, err := nb.NativeSources(dir, path, name, len(folder.Vertex) == 0)
 		if err != nil {
 			fail("package '" + path + "': " + err.Error())
 			return
 		}
-		if modules != "" {
-			paths = append(paths, modules)
-			if !slices.Contains(l.paths, modules) {
-				l.paths = append(l.paths, modules)
+		for _, src := range native {
+			if !add(src) {
+				return
 			}
 		}
 	}
@@ -654,7 +671,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		l.readAll(f, units[i], name)
 	}
 	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units})
-	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, ImportPaths: paths})
+	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0})
 }
 
 // lastSegment returns the trailing folder name from a path.

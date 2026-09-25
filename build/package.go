@@ -14,11 +14,6 @@ import (
 
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/macho"
-	"github.com/vertex-language/objv"
-	objvpp "github.com/vertex-language/objv/preprocessor"
-	objvsys "github.com/vertex-language/objv/sysroot"
-	"github.com/vertex-language/vcc"
-	vccpp "github.com/vertex-language/vcc/preprocessor"
 	"github.com/vertex-language/vcx"
 
 	"github.com/vertex-language/vsc"
@@ -125,7 +120,7 @@ func (n *Linkage) add(t *pkg.ResolvedTarget) {
 	n.Frameworks = appendNew(n.Frameworks, t.Frameworks...)
 	n.CXX = n.CXX || t.UsesCXX()
 	for _, s := range t.Sources {
-		n.ObjC = n.ObjC || s.Language == pkg.ObjC
+		n.ObjC = n.ObjC || s.Language == pkg.ObjCXX
 	}
 }
 
@@ -168,6 +163,16 @@ func laterOS(a, b string) string {
 
 // Options adds what n needs to a link's options.
 func (n Linkage) Options(opts LinkOptions) LinkOptions { return n.options(opts) }
+
+// Merge is what n and m need together.
+func (n Linkage) Merge(m Linkage) Linkage {
+	n.Libraries = appendNew(n.Libraries, m.Libraries...)
+	n.Frameworks = appendNew(n.Frameworks, m.Frameworks...)
+	n.CXX = n.CXX || m.CXX
+	n.ObjC = n.ObjC || m.ObjC
+	n.MinOS = laterOS(n.MinOS, m.MinOS)
+	return n
+}
 
 // TargetObjects compiles the C-family targets a target of p depends on --
 // not the target itself, which is Vertex and compiled as a module of its
@@ -245,14 +250,13 @@ func (b *packageBuild) swiftTarget(t *pkg.ResolvedTarget) ([]Input, error) {
 	return []Input{{Name: t.Name + ".o", Data: obj}}, nil
 }
 
-// cTarget compiles a C, C++ or Objective-C target, and writes the interface
-// its public headers give the Swift targets that import it.
+// cTarget compiles a C++ target, and writes the interface its public
+// headers give the Swift targets that import it.
 //
-// Nothing here runs a host toolchain. C is vcc's, C++ is vcx's and
-// Objective-C is objv's, each called as a library in this process, and
-// what comes back is object bytes for the same linker the Swift targets
-// feed. A machine with Go and an SDK's headers builds a package; a machine
-// with clang does not build it any differently.
+// Nothing here runs a host toolchain. C++ is vcx's, called as a library in
+// this process, and what comes back is object bytes for the same linker
+// the Swift targets feed. A machine with Go and an SDK's headers builds a
+// package; a machine with clang does not build it any differently.
 func (b *packageBuild) cTarget(t *pkg.ResolvedTarget) ([]Input, error) {
 	fl, err := b.cFlags(t)
 	if err != nil {
@@ -372,28 +376,26 @@ func (b *packageBuild) cFlags(t *pkg.ResolvedTarget) (cFlags, error) {
 	return fl, nil
 }
 
-// cCompilers holds one compiler per language for one target, made on first
-// use: each resolves its search list and predefines once, and reuses them
-// for every file after.
+// cCompilers holds the C++ compiler for one target, made on first use: it
+// resolves its search list and predefines once, and reuses them for every
+// file after.
 type cCompilers struct {
 	b     *packageBuild
 	t     *pkg.ResolvedTarget
 	flags cFlags
 
-	c    *vcc.Compiler
-	cxx  *vcx.Compiler
-	objc *objv.Compiler
+	cxx *vcx.Compiler
 }
 
 // cacheKey names what a target's objects are made from: the compiler
-// they go through, the target and deployment they are built for, the
+// they go through (this executable, see compilerIdentity), the target and deployment they are built for, the
 // flags, and every file in the target's folder -- its sources and the
 // headers beside them. Two folders that hash alike build alike. It is ""
 // where the folder cannot be read, and then nothing is cached.
 func (cc *cCompilers) cacheKey() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "vsc-cobj-1\n%s\n%s\n%d\n", targetName(cc.b.opts.Target), cc.b.minOS,
-		cxxStd(cc.b.p.Manifest.CXXLanguageStandard))
+	fmt.Fprintf(h, "vsc-cobj-2\n%s\n%s\n%d\n%s\n", targetName(cc.b.opts.Target), cc.b.minOS,
+		cxxStd(cc.b.p.Manifest.CXXLanguageStandard), compilerIdentity())
 	for _, inc := range cc.flags.includes {
 		fmt.Fprintf(h, "I %s\n", inc)
 	}
@@ -437,30 +439,17 @@ func (cc *cCompilers) cacheKey() string {
 
 // object compiles one source file to object bytes.
 func (cc *cCompilers) object(src pkg.SourceFile) ([]byte, error) {
-	name := targetName(cc.b.opts.Target)
 	switch src.Language {
-	case pkg.C:
-		if cc.c == nil {
-			cc.c = &vcc.Compiler{
-				Target:      name,
-				IncludeDirs: cc.flags.includes,
-				Defines:     vccPredefines(cc.flags.defines["c"], cc.flags.undefines["c"]),
-			}
-		}
-		data, diags, err := cc.c.Object(vcc.File(src.Path))
-		if err == nil && vcc.HasErrors(diags) {
-			err = &vcc.DiagnosticError{Diagnostics: diags}
-		}
-		return data, err
-
 	case pkg.CXX:
 		if cc.cxx == nil {
 			cc.cxx = &vcx.Compiler{
-				Target:      name,
+				Target:      targetName(cc.b.opts.Target),
 				Std:         cxxStd(cc.b.p.Manifest.CXXLanguageStandard),
 				IncludeDirs: cc.flags.includes,
-				Defs:        cc.flags.defines["cxx"],
-				Undefs:      cc.flags.undefines["cxx"],
+				// cSettings are every C-family language's, as SwiftPM
+				// reads them; cxxSettings are C++'s alone, and come after.
+				Defs:   append(append([]string(nil), cc.flags.defines["c"]...), cc.flags.defines["cxx"]...),
+				Undefs: append(append([]string(nil), cc.flags.undefines["c"]...), cc.flags.undefines["cxx"]...),
 			}
 		}
 		data, diags, err := cc.cxx.Object(vcx.File(src.Path))
@@ -468,60 +457,10 @@ func (cc *cCompilers) object(src pkg.SourceFile) ([]byte, error) {
 			err = &vcx.DiagnosticError{Diagnostics: diags}
 		}
 		return data, err
-
-	case pkg.ObjC:
-		if cc.objc == nil {
-			cc.objc = &objv.Compiler{
-				Target:      name,
-				IncludeDirs: cc.flags.includes,
-				Defines:     objvPredefines(cc.flags.defines["c"], cc.flags.undefines["c"]),
-				// SwiftPM compiles a target's Objective-C with ARC -- its
-				// `swift build -v` passes -fobjc-arc -- and a manifest
-				// means what SwiftPM does with it. Without it, a strong
-				// static or an autoreleased object kept past its pool is
-				// a dangling reference in code written for ARC.
-				ARC: true,
-			}
-			if v, ok := objvsys.ParseVersion(cc.b.minOS); ok {
-				cc.objc.Deployment = v
-			}
-		}
-		data, diags, err := cc.objc.Object(objv.File(src.Path))
-		if err == nil && objv.HasErrors(diags) {
-			err = &objv.DiagnosticError{Diagnostics: diags}
-		}
-		return data, err
-
 	case pkg.ObjCXX:
-		return nil, errors.New("Objective-C++ has no compiler here yet: objv is Objective-C over C, and vcx is C++ without it")
-	case pkg.Assembly:
-		return nil, errors.New("assembly sources are not built yet")
+		return nil, errors.New("Objective-C++ is not compiled yet: vcx has no Objective-C half")
 	}
 	return nil, fmt.Errorf("no compiler for this kind of source")
-}
-
-// vccPredefines is -D and then -U, in vcc's spelling.
-func vccPredefines(defines, undefines []string) []vccpp.Predefine {
-	out := make([]vccpp.Predefine, 0, len(defines)+len(undefines))
-	for _, d := range defines {
-		out = append(out, vccpp.Predefine{Kind: vccpp.PredefineDefine, Text: d})
-	}
-	for _, u := range undefines {
-		out = append(out, vccpp.Predefine{Kind: vccpp.PredefineUndef, Text: u})
-	}
-	return out
-}
-
-// objvPredefines is -D and then -U, in objv's spelling.
-func objvPredefines(defines, undefines []string) []objvpp.Predefine {
-	out := make([]objvpp.Predefine, 0, len(defines)+len(undefines))
-	for _, d := range defines {
-		out = append(out, objvpp.Predefine{Kind: objvpp.PredefineDefine, Text: d})
-	}
-	for _, u := range undefines {
-		out = append(out, objvpp.Predefine{Kind: objvpp.PredefineUndef, Text: u})
-	}
-	return out
 }
 
 // cxxStd is a manifest's cxxLanguageStandard as a vcx standard. vcx reads

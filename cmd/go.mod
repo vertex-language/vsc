@@ -21,7 +21,7 @@ require (
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
-	github.com/vertex-language/air v0.0.0
+	github.com/vertex-language/air v0.0.0 // indirect
 	github.com/vertex-language/amd64 v0.0.0 // indirect
 	github.com/vertex-language/amdgpu v0.0.0 // indirect
 	github.com/vertex-language/arm64 v0.0.0 // indirect
@@ -31,10 +31,8 @@ require (
 	github.com/vertex-language/ir v0.0.0 // indirect
 	github.com/vertex-language/ir/lower v0.0.0 // indirect
 	github.com/vertex-language/macho v0.0.0 // indirect
-	github.com/vertex-language/objv v0.0.0-00010101000000-000000000000 // indirect
 	github.com/vertex-language/pe v0.0.0 // indirect
 	github.com/vertex-language/ptx v0.0.0 // indirect
-	github.com/vertex-language/vcc v0.0.0 // indirect
 	github.com/vertex-language/vcx v0.0.0 // indirect
 	github.com/vertex-language/vsc/build v0.0.0 // indirect
 	github.com/vertex-language/vsc/stdlib v0.0.0 // indirect
@@ -54,9 +52,7 @@ replace (
 	github.com/vertex-language/ir => ../../ir
 	github.com/vertex-language/ir/lower => ../../ir/lower
 	github.com/vertex-language/macho => ../../macho
-	github.com/vertex-language/objv => ../../objv
 	github.com/vertex-language/pe => ../../pe
-	github.com/vertex-language/vcc => ../../vcc
 	github.com/vertex-language/vcx => ../../vcx
 	github.com/vertex-language/vsc => ..
 	github.com/vertex-language/vsc/build => ../build

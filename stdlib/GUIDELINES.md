@@ -40,56 +40,73 @@ Some of what the compiler emits calls to belongs to a feature most programs neve
 
 ## 3. Native Bridge Architecture
 
-A bridge translates platform APIs into an `extern "C"` ABI wrapped by Vertex bindings.
+A package's native code is a **C++ named module in the package's own folder**. vsc reads the module's `export`s through vcx and gives them to the package's Vertex as ordinary declarations. There is no manifest, no C header, no `bindings.vs` and no `@_silgen_name`. The design is `~/Desktop/proposed_vsc_import_v2.md`.
 
 ### File Layout
 
 ```
-<pkg>/
-├── c<pkg>/
-│   ├── include/c<pkg>.h   # Public C ABI: extern "C", primitive types only
-│   ├── c<pkg>.cpp         # Main implementation (#if defined(_WIN32), etc.)
-│   ├── c<pkg>_darwin.m    # Optional: Objective-C for Apple frameworks
-│   └── kernels.metal      # gpu/* only: vendor GPU kernels (elsewhere, kernels are .vs)
-├── bindings.vs            # @_silgen_name definitions only
-└── *.vs                   # Public Vertex API, types, policy, and validation
+net/tcp/                  ← import "net/tcp"
+├── sock.cpp              # export module net.tcp;   the interface unit (exactly one)
+├── sock_posix.cpp        # module net.tcp;          implementation units, any number
+├── sock_windows.cpp      # module net.tcp;
+├── window_darwin.mm      # module ui.window;        Objective-C++ for Apple frameworks (vcx, once it has it)
+└── *.vs                  # package tcp: the public Vertex API, types, policy, validation
 ```
 
-```swift
-.target(name: "c<pkg>", path: "<pkg>/c<pkg>", publicHeadersPath: "include"),
-.target(name: "<pkg>", dependencies: ["c<pkg>"], path: "<pkg>", exclude: ["c<pkg>"]),
-```
+* **The module name is the import path with dots:** `net/tcp` is `net.tcp`, `github.com/you/thing/x` is `thing.x`. vsc checks it.
+* **Platform files use Go's suffixes:** `_darwin`, `_posix` (every platform but Windows), `_windows`, `_linux`, `_android`, `_ios`, and `_arm64` / `_amd64`, alone or as `_linux_amd64`. A file named for another target is not built. This replaces `#if` around whole files.
+* **System headers go in the global module fragment** (`module;` … `export module net.tcp;`), so their macros never reach the module's users.
+* **Visibility:** in a folder that has `.vs` files, the C++ exports are package-internal: the `.vs` files call them unqualified, and importers see only the `public` Vertex API. A folder of C++ alone is a package whose exports *are* its API (`import "math"`, `math.add(1, 2)`).
+* **Programs** are `cmd/<name>/main.vs` (`vsc run <name>`), tests included.
+* **Linking:** a unit names what a program using the package must link with a pragma, in its global module fragment: `#pragma vertex framework("AppKit")`, `#pragma vertex library("m")`, or clang's `#pragma comment(lib, "ws2_32")`. Framework headers are found as clang finds them (`<CoreFoundation/CoreFoundation.h>`).
 
-A target compiles every source in it for **every** platform. Wrap a platform-only file (`c<pkg>_darwin.m`) in `#if defined(__APPLE__)`, and implement the same header functions in the `.cpp` under `#if !defined(__APPLE__)`.
+### What crosses
+
+vsc generates one `extern "C"` thunk per exported function and calls that, so every C++ ABI decision (how a `std::string_view` is passed, what a symbol is called) stays vcx's.
+
+| C++ export | Vertex sees |
+| --- | --- |
+| `int32_t`, `uint16_t`, `double`, `bool`, `char` | `int32`, `uint16`, `float64`, `bool`, `CChar` |
+| `T*`, `const T*`, `void*`, `T**` | `UnsafeMutablePointer<T>?`, `UnsafePointer<T>?`, `UnsafeMutableRawPointer?`, … |
+| `std::string_view` parameter | `string` |
+| `std::span<T>` / `std::span<const T>` parameter | `UnsafeMutableBufferPointer<T>` / `UnsafeBufferPointer<T>` (waits on vcx's span, see the gaps) |
+| `enum class E : int32_t { … }` | `enum E: int32 { case … }` |
+| unscoped `enum E : int32_t { … }` | `enum E { static let …: int32 }` |
+| `constexpr` integer | `let` (`static let` in a namespace) |
+| `namespace <module> { … }` (`math` for `math`, `net::tcp` or `tcp` for `net.tcp`) | the package itself |
+| any other namespace | a Vertex namespace: `detail::f` is `detail.f` |
+
+Not yet: classes, templates, `std::expected` / `std::optional`, references. vsc says what it left out and why when it builds.
 
 ### Toolchain & Language Selection
 
-All native code compiles in-process using the Go toolchain (no external toolchain required):
+All native code compiles in-process through vcx (no external toolchain):
 
-| Extension | Compiler | Standard / Target | Usage |
-| --- | --- | --- | --- |
-| `.cpp`, `.cc`, `.cxx` | **vcx** / `v++` | the manifest's `cxxLanguageStandard` (up to C++23) | **Default.** Use for all POSIX and Win32 bridges. Enables RAII, clean string views, and templates. |
-| `.c` | **vcc** | C11/C17 | Pristine upstream C code only. |
-| `.m` | **objv** | Objective-C (ARC) | Apple-only frameworks (AppKit, Security, MPS/Accelerate in `gpu/blas`). Metal's host API belongs to the built-in `gpu`'s runtime unit (§1.1), not to packages. |
-| `.cu`, `.cuh`, `.hip`, `.metal` | **vcx** | vendor GPU kernels | Only in the `gpu` repository's function packages (`gpu/blas`, `gpu/dnn`), for kernels that need vendor tuning. Everywhere else a GPU kernel is `.vs` (`func f(...) kernel`), which builds for every vendor and the CPU. Vendor sources load through `device.Library`. `.metal` builds a `.metallib` that's loaded at run time, not a linked object. |
+| Extension | Compiler | Usage |
+| --- | --- | --- |
+| `.cpp`, `.cc`, `.cxx`, `.cppm` | **vcx** / `v++` (C++23) | **Default.** Every bridge. |
+| `.mm` | **vcx** (Objective-C++) | Apple-only frameworks. Not compiled yet: vcx has no Objective-C half. |
+| `.cu`, `.cuh`, `.hip`, `.metal` | **vcx** | Only in the `gpu` repository's function packages, for kernels that need vendor tuning. Everywhere else a kernel is `.vs`. |
+
+`.c` and `.m` are errors in any package, `Package.swift` ones included: vsc builds `.vs` and C++, and nothing else. C belongs to vcc and Objective-C to objv, which are separate compilers.
 
 **Known gaps:**
-* **GPU sources in packages:** `vsc/pkg/layout.go` doesn't list `.cu`, `.cuh`, `.hip` or `.metal` yet, so a `package.vs` target won't pick them up.
-* **Objective-C++ (`.mm`) and assembly (`.s`, `.S`):** not built. For Objective-C++, use a `.m` file and a `.cpp` file that talk through the shared header.
-* **`std::span`:** vcx can't construct one from a pointer and a length yet. Pass a pointer and a count.
+* **Objective-C++ (`.mm`):** not compiled yet.
+* **`std::span`:** vcx can't construct one from a pointer and a length yet, nor iterate one with range-`for`. Pass a pointer and a count.
+* **C++ importing another package's module** (`import net.tcp;` from another package's C++): not wired yet. vcx resolves module imports; vsc does not yet hand it other packages' interface units.
 
 ---
 
 ## 4. Bridge Design Contract
 
-* **ABI Boundary:** Headers must use `extern "C"` and expose only fixed-width integers (`int32_t`, `uint64_t`), raw buffers (`const char*`, length pairs), and opaque pointers. No C++ types, Objective-C objects, or exceptions may cross the boundary.
-* **Namespace Isolation:** Prefix all C symbols with `c<pkg>_*` and constants with `C<PKG>_*`. Never use `vertex_*`.
-* **Zero Blocking:** Native bridges must never block an OS thread. Descriptors are non-blocking. Return `*_ERR_WOULD_BLOCK` on pending I/O and let Vertex await readiness via `vertex_task_wait_fd`. When the OS only offers a blocking call (a child's exit, a signal), turn it into a readable descriptor (a pidfd, kqueue, or self-pipe) instead of blocking in native code.
-* **Caller-Owned Memory:** Buffers are allocated and owned by the caller. If the native layer must allocate, provide a corresponding `c<pkg>_free_*()` function.
-* **Return Conventions:** Return `0` or byte counts on success; return negative error codes on failure. Provide `c<pkg>_last_error()` to surface underlying OS error numbers (`errno`, `GetLastError()`).
-* **Universal Target Support:** Every header function must be implemented across all supported targets (`aarch64-macos`, `x86_64-windows`, `aarch64-android`). Unsupported operations must return `*_ERR_UNSUPPORTED` rather than being omitted or panicking.
+* **Types at the boundary:** fixed-width integers, pointers and buffers, `std::string_view`, enums and integer constants. No classes, exceptions or Objective-C objects cross. Exported functions should be `noexcept`: the thunks are, so an escaping exception terminates.
+* **Namespace Isolation:** the module is the namespace. Never name anything `vertex_*`.
+* **Zero Blocking:** Native bridges must never block an OS thread. Descriptors are non-blocking. Return a would-block code on pending I/O and let Vertex await readiness via `vertex_task_wait_fd`. When the OS only offers a blocking call (a child's exit, a signal), turn it into a readable descriptor (a pidfd, kqueue, or self-pipe) instead of blocking in native code.
+* **Caller-Owned Memory:** Buffers are allocated and owned by the caller. If the native layer must allocate, export a matching free function.
+* **Return Conventions:** Return `0` or byte counts on success, and negative error codes on failure. Export a `last_error()` to surface underlying OS error numbers (`errno`, `GetLastError()`).
+* **Universal Target Support:** Every exported function must be implemented on every supported target (`aarch64-macos`, `x86_64-windows`, `aarch64-android`). An unsupported operation returns an "unsupported" code rather than being omitted or panicking.
 * **Thin Adapters:** The bridge handles OS call translation only. Parsing, business logic, default values, and data structures belong in Vertex.
-* **Privileged Packages Only:** Native bridges are restricted to core platform modules (`os`, `sync`, `fs`, `time`, `net/*`, `ui/window`, `db/sqlite`) and the `gpu` repository's function packages (`gpu/*`: vendor kernel sources, and `gpu/blas`'s MPS/Accelerate binding). `gpu` itself isn't a package: it's built into the compiler (§1.1).
+* **Privileged Packages Only:** Native bridges are restricted to core platform modules (`os`, `sync`, `fs`, `time`, `net/*`, `ui/window`, `db/sqlite`) and the `gpu` repository's function packages (`gpu/*`). `gpu` itself isn't a package: it's built into the compiler (§1.1).
 
 ---
 

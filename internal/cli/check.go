@@ -22,7 +22,7 @@ func cmdCheck(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "vsc:", err)
 		return exitUsage
 	}
-	srcs, err := sources(fs.Args())
+	srcs, err := sources(fs.Args(), target)
 	if err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
 		return exitUsage

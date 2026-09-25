@@ -6,13 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/vertex-language/ir"
 
 	"github.com/vertex-language/vsc"
 	"github.com/vertex-language/vsc/importer"
+	"github.com/vertex-language/vsc/pkg"
 )
 
 // common is the flag set every verb shares.
@@ -27,9 +27,12 @@ type common struct {
 	// notice reports what a build is doing that it might otherwise seem
 	// to hang on -- fetching a package. Set by the command; nil is quiet.
 	notice func(string)
-	// built is each package target's C-family dependencies, by the
-	// target's directory, built once however often they are asked for.
-	built map[string]*targetBuild
+	// main is the module being built: the checkout the program's files
+	// are in, with its vs.mod, and the vs.work above it.
+	main *mainModule
+	// natives are the C++ modules of the folders read so far, by
+	// directory, bound once however often they are imported.
+	natives map[string]*native
 }
 
 // includePath collects repeated -I or -P flags in order.
@@ -93,39 +96,58 @@ func (c *common) options(t ir.Target, stop vsc.Phase) vsc.Options {
 type packages common
 
 // Local is the directory of source for path without fetching: the
-// checkout -replace names for it, or the checkout the importing file is in.
+// checkout -replace names for it, one a vs.work uses or the main module's
+// vs.mod replaces it with, or the checkout the importing file is in.
 func (p *packages) Local(path, fromDir string) (string, error) {
 	if dir, sub, ok := p.replaced(path); ok {
 		return importer.Checkout(path, dir, sub)
+	}
+	if m := (*common)(p).mainModule(fromDir); m != nil {
+		if dir, sub, ok := m.local(path); ok {
+			return importer.Checkout(path, dir, sub)
+		}
 	}
 	return importer.Local(path, fromDir)
 }
 
 // Fetch is the directory of source for path, fetched into the cache if this
-// machine does not have it, or "" for a path no repository answers to.
+// machine does not have it, or "" for a path no repository answers to. The
+// version is the one the main module's vs.mod requires, and what is
+// fetched at it must hash as its vs.sum records.
 func (p *packages) Fetch(path string) (string, error) {
 	if _, ok := importer.Lookup(path); !ok {
 		return "", nil
 	}
-	return importer.Resolve(path, importer.Options{
+	m := (*common)(p).main
+	version := ""
+	if m != nil && m.root.Mod != nil {
+		module := importer.ModuleOf(path)
+		version = m.root.Mod.Required(module)
+		// A replace with another module fetches that one, at its version,
+		// in the path's place.
+		for _, r := range m.replaces {
+			if r.Dir != "" || r.Module != module || (r.Version != "" && r.Version != version) {
+				continue
+			}
+			sub, _ := under(path, module)
+			path = r.New.Module
+			if sub != "" {
+				path += "/" + sub
+			}
+			version = r.New.Version
+			break
+		}
+	}
+	dir, err := importer.Resolve(path, importer.Options{
+		Ref:     version,
 		Offline: p.offline,
 		Update:  p.update,
 		Log:     p.notice,
 	})
-}
-
-// TargetModules builds the C-family targets the package target in dir
-// depends on, and is where their interfaces are. See vsc.TargetBuilder.
-func (p *packages) TargetModules(dir string) (string, error) {
-	t, err := (*common)(p).resolve()
-	if err != nil {
-		return "", err
+	if err != nil || version == "" {
+		return dir, err
 	}
-	b, err := (*common)(p).targets(dir, t)
-	if err != nil || b == nil || len(b.objs) == 0 {
-		return "", err
-	}
-	return b.modules, nil
+	return dir, m.check(importer.ModuleOf(path), version, dir, path)
 }
 
 // replaced is a directory named by -replace for this path. It is how a
@@ -137,15 +159,28 @@ func (p *packages) TargetModules(dir string) (string, error) {
 func (p *packages) replaced(path string) (dir, sub string, ok bool) {
 	for _, r := range p.replace {
 		name, dir, found := strings.Cut(r, "=")
-		if !found || (path != name && !strings.HasPrefix(path, name+"/")) {
+		if !found {
 			continue
 		}
-		if abs, err := filepath.Abs(dir); err == nil {
-			dir = abs
+		if sub, ok := under(path, name); ok {
+			if abs, err := filepath.Abs(dir); err == nil {
+				dir = abs
+			}
+			return dir, sub, true
 		}
-		return dir, strings.TrimPrefix(strings.TrimPrefix(path, name), "/"), true
 	}
 	return "", "", false
+}
+
+// under reports whether path is module or a folder of it, and which.
+func under(path, module string) (sub string, ok bool) {
+	if path == module {
+		return "", true
+	}
+	if strings.HasPrefix(path, module+"/") {
+		return strings.TrimPrefix(path, module+"/"), true
+	}
+	return "", false
 }
 
 // source reads one input file or standard input ("" or "-").
@@ -167,11 +202,11 @@ func source(name string) (vsc.Source, error) {
 // sources reads multiple input files in order, defaulting to stdin if empty.
 // A directory stands for the Vertex files in it, as a folder is a package:
 // `vsc run tests/all`.
-func sources(names []string) ([]vsc.Source, error) {
+func sources(names []string, target ir.Target) ([]vsc.Source, error) {
 	if len(names) == 0 {
 		names = []string{"-"}
 	}
-	names, err := expandDirs(names)
+	names, err := expandDirs(names, target)
 	if err != nil {
 		return nil, err
 	}
@@ -196,8 +231,8 @@ func outputName(srcs []vsc.Source, ext string) string {
 }
 
 // expandDirs replaces each directory among names with the Vertex files in
-// it, in name order.
-func expandDirs(names []string) ([]string, error) {
+// it that the target builds, in name order: a folder is a package.
+func expandDirs(names []string, target ir.Target) ([]string, error) {
 	var out []string
 	for _, name := range names {
 		info, err := os.Stat(name)
@@ -205,15 +240,14 @@ func expandDirs(names []string) ([]string, error) {
 			out = append(out, name)
 			continue
 		}
-		files, err := filepath.Glob(filepath.Join(name, "*"+vsc.SourceExtension))
+		f, err := pkg.ReadFolder(name, pkg.PlatformOf(target.Use()), pkg.ArchOf(target.Use()))
 		if err != nil {
 			return nil, err
 		}
-		if len(files) == 0 {
+		if len(f.Vertex) == 0 {
 			return nil, fmt.Errorf("%s: no %s files in the folder", name, vsc.SourceExtension)
 		}
-		sort.Strings(files)
-		out = append(out, files...)
+		out = append(out, f.Vertex...)
 	}
 	return out, nil
 }

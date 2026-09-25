@@ -359,8 +359,7 @@ cd build && go test ./...
 `vsc` is part of the Vertex compiler family:
 
 - **`vsc`**: Vertex Source Compiler frontend, SIL, and lowering.
-- **`vcx`**: In-process C++ compiler used to compile the Vertex runtime.
-- **`vcc`**: Standalone C compiler sharing header scanning with `vcx`.
+- **`vcx`**: In-process C++ compiler: the Vertex runtime, and every package's native C++ module, whose exports vsc imports.
 - **`ir`**: Target-independent machine intermediate representation (VIR).
 - **`arm64`** / **`amd64`** / **`i386`**: Native architecture assemblers and machine instruction encoders.
 - **`macho`** / **`pe`** / **`elf`**: Pure Go binary container readers, writers, and linkers.

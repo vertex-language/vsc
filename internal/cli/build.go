@@ -4,18 +4,17 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/vertex-language/vsc/iface"
 	"io"
+	"os"
+	"path/filepath"
 
 	"github.com/vertex-language/ir"
 	irtext "github.com/vertex-language/ir/text"
 
 	"github.com/vertex-language/vsc"
 	"github.com/vertex-language/vsc/build"
+	"github.com/vertex-language/vsc/iface"
 	"github.com/vertex-language/vsc/internal/sil/text"
-	"github.com/vertex-language/vsc/pkg"
-	"github.com/vertex-language/vsc/token"
-	"path/filepath"
 )
 
 // emitMode describes how far down the compilation pipeline to go and what to write.
@@ -74,7 +73,7 @@ func (b *buildFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&b.output, "o", "", "write output here (\"-\" is standard output)")
 	fs.StringVar(&b.entry, "entry", "", "the program's entry symbol (default: the platform's)")
 	fs.BoolVar(&b.freestanding, "freestanding", false, "link no platform libraries")
-	fs.StringVar(&b.packagePath, "package-path", "", "build the package rooted here (default: this directory, when it has a Package.swift)")
+	fs.StringVar(&b.packagePath, "package-path", "", "build the SwiftPM package rooted here (default: this directory, when it has a Package.swift)")
 }
 
 func cmdBuild(args []string, stdout, stderr io.Writer) int {
@@ -90,6 +89,11 @@ func cmdBuild(args []string, stdout, stderr io.Writer) int {
 }
 
 // doBuild compiles the sources and returns the output path and exit code.
+//
+// What is built is, in order: the SwiftPM package here when there is a
+// Package.swift and no files are named (see package.go); the program a
+// bare name is, cmd/<name> of this checkout; the folder or files named;
+// and with nothing named, the folder here.
 func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, int) {
 	mode, ok := lookupEmit(bf.emit)
 	if !ok {
@@ -102,43 +106,69 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 		return "", exitUsage
 	}
 	bf.notice = func(msg string) { fmt.Fprintln(stderr, "vsc:", msg) }
-	// No files, in a package: the package. See package.go.
 	if root, product, ok := isPackageBuild(bf, names); ok {
 		return doPackageBuild(bf, mode, root, product, target, stdout, stderr)
 	}
+	if len(names) == 1 {
+		if dir := programDir(names[0]); dir != "" {
+			names = []string{dir}
+		}
+	}
+	if len(names) == 0 && hasVertex(".") {
+		names = []string{"."}
+	}
 	return doFilesBuild(bf, mode, names, target, stdout, stderr)
+}
+
+// hasVertex reports whether dir holds .vs files.
+func hasVertex(dir string) bool {
+	found, _ := filepath.Glob(filepath.Join(dir, "*"+vsc.SourceExtension))
+	return len(found) > 0
 }
 
 // doFilesBuild compiles the named files as one program or module, with what
 // they import, and writes what --emit asks for.
 func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Target, stdout, stderr io.Writer) (string, int) {
-	names, err := expandDirs(names)
+	names, err := expandDirs(names, target)
 	if err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
 		return "", exitUsage
 	}
-	srcs, err := sources(names)
+	srcs, err := sources(names, target)
 	if err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
 		return "", exitUsage
 	}
 
-	// Files that are a target of a package bring the C-family targets the
-	// manifest has that target depend on: built first, so `import cwindow`
-	// finds its interface, and linked with the program.
-	var own *targetBuild
+	// The program's folder is its module's, and its C++ is more of it.
+	progDir := ""
 	if len(names) > 0 && !isStdout(names[0]) {
-		own, err = bf.targets(filepath.Dir(names[0]), target)
-		if err != nil {
-			fmt.Fprintln(stderr, "vsc:", err)
-			return "", exitUsage
+		progDir = filepath.Dir(names[0])
+		for _, n := range names[1:] {
+			if filepath.Dir(n) != progDir {
+				progDir = ""
+				break
+			}
 		}
 	}
-	opts := bf.options(target, mode.stop)
-	if own != nil && own.modules != "" {
-		opts.ImportPaths = append([]string{own.modules}, opts.ImportPaths...)
+	wd, _ := os.Getwd()
+	if progDir != "" {
+		bf.mainModule(progDir)
+		pkgName := bf.module
+		if pkgName == vsc.EntryModule {
+			pkgName = "main"
+		}
+		own, err := bf.bind(progDir, "", pkgName, false, target)
+		if err != nil {
+			fmt.Fprintln(stderr, "vsc:", err)
+			return "", exitDiags
+		}
+		srcs = append(srcs, own...)
+	} else {
+		bf.mainModule(wd)
 	}
 
+	opts := bf.options(target, mode.stop)
 	u, diags := vsc.Compile(srcs, opts)
 	if printDiags(stderr, diags) {
 		return "", exitDiags
@@ -151,6 +181,7 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 	if mode.name == "exe" {
 		out = vsc.ImageName(target, out)
 	}
+	minOS := bf.main.minOS(target)
 
 	switch mode.name {
 	case "interface":
@@ -183,7 +214,7 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		return out, write(out, stdout, stderr, buf.Bytes(), false)
 
 	case "obj":
-		obj, err := object(u.VIR)
+		obj, err := build.Object(u.VIR, build.Options{MinOS: minOS})
 		if err != nil {
 			fmt.Fprintln(stderr, "vsc:", err)
 			return "", exitUsage
@@ -191,57 +222,54 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		return out, write(out, stdout, stderr, obj, false)
 	}
 
-	// exe and lib: the object, then the link.
+	// exe and lib: the objects, then the link.
 	if mode.name == "lib" && target.Use() != "aarch64/android" {
 		fmt.Fprintf(stderr, "vsc: --emit lib builds for aarch64-android only, not %s\n", target.Use())
 		return "", exitUsage
 	}
-	obj, err := object(u.VIR)
+	obj, err := build.Object(u.VIR, build.Options{MinOS: minOS})
 	if err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
 		return "", exitUsage
 	}
-	// Build program object and any imported package dependencies, then link.
 	inputs := []build.Input{{Name: outputName(srcs, ".o"), Data: obj}}
-	var libs []string
+	seen := map[string]bool{inputs[0].Name: true}
 	var need []build.Linkage
-	seenInput := map[string]bool{}
-	for _, in := range inputs {
-		seenInput[in.Name] = true
-	}
-	if own != nil {
-		for _, obj := range own.objs {
-			if !seenInput[obj.Name] {
-				seenInput[obj.Name] = true
-				inputs = append(inputs, obj)
+	addNative := func(dir string) int {
+		objs, n, err := bf.nativeObjects(dir)
+		if err != nil {
+			fmt.Fprintln(stderr, "vsc:", err)
+			return exitDiags
+		}
+		for _, o := range objs {
+			if !seen[o.Name] {
+				seen[o.Name] = true
+				inputs = append(inputs, o)
 			}
 		}
-		need = append(need, own.need)
+		if len(objs) > 0 {
+			need = append(need, n)
+		}
+		return exitOK
+	}
+	if progDir != "" {
+		if code := addNative(progDir); code != exitOK {
+			return "", code
+		}
 	}
 	for _, p := range u.Packages {
-		pobj, code := buildPackage(p, bf, target, stderr)
+		pobj, code := buildPackage(p, bf, target, minOS, stderr)
 		if code != exitOK {
 			return "", code
 		}
-		if !seenInput[p.Name+".o"] {
-			seenInput[p.Name+".o"] = true
+		if !seen[p.Name+".o"] {
+			seen[p.Name+".o"] = true
 			inputs = append(inputs, build.Input{Name: p.Name + ".o", Data: pobj})
 		}
-		// A folder that is a target of a package brings the C-family
-		// targets it depends on, which its manifest says how to build.
-		built, err := bf.targets(p.Dir, target)
-		if err != nil {
-			fmt.Fprintf(stderr, "vsc: package %s (%s): %v\n", p.Name, p.Dir, err)
-			return "", exitUsage
-		}
-		if built != nil {
-			for _, obj := range built.objs {
-				if !seenInput[obj.Name] {
-					seenInput[obj.Name] = true
-					inputs = append(inputs, obj)
-				}
+		if p.Native {
+			if code := addNative(p.Dir); code != exitOK {
+				return "", code
 			}
-			need = append(need, built.need)
 		}
 	}
 
@@ -261,8 +289,8 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		Entry:        bf.entry,
 		Freestanding: bf.freestanding,
 		Swift:        len(u.Info.SwiftModules) > 0,
-		LibNames:     libs,
 		Shared:       mode.name == "lib",
+		MinOS:        minOS,
 	}
 	if link.Shared {
 		link.SOName = filepath.Base(out)
@@ -279,15 +307,14 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 }
 
 // buildPackage compiles one imported folder as its own module.
-func buildPackage(pkg vsc.Package, bf *buildFlags, target ir.Target, stderr io.Writer) ([]byte, int) {
+func buildPackage(pkg vsc.Package, bf *buildFlags, target ir.Target, minOS string, stderr io.Writer) ([]byte, int) {
 	opts := bf.options(target, vsc.All)
 	opts.Module = pkg.Name
-	opts.ImportPaths = append(opts.ImportPaths, pkg.ImportPaths...)
 	u, diags := vsc.Compile(pkg.Sources, opts)
 	if printDiags(stderr, diags) {
 		return nil, exitDiags
 	}
-	obj, err := object(u.VIR)
+	obj, err := build.Object(u.VIR, build.Options{MinOS: minOS})
 	if err != nil {
 		fmt.Fprintf(stderr, "vsc: package %s (%s): %v\n", pkg.Name, pkg.Dir, err)
 		return nil, exitUsage
@@ -295,76 +322,10 @@ func buildPackage(pkg vsc.Package, bf *buildFlags, target ir.Target, stderr io.W
 	return obj, exitOK
 }
 
-func object(m *ir.Module) ([]byte, error) { return build.Object(m, build.Options{}) }
-
 func write(name string, stdout, stderr io.Writer, data []byte, exec bool) int {
 	if err := writeOut(name, stdout, data, exec); err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
 		return exitUsage
 	}
 	return exitOK
-}
-
-// A targetBuild is what a package target's C-family dependencies built to.
-type targetBuild struct {
-	objs    []build.Input
-	need    build.Linkage
-	modules string
-}
-
-// targets finds the manifest of the package a folder is a target of,
-// walking up from the folder, and compiles the C-family targets that target
-// depends on, once. A folder no manifest claims brings nothing, and is nil.
-func (c *common) targets(dir string, target ir.Target) (*targetBuild, error) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, err
-	}
-	if b, ok := c.built[abs]; ok {
-		return b, nil
-	}
-	b, err := packageTargets(abs, target)
-	if err != nil {
-		return nil, err
-	}
-	if c.built == nil {
-		c.built = map[string]*targetBuild{}
-	}
-	c.built[abs] = b
-	return b, nil
-}
-
-func packageTargets(abs string, target ir.Target) (*targetBuild, error) {
-	for d := abs; ; d = filepath.Dir(d) {
-		if _, ok := pkg.FindManifest(d); ok {
-			m, diags, err := pkg.Load(d)
-			if err != nil {
-				return nil, err
-			}
-			for _, diag := range diags {
-				if diag.Severity == token.Error {
-					return nil, fmt.Errorf("%s: %s", d, diag.Message)
-				}
-			}
-			platform := pkg.PlatformOf(target.Use())
-			p, err := pkg.Resolve(d, m, platform, "debug")
-			if err != nil {
-				return nil, err
-			}
-			for _, t := range p.Targets {
-				if filepath.Clean(t.Dir) == abs {
-					work := filepath.Join(d, ".build", "vsc", "debug")
-					objs, need, err := build.TargetObjects(p, t, build.PackageOptions{Target: target, Config: "debug", Work: work})
-					if err != nil {
-						return nil, err
-					}
-					return &targetBuild{objs: objs, need: need, modules: filepath.Join(work, "Modules")}, nil
-				}
-			}
-			return nil, nil
-		}
-		if filepath.Dir(d) == d {
-			return nil, nil
-		}
-	}
 }

@@ -117,29 +117,17 @@ func TestResolveUnknownPath(t *testing.T) {
 	}
 }
 
-// TestResolveLocalCheckout finds the source a reserved path names by
-// reading the package's manifest: the library product with that name
-// says which target it is, and the target says where the source is.
+// TestResolveLocalCheckout finds the source a standard library path names
+// in a checkout already in the cache: the folder the rest of the path is.
 //
-// It uses a package written here rather than a fetched one, so it is the
-// manifest reading that is under test and not the network.
+// It uses a checkout written here rather than a fetched one, so it is the
+// resolution that is under test and not the network.
 func TestResolveLocalCheckout(t *testing.T) {
 	cache := t.TempDir()
 	m, _ := importer.Lookup("net/tcp")
 	root := importer.PackageDir(m, cache)
 	writeFiles(t, root, map[string]string{
-		".git/HEAD": "ref: refs/heads/main\n",
-		"package.vs": `import PackageDescription
-let package = Package(
-    name: "net",
-    products: [
-        .library(name: "net/tcp", targets: ["tcp"]),
-    ],
-    targets: [
-        .target(name: "tcp", path: "tcp"),
-    ]
-)
-`,
+		".git/HEAD":     "ref: refs/heads/main\n",
 		"tcp/stream.vs": "package tcp\n",
 	})
 
@@ -152,40 +140,28 @@ let package = Package(
 	}
 }
 
-// TestResolveWrongProduct names what the package does offer, since a
-// package whose library is called something else is the likely mistake.
-func TestResolveWrongProduct(t *testing.T) {
+// TestResolveMissingFolder names the folder it looked for: a path is a
+// folder, and nothing else can answer for it.
+func TestResolveMissingFolder(t *testing.T) {
 	cache := t.TempDir()
 	m, _ := importer.Lookup("net/tcp")
 	root := importer.PackageDir(m, cache)
 	writeFiles(t, root, map[string]string{
-		".git/HEAD": "ref: refs/heads/main\n",
-		"package.vs": `import PackageDescription
-let package = Package(
-    name: "net",
-    products: [
-        .library(name: "net/udp", targets: ["udp"]),
-    ],
-    targets: [
-        .target(name: "udp", path: "udp"),
-    ]
-)
-`,
+		".git/HEAD":     "ref: refs/heads/main\n",
 		"udp/socket.vs": "package udp\n",
 	})
 
 	_, err := importer.Resolve("net/tcp", importer.Options{Cache: cache, Offline: true})
 	if err == nil {
-		t.Fatal("a package offering no such library resolved")
+		t.Fatal("a checkout with no tcp folder resolved net/tcp")
 	}
-	if !strings.Contains(err.Error(), "net/udp") {
-		t.Errorf("error does not say what the package offers: %v", err)
+	if !strings.Contains(err.Error(), filepath.Join(root, "tcp")) {
+		t.Errorf("error does not name the folder: %v", err)
 	}
 }
 
-// TestResolvePureFolderWithoutManifest verifies that a pure Vertex repository
-// without package.vs resolves directly to its root when it has .vs source files.
-func TestResolvePureFolderWithoutManifest(t *testing.T) {
+// TestResolveRepositoryRoot: a path that is the repository is its root.
+func TestResolveRepositoryRoot(t *testing.T) {
 	cache := t.TempDir()
 	m, _ := importer.Lookup("time")
 	root := importer.PackageDir(m, cache)
@@ -203,9 +179,8 @@ func TestResolvePureFolderWithoutManifest(t *testing.T) {
 	}
 }
 
-// TestResolvePureSubfolderWithoutManifest verifies that subpackages in a pure
-// Vertex repo without package.vs (Golang style) resolve to their respective subfolders.
-func TestResolvePureSubfolderWithoutManifest(t *testing.T) {
+// TestResolveSubfolders: each folder of a repository is its own package.
+func TestResolveSubfolders(t *testing.T) {
 	cache := t.TempDir()
 	m, _ := importer.Lookup("crypto/sha256")
 	root := importer.PackageDir(m, cache)
@@ -224,36 +199,50 @@ func TestResolvePureSubfolderWithoutManifest(t *testing.T) {
 	}
 }
 
-// TestResolvePureSubfolderBesideManifest verifies that a pure .vs folder inside a repo
-// that has a package.vs (for C targets) still resolves as a package without needing to be
-// listed in package.vs.
-func TestResolvePureSubfolderBesideManifest(t *testing.T) {
+// TestResolveCxxFolder: a folder of C++ alone is a package, whose module
+// is its API.
+func TestResolveCxxFolder(t *testing.T) {
 	cache := t.TempDir()
-	m, _ := importer.Lookup("net/ip")
+	m, _ := importer.Lookup("math")
 	root := importer.PackageDir(m, cache)
 	writeFiles(t, root, map[string]string{
 		".git/HEAD": "ref: refs/heads/main\n",
-		"package.vs": `import PackageDescription
-let package = Package(
-    name: "net",
-    products: [
-        .library(name: "net/tcp", targets: ["tcp"]),
-    ],
-    targets: [
-        .target(name: "tcp", path: "tcp"),
-    ]
-)
-`,
-		"tcp/stream.vs": "package tcp\n",
-		"ip/ip.vs":      "package ip\n",
+		"math.cpp":  "export module math;\n",
 	})
-
-	dir, err := importer.Resolve("net/ip", importer.Options{Cache: cache, Offline: true})
-	if err != nil {
+	if _, err := importer.Resolve("math", importer.Options{Cache: cache, Offline: true}); err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(root, "ip"); filepath.Clean(dir) != want {
-		t.Errorf("Resolve = %q, want %q", dir, want)
+}
+
+// TestSums: a hash recorded once is held to after, and is Go's h1 form.
+func TestSums(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"a.vs": "package a\n", ".git/HEAD": "x\n"})
+	h, err := importer.Hash(dir)
+	if err != nil || !strings.HasPrefix(h, "h1:") {
+		t.Fatalf("Hash = %q, %v", h, err)
+	}
+	writeFiles(t, dir, map[string]string{".git/HEAD": "changed\n"})
+	if again, _ := importer.Hash(dir); again != h {
+		t.Errorf(".git is part of the hash: %s then %s", h, again)
+	}
+	path := filepath.Join(t.TempDir(), "vs.sum")
+	sums, _ := importer.ReadSums(path)
+	if err := sums.Check("net", "v1.0.0", h); err != nil {
+		t.Fatal(err)
+	}
+	if err := sums.Save(); err != nil {
+		t.Fatal(err)
+	}
+	sums, _ = importer.ReadSums(path)
+	if err := sums.Check("net", "v1.0.0", "h1:other"); err == nil {
+		t.Error("a changed hash was accepted")
+	}
+	if got := importer.ModuleOf("net/tcp"); got != "net" {
+		t.Errorf("ModuleOf(net/tcp) = %q", got)
+	}
+	if got := importer.ModuleOf("github.com/you/thing/x/y"); got != "github.com/you/thing" {
+		t.Errorf("ModuleOf = %q", got)
 	}
 }
 

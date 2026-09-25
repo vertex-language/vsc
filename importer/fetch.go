@@ -11,6 +11,10 @@ import (
 
 // Options say how much a resolve is allowed to do.
 type Options struct {
+	// Ref is the version to take where the path pins none: what the
+	// building module's vs.mod requires of it. Empty is the default branch.
+	Ref string
+
 	// Cache is where packages are kept; CacheDir() when empty.
 	Cache string
 	// Offline forbids the network. A package already in the cache is

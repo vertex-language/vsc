@@ -13,11 +13,8 @@ type Language int
 
 const (
 	Swift Language = iota
-	C
 	CXX
-	ObjC
 	ObjCXX
-	Assembly
 )
 
 // languageOf is a source file's language by its extension, and false for a
@@ -26,18 +23,27 @@ func languageOf(path string) (Language, bool) {
 	switch filepath.Ext(path) {
 	case ".swift", ".vs":
 		return Swift, true
-	case ".c":
-		return C, true
 	case ".cpp", ".cc", ".cxx", ".c++":
 		return CXX, true
-	case ".m":
-		return ObjC, true
 	case ".mm":
 		return ObjCXX, true
-	case ".s", ".S":
-		return Assembly, true
 	}
 	return 0, false
+}
+
+// notBuilt is why a source file is one vsc builds no longer: its native
+// language is C++, which vcx compiles, and C, Objective-C and assembly
+// are other compilers' (vcc's, objv's). nil for any other file.
+func notBuilt(path string) error {
+	switch filepath.Ext(path) {
+	case ".c":
+		return fmt.Errorf("%s is C: vsc builds C++, so port it to a .cpp", path)
+	case ".m":
+		return fmt.Errorf("%s is Objective-C: vsc builds C++, so port it to Objective-C++ as a .mm", path)
+	case ".s", ".S":
+		return fmt.Errorf("%s is assembly, which vsc does not build", path)
+	}
+	return nil
 }
 
 // A SourceFile is one file of a target.
@@ -251,6 +257,9 @@ func resolveTarget(root string, t *Target, platform, config string, owned []stri
 	}
 	swift, cfamily, elsewhere := 0, 0, 0
 	for _, f := range files {
+		if err := notBuilt(f); err != nil {
+			return nil, fmt.Errorf("target '%s': %w", t.Name, err)
+		}
 		lang, ok := languageOf(f)
 		if !ok {
 			continue
@@ -430,9 +439,11 @@ func buildOrder(targets []*ResolvedTarget) ([]*ResolvedTarget, error) {
 }
 
 // sourcePlatforms are the file-name suffixes that limit a source to some
-// platforms, as Go's do: cwindow_darwin.m is Cocoa's and cwindow_android.c
-// NativeActivity's, and each target builds the one that is its own.
+// platforms, as Go's do: window_darwin.mm is Cocoa's and window_android.cpp
+// NativeActivity's, and each target builds the one that is its own. posix
+// is every platform but Windows.
 var sourcePlatforms = map[string][]string{
+	"posix":   {"macos", "ios", "tvos", "watchos", "visionos", "maccatalyst", "linux", "android"},
 	"darwin":  {"macos", "ios", "tvos", "watchos", "visionos", "maccatalyst"},
 	"macos":   {"macos"},
 	"ios":     {"ios"},

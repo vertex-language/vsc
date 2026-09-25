@@ -11,50 +11,52 @@ import (
 
 // A source file belongs to a module: the checkout it is in. Imports of that
 // module -- the module itself, or any folder of it -- are answered by the
-// checkout, never by a download, so a package's tests and examples build
+// checkout, never by a download, so a package's programs and tests build
 // against the package as it is on disk, and one folder of a repository
 // importing another gets the same revision of it. It is Go's rule for the
-// main module, with the repository standing in for go.mod.
+// main module.
 
 // A Root is the checkout a directory is inside, and the import path it
 // answers to.
 type Root struct {
-	// Dir is the checkout: the nearest directory holding a manifest or a
+	// Dir is the checkout: the nearest directory holding a vs.mod or a
 	// .git.
 	Dir string
 	// Path is the import path of the checkout as a whole: "net" for
 	// github.com/vertex-language/net, "github.com/you/thing" for any other
 	// repository.
 	Path string
+	// Mod is the checkout's vs.mod, nil where it has none.
+	Mod *pkg.ModFile
 }
 
 // Enclosing is the checkout dir is inside, if it is inside one.
 //
-// The checkout's import path is read from what the checkout says of
-// itself: its origin remote, which is the URL it would be fetched from;
-// failing that its manifest's name; failing that the directory's name.
+// The checkout's import path is what it says of itself: its vs.mod's
+// module line; failing that its origin remote, which is the URL it would
+// be fetched from; failing that the directory's name.
 func Enclosing(dir string) (Root, bool) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return Root{}, false
 	}
 	for d := abs; ; d = filepath.Dir(d) {
-		_, manifest := pkg.FindManifest(d)
+		modPath := pkg.FindModFile(d)
 		git := isDir(filepath.Join(d, ".git"))
-		if manifest || git {
-			path := ""
-			if git {
-				path = pathOfRemote(originURL(filepath.Join(d, ".git", "config")))
-			}
-			if path == "" && manifest {
-				if m, _, err := pkg.Load(d); err == nil && m != nil {
-					path = m.Name
+		if modPath != "" || git {
+			r := Root{Dir: d}
+			if modPath != "" {
+				if m, err := pkg.LoadModFile(modPath); err == nil {
+					r.Mod, r.Path = m, m.Module
 				}
 			}
-			if path == "" {
-				path = filepath.Base(d)
+			if r.Path == "" && git {
+				r.Path = pathOfRemote(originURL(filepath.Join(d, ".git", "config")))
 			}
-			return Root{Dir: d, Path: path}, true
+			if r.Path == "" {
+				r.Path = filepath.Base(d)
+			}
+			return r, true
 		}
 		if filepath.Dir(d) == d {
 			return Root{}, false

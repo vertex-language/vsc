@@ -11,8 +11,8 @@ func gitConfig(url string) string {
 	return "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = " + url + "\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"
 }
 
-// TestEnclosingPath reads a checkout's import path from where it would be
-// fetched from, then its manifest, then its folder's name.
+// TestEnclosingPath reads a checkout's import path from its vs.mod, then
+// where it would be fetched from, then its folder's name.
 func TestEnclosingPath(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -28,10 +28,14 @@ func TestEnclosingPath(t *testing.T) {
 		{"any other repository is its whole path",
 			map[string]string{".git/config": gitConfig("git@github.com:you/thing.git")},
 			"github.com/you/thing"},
-		{"with no remote, the manifest's name",
-			map[string]string{".git/HEAD": "ref: refs/heads/main\n",
-				"package.vs": "import PackageDescription\nlet package = Package(name: \"time\", targets: [])\n"},
+		{"a vs.mod's module line comes first",
+			map[string]string{".git/config": gitConfig("https://github.com/someone/fork"),
+				"vs.mod": "module github.com/vertex-language/time\n"},
 			"time"},
+		{"with no remote, the vs.mod",
+			map[string]string{".git/HEAD": "ref: refs/heads/main\n",
+				"vs.mod": "module github.com/you/clock\n"},
+			"github.com/you/clock"},
 		{"with neither, the folder's name",
 			map[string]string{".git/HEAD": "ref: refs/heads/main\n"},
 			"repo"},
@@ -68,32 +72,6 @@ func TestLocalIsTheCheckoutItself(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("Local(%q) = %q, %v; want %q", path, got, err, want)
 		}
-	}
-}
-
-// TestLocalAsksTheManifest: in a checkout with a manifest, a library the
-// manifest names is where its target is, though the path says otherwise.
-func TestLocalAsksTheManifest(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "time")
-	writeFiles(t, root, map[string]string{
-		".git/config": gitConfig("https://github.com/vertex-language/time"),
-		"package.vs": `import PackageDescription
-let package = Package(
-    name: "time",
-    products: [
-        .library(name: "time", targets: ["time"]),
-    ],
-    targets: [
-        .target(name: "time", path: "time"),
-    ]
-)
-`,
-		"time/duration.vs":    "package time\n",
-		"tests/check/main.vs": "package main\n",
-	})
-	got, err := importer.Local("time", filepath.Join(root, "tests", "check"))
-	if want := filepath.Join(root, "time"); err != nil || got != want {
-		t.Errorf("Local(time) = %q, %v; want %q", got, err, want)
 	}
 }
 

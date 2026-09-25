@@ -32,12 +32,10 @@ require (
 	github.com/vertex-language/asm v0.0.0 // indirect
 	github.com/vertex-language/elf v0.0.0 // indirect
 	github.com/vertex-language/i386 v0.0.0 // indirect
-	github.com/vertex-language/ir/lower v0.0.0 // indirect
+	github.com/vertex-language/ir/lower v0.0.0
 	github.com/vertex-language/macho v0.0.0 // indirect
-	github.com/vertex-language/objv v0.0.0-00010101000000-000000000000 // indirect
 	github.com/vertex-language/pe v0.0.0 // indirect
 	github.com/vertex-language/ptx v0.0.0 // indirect
-	github.com/vertex-language/vcc v0.0.0 // indirect
 	github.com/vertex-language/vcx v0.0.0 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
@@ -55,9 +53,7 @@ replace (
 	github.com/vertex-language/ir => ../ir
 	github.com/vertex-language/ir/lower => ../ir/lower
 	github.com/vertex-language/macho => ../macho
-	github.com/vertex-language/objv => ../objv
 	github.com/vertex-language/pe => ../pe
-	github.com/vertex-language/vcc => ../vcc
 	github.com/vertex-language/vcx => ../vcx
 	github.com/vertex-language/vsc/build => ./build
 	github.com/vertex-language/vsc/stdlib => ./stdlib

@@ -11,11 +11,8 @@ import (
 	"github.com/vertex-language/ir"
 
 	"github.com/vertex-language/vsc"
-	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/build"
-	"github.com/vertex-language/vsc/parser"
 	"github.com/vertex-language/vsc/pkg"
-	"github.com/vertex-language/vsc/token"
 )
 
 // isPackageBuild reports whether a build's arguments ask for a package, and
@@ -69,20 +66,13 @@ func declaresProduct(bf *buildFlags, name string) bool {
 	return false
 }
 
-// doPackageBuild builds the package at root and writes its programs, or the
-// one product named. It returns where the program landed when there is one to run.
+// doPackageBuild builds the SwiftPM package at root the way SwiftPM does --
+// every target, in the manifest's order, see build.BuildPackage -- and
+// writes its programs, or the one product named. It returns where the
+// program landed when there is one to run.
 //
-// A program that imports by path -- `import "net/tcp"` -- is built as a
-// program of files is: its target's sources are compiled, and what they
-// import is found the way any import is (see vsc's importer). A library of
-// the same package is the checkout the program is in, so it is read from
-// disk, with the C-family targets the manifest has it depend on built
-// beside it. The manifest is only needed for those: a package of Vertex
-// alone has none.
-//
-// A program that imports its package's targets by module name --
-// `import tcp`, as a SwiftPM package does -- is built the way SwiftPM
-// builds it: every target, in the manifest's order. See build.BuildPackage.
+// A Vertex package has no manifest and never comes here: it is a folder,
+// and its programs are its cmd/ folders (see doBuild).
 func doPackageBuild(bf *buildFlags, mode emitMode, root, product string, target ir.Target, stdout, stderr io.Writer) (string, int) {
 	if mode.name != "exe" {
 		fmt.Fprintf(stderr, "vsc: a package builds programs; --emit %s is for files\n", mode.name)
@@ -137,76 +127,25 @@ func doPackageBuild(bf *buildFlags, mode emitMode, root, product string, target 
 		fmt.Fprintln(stderr, "vsc:", err)
 		return "", exitUsage
 	}
+	images, code := buildSwiftPM(p, target, work, stderr)
+	if code != exitOK {
+		return "", code
+	}
 	landed := ""
-	var swiftpm map[string][]byte
 	for _, prog := range programs {
 		if product != "" && prog.Name != product {
 			continue
-		}
-		var files []string
-		for _, src := range prog.Target.Sources {
-			if src.Language == pkg.Swift {
-				files = append(files, src.Path)
-			}
-		}
-		if len(files) == 0 {
-			fmt.Fprintf(stderr, "vsc: the program '%s' has no Vertex sources in %s\n", prog.Name, prog.Target.Dir)
-			return "", exitUsage
 		}
 		out := vsc.ImageName(target, filepath.Join(work, prog.Name))
 		if bf.output != "" {
 			out = vsc.ImageName(target, bf.output)
 		}
-		if !importsByPath(files) {
-			if swiftpm == nil {
-				images, code := buildSwiftPM(p, target, work, stderr)
-				if code != exitOK {
-					return "", code
-				}
-				swiftpm = images
-			}
-			if code := write(out, io.Discard, stderr, swiftpm[prog.Name], true); code != exitOK {
-				return "", code
-			}
-			landed = out
-			continue
-		}
-		one := *bf
-		one.module = vsc.EntryModule
-		one.output = out
-		out, code := doFilesBuild(&one, mode, files, target, stdout, stderr)
-		if code != exitOK {
+		if code := write(out, io.Discard, stderr, images[prog.Name], true); code != exitOK {
 			return "", code
 		}
-		// What one program built -- a C target, a fetched package -- the next
-		// one uses as it is.
-		bf.built = one.built
 		landed = out
 	}
 	return landed, exitOK
-}
-
-// importsByPath reports whether any of the files imports a package by path,
-// which is how a Vertex program imports; a SwiftPM one imports by module name.
-func importsByPath(files []string) bool {
-	for _, name := range files {
-		text, err := os.ReadFile(name)
-		if err != nil {
-			continue
-		}
-		f, _ := parser.ParseFile(token.NewFile(name, text), 0)
-		if f == nil {
-			continue
-		}
-		for _, stmt := range f.Stmts {
-			if d, ok := stmt.(*ast.DeclStmt); ok {
-				if imp, ok := d.D.(*ast.ImportDecl); ok && len(imp.Paths) > 0 {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // buildSwiftPM builds every target of a SwiftPM-style package and links

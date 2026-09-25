@@ -82,7 +82,7 @@ type LinkOptions struct {
 // This is the step past Object, and the last one that is entirely the
 // compiler's own: what comes out needs no toolchain to have been
 // installed and no `ld` to have been run. The linker is
-// vertex-language's, shared with vcc, and takes bytes and returns
+// vertex-language's, shared with vcx, and takes bytes and returns
 // Executable links objects into a runnable image and returns its bytes.
 func Executable(objs []Input, opts LinkOptions) ([]byte, error) {
 	if len(objs) == 0 {

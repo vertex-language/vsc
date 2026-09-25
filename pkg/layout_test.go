@@ -33,7 +33,7 @@ func TestResolveMixedPackage(t *testing.T) {
 	}
 
 	cmath := p.Target("CMath")
-	if cmath.Swift() || len(cmath.Sources) != 1 || cmath.Sources[0].Language != C ||
+	if cmath.Swift() || len(cmath.Sources) != 1 || cmath.Sources[0].Language != CXX ||
 		filepath.Base(cmath.PublicHeaders) != "include" || strings.Join(cmath.Defines["c"], " ") != "SCALE=3" {
 		t.Errorf("CMath = %+v", cmath)
 	}

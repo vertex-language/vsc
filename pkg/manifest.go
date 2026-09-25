@@ -13,25 +13,17 @@ import (
 	"github.com/vertex-language/vsc/token"
 )
 
-// ManifestName is the file a package is rooted at.
+// ManifestName is the file a SwiftPM package is rooted at. A Vertex
+// package has no manifest: it is a folder (see Folder), and its module's
+// requirements, where it states any, are in a vs.mod (see ModFile).
 const ManifestName = "Package.swift"
 
-// VertexManifestName is the same manifest under Vertex's name for it,
-// which is looked for first.
-const VertexManifestName = "package.vs"
-
-// vertexToolsVersion is the PackageDescription a package.vs is read as
-// when its first line does not name one.
-const vertexToolsVersion = "6.0"
-
-// FindManifest is the manifest of the package rooted at dir, under either
-// name, and whether there is one.
+// FindManifest is the Package.swift of the package rooted at dir, and
+// whether there is one.
 func FindManifest(dir string) (string, bool) {
-	for _, name := range []string{VertexManifestName, ManifestName} {
-		path := filepath.Join(dir, name)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path, true
-		}
+	path := filepath.Join(dir, ManifestName)
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path, true
 	}
 	return "", false
 }
@@ -164,11 +156,6 @@ func Parse(name string, src []byte) (*Manifest, []token.Diagnostic) {
 	}
 	m := &Manifest{}
 	m.ToolsVersion = toolsVersion(src)
-	// A Vertex manifest is written against the PackageDescription this
-	// compiler reads, and need not say which.
-	if m.ToolsVersion == "" && filepath.Base(name) == VertexManifestName {
-		m.ToolsVersion = vertexToolsVersion
-	}
 	if m.ToolsVersion == "" {
 		e.errorAt(file, "the manifest's first line must be '// swift-tools-version: X.Y', which says which PackageDescription it is written against")
 	}
