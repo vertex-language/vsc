@@ -1992,6 +1992,12 @@ func (c *fn) initExistential(in *sil.Inst) error {
 	tables := make([]*ir.Global, len(protos))
 	for i, name := range protos {
 		table, ok := c.l.witness[typeNameOfType(concrete)+":"+name]
+		if !ok && name == "AnyObject" {
+			// AnyObject requires nothing, so its table is never read: any
+			// class instance -- a generic class's too, which has no table
+			// of its own under this name -- takes an empty one.
+			table, ok = c.l.emptyWitnessTable(), true
+		}
 		if !ok {
 			return c.fail(ErrUnsupported, in.Op(),
 				"no witness table for "+typeNameOfType(concrete)+": "+name)
@@ -3378,4 +3384,15 @@ func (c *fn) storeLeaves(in *sil.Inst, v *sil.Value, dst ir.Ptr) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// emptyWitnessTable is a table with nothing in it: what an existential of
+// a protocol that requires nothing, AnyObject, holds for its table.
+func (l *lowerer) emptyWitnessTable() *ir.Global {
+	if l.emptyTable == nil {
+		g := l.out.Global(l.sym("vertex_empty_witness_table"), ir.RO, ir.StoreI64.FType()).Init(ir.Lit(ir.Int(0))).Align(8)
+		g.Internal()
+		l.emptyTable = g
+	}
+	return l.emptyTable
 }

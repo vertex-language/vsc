@@ -133,6 +133,7 @@ func (l *lowerer) weakenCoreRecords() {
 
 // lowerer maintains translation state across a lowered module.
 type lowerer struct {
+	emptyTable  *ir.Global               // emptyWitnessTable's, once made
 	closures    map[string]closureParts  // capturing closures' forwarders, by body
 	releasers   map[string]*ir.Func      // a stack context's last release, by body; nil for none
 	onces       map[string]*onceAccessor // global addressors initialized once, by name; nil for not one

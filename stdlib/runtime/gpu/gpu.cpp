@@ -84,6 +84,7 @@ struct vertex_gpu_kernel {
   void (*cpu)(void** slots);  // the kernel on the CPU device
   i64 flags;                 // kernelUsesBarrier
   i64 params;                // how many slots a launch fills
+  const char* label;         // the kernel's own (mangled) name
 };
 }
 
@@ -100,6 +101,7 @@ struct Buffer {
   u8* contents;  // host-visible, on both kinds: Apple's memory is unified
   i64 bytes;
   void* metal;  // id<MTLBuffer>, or null on the CPU
+  bool wrapped;  // contents belong to the caller (a mapped file): not freed
 };
 
 // A pipeline made for one kernel on one Metal device.
@@ -645,6 +647,23 @@ Pipeline* pipelineFor(Device* d, const vertex_gpu_kernel* k) {
           made->width = static_cast<i64>(objc::send<u64>(state, "threadExecutionWidth"));
           made->next = d->pipelines;
           d->pipelines = made;
+          if (vertex_pal_getenv("VERTEX_GPU_PROFILE")) {
+            // How many threads a group of it may have: fewer, the more
+            // registers it takes.
+            say("gpu-pipeline ");
+            say(k->label ? k->label : k->name);
+            char buf[16];
+            int n = 0;
+            char digits[12];
+            i64 v = made->maxThreads;
+            do { digits[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v > 0);
+            int at = 0;
+            buf[at++] = ' ';
+            while (n > 0) buf[at++] = digits[--n];
+            buf[at++] = '\n';
+            buf[at] = 0;
+            say(buf);
+          }
         }
       }
     }
@@ -675,6 +694,25 @@ i32 syncDevice(Device* d) {
     objc::report("a launch failed", objc::send<objc::id>(cb, "error"));
     result = 7;
   }
+  // VERTEX_GPU_PROFILE=2: each command buffer's device time, as
+  // "gpu-profile commit <microseconds>": what the host waited for.
+  const char* profile = vertex_pal_getenv("VERTEX_GPU_PROFILE");
+  if (profile && profile[0] == '2') {
+    double start = objc::send<double>(cb, "GPUStartTime");
+    double end = objc::send<double>(cb, "GPUEndTime");
+    i64 us = static_cast<i64>((end - start) * 1e6);
+    char buf[32];
+    char digits[24];
+    int n = 0;
+    if (us < 0) us = 0;
+    do { digits[n++] = static_cast<char>('0' + us % 10); us /= 10; } while (us > 0);
+    int at = 0;
+    while (n > 0) buf[at++] = digits[--n];
+    buf[at++] = '\n';
+    buf[at] = 0;
+    say("gpu-profile commit ");
+    say(buf);
+  }
   objc::send<void>(enc, "release");
   objc::send<void>(cb, "release");
   objc::poolPop(pool);
@@ -703,6 +741,10 @@ i32 runMetal(Launch* l) {
   if (!d->pendingBuffer) {
     objc::id made = objc::send<objc::id>(d->queue, "commandBuffer");
     d->pendingBuffer = objc::send<objc::id>(made, "retain");
+    // A serial encoder: each dispatch runs after the one before, which is
+    // what a model's chain of dependent launches needs. (A concurrent one
+    // with a barrier before every dispatch was measured slower on such a
+    // chain, though faster for independent ones.)
     objc::id menc = objc::send<objc::id>(made, "computeCommandEncoder");
     d->pendingEncoder = objc::send<objc::id>(menc, "retain");
   }
@@ -722,6 +764,41 @@ i32 runMetal(Launch* l) {
   objc::send<void>(enc, "dispatchThreads:threadsPerThreadgroup:", grid, group);
   d->pendingLock.unlock();
   i32 result = 0;
+  // VERTEX_GPU_PROFILE=1: each launch alone in its command buffer, its
+  // device time said: "gpu-profile <kernel> <microseconds>".
+  const char* profile = vertex_pal_getenv("VERTEX_GPU_PROFILE");
+  if (profile && profile[0] == '1') {
+    d->pendingLock.lock();
+    objc::id pcb = d->pendingBuffer;
+    objc::id penc = d->pendingEncoder;
+    d->pendingBuffer = nullptr;
+    d->pendingEncoder = nullptr;
+    d->pendingLock.unlock();
+    objc::send<void>(penc, "endEncoding");
+    objc::send<void>(pcb, "commit");
+    objc::send<void>(pcb, "waitUntilCompleted");
+    double start = objc::send<double>(pcb, "GPUStartTime");
+    double end = objc::send<double>(pcb, "GPUEndTime");
+    i64 tenths = static_cast<i64>((end - start) * 1e7);  // tenths of a microsecond
+    if (tenths < 0) tenths = 0;
+    say("gpu-profile ");
+    say(l->kernel->label ? l->kernel->label : l->kernel->name);
+    char buf[32];
+    char digits[24];
+    int n = 0;
+    i64 whole = tenths / 10;
+    do { digits[n++] = static_cast<char>('0' + whole % 10); whole /= 10; } while (whole > 0);
+    int at = 0;
+    buf[at++] = ' ';
+    while (n > 0) buf[at++] = digits[--n];
+    buf[at++] = '.';
+    buf[at++] = static_cast<char>('0' + tenths % 10);
+    buf[at++] = '\n';
+    buf[at] = 0;
+    say(buf);
+    objc::send<void>(penc, "release");
+    objc::send<void>(pcb, "release");
+  }
   // VERTEX_GPU_SYNC=1 waits after every launch, as launches once did: a
   // failure is then reported at the launch that caused it.
   if (vertex_pal_getenv("VERTEX_GPU_SYNC") || vertex_pal_getenv("VERTEX_GPU_DEBUG")) {
@@ -847,11 +924,44 @@ void* vertex_gpu_buffer_create(void* dev, i64 bytes) {
   return b;
 }
 
+// A buffer over memory the caller has -- a mapped weight file -- with no
+// copy: Apple's GPUs read host memory, so Metal takes the pages as they are
+// (newBufferWithBytesNoCopy), and the CPU device reads them directly. ptr
+// is page-aligned, as a mapping is; the length is rounded up to whole
+// 16 KB pages, which the mapping's last page covers. The memory must
+// outlive the buffer. Null when the device will not take it.
+void* vertex_gpu_buffer_wrap(void* dev, void* ptr, i64 bytes) {
+  Device* d = static_cast<Device*>(dev);
+  const u64 page = 16384;
+  if (!ptr || bytes <= 0) return nullptr;
+  // Metal takes whole pages; the CPU device reads any memory.
+  if (d->kind == KindMetal && (reinterpret_cast<u64>(ptr) & (4096 - 1)) != 0) return nullptr;
+  Buffer* b = allocate<Buffer>(1);
+  b->device = d;
+  b->bytes = bytes;
+  b->contents = static_cast<u8*>(ptr);
+  b->wrapped = true;
+  if (d->kind == KindMetal) {
+    u64 length = (static_cast<u64>(bytes) + page - 1) / page * page;
+    void* pool = objc::poolPush();
+    b->metal = objc::send<objc::id>(d->metal, "newBufferWithBytesNoCopy:length:options:deallocator:", ptr, length,
+                                    static_cast<u64>(0), static_cast<objc::id>(nullptr));
+    objc::poolPop(pool);
+    if (!b->metal) {
+      release(b, sizeof(Buffer), alignof(Buffer));
+      return nullptr;
+    }
+  }
+  return b;
+}
+
 void vertex_gpu_buffer_release(void* buf) {
   Buffer* b = static_cast<Buffer*>(buf);
   if (!b) return;
   if (b->metal) {
     objc::send<void>(b->metal, "release");
+  } else if (b->wrapped) {
+    // The caller's memory.
   } else if (b->contents) {
     release(b->contents, static_cast<usize>(b->bytes > 0 ? b->bytes : 16), 64);
   }

@@ -35,6 +35,14 @@ func (g *gen) convert(e *ast.CallExpr, to types.Type) (*sil.Value, bool) {
 			return g.truncatingConvert(e, args[0].X, to)
 		}
 	}
+	// `UnsafeMutablePointer(mutating: p)` and `UnsafeMutableRawPointer(
+	// mutating: p)` are p's address, typed to write through: a pointer
+	// conversion, as the unlabelled one is.
+	if len(args) == 1 && args[0].Label != nil && g.text(args[0].Label) == "mutating" {
+		if v, isPointer := g.pointerConvert(e, args[0].X, g.typeOf(args[0].X), to); isPointer {
+			return v, true
+		}
+	}
 	if len(args) != 1 || args[0].Label != nil {
 		// Other labelled initializers have other rules, and none of
 		// them is this.
@@ -220,19 +228,29 @@ func (g *gen) floatConvert(e *ast.CallExpr, arg ast.Expr, from, to types.Type) (
 	if !ok {
 		return nil, false
 	}
-	if src.machine != "Int64" {
+	// An integer of 32 bits or fewer converts from 32 bits, as Swift's
+	// sitofp_Int32_FPIEEE32 does: widening it to 64 first gives the same
+	// value, but a 64-bit conversion is several instructions on a GPU.
+	width := "Int64"
+	if src.bits <= 32 {
+		width = "Int32"
+	}
+	if src.machine != width {
 		verb := "sextOrBitCast"
 		if !src.signed {
 			verb = "zextOrBitCast"
 		}
-		raw = g.blk.Builtin(verb+"_"+src.machine+"_Int64",
-			sil.Object(sil.BuiltinInt64), raw)
+		wide := sil.BuiltinInt64
+		if width == "Int32" {
+			wide = sil.BuiltinInt32
+		}
+		raw = g.blk.Builtin(verb+"_"+src.machine+"_"+width, sil.Object(wide), raw)
 	}
 	verb := "sitofp"
 	if !src.signed {
 		verb = "uitofp"
 	}
-	out := g.blk.Builtin(verb+"_Int64_"+dst, sil.Object(builtinNamed(dst)), raw)
+	out := g.blk.Builtin(verb+"_"+width+"_"+dst, sil.Object(builtinNamed(dst)), raw)
 	return g.blk.Struct(result, out), true
 }
 

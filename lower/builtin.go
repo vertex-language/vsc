@@ -242,11 +242,37 @@ func (c *fn) floatConvertBuiltin(verb string, from, to repr, a ir.Value) ([]ir.V
 	}
 	switch verb {
 	case "sitofp", "uitofp":
+		signed := verb == "sitofp"
+		// From 32 bits: what an integer of 32 bits or fewer converts from.
+		if w, is32 := a.(ir.I32); is32 {
+			switch to.reg {
+			case ir.TypeF64:
+				if signed {
+					return []ir.Value{c.b.F64.SCvtI32(w)}, true, nil
+				}
+				return []ir.Value{c.b.F64.UCvtI32(w)}, true, nil
+			case ir.TypeF32:
+				if signed {
+					return []ir.Value{c.b.F32.SCvtI32(w)}, true, nil
+				}
+				return []ir.Value{c.b.F32.UCvtI32(w)}, true, nil
+			case ir.TypeF16:
+				if signed {
+					return []ir.Value{c.b.F16().SCvtI32(w)}, true, nil
+				}
+				return []ir.Value{c.b.F16().UCvtI32(w)}, true, nil
+			case ir.TypeBF16:
+				if signed {
+					return []ir.Value{c.b.BF16().SCvtI32(w)}, true, nil
+				}
+				return []ir.Value{c.b.BF16().UCvtI32(w)}, true, nil
+			}
+			return fail()
+		}
 		n, ok := a.(ir.I64)
 		if !ok {
 			return fail()
 		}
-		signed := verb == "sitofp"
 		switch to.reg {
 		case ir.TypeF64:
 			if signed {

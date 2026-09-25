@@ -17,6 +17,7 @@ package gpu
 @_silgen_name("vertex_gpu_buffer_release") func _bufferRelease(_ b: UnsafeMutableRawPointer)
 @_silgen_name("vertex_gpu_buffer_contents") func _bufferContents(_ b: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
 @_silgen_name("vertex_gpu_buffer_device") func _bufferDevice(_ b: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_gpu_buffer_wrap") func _bufferWrap(_ d: UnsafeMutableRawPointer, _ p: UnsafeMutableRawPointer, _ bytes: int) -> UnsafeMutableRawPointer?
 @_silgen_name("vertex_gpu_copy") func _copyBytes(_ dst: UnsafeMutableRawPointer, _ src: UnsafeRawPointer, _ bytes: int)
 @_silgen_name("vertex_gpu_launch_begin") func _launchBegin(_ kernel: UnsafeRawPointer) -> UnsafeMutableRawPointer
 @_silgen_name("vertex_gpu_launch_buffer") func _launchBuffer(_ l: UnsafeMutableRawPointer, _ b: UnsafeMutableRawPointer, _ offset: int)
@@ -81,6 +82,19 @@ public final class Device {
         return Buffer<T>(_memory: _Memory(_h: h), device: self, offset: 0, count: count)
     }
 
+    /// Wrap is a buffer over bytes of host memory, read in place: no copy.
+    /// Apple's GPUs read host memory, so a mapped weight file is a buffer
+    /// as it is, and a model costs its size once, not twice. p is
+    /// page-aligned (a mapping's start is); owner is what keeps the memory
+    /// alive -- the mapping -- and is kept as long as the buffer is. Its
+    /// contents are the caller's to leave unchanged.
+    public func Wrap(_ p: UnsafeMutableRawPointer, bytes: int, keeping owner: AnyObject) throws -> Buffer<uint8> {
+        guard let h = _bufferWrap(_h, p, bytes) else { throw DeviceError.noMemory }
+        let memory = _Memory(_h: h)
+        memory._owner = owner
+        return Buffer<uint8>(_memory: memory, device: self, offset: 0, count: bytes)
+    }
+
     /// Upload is a new buffer holding count elements copied from host
     /// memory.
     public func Upload<T>(from host: UnsafePointer<T>, count: int) async throws -> Buffer<T> {
@@ -124,6 +138,9 @@ public func Devices() -> [Device] {
 /// viewing it goes.
 public final class _Memory {
     public let _h: UnsafeMutableRawPointer
+    /// _owner is what the memory is borrowed from, for a wrapped buffer:
+    /// kept alive while any buffer views it.
+    public var _owner: AnyObject?
 
     public init(_h: UnsafeMutableRawPointer) {
         self._h = _h

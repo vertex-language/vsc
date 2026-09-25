@@ -114,6 +114,11 @@ func (l *lowerer) writeKernelDescriptor(kernel, name string, img *KernelImage, p
 	entry := l.out.Global(l.sym(kernel+"$gpu_name"), ir.RO, ir.Array(uint64(len(KernelEntry)+1), ir.StoreI8.FType())).
 		Init(ir.Str(KernelEntry + "\x00"))
 	entry.Internal()
+	// The kernel's own name, for what the runtime says about it
+	// (VERTEX_GPU_PROFILE): every Metal entry is KernelEntry.
+	label := l.out.Global(l.sym(kernel+"$gpu_label"), ir.RO, ir.Array(uint64(len(kernel)+1), ir.StoreI8.FType())).
+		Init(ir.Str(kernel + "\x00"))
+	label.Internal()
 
 	if l.kernelRecord == nil {
 		rec := l.out.Struct("vertex_gpu_kernel")
@@ -123,6 +128,7 @@ func (l *lowerer) writeKernelDescriptor(kernel, name string, img *KernelImage, p
 		rec.Field("cpu", ir.StorePtr.FType())
 		rec.Field("flags", ir.StoreI64.FType())
 		rec.Field("params", ir.StoreI64.FType())
+		rec.Field("label", ir.StorePtr.FType())
 		l.kernelRecord = rec
 	}
 	var flags int64
@@ -144,6 +150,7 @@ func (l *lowerer) writeKernelDescriptor(kernel, name string, img *KernelImage, p
 			ir.Val("cpu", ir.RelocInit(thunk)),
 			ir.Val("flags", ir.Lit(ir.Int(flags))),
 			ir.Val("params", ir.Lit(ir.Int(int64(params)))),
+			ir.Val("label", ir.RelocInit(label)),
 		)).
 		Align(8)
 	// A kernel private to this module -- a generic one's specialization,

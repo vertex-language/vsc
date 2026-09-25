@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`270` in the order the
+A ladder: one small thing per file, numbered `001`–`272` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -11,13 +11,13 @@ definition.
 
 | Ladder | Files | The oracle | Compared |
 | --- | --- | --- | --- |
-| `tests/` | `001`–`270` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
+| `tests/` | `001`–`272` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
 
 Each file is a `main.swift` of top-level code, and both compilers are
 given it unchanged. There is no entry point to rename and no harness
 around it.
 
-## `001`–`270`
+## `001`–`272`
 
 | | |
 | --- | --- |
@@ -48,6 +48,8 @@ around it.
 | 268 | a generic function's `T` inferred from the pointer passed: `UnsafePointer<T>` of `Int32`s and `UInt8`s, `UnsafeMutablePointer<T>` |
 | 269 | a class initializer that throws before its properties are all set: caught, `try?`, through `super.init`; the unfinished instance's `deinit` does not run |
 | 270 | closures whose parameter is a tuple of mixed registers, `(Int, Double)`: called, and mapped, filtered and reduced over an array of them |
+| 271 | a generic class's instance as `AnyObject`, stored, tested with `is` and cast back with `as?` |
+| 272 | pointers made writable with `init(mutating:)`, typed and raw |
 
 ## Rules
 
