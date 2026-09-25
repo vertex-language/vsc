@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`264` in the order the
+A ladder: one small thing per file, numbered `001`–`266` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -11,13 +11,13 @@ definition.
 
 | Ladder | Files | The oracle | Compared |
 | --- | --- | --- | --- |
-| `tests/` | `001`–`264` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
+| `tests/` | `001`–`266` `.swift` | swiftc on Apple Silicon | stdout and how the run ended |
 
 Each file is a `main.swift` of top-level code, and both compilers are
 given it unchanged. There is no entry point to rename and no harness
 around it.
 
-## `001`–`264`
+## `001`–`266`
 
 | | |
 | --- | --- |
@@ -42,6 +42,8 @@ around it.
 | 262 | a pointer's bit pattern: `Int(bitPattern:)` and `UInt(bitPattern:)` of a pointer, and the failable `init?(bitPattern:)` back, nil at zero |
 | 263 | a generic function's `T` beside the `T` of the generic methods it calls: `map`, `reduce`, `compactMap` |
 | 264 | a literal as an associated type its protocol makes `Numeric`: `v < 0` and `v = 0` for a `T.Acc` |
+| 265 | an array literal appended with `+=`, typed by the array: `bytes += [0x80]` on a `[UInt8]` |
+| 266 | `split` of a `Substring`: lines split into fields, `maxSplits`, empty pieces kept |
 
 ## Rules
 

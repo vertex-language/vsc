@@ -318,6 +318,14 @@ func (c *checker) kernelLaunch(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) t
 			// A generic function's own type parameter, a number once
 			// it is specialized: gpu._Launch._value.
 			method, expect = "_value", p.Type
+		} else if isTagStruct(p.Type) {
+			// A struct with no stored properties is only its type, which
+			// the specialization already is: nothing is passed.
+			if got := c.checkExpr(a.X, p.Type, scope); !isInvalid(got) && !types.AssignableTo(got, p.Type) {
+				c.typeErrorf(a.X.Pos(), "cannot launch %s with '%s' for '%s': it takes '%s'", sym.Name(), got, p.Name, p.Type)
+				ok = false
+			}
+			continue
 		} else {
 			// The declaration said why already.
 			ok = false
@@ -593,12 +601,24 @@ func (c *checker) inferKernelArgs(sym *FuncSymbol, sig *types.Signature, args []
 		// type parameter, which is a number once the function is
 		// specialized, and checked then.
 		_, outer := t.(*types.TypeParam)
-		if _, scalar := kernelScalarOf(t); !scalar && !outer {
-			c.typeErrorf(args[0].Pos(), "cannot launch %s with '%s' as '%s': a kernel's types are numbers and bools",
+		if _, scalar := kernelScalarOf(t); !scalar && !outer && !isTagStruct(t) {
+			c.typeErrorf(args[0].Pos(), "cannot launch %s with '%s' as '%s': a kernel's types are numbers, bools and structs with no stored properties",
 				sym.Name(), t, tp)
 			return nil, false
 		}
 		spec.Args = append(spec.Args, t)
 	}
 	return spec, true
+}
+
+// isTagStruct reports whether t is a struct with no stored properties: a
+// type a kernel is specialized over for its static members alone -- a
+// quantized block format, as a C++ template takes a tag type. A value of
+// it is nothing to pass.
+func isTagStruct(t types.Type) bool {
+	if _, generic := t.(*types.GenericInstance); generic {
+		return false
+	}
+	st, ok := t.Underlying().(*types.Struct)
+	return ok && len(st.Fields) == 0
 }

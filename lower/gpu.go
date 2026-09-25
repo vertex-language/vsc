@@ -219,6 +219,11 @@ func (l *lowerer) kernelEntries() error {
 		at := 0
 		for _, sp := range sf.Type().Params {
 			fields := structFieldTypes(sp.Type.Formal())
+			if len(fields) == 0 && isStructType(sp.Type.Formal()) {
+				// A struct with no stored properties -- a tag type the
+				// kernel is specialized over -- takes no word.
+				continue
+			}
 			if len(fields) > 1 && at+len(fields) <= len(words) {
 				for j, ft := range fields {
 					if _, isPtr := ft.Underlying().(*types.Pointer); isPtr && words[at+j].Type() == ir.TypeI64 {
@@ -253,6 +258,18 @@ func (l *lowerer) kernelEntries() error {
 		b.Return()
 	}
 	return nil
+}
+
+// isStructType reports whether t is a struct, or an instance of one.
+func isStructType(t types.Type) bool {
+	if gi, ok := t.(*types.GenericInstance); ok {
+		t = gi.Base
+	}
+	if t == nil {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Struct)
+	return ok
 }
 
 // structFieldTypes is the stored fields' types of a struct, or of an

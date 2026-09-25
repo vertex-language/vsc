@@ -951,12 +951,14 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 		// An array literal compared with or added to an array is an array
 		// of that array's elements: `bytes == [109, 115]` with bytes a
-		// [UInt8], `xs + []`.
+		// [UInt8], `xs + []`, `bytes += [0x80]`.
 		// So is one compared with a type an array literal makes: an
 		// option set, `p == [.read, .write]`.
-		if opName == "==" || opName == "!=" || opName == "+" {
+		if opName == "==" || opName == "!=" || opName == "+" || opName == "+=" {
 			if _, lit := unparen(e.Y).(*ast.ArrayLit); lit && takesArrayLiteral(lhs) && !types.Identical(lhs, rhs) {
 				rhs = c.checkExpr(e.Y, lhs, scope)
+			} else if opName == "+=" {
+				// The left of += is what is assigned to; it is never retyped.
 			} else if _, lit := unparen(e.X).(*ast.ArrayLit); lit && takesArrayLiteral(rhs) && !types.Identical(lhs, rhs) {
 				lhs = c.checkExpr(e.X, rhs, scope)
 			}

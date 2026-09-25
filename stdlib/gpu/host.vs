@@ -240,6 +240,9 @@ public final class _Launch {
     /// a generic kernel. The type is one of the others' by the time the
     /// launch runs.
     public func _value<T>(_ v: T) -> _Launch {
+        // A struct with no stored properties -- a tag type a kernel is
+        // specialized over -- is nothing to pass.
+        if MemoryLayout<T>.size == 0 { return self }
         if let x = v as? float32 { return _float32(x) }
         if let x = v as? float64 { return _float64(x) }
         if let x = v as? int32 { return _int32(x) }

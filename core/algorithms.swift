@@ -1476,6 +1476,30 @@ extension Substring {
 
     func hasPrefix(_ prefix: String) -> Bool { return _string.hasPrefix(prefix) }
     func hasSuffix(_ suffix: String) -> Bool { return _string.hasSuffix(suffix) }
+
+    // String's split over this substring's characters: the pieces are
+    // Substrings of the same base, as Swift's Collection.split makes them.
+    func split(separator: Character, maxSplits: Int = Int.max, omittingEmptySubsequences: Bool = true) -> [Substring] {
+        var out: [Substring] = []
+        var start = _start
+        var at = _start
+        var splits = 0
+        while at < _end {
+            let end = _characterEnd(_base, at)
+            if splits < maxSplits && Character(_string: _stringSlice(_base, at, end)) == separator {
+                if !(omittingEmptySubsequences && start == at) {
+                    out.append(Substring(_base: _base, _start: start, _end: at))
+                    splits += 1
+                }
+                start = end
+            }
+            at = end
+        }
+        if !(omittingEmptySubsequences && start == _end) {
+            out.append(Substring(_base: _base, _start: start, _end: _end))
+        }
+        return out
+    }
 }
 
 // A string and the characters of a substring after it.
