@@ -237,6 +237,32 @@ public enum Atomic {
     public static func CompareExchange(_ p: UnsafeMutablePointer<int32>, expected: int32, desired: int32) -> int32 {
         return _atomicCasI32(p, expected, desired)
     }
+    /// Add of a half is a compare-and-swap on the aligned 32-bit word
+    /// that holds it, the sum rounded once: Metal has no 16-bit atomics.
+    public static func Add(_ p: UnsafeMutablePointer<float16>, _ v: float16) -> float16 {
+        return float16(bitPattern: _atomicAddHalf(uint(bitPattern: p), v.bitPattern, false))
+    }
+    public static func Add(_ p: UnsafeMutablePointer<bfloat16>, _ v: bfloat16) -> bfloat16 {
+        return bfloat16(bitPattern: _atomicAddHalf(uint(bitPattern: p), v.bitPattern, true))
+    }
+}
+
+/// _atomicAddHalf adds the half v to the one at address a, a float16 or
+/// a bfloat16 by brain, and returns the bits it held.
+public func _atomicAddHalf(_ a: uint, _ v: uint16, _ brain: bool) -> uint16 {
+    let word = UnsafeMutablePointer<int32>(bitPattern: a & ~3)!
+    let shift = uint32(truncatingIfNeeded: (a & 2) * 8)
+    var old = uint32(bitPattern: word.pointee)
+    while true {
+        let h = uint16(truncatingIfNeeded: old >> shift)
+        let sum = brain
+            ? (bfloat16(bitPattern: h) + bfloat16(bitPattern: v)).bitPattern
+            : (float16(bitPattern: h) + float16(bitPattern: v)).bitPattern
+        let new = (old & ~(uint32(0xffff) << shift)) | (uint32(sum) << shift)
+        let seen = uint32(bitPattern: _atomicCasI32(word, int32(bitPattern: old), int32(bitPattern: new)))
+        if seen == old { return h }
+        old = seen
+    }
 }
 
 // ---- memory views (§6.3) ----

@@ -36,12 +36,6 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 		if repl, ok := subst[tt]; ok {
 			return repl
 		}
-		// Match by name in case different pointer instances represent the same type parameter
-		for param, repl := range subst {
-			if param.Name == tt.Name {
-				return repl
-			}
-		}
 		return tt
 
 	case *Array:
@@ -266,18 +260,6 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 	default:
 		return t
 	}
-}
-
-// SubstituteByName replaces occurrences of type parameters matching by parameter name.
-func SubstituteByName(t Type, subst map[string]Type) Type {
-	if t == nil || len(subst) == 0 {
-		return t
-	}
-	pm := make(map[*TypeParam]Type, len(subst))
-	for name, typ := range subst {
-		pm[&TypeParam{Name: name}] = typ
-	}
-	return Substitute(t, pm)
 }
 
 // Unify matches an argument's type against a parameter's, binding the

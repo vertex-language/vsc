@@ -26,6 +26,9 @@ func (g *gen) convert(e *ast.CallExpr, to types.Type) (*sil.Value, bool) {
 	// `UInt64(bitPattern: x)` between integers of one width is the same
 	// bits read the other way, which is what truncating is at one width.
 	if len(args) == 1 && args[0].Label != nil && g.text(args[0].Label) == "bitPattern" {
+		if v, ok := g.bitsOfPointer(e, args[0].X, to); ok {
+			return v, true
+		}
 		src, okSrc := intRangeOf(g.typeOf(args[0].X))
 		dst, okDst := intRangeOf(to)
 		if okSrc && okDst && src.bits == dst.bits {

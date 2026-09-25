@@ -518,10 +518,11 @@ func TestGenericsAndSubstitution(t *testing.T) {
 		t.Errorf("substitute generic instance failed: got %s", substGen)
 	}
 
-	// SubstituteByName
-	byName := SubstituteByName(arrT, map[string]Type{"T": Typ[Double]})
-	if !Identical(byName, &Array{Elem: Typ[Double]}) {
-		t.Errorf("SubstituteByName failed: got %s", byName)
+	// Another parameter that is also named T -- a generic caller's T
+	// around a call of map<T> -- is a different parameter, and stays.
+	other := &TypeParam{Name: "T"}
+	if got := Substitute(&Array{Elem: other}, substMap); got.(*Array).Elem != other {
+		t.Errorf("substitute replaced another parameter named T: got %s", got)
 	}
 }
 

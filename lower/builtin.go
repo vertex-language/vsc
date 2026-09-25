@@ -135,6 +135,20 @@ func (c *fn) boolBuiltin(name, verb string, args []ir.Value) ([]ir.Value, error)
 
 // convertBuiltin translates width conversion builtins (sext, zext, trunc, fp/int conversions).
 func (c *fn) convertBuiltin(name string, args []ir.Value) ([]ir.Value, bool, error) {
+	// A pointer's address as a word, and a word as an address: Swift's
+	// ptrtoint_Word and inttoptr_Word, named by the integer alone.
+	switch name {
+	case "ptrtoint_Word", "ptrtoint_Int64":
+		if p, ok := args[0].(ir.Ptr); ok && len(args) == 1 {
+			return []ir.Value{c.b.I64.FromPtr(p)}, true, nil
+		}
+		return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not a pointer")
+	case "inttoptr_Word", "inttoptr_Int64":
+		if n, ok := args[0].(ir.I64); ok && len(args) == 1 {
+			return []ir.Value{c.b.Ptr.FromI64(n)}, true, nil
+		}
+		return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand is not an i64")
+	}
 	verb, src, dst, ok := splitConvert(name)
 	if !ok {
 		return nil, false, nil

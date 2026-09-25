@@ -161,3 +161,49 @@ func (g *gen) pointerOffset(e *ast.BinaryExpr) (*sil.Value, bool) {
 	moved := g.blk.IndexAddr(addr, n)
 	return g.blk.AddressToPointer(moved, lowerType(g.typeOf(e))), true
 }
+
+// bitsOfPointer lowers `Int(bitPattern: p)` and `UInt(bitPattern: p)`:
+// p's address as a word, as Swift's ptrtoint_Word is.
+func (g *gen) bitsOfPointer(e *ast.CallExpr, arg ast.Expr, to types.Type) (*sil.Value, bool) {
+	from := g.typeOf(arg)
+	if o, isOpt := optionalOf(from); isOpt {
+		if _, wraps := pointerOf(o.Wrapped); wraps {
+			g.refuse(e, "the bit pattern of an optional pointer")
+			return nil, true
+		}
+	}
+	if _, ok := pointerOf(from); !ok {
+		return nil, false
+	}
+	v := g.rvalue(arg)
+	if v == nil {
+		return nil, true
+	}
+	word := g.blk.Builtin("ptrtoint_Word", sil.Object(builtinFor(to)), v)
+	return g.blk.Struct(lowerType(to), word), true
+}
+
+// pointerFromBits lowers `UnsafeMutablePointer<T>(bitPattern: n)`: the
+// pointer at address n, as Swift's inttoptr_Word makes it, which is nil
+// where n is zero -- an optional pointer's none is the null pointer.
+func (g *gen) pointerFromBits(e *ast.CallExpr) (*sil.Value, bool) {
+	if e.Args == nil || len(e.Args.Args) != 1 || e.Args.Args[0].Label == nil ||
+		g.text(e.Args.Args[0].Label) != "bitPattern" {
+		return nil, false
+	}
+	o, isOpt := optionalOf(g.typeOf(e))
+	if !isOpt {
+		return nil, false
+	}
+	if _, ok := pointerOf(o.Wrapped); !ok {
+		return nil, false
+	}
+	arg := e.Args.Args[0].X
+	v := g.rvalue(arg)
+	if v == nil {
+		return nil, true
+	}
+	n := g.machine(v, g.typeOf(arg))
+	p := g.blk.Builtin("inttoptr_Word", lowerType(o.Wrapped), n)
+	return g.blk.Enum(lowerType(g.typeOf(e)), optionalSome, p), true
+}

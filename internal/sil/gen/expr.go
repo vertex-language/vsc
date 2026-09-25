@@ -854,6 +854,9 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 	// Pointer type conversions: `UnsafeRawPointer(p)`, a type named, not
 	// a function that returns a pointer.
 	if _, isFunc := g.info.Uses[id.Name].(*analyzer.FuncSymbol); !isFunc {
+		if v, ok := g.pointerFromBits(e); ok {
+			return v
+		}
 		if _, ok := pointerOf(g.typeOf(e)); ok {
 			if v, isConversion := g.convert(e, g.typeOf(e)); isConversion {
 				return v

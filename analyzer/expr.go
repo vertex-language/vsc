@@ -1478,6 +1478,17 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					return t
 				}
 			}
+			// `UnsafeMutablePointer<T>(bitPattern: n)` is the pointer at
+			// address n, or nil at zero: Swift's failable init?(bitPattern:)
+			// of an Int or a UInt.
+			if _, isPtr := inst.Underlying().(*types.Pointer); isPtr && len(args) == 1 &&
+				args[0].Label != nil && args[0].Label.Text(c.file) == "bitPattern" {
+				t := c.checkExpr(args[0].X, types.Typ[types.Int], scope)
+				if !isWord(t) && !isInvalid(t) {
+					c.typeErrorf(args[0].Pos(), "cannot convert value of type '%s' to expected argument type 'Int'", t)
+				}
+				return &types.Optional{Wrapped: inst}
+			}
 			for _, arg := range args {
 				t := c.checkExpr(arg.X, nil, scope)
 				// String(cString:) takes a pointer, not an optional one, so
@@ -3136,6 +3147,18 @@ func (c *checker) basicInit(e *ast.CallExpr, b *types.Basic, inst types.Type, ar
 		return args[i].Label.Text(c.file)
 	}
 	switch {
+	// `Int(bitPattern: p)` and `UInt(bitPattern: p)` are p's address, and
+	// zero for a nil p: Swift's init(bitPattern:) of any pointer, optional
+	// or not.
+	case (b.Kind() == types.Int || b.Kind() == types.UInt) && len(args) == 1 && label(0) == "bitPattern":
+		t := c.checkExpr(args[0].X, nil, scope)
+		if o, ok := t.Underlying().(*types.Optional); ok {
+			t = o.Wrapped
+		}
+		if _, isPtr := t.Underlying().(*types.Pointer); !isPtr {
+			return nil, false
+		}
+		return inst, true
 	case b.Info()&types.IsNumeric != 0 && len(args) == 1 && label(0) == "":
 		t := c.checkExpr(args[0].X, nil, scope)
 		if !isString(t) {
@@ -3780,4 +3803,10 @@ func inferFromSuperclass(cl types.Type, want *types.GenericInstance) types.Type 
 		sup = up.Superclass
 	}
 	return cl
+}
+
+// isWord reports whether t is Int or UInt, what a pointer's bit pattern is.
+func isWord(t types.Type) bool {
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && (b.Kind() == types.Int || b.Kind() == types.UInt)
 }

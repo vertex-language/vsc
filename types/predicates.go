@@ -616,6 +616,8 @@ func ConformsToNamed(t Type, name string) bool {
 				declared = append(declared, p)
 			}
 		}
+	case *Dependent:
+		declared = dependentProtocols(tt)
 	case *Class:
 		declared = tt.Conformances
 		if tt.Superclass != nil && ConformsToNamed(tt.Superclass, name) {
@@ -632,6 +634,44 @@ func ConformsToNamed(t Type, name string) bool {
 		return false
 	}
 	return walk(declared)
+}
+
+// dependentProtocols is what an associated type reached through a type
+// parameter is known to conform to: the constraints its protocols put on
+// it -- `associatedtype Acc: Number` -- and those a where clause adds.
+func dependentProtocols(d *Dependent) []*Protocol {
+	tp, ok := d.Base.(*TypeParam)
+	if !ok {
+		return nil
+	}
+	var out []*Protocol
+	for _, c := range tp.Promised[d.Name] {
+		if p, ok := c.Underlying().(*Protocol); ok {
+			out = append(out, p)
+		}
+	}
+	seen := map[*Protocol]bool{}
+	var visit func(p *Protocol)
+	visit = func(p *Protocol) {
+		if p == nil || seen[p] {
+			return
+		}
+		seen[p] = true
+		for _, a := range p.Associated {
+			if a != nil && a.Name == d.Name {
+				out = append(out, a.Constraints...)
+			}
+		}
+		for _, up := range p.Inherited {
+			visit(up)
+		}
+	}
+	for _, c := range tp.Constraints {
+		if p, ok := c.Underlying().(*Protocol); ok {
+			visit(p)
+		}
+	}
+	return out
 }
 
 // LiteralProtocols are the protocols by which a type may be written as an
