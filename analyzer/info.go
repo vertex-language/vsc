@@ -46,6 +46,13 @@ type Info struct {
 	// Swift's `==` on tuples -- each as the specialized call it is.
 	OperatorCalls map[ast.Expr]*ast.CallExpr
 
+	// CollectionEquals are the `==` and `!=` of two arrays or two
+	// dictionaries whose elements the runtime cannot compare -- structs,
+	// enums, classes that are Equatable -- each as the call of core's
+	// Swift that compares them: `a == b` is `a._arrayEquals(b)`, as
+	// Swift's conditional Equatable conformance of Array is.
+	CollectionEquals map[*ast.BinaryExpr]*ast.CallExpr
+
 	// PatternMatches are the expression patterns matched through a `~=`
 	// the program declares.
 	PatternMatches map[*ast.ExprPattern]*FuncSymbol
@@ -333,6 +340,7 @@ func NewInfo() *Info {
 		Autoclosures:      make(map[ast.Expr]*types.Signature),
 		ArraySequences:    make(map[*ast.CallExpr]*Iteration),
 		OperatorCalls:     make(map[ast.Expr]*ast.CallExpr),
+		CollectionEquals:  make(map[*ast.BinaryExpr]*ast.CallExpr),
 		OperatorSpecs:     make(map[ast.Expr]Specialization),
 		ArrayRepeats:      make(map[*ast.CallExpr]bool),
 		CoreCalls:         make(map[*ast.CallExpr]*ast.CallExpr),

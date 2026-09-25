@@ -1078,7 +1078,10 @@ func (g *gen) structuralMetadata(at ast.Node, t types.Type) (string, bool) {
 			return "", false
 		}
 	}
-	mangled := "$sVSCmeta_" + identifierSafe(t.String())
+	// The spelling made safe is lossy -- (String, Value) and
+	// [String: Value] both come out _String__Value_ -- so a hash of the
+	// spelling itself tells them apart.
+	mangled := "$sVSCmeta_" + identifierSafe(t.String()) + "_" + spellingHash(t.String())
 	if _, done := g.m.MetadataFor(sil.StructuralKey(t)); done {
 		return mangled, true
 	}

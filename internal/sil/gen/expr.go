@@ -2634,6 +2634,15 @@ func (g *gen) arrayEquality(e *ast.BinaryExpr, op string) (*sil.Value, bool) {
 	if op != "==" && op != "!=" {
 		return nil, false
 	}
+	// Elements the runtime does not compare: the call of core's Swift
+	// the checker made.
+	if call := g.info.CollectionEquals[e]; call != nil {
+		v := g.expr(call)
+		if v == nil || op == "==" {
+			return v, true
+		}
+		return g.notBool(e, v), true
+	}
 	a, ok := g.typeOf(e.X).Underlying().(*types.Array)
 	if !ok {
 		return nil, false

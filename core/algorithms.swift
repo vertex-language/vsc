@@ -325,6 +325,19 @@ extension Array {
 
 // ---- Dictionary ----
 
+extension Dictionary where Value: Equatable {
+    // Whether other has the same keys, each with an equal value: what
+    // == on two dictionaries is.
+    func _dictionaryEquals(_ other: [Key: Value]) -> Bool {
+        if count != other.count { return false }
+        for (k, v) in self {
+            guard let w = other[k] else { return false }
+            if v != w { return false }
+        }
+        return true
+    }
+}
+
 extension Dictionary {
     // The keys, and the values, in the dictionary's order.
     var keys: [Key] {
@@ -614,6 +627,12 @@ extension ArraySlice: CustomStringConvertible, CustomDebugStringConvertible {
 }
 
 extension Array where Element: Equatable {
+    // What == on two arrays is, where the runtime does not compare
+    // their elements itself.
+    func _arrayEquals(_ other: [Element]) -> Bool {
+        return elementsEqual(other)
+    }
+
     // Whether the elements are other's, in order.
     func elementsEqual(_ other: [Element]) -> Bool {
         if count != other.count { return false }
@@ -1295,6 +1314,19 @@ extension String {
             at = end
         }
         return nil
+    }
+
+    // Where the last Character equal to c is, if any.
+    func lastIndex(of c: Character) -> _StringIndex? {
+        var at = 0
+        var found: _StringIndex? = nil
+        let count = _utf8Count(self)
+        while at < count {
+            let end = _characterEnd(self, at)
+            if Character(_string: _stringSlice(self, at, end)) == c { found = _StringIndex(_offset: at) }
+            at = end
+        }
+        return found
     }
 
     // Whether the String holds c.

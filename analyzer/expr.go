@@ -963,6 +963,16 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				lhs = c.checkExpr(e.X, rhs, scope)
 			}
 		}
+		// So is a dictionary literal compared with a dictionary: `d == [:]`.
+		if opName == "==" || opName == "!=" {
+			_, ld := lhs.Underlying().(*types.Dictionary)
+			_, rd := rhs.Underlying().(*types.Dictionary)
+			if _, lit := unparen(e.Y).(*ast.DictLit); lit && ld && !types.Identical(lhs, rhs) {
+				rhs = c.checkExpr(e.Y, lhs, scope)
+			} else if _, lit := unparen(e.X).(*ast.DictLit); lit && rd && !types.Identical(lhs, rhs) {
+				lhs = c.checkExpr(e.X, rhs, scope)
+			}
+		}
 
 		// An operator is a function, and core declares them. Where
 		// one resolves, the call decides the type and the rules
@@ -993,6 +1003,8 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 			if !c.comparable(lhs) {
 				c.typeErrorf(e.Op.Pos(), "type '%s' is not comparable", lhs)
+			} else if opName == "==" || opName == "!=" {
+				c.collectionEquals(e, lhs, scope)
 			}
 			if !types.AssignableTo(rhs, lhs) && !types.AssignableTo(lhs, rhs) {
 				c.typeErrorf(e.Op.Pos(), "binary operator '%s' cannot be applied to operands of type '%s' and '%s'", opName, lhs, rhs)
@@ -2659,7 +2671,44 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 		return true
 	}
 	var chosen *SubscriptRef
+	// The arguments' own types pick first, as an overloaded method's do:
+	// `v[1]` takes the subscript by Int, not an earlier one by String.
+	quiet := len(c.info.Diagnostics)
+	argTypes := make([]types.Type, len(e.Args))
+	for i, arg := range e.Args {
+		argTypes[i] = c.checkExpr(arg.X, nil, scope)
+	}
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	var viable []*SubscriptRef
+	var sigs []*types.Signature
 	for _, ref := range candidates {
+		if !fits(ref) || len(ref.Subscript.TypeParams) > 0 {
+			continue
+		}
+		ok := true
+		for i, arg := range e.Args {
+			if !c.argFitsParam(arg, argTypes[i], ref.Subscript.Params[i]) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			viable = append(viable, ref)
+			sigs = append(sigs, &types.Signature{Params: ref.Subscript.Params})
+		}
+	}
+	if len(viable) > 1 {
+		if keep := c.byLiteralDefaults(sigs, e.Args); len(keep) > 0 {
+			viable = []*SubscriptRef{viable[keep[0]]}
+		}
+	}
+	if len(viable) > 0 {
+		chosen = viable[0]
+	}
+	for _, ref := range candidates {
+		if chosen != nil {
+			break
+		}
 		if !fits(ref) {
 			continue
 		}
@@ -3811,4 +3860,32 @@ func inferFromSuperclass(cl types.Type, want *types.GenericInstance) types.Type 
 func isWord(t types.Type) bool {
 	b, ok := t.Underlying().(*types.Basic)
 	return ok && (b.Kind() == types.Int || b.Kind() == types.UInt)
+}
+
+// collectionEquals records `a == b` on two arrays or two dictionaries
+// whose elements the runtime does not compare as the call of core's
+// Swift that does, through each element's own ==: Array's _arrayEquals,
+// Dictionary's _dictionaryEquals.
+func (c *checker) collectionEquals(e *ast.BinaryExpr, t types.Type, scope *Scope) {
+	name := ""
+	switch u := t.Underlying().(type) {
+	case *types.Array:
+		if _, rt := core.ArrayEqual(u); rt {
+			return
+		}
+		name = "_arrayEquals"
+	case *types.Dictionary:
+		name = "_dictionaryEquals"
+	default:
+		return
+	}
+	span := ast.Span{Lo: e.Pos(), Hi: e.End()}
+	mem := &ast.MemberExpr{Span: ast.Span{Lo: e.X.Pos(), Hi: e.X.End()}, X: e.X, Dot: e.X.End(),
+		Name: &ast.Ident{Span: ast.Span{Lo: e.Op.Pos(), Hi: e.Op.End()}, Synth: name}}
+	call := &ast.CallExpr{Span: span, Fun: mem, Args: &ast.CallArgs{Span: span,
+		Args: []*ast.CallArg{{Span: ast.Span{Lo: e.Y.Pos(), Hi: e.Y.End()}, X: e.Y}}}}
+	if got := c.checkExpr(call, types.Typ[types.Bool], scope); isInvalid(got) {
+		return
+	}
+	c.info.CollectionEquals[e] = call
 }

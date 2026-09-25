@@ -393,7 +393,18 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 			if v == nil {
 				return
 			}
-			v = g.optionalFor(e.Y, v, g.typeOf(e.Y), ref.Subscript.Result)
+			// Wrapped in the optional the setter takes, the value is
+			// the optional's: a borrowed one is copied into it, and the
+			// optional ends with the statement, as `x as T?` does.
+			from := g.typeOf(e.Y)
+			_, toOpt := optionalOf(ref.Subscript.Result)
+			_, fromOpt := optionalOf(from)
+			if toOpt && !fromOpt && v.Ownership() != sil.None {
+				v = g.optionalFor(e.Y, g.consume(v), from, ref.Subscript.Result)
+				g.destroyLater(v)
+			} else {
+				v = g.optionalFor(e.Y, v, from, ref.Subscript.Result)
+			}
 			g.declaredSubscriptWrite(sub, ref, v)
 			return
 		}

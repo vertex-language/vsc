@@ -321,10 +321,22 @@ func (c *checker) comparable(t types.Type) bool {
 		return ok && c.conformsTo(t, eq)
 	case *types.Array:
 		return c.comparable(tt.Elem)
+	case *types.Dictionary:
+		return c.comparable(tt.Key) && c.comparable(tt.Value)
 	case *types.Optional:
 		return c.comparable(tt.Wrapped)
 	}
-	return types.Comparable(t)
+	if types.Comparable(t) {
+		return true
+	}
+	// A struct, an enum or a class that says it is Equatable: Array's
+	// and Dictionary's == are theirs where their elements are.
+	switch t.Underlying().(type) {
+	case *types.Struct, *types.Enum, *types.Class:
+		eq, ok := c.coreProtocol("Equatable")
+		return ok && c.conformsTo(t, eq)
+	}
+	return false
 }
 
 // implicitSelfMember is `self.name` for a name used alone, or called, inside

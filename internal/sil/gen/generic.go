@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/vertex-language/vsc/analyzer"
@@ -217,6 +218,17 @@ func identifierSafe(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// spellingHash is a short FNV-1a hash of s, for a name that identifierSafe
+// alone would make ambiguous.
+func spellingHash(s string) string {
+	var h uint64 = 14695981039346656037
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211
+	}
+	return strconv.FormatUint(h, 16)
 }
 
 type genericBodyError string
