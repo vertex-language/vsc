@@ -223,10 +223,23 @@ Device* metal() {
 
 struct Launch;
 
+// A place in a kernel that asks for workgroup storage, and where in the
+// group's storage its allocation is.
+struct SharedSite {
+  void* key;
+  i64 at;
+};
+
+constexpr int maxSharedSites = 64;
+
 struct Group {
   i64 id[3];
   u8* shared;       // the group's workgroup storage
   i64 sharedSize;
+  i64 sharedUsed;   // how much of it the sites have taken
+  SharedSite sites[maxSharedSites];
+  u32 siteCount;
+  Lock siteLock;
   u32 arrived;      // at the barrier, this phase
   u32 phase;
   u32 members;      // work-items still running the kernel
@@ -240,7 +253,6 @@ struct WorkItem {
   i32 size[3];
   i32 groups[3];
   Group* g;
-  i64 sharedCursor;
   Launch* launch;
   Fiber* fiber;  // the fiber running it, where the group runs on fibers
 };
@@ -334,7 +346,6 @@ void runItem(Launch* l, Group* g, i32 lx, i32 ly, i32 lz, WorkItem* w) {
   w->local[1] = ly;
   w->local[2] = lz;
   w->g = g;
-  w->sharedCursor = 0;
   for (int a = 0; a < 3; a++) {
     w->group[a] = static_cast<i32>(g->id[a]);
     w->size[a] = static_cast<i32>(l->per[a]);
@@ -398,7 +409,6 @@ void runGroupOnFibers(Launch* l, i64 index, Fibers* pool, WorkItem* worker) {
         w->local[1] = static_cast<i32>(y);
         w->local[2] = static_cast<i32>(z);
         w->g = &g;
-        w->sharedCursor = 0;
         for (int a = 0; a < 3; a++) {
           w->group[a] = static_cast<i32>(g.id[a]);
           w->size[a] = static_cast<i32>(l->per[a]);
@@ -950,36 +960,51 @@ void vertex_gpu_barrier() {
 #endif
 }
 
-// The group's workgroup storage: each work-item asks for the same sizes
-// in the same order, so each is handed the same bytes. The first to ask
-// makes it.
+// The group's workgroup storage. A GPU gives each place in a kernel that
+// asks for storage (gpu.Shared) one allocation per group, however often
+// that place runs -- a group reduction called in a loop reuses its
+// storage every time round, as it does on Metal, where each place is a
+// shared variable of its own. Here a place is known by where it called
+// from: the frame record chain names the return address into the code
+// that constructed the gpu.Shared, which differs for every place in the
+// program. The first work-item to reach a place allocates for it; the
+// rest find it.
 void* vertex_gpu_shared(i64 bytes, i64 align) {
   WorkItem* w = current();
   Group* g = w->g;
   if (align < 1) align = 1;
-  i64 at = (w->sharedCursor + align - 1) / align * align;
-  w->sharedCursor = at + bytes;
-  // Storage is made the first time the group asks, big enough for
-  // everything a kernel of this size asks for: 64 KB, as a GPU's group
-  // storage is at most.
+  // This function's frame record, then the caller's (gpu.Shared's
+  // initializer): the return address it holds is the place.
+  void** frame = static_cast<void**>(__builtin_frame_address(0));
+  void** up = frame ? static_cast<void**>(frame[0]) : nullptr;
+  void* key = up ? up[1] : __builtin_return_address(0);
   constexpr i64 limit = 64 * 1024;
-  if (w->sharedCursor > limit) {
-    say("gpu: more than 64 KB of shared storage in one workgroup\n");
-    vertex_pal_abort();
-  }
-  u8* base = static_cast<u8*>(__builtin_atomic_load(reinterpret_cast<u64*>(&g->shared)) ? g->shared : nullptr);
-  if (!base) {
+  g->siteLock.lock();
+  if (!g->shared) {
     u8* made = static_cast<u8*>(vertex_pal_alloc(limit, 16));
     vertex_pal_fill(made, 0, limit);
-    u64 was = __builtin_atomic_cas(reinterpret_cast<u64*>(&g->shared), 0ull, reinterpret_cast<u64>(made));
-    if (was != 0) {
-      vertex_pal_free(made, limit, 16);
-    } else {
-      g->sharedSize = limit;
-    }
-    base = g->shared;
+    g->shared = made;
+    g->sharedSize = limit;
   }
-  return base + at;
+  i64 at = -1;
+  for (u32 i = 0; i < g->siteCount; i++) {
+    if (g->sites[i].key == key) {
+      at = g->sites[i].at;
+      break;
+    }
+  }
+  if (at < 0) {
+    at = (g->sharedUsed + align - 1) / align * align;
+    if (at + bytes > limit || g->siteCount >= maxSharedSites) {
+      g->siteLock.unlock();
+      say("gpu: more than 64 KB of shared storage in one workgroup\n");
+      vertex_pal_abort();
+    }
+    g->sharedUsed = at + bytes;
+    g->sites[g->siteCount++] = SharedSite{key, at};
+  }
+  g->siteLock.unlock();
+  return g->shared + at;
 }
 
 // A work-item that traps ends: the launch is marked, the work-item's
