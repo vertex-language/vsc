@@ -198,11 +198,12 @@ func (g *gen) defaultValue(at ast.Node, e ast.Expr) *sil.Value {
 	// Anything else is evaluated where the call is, read out of the file
 	// it was written in. A default of an imported function has no file
 	// here: Swift calls a generator for it, which this does not name yet.
-	f := g.fileOf(e)
+	// The checker recorded the file each default was written in -- for
+	// an imported function, a file of another module -- so the file
+	// index is only asked about a default it did not see.
+	f := g.info.DefaultFiles[e]
 	if f == nil {
-		// A default of a function another Vertex module declares: its
-		// expression was checked in that module's file.
-		f = g.info.DefaultFiles[e]
+		f = g.fileOf(e)
 	}
 	if f != nil {
 		saved := g.file

@@ -216,11 +216,30 @@ func (g *gen) fileOf(n ast.Node) *token.File {
 // are answered "no file" by the first tier without walking anything.
 type fileIndex struct {
 	files   []*ast.File
+	decls   map[ast.Node]*token.File
 	shallow map[ast.Node]*token.File
 	deep    map[ast.Node]*token.File
 }
 
 func (x *fileIndex) of(n ast.Node) *token.File {
+	// A tier below both: the declarations alone, and the members of the
+	// types and extensions that hold them. Nearly every question is a
+	// function or an initializer, and this answers it without indexing
+	// every parameter and type expression of every imported file.
+	if x.decls == nil {
+		x.decls = make(map[ast.Node]*token.File, 1024)
+		for _, f := range x.files {
+			if f != nil && f.Unit != nil {
+				indexDecls(x.decls, f, f.Unit)
+			}
+		}
+		if core, _, _ := core.Files(); core != nil {
+			indexDecls(x.decls, core, nil)
+		}
+	}
+	if f, ok := x.decls[n]; ok {
+		return f
+	}
 	if x.shallow == nil {
 		x.shallow = make(map[ast.Node]*token.File, 1024)
 		for _, f := range x.files {
@@ -244,6 +263,28 @@ func (x *fileIndex) of(n ast.Node) *token.File {
 		}
 	}
 	return x.deep[n]
+}
+
+// indexDecls records unit as the file of f's declarations and of their
+// members, going no further into any of them. The first file to claim a
+// node keeps it, as in index.
+func indexDecls(m map[ast.Node]*token.File, f *ast.File, unit *token.File) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		if n == nil {
+			return true
+		}
+		if _, dup := m[n]; !dup {
+			m[n] = unit
+		}
+		switch n.(type) {
+		case *ast.File, *ast.DeclStmt, *ast.MemberBlock,
+			*ast.StructDecl, *ast.ClassDecl, *ast.EnumDecl, *ast.ActorDecl,
+			*ast.ProtocolDecl, *ast.ExtensionDecl,
+			*ast.VarDecl: // for its bindings, which a property is asked by
+			return true
+		}
+		return false
+	})
 }
 
 // index records unit as the file of every node in f -- the first file to
