@@ -1144,12 +1144,6 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return thenT
 
 	case *ast.CallExpr:
-		// What an earlier look at this call inferred is not this one's:
-		// a closure argument is read once with no type to pick among
-		// overloads, when `captured.append(s)` in it, with `s` still
-		// unknown, is the generic append(contentsOf:), and then again as
-		// the parameter says, when it is append(_:), which has none.
-		delete(c.info.Specializations, e)
 		// A key path given where a function goes -- `xs.map(\.name)` --
 		// is the closure `{ $0.name }`, and is checked and lowered as one.
 		// No parameter takes a KeyPath yet, so every argument is that.
@@ -1224,10 +1218,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					sig := m.Signature()
 					c.info.Types[mem] = sig
 					c.info.Types[e.Fun] = sig
-					// The core's method, lowered as such: not a method an
-					// earlier look at the call chose, with its arguments'
-					// types still unknown.
+					// The core's method, lowered as such: not what an earlier
+					// look at the call chose and inferred with its arguments'
+					// types still unknown. A closure argument is read once with
+					// no type, to pick among overloads, and `captured.append(s)`
+					// in it, with `s` unknown, is then the generic
+					// append(contentsOf:); read again as the parameter says, it
+					// is this append(_:), which has no type arguments.
 					delete(c.info.Methods, mem)
+					delete(c.info.Specializations, e)
 					return c.checkCallArguments(e, sig, args, scope).Results
 				}
 				// A method an extension gives a built-in type, called:
