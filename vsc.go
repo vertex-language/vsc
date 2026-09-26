@@ -324,6 +324,9 @@ type importer struct {
 	// names is each folder's package name, as its package declaration
 	// gives it, once the folder has been read.
 	names map[string]string
+	// ahead is folders being read and parsed before the walk reaches
+	// them, by directory.
+	ahead map[string]*prefetch
 	out   []analyzer.Import
 	pkgs  []Package
 	diags []Diagnostic
@@ -640,8 +643,15 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 			return dir
 		}
 	}
-	use := l.target.Use()
-	folder, err := pkg.ReadFolder(dir, pkg.PlatformOf(use), pkg.ArchOf(use))
+	pre := l.ahead[dir]
+	if pre == nil {
+		pre = l.readAhead(dir)
+	}
+	<-pre.done
+	// A folder's trees are this import's alone: the checker rewrites
+	// them, so another import of it parses its own.
+	delete(l.ahead, dir)
+	folder, err := pre.folder, pre.err
 	if err != nil {
 		fail("package '" + path + "': " + err.Error())
 		return ""
@@ -664,22 +674,9 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		srcs = append(srcs, r.src)
 		return true
 	}
-	// The folder's files are read and parsed at once, and added in order.
-	read := make([]readFile, len(folder.Vertex))
-	var wg sync.WaitGroup
-	for i, name := range folder.Vertex {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			text, err := os.ReadFile(name)
-			if err != nil {
-				read[i].err = err
-				return
-			}
-			read[i] = parseSource(Source{Name: name, Text: text}, l.ifcfg)
-		}()
-	}
-	wg.Wait()
+	// The folder's files were read and parsed at once, and are added in
+	// order.
+	read := pre.read
 	for i, name := range folder.Vertex {
 		if err := read[i].err; err != nil {
 			fail("cannot read '" + name + "': " + err.Error())
@@ -734,6 +731,11 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		}
 	}
 
+	// What these files import is known now: start reading it, so the
+	// walk below finds each folder parsed rather than parsing it then.
+	for i, f := range files {
+		l.prefetchImports(f, units[i])
+	}
 	var deps []string
 	opaque := false
 	for i, f := range files {
@@ -748,6 +750,81 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units})
 	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque})
 	return dir
+}
+
+// A prefetch is a folder read and parsed ahead of the walk: its files for
+// this target, and each one's source and tree, in order.
+type prefetch struct {
+	done   chan struct{}
+	folder *pkg.Folder
+	err    error
+	read   []readFile
+}
+
+// readAhead starts reading dir: which files it builds for the target, and
+// each of them read and parsed, all at once.
+func (l *importer) readAhead(dir string) *prefetch {
+	pre := &prefetch{done: make(chan struct{})}
+	if l.ahead == nil {
+		l.ahead = map[string]*prefetch{}
+	}
+	l.ahead[dir] = pre
+	use := l.target.Use()
+	cfg := l.ifcfg
+	go func() {
+		defer close(pre.done)
+		pre.folder, pre.err = pkg.ReadFolder(dir, pkg.PlatformOf(use), pkg.ArchOf(use))
+		if pre.err != nil || pre.folder.Empty() {
+			return
+		}
+		pre.read = make([]readFile, len(pre.folder.Vertex))
+		var wg sync.WaitGroup
+		for i, name := range pre.folder.Vertex {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				text, err := os.ReadFile(name)
+				if err != nil {
+					pre.read[i].err = err
+					return
+				}
+				pre.read[i] = parseSource(Source{Name: name, Text: text}, cfg)
+			}()
+		}
+		wg.Wait()
+	}()
+	return pre
+}
+
+// prefetchImports starts reading every folder f imports that is neither
+// loaded nor on its way. Resolving a path stays here, on the walk's
+// goroutine; only the reading and parsing go ahead. A path that does not
+// resolve is left for the walk to report.
+func (l *importer) prefetchImports(f *ast.File, unit *token.File) {
+	for _, stmt := range f.Stmts {
+		decl, ok := stmt.(*ast.DeclStmt)
+		if !ok {
+			continue
+		}
+		imp, ok := decl.D.(*ast.ImportDecl)
+		if !ok || unit == nil {
+			continue
+		}
+		for _, spec := range imp.Paths {
+			path, ok := importPathText(spec.Path, unit)
+			if !ok || path == "" {
+				continue
+			}
+			dir, err := l.folder(path, filepath.Dir(unit.Name()))
+			if err != nil || l.ahead[dir] != nil {
+				continue
+			}
+			if name, known := l.names[dir]; known && spec.Alias == nil && l.seen[name] {
+				continue
+			}
+			l.readAhead(dir)
+		}
+	}
 }
 
 // readFile is one source of an imported folder, read and parsed.
