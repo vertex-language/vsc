@@ -299,6 +299,9 @@ type funcOut struct {
 	cxx    string // the qualified C++ callee
 	params []paramOut
 	ret    typeMap
+	// noReturn is a [[noreturn]] void function, which Vertex sees
+	// returning Never, as ClangImporter imports one.
+	noReturn bool
 }
 
 type paramOut struct {
@@ -440,6 +443,7 @@ func (g *bindingGen) addFunc(fn *sema.FuncSymbol) {
 		return
 	}
 	f.ret = ret
+	f.noReturn = ret.void && (fn.NoReturn || fn.TemplateOf != nil && fn.TemplateOf.NoReturn)
 	f.thunk = fmt.Sprintf("__vs_%s_%s_%d", strings.ReplaceAll(g.n.Module, ".", "_"), fn.SymName, len(g.funcs))
 	g.funcs = append(g.funcs, f)
 }
@@ -793,12 +797,15 @@ func (g *bindingGen) emit(pkgName string) ([]byte, []byte) {
 		if !f.ret.void {
 			result = " -> " + f.ret.raw[0]
 			cxxResult = f.ret.cxx[0]
+		} else if f.noReturn {
+			result = " -> Never"
+			cxxResult = "[[noreturn]] void"
 		}
 		fmt.Fprintf(&decls, "@_silgen_name(\"%s\")\nfunc %s(%s)%s\n\n", f.thunk, f.thunk, strings.Join(rawParams, ", "), result)
 
 		call := f.cxx + "(" + strings.Join(cxxArgs, ", ") + ")"
 		if f.ret.void {
-			fmt.Fprintf(&cxx, "extern \"C\" void %s(%s) noexcept { %s; }\n", f.thunk, strings.Join(cxxParams, ", "), call)
+			fmt.Fprintf(&cxx, "extern \"C\" %s %s(%s) noexcept { %s; }\n", cxxResult, f.thunk, strings.Join(cxxParams, ", "), call)
 		} else {
 			ret := call
 			if f.ret.fromCxx != nil {
@@ -813,15 +820,17 @@ func (g *bindingGen) emit(pkgName string) ([]byte, []byte) {
 		if len(f.scope) > 0 {
 			static = "static "
 		}
-		vsResult := ""
+		vsResult, ret := "", "return "
 		if !f.ret.void {
 			vsResult = " -> " + f.ret.vertex
+		} else if f.noReturn {
+			vsResult, ret = " -> Never", ""
 		}
 		body := f.thunk + "(" + strings.Join(rawArgs, ", ") + ")"
 		if f.ret.fromRaw != nil {
 			body = f.ret.fromRaw(body)
 		}
-		fmt.Fprintf(b, "%s%sfunc %s(%s)%s {\n    return %s\n}\n\n", access, static, vertexName(f.name), strings.Join(vsParams, ", "), vsResult, body)
+		fmt.Fprintf(b, "%s%sfunc %s(%s)%s {\n    %s%s\n}\n\n", access, static, vertexName(f.name), strings.Join(vsParams, ", "), vsResult, ret, body)
 	}
 
 	var vs bytes.Buffer
@@ -905,7 +914,10 @@ func (n *Native) Objects(thunks []byte, work string) ([]Input, Linkage, error) {
 // files and the modules it may import.
 func (n *Native) cacheKey(thunks []byte) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "vsc-native-1\n%s\n%s\n", targetName(n.Target), compilerIdentity())
+	// The deployment target is in the objects (LC_BUILD_VERSION), and the
+	// link refuses one newer than the program's: a package built for net's
+	// own programs (macOS 13) is not the one a program for 11.0 links.
+	fmt.Fprintf(h, "vsc-native-1\n%s\n%s\nminos %s\n", targetName(n.Target), compilerIdentity(), n.MinOS)
 	h.Write(thunks)
 	var files []string
 	entries, _ := os.ReadDir(n.Dir)

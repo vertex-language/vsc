@@ -34,6 +34,7 @@ export namespace detail { void reset() {} }
 export template <class T> T twice(T x) { return x + x; }
 export struct Point { int x, y; };
 export Point origin() { return {}; }
+export [[noreturn]] void quit(int32_t code) noexcept;
 int32_t hidden(int32_t x) { return x; }
 `
 	if err := os.WriteFile(iface, []byte(src), 0o644); err != nil {
@@ -65,6 +66,9 @@ int32_t hidden(int32_t x) { return x; }
 		"public func scale(_ x: float64) -> float64",
 		"public enum detail {",
 		"public static func reset()",
+		// [[noreturn]] is Never, as ClangImporter imports it.
+		"public func quit(_ code: int32) -> Never {\n    __vs_",
+		") -> Never\n",
 	} {
 		if !strings.Contains(string(vs), want) {
 			t.Errorf("the Vertex has no %q:\n%s", want, vs)
@@ -80,6 +84,7 @@ int32_t hidden(int32_t x) { return x; }
 		"static_cast<::Code>(a0_0)",
 		"std::string_view(a1_0, static_cast<std::size_t>(a1_1))",
 		") noexcept {",
+		"extern \"C\" [[noreturn]] void __vs_net_codes_quit_",
 	} {
 		if !strings.Contains(string(thunks), want) {
 			t.Errorf("the thunks have no %q:\n%s", want, thunks)
