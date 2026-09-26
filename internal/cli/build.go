@@ -179,8 +179,17 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 	var mainKey buildcache.Key
 	var cachedMain []byte
 	keyedMain := false
+	// A program linked whole has its packages built as the importer finds
+	// them; see packageStream.
+	var stream *packageStream
 	if mode.name == "exe" || mode.name == "lib" {
 		minOS := bf.main.minOS(target)
+		streamDir := progDir
+		if streamDir == "" {
+			streamDir = wd
+		}
+		stream = newPackageStream(&bf.common, bf, target, streamDir, minOS, stderr)
+		opts.OnPackage = stream.add
 		opts.AfterImports = func(pkgs []vsc.Package, opaque bool) bool {
 			if opaque {
 				return true
@@ -339,7 +348,13 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 			}
 		}
 	}
-	pobjs, code := packageObjects(u.Packages, bf, target, mainDir, minOS, stderr)
+	var pobjs [][]byte
+	var code int
+	if stream != nil {
+		pobjs, code = stream.finish(u.Packages)
+	} else {
+		pobjs, code = packageObjects(u.Packages, bf, target, mainDir, minOS, stderr)
+	}
 	nativeDone()
 	if code != exitOK {
 		return "", code

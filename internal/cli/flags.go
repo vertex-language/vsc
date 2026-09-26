@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/vertex-language/ir"
 
@@ -42,6 +43,12 @@ type common struct {
 	// headers is the build's header cache: every C++ unit of every
 	// folder reads the same libc++ and SDK headers.
 	headers *preprocessor.Cache
+	// early is the native modules compiling since their packages were
+	// found; see startNative.
+	early struct {
+		mu sync.Mutex
+		m  map[string]*nativeFuture
+	}
 }
 
 // includePath collects repeated -I or -P flags in order.

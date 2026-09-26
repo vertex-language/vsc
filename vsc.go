@@ -82,6 +82,10 @@ type Options struct {
 	// It is how a build that has the module's object cached already
 	// learns what to link without compiling the module again.
 	AfterImports func(pkgs []Package, opaque bool) bool
+	// OnPackage, when set, is told of each imported package as soon as the
+	// importer has it, which is after every package it imports: a build
+	// can start compiling it while the rest of the imports are read.
+	OnPackage func(Package)
 	// Summaries, when set, keeps what an importer reads of each folder it
 	// imports: the files with the bodies no client compiles blanked (see
 	// prune), which parse far faster than the source. Nil parses the
@@ -216,7 +220,7 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 		return u, diags
 	}
 	done = timing.Start("imports")
-	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg, opts.Target, opts.Summaries)
+	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg, opts.Target, opts.Summaries, opts.OnPackage)
 	done()
 	u.Packages = pkgs
 	diags = append(diags, importDiags...)
@@ -338,8 +342,8 @@ var errNoTarget = errors.New("no target: lowering needs a machine to lower for")
 
 // loadImports resolves and loads all transitive module and package imports.
 func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []string,
-	packages PackageResolver, ifcfg ifconfig.Config, target ir.Target, summaries SummaryCache) ([]analyzer.Import, []Package, []Diagnostic) {
-	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, ifcfg: ifcfg, target: target, summaries: summaries}
+	packages PackageResolver, ifcfg ifconfig.Config, target ir.Target, summaries SummaryCache, onPackage func(Package)) ([]analyzer.Import, []Package, []Diagnostic) {
+	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, ifcfg: ifcfg, target: target, summaries: summaries, onPackage: onPackage}
 	for i, f := range files {
 		unit := f.Unit
 		if i < len(units) && units[i] != nil {
@@ -376,6 +380,8 @@ type importer struct {
 	found map[[2]string]foundFolder
 	// summaries keeps the pruned text of folders read before.
 	summaries SummaryCache
+	// onPackage is Options.OnPackage.
+	onPackage func(Package)
 	out       []analyzer.Import
 	pkgs      []Package
 	diags     []Diagnostic
@@ -818,6 +824,9 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units})
 	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque,
 		Surface: surface(files, units)})
+	if l.onPackage != nil {
+		l.onPackage(l.pkgs[len(l.pkgs)-1])
+	}
 	return dir
 }
 

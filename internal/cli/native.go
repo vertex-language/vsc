@@ -299,6 +299,11 @@ func (c *common) nativeObjectsAll(dirs []string) []nativeResult {
 		go func() {
 			defer wg.Done()
 			nat, r := c.natives[d], built[d]
+			if f := c.earlyNative(d); f != nil {
+				<-f.done
+				*r = f.r
+				return
+			}
 			doneNative := timing.Start("native C++ objects")
 			r.objs, r.need, r.err = nat.n.Objects(nat.thunks, nativeWork())
 			doneNative()
