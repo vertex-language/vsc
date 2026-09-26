@@ -321,9 +321,12 @@ type importer struct {
 	fetched  map[string]string
 	fetchErr map[string]error
 	seen     map[string]bool
-	out      []analyzer.Import
-	pkgs     []Package
-	diags    []Diagnostic
+	// names is each folder's package name, as its package declaration
+	// gives it, once the folder has been read.
+	names map[string]string
+	out   []analyzer.Import
+	pkgs  []Package
+	diags []Diagnostic
 }
 
 // readAll reads every module a file imports. `via` is the module
@@ -625,6 +628,18 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		fail(err.Error())
 		return ""
 	}
+	// A package imported again -- io, by nearly everything -- is already
+	// loaded under its name. Reading and parsing its folder again only to
+	// learn that was most of what loading imports cost.
+	if name, ok := l.names[dir]; ok {
+		as := name
+		if spec.Alias != nil {
+			as = spec.Alias.Text(unit)
+		}
+		if l.seen[as] {
+			return dir
+		}
+	}
 	use := l.target.Use()
 	folder, err := pkg.ReadFolder(dir, pkg.PlatformOf(use), pkg.ArchOf(use))
 	if err != nil {
@@ -676,6 +691,12 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	}
 
 	name := packageNameOf(files, units)
+	if name != "" {
+		if l.names == nil {
+			l.names = map[string]string{}
+		}
+		l.names[dir] = name
+	}
 	if name == "" {
 		name = lastSegment(path)
 	}
