@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/vcx"
@@ -888,24 +889,40 @@ func (n *Native) Objects(thunks []byte, work string) ([]Input, Linkage, error) {
 	if err := os.WriteFile(thunkPath, thunks, 0o644); err != nil {
 		return nil, need, err
 	}
-	var objs []Input
 	prefix := strings.ReplaceAll(n.Module, ".", "_")
-	for _, src := range append(append([]string(nil), n.Sources...), thunkPath) {
+	srcs := append(append([]string(nil), n.Sources...), thunkPath)
+	objs := make([]Input, len(srcs))
+	errs := make([]error, len(srcs))
+	// The units are compiled at once; vcx keeps no state between
+	// compiles (TestConcurrentObjects holds it to that).
+	var wg sync.WaitGroup
+	for i, src := range srcs {
 		name := prefix + "_" + strings.TrimSuffix(filepath.Base(src), filepath.Ext(src)) + ".o"
 		cached := filepath.Join(work, "native", key, name)
 		if data, err := os.ReadFile(cached); err == nil {
-			objs = append(objs, Input{Name: name, Data: data})
+			objs[i] = Input{Name: name, Data: data}
 			continue
 		}
-		data, diags, err := c.Object(vcx.File(src))
-		if err == nil && vcx.HasErrors(diags) {
-			err = &vcx.DiagnosticError{Diagnostics: diags}
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data, diags, err := c.Object(vcx.File(src))
+			if err == nil && vcx.HasErrors(diags) {
+				err = &vcx.DiagnosticError{Diagnostics: diags}
+			}
+			if err != nil {
+				errs[i] = fmt.Errorf("%s: %w", src, err)
+				return
+			}
+			_ = os.WriteFile(cached, data, 0o644)
+			objs[i] = Input{Name: name, Data: data}
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
-			return nil, need, fmt.Errorf("%s: %w", src, err)
+			return nil, need, err
 		}
-		_ = os.WriteFile(cached, data, 0o644)
-		objs = append(objs, Input{Name: name, Data: data})
 	}
 	return objs, need, nil
 }

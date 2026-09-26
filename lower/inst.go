@@ -923,6 +923,19 @@ func (c *fn) load(in *sil.Inst) error {
 	}
 	res := in.Result()
 
+	// A value too wide for registers is copied into the storage set
+	// aside for it and used from there, as a call's wide result is. Its
+	// scalars would be written back there a word at a time wherever it
+	// is wanted by address, which for a large struct in an async body
+	// was most of the function.
+	if size, wide := indirect(res.Type()); wide {
+		if slot, ok := c.spill[res]; ok {
+			c.b.MemCpy(slot, p, c.b.I64.Const(size))
+			c.mem[res] = slot
+			return nil
+		}
+	}
+
 	// A struct comes back one field at a time, from the offsets the
 	// layout gave them, into the registers the body reads.
 	if ls, ok := leavesOf(res.Type()); ok && len(ls) > 1 {

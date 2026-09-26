@@ -283,13 +283,11 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 			}
 		}
 		if len(dirs) > 0 {
-			results := make([]nativeResult, len(dirs))
+			var results []nativeResult
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				for i, d := range dirs {
-					results[i].objs, results[i].need, results[i].err = bf.nativeObjects(d)
-				}
+				results = bf.nativeObjectsAll(dirs)
 			}()
 			nativeDone = func() {
 				<-done

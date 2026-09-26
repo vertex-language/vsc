@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"fmt"
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/stdlib"
@@ -1014,6 +1015,14 @@ func (c *fn) structRefCount(in *sil.Inst, st *types.Struct, retain bool) error {
 		image, _ := enumImage(w.enum)
 		return len(image.Fields)
 	}
+	// A struct in memory that holds several references is counted by a
+	// call to a function made once per layout, as swiftc outlines a copy:
+	// expanded at every copy and destroy of a large value -- an async
+	// frame holds many -- its counting was most of some functions' code.
+	if from, inMemory := c.mem[in.Args()[0]]; inMemory && len(owned) >= outlineCounts {
+		c.b.Call(c.l.structCounter(st, owned, retain), from)
+		return nil
+	}
 	words := make([][]ir.Value, len(owned))
 	if from, inMemory := c.mem[in.Args()[0]]; inMemory {
 		for i, w := range owned {
@@ -1071,6 +1080,54 @@ func (c *fn) structRefCount(in *sil.Inst, st *types.Struct, retain bool) error {
 		c.b.Call(c.l.runtimeFunc(name, ir.NewSig().Param(ir.TypePtr)), p)
 	}
 	return nil
+}
+
+// outlineCounts is how many references a struct in memory holds before
+// counting them is a call rather than inline code.
+const outlineCounts = 4
+
+// structCounter is the function that retains, or releases, every
+// reference a struct with these owned words holds, given its address.
+// What it does depends on the layout alone, so the layout is its name.
+func (l *lowerer) structCounter(st *types.Struct, owned []ownedWord, retain bool) *ir.Func {
+	var key strings.Builder
+	key.WriteString(st.String())
+	for _, w := range owned {
+		fmt.Fprintf(&key, "|%d", w.offset)
+		switch {
+		case w.string:
+			key.WriteString("s")
+		case w.existential:
+			key.WriteString("x")
+		case w.enum != nil:
+			key.WriteString("e" + w.enum.String())
+		}
+	}
+	prefix := "$sVSCrelease_"
+	if retain {
+		prefix = "$sVSCretain_"
+	}
+	name := prefix + identSafe(key.String())
+	if f, ok := l.counters[name]; ok {
+		return f
+	}
+	objects, strs := stdlib.Release, stdlib.StringRelease
+	if retain {
+		objects, strs = stdlib.Retain, stdlib.StringRetain
+	}
+	f := l.out.Func(l.sym(name))
+	f.Internal()
+	v := f.ParamPtr("value")
+	b := f.Entry()
+	countOwned(f, b, v, owned,
+		l.runtimeFunc(strs, ir.NewSig().Param(ir.TypePtr)),
+		l.runtimeFunc(objects, ir.NewSig().Param(ir.TypePtr)),
+		l.existentialCounter(retain), "c").Return()
+	if l.counters == nil {
+		l.counters = map[string]*ir.Func{}
+	}
+	l.counters[name] = f
+	return f
 }
 
 // ownedLeaves is where each of ownedWords' references is in the flat

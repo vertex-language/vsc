@@ -1,6 +1,6 @@
 package cli
 
-// Imported packages compiled in parallel, one worker process each.
+// Imported packages compiled in parallel, in a pool of worker processes.
 //
 // A package's compile reads its imports' source, not their objects, so
 // every package the cache does not have can be compiled at once. They
@@ -9,9 +9,10 @@ package cli
 // is checking in package-level state (types.BuiltinAssoc) -- and a
 // process per package is how `go build` runs its compiler too.
 //
-// A worker is this executable run as `vsc __compile-package JOB OUT`:
-// JOB is the package and everything the build's flags say about finding
-// its imports, OUT where its object goes, and OUT.time its phase times.
+// A worker is this executable run as `vsc __compile-package TIME`. It
+// compiles the jobs it is sent, one at a time, for the whole build --
+// each job is a package and everything the build's flags say about
+// finding its imports -- and writes its phase times to TIME at the end.
 
 import (
 	"bytes"
@@ -110,14 +111,33 @@ func compilePackages(pkgs []vsc.Package, idx []int, bf *buildFlags, mainDir, min
 	var mu sync.Mutex
 	errw := &lockedWriter{w: stderr}
 	worst := exitOK
+	fail := func(code int) {
+		mu.Lock()
+		worst = max(worst, code)
+		mu.Unlock()
+	}
 	work := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < n; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			wk, err := startWorker(exe, filepath.Join(dir, fmt.Sprintf("w%d.time", w)))
+			if err != nil {
+				fmt.Fprintln(errw, "vsc:", err)
+				fail(exitUsage)
+				for range work {
+				}
+				return
+			}
+			defer func() {
+				if err := wk.stop(); err != nil {
+					fmt.Fprintln(errw, "vsc: worker:", err)
+					fail(exitUsage)
+				}
+			}()
 			for i := range work {
-				obj, code := runWorker(exe, dir, i, packageJob{
+				res, err := wk.run(packageJob{
 					Pkg:     pkgs[i],
 					MainDir: mainDir,
 					Target:  bf.target,
@@ -126,13 +146,23 @@ func compilePackages(pkgs []vsc.Package, idx []int, bf *buildFlags, mainDir, min
 					Pkgs:    bf.pkgs,
 					Replace: bf.replace,
 					Offline: bf.offline,
-				}, errw)
-				mu.Lock()
-				if code != exitOK {
-					worst = max(worst, code)
-				} else {
-					out[i] = obj
+				})
+				if err != nil {
+					fmt.Fprintf(errw, "vsc: package %s: %v\n", pkgs[i].Name, err)
+					fail(exitUsage)
+					for range work {
+					}
+					return
 				}
+				if len(res.Diag) > 0 {
+					errw.Write(res.Diag)
+				}
+				if res.Code != exitOK {
+					fail(res.Code)
+					continue
+				}
+				mu.Lock()
+				out[i] = res.Obj
 				mu.Unlock()
 			}
 		}()
@@ -144,92 +174,133 @@ func compilePackages(pkgs []vsc.Package, idx []int, bf *buildFlags, mainDir, min
 	close(work)
 	wg.Wait()
 	done()
+	for w := 0; w < n; w++ {
+		timing.Merge(filepath.Join(dir, fmt.Sprintf("w%d.time", w)))
+	}
 	if worst != exitOK {
 		return nil, worst
 	}
 	return out, exitOK
 }
 
-func runWorker(exe, dir string, i int, job packageJob, stderr io.Writer) ([]byte, int) {
-	jobPath := filepath.Join(dir, fmt.Sprintf("%d.job", i))
-	objPath := filepath.Join(dir, fmt.Sprintf("%d.o", i))
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(job); err != nil {
-		fmt.Fprintln(stderr, "vsc:", err)
-		return nil, exitUsage
-	}
-	if err := os.WriteFile(jobPath, buf.Bytes(), 0o644); err != nil {
-		fmt.Fprintln(stderr, "vsc:", err)
-		return nil, exitUsage
-	}
-	cmd := exec.Command(exe, "__compile-package", jobPath, objPath)
-	cmd.Env = append(os.Environ(), workerEnv+"=1")
-	var diag bytes.Buffer
-	cmd.Stderr = &diag
-	err := cmd.Run()
-	if diag.Len() > 0 {
-		stderr.Write(diag.Bytes())
-	}
-	timing.Merge(objPath + ".time")
-	if err != nil {
-		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() > 0 {
-			return nil, exit.ExitCode()
-		}
-		fmt.Fprintf(stderr, "vsc: package %s: %v\n", job.Pkg.Name, err)
-		return nil, exitUsage
-	}
-	obj, err := os.ReadFile(objPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "vsc: package %s: %v\n", job.Pkg.Name, err)
-		return nil, exitUsage
-	}
-	return obj, exitOK
+// packageResult is a worker's answer to one job.
+type packageResult struct {
+	Obj  []byte
+	Code int
+	Diag []byte // what compiling the package printed
 }
 
-// cmdCompilePackage is a worker: one package, from a job file, to an
-// object file.
+// A worker is one process that compiles packages until its input ends.
+type worker struct {
+	cmd *exec.Cmd
+	in  io.WriteCloser
+	enc *gob.Encoder
+	dec *gob.Decoder
+}
+
+// startWorker runs `vsc __compile-package TIME`, which reads jobs from
+// its standard input and answers each on its standard output, then
+// writes its phase times to TIME.
+func startWorker(exe, timePath string) (*worker, error) {
+	cmd := exec.Command(exe, "__compile-package", timePath)
+	cmd.Env = append(os.Environ(), workerEnv+"=1")
+	cmd.Stderr = os.Stderr
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &worker{cmd: cmd, in: in, enc: gob.NewEncoder(in), dec: gob.NewDecoder(out)}, nil
+}
+
+func (w *worker) run(job packageJob) (packageResult, error) {
+	var res packageResult
+	if err := w.enc.Encode(job); err != nil {
+		return res, err
+	}
+	if err := w.dec.Decode(&res); err != nil {
+		return res, fmt.Errorf("the worker stopped: %w", err)
+	}
+	return res, nil
+}
+
+// stop ends the worker's input and waits for it to exit.
+func (w *worker) stop() error {
+	w.in.Close()
+	return w.cmd.Wait()
+}
+
+// cmdCompilePackage is a worker: package jobs from standard input,
+// compiled one after another in this process, each answered on standard
+// output. Keeping the process for the whole build is what lets its
+// packages share what one compile loads anyway -- core, the SDK, the
+// natives bound for the build.
 func cmdCompilePackage(args []string, stderr io.Writer) int {
 	if os.Getenv(workerEnv) != "1" {
 		fmt.Fprintln(stderr, "vsc: __compile-package is run by vsc itself, not by hand")
 		return exitUsage
 	}
-	if len(args) != 2 {
-		fmt.Fprintln(stderr, "vsc: __compile-package JOB OUT")
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "vsc: __compile-package TIME")
 		return exitUsage
 	}
-	data, err := os.ReadFile(args[0])
-	if err != nil {
-		fmt.Fprintln(stderr, "vsc:", err)
-		return exitUsage
+	// The answers own standard output: anything a compile prints there
+	// goes to standard error instead, not into the stream.
+	answers := os.Stdout
+	os.Stdout = os.Stderr
+	dec := gob.NewDecoder(os.Stdin)
+	enc := gob.NewEncoder(answers)
+	var bf *buildFlags
+	var flags packageJob // the flags bf was made for
+	for {
+		var job packageJob
+		if err := dec.Decode(&job); err != nil {
+			if err == io.EOF {
+				break
+			}
+			fmt.Fprintln(stderr, "vsc:", err)
+			return exitUsage
+		}
+		var diag bytes.Buffer
+		res := packageResult{Code: exitOK}
+		if bf == nil || !sameFlags(flags, job) {
+			bf = &buildFlags{common: common{
+				target:  job.Target,
+				include: job.Include,
+				pkgs:    job.Pkgs,
+				replace: job.Replace,
+				offline: job.Offline,
+			}}
+			flags = job
+			bf.mainModule(job.MainDir)
+		}
+		target, err := bf.resolve()
+		if err != nil {
+			fmt.Fprintln(&diag, "vsc:", err)
+			res.Code = exitUsage
+		} else {
+			res.Obj, res.Code = buildPackage(job.Pkg, bf, target, job.MinOS, &diag)
+		}
+		res.Diag = diag.Bytes()
+		if err := enc.Encode(res); err != nil {
+			fmt.Fprintln(stderr, "vsc:", err)
+			return exitUsage
+		}
 	}
-	var job packageJob
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&job); err != nil {
-		fmt.Fprintln(stderr, "vsc:", err)
-		return exitUsage
-	}
-	bf := &buildFlags{common: common{
-		target:  job.Target,
-		include: job.Include,
-		pkgs:    job.Pkgs,
-		replace: job.Replace,
-		offline: job.Offline,
-	}}
-	target, err := bf.resolve()
-	if err != nil {
-		fmt.Fprintln(stderr, "vsc:", err)
-		return exitUsage
-	}
-	bf.mainModule(job.MainDir)
-	obj, code := buildPackage(job.Pkg, bf, target, job.MinOS, stderr)
-	timing.WriteFile(args[1] + ".time")
-	if code != exitOK {
-		return code
-	}
-	if err := os.WriteFile(args[1], obj, 0o644); err != nil {
-		fmt.Fprintln(stderr, "vsc:", err)
-		return exitUsage
-	}
+	timing.WriteFile(args[0])
 	return exitOK
+}
+
+// sameFlags reports whether two jobs find their imports the same way.
+func sameFlags(a, b packageJob) bool {
+	return a.MainDir == b.MainDir && a.Target == b.Target && a.Offline == b.Offline &&
+		slices.Equal(a.Include, b.Include) && slices.Equal(a.Pkgs, b.Pkgs) && slices.Equal(a.Replace, b.Replace)
 }
 
 // lockedWriter serializes writes from the workers' goroutines.

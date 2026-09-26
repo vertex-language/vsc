@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/vertex-language/ir"
 
@@ -183,42 +184,93 @@ func nativeWork() string { return filepath.Join(importer.CacheDir(), "build") }
 // modules its C++ imports, and says what the link needs for them. Nil
 // where the folder has none.
 func (c *common) nativeObjects(dir string) ([]build.Input, build.Linkage, error) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, build.Linkage{}, err
-	}
-	var objs []build.Input
-	var need build.Linkage
-	seen := map[string]bool{}
-	var walk func(string) error
-	walk = func(d string) error {
-		if seen[d] {
-			return nil
+	r := c.nativeObjectsAll([]string{dir})[0]
+	return r.objs, r.need, r.err
+}
+
+// nativeObjectsAll is nativeObjects for several folders at once. Every
+// C++ module they reach is compiled once, the modules concurrently, and
+// each folder's objects come in the order nativeObjects gives them:
+// the folder's own, then its imports', depth first.
+func (c *common) nativeObjectsAll(dirs []string) []nativeResult {
+	out := make([]nativeResult, len(dirs))
+	abs := make([]string, len(dirs))
+	var mods []string
+	reached := map[string]bool{}
+	var reach func(string)
+	reach = func(d string) {
+		if reached[d] {
+			return
 		}
-		seen[d] = true
+		reached[d] = true
 		nat := c.natives[d]
 		if nat == nil {
+			return
+		}
+		mods = append(mods, d)
+		for _, dep := range nat.deps {
+			reach(dep)
+		}
+	}
+	for i, dir := range dirs {
+		a, err := filepath.Abs(dir)
+		if err != nil {
+			out[i].err = err
+			continue
+		}
+		abs[i] = a
+		reach(a)
+	}
+
+	built := make(map[string]*nativeResult, len(mods))
+	for _, d := range mods {
+		built[d] = &nativeResult{}
+	}
+	var wg sync.WaitGroup
+	for _, d := range mods {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			nat, r := c.natives[d], built[d]
+			doneNative := timing.Start("native C++ objects")
+			r.objs, r.need, r.err = nat.n.Objects(nat.thunks, nativeWork())
+			doneNative()
+		}()
+	}
+	wg.Wait()
+
+	for i := range dirs {
+		if out[i].err != nil {
+			continue
+		}
+		seen := map[string]bool{}
+		var walk func(string) error
+		walk = func(d string) error {
+			if seen[d] {
+				return nil
+			}
+			seen[d] = true
+			r := built[d]
+			if r == nil {
+				return nil
+			}
+			if r.err != nil {
+				return r.err
+			}
+			out[i].objs = append(out[i].objs, r.objs...)
+			out[i].need = out[i].need.Merge(r.need)
+			for _, dep := range c.natives[d].deps {
+				if err := walk(dep); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
-		doneNative := timing.Start("native C++ objects")
-		o, n, err := nat.n.Objects(nat.thunks, nativeWork())
-		doneNative()
-		if err != nil {
-			return err
+		if err := walk(abs[i]); err != nil {
+			out[i] = nativeResult{need: out[i].need, err: err}
 		}
-		objs = append(objs, o...)
-		need = need.Merge(n)
-		for _, dep := range nat.deps {
-			if err := walk(dep); err != nil {
-				return err
-			}
-		}
-		return nil
 	}
-	if err := walk(abs); err != nil {
-		return nil, need, err
-	}
-	return objs, need, nil
+	return out
 }
 
 // The two halves of binding a folder's C++, through the build cache.

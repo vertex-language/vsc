@@ -138,6 +138,7 @@ type lowerer struct {
 	releasers   map[string]*ir.Func      // a stack context's last release, by body; nil for none
 	onces       map[string]*onceAccessor // global addressors initialized once, by name; nil for not one
 	boxes       map[string]*ir.Global    // captured variables' box metadata, by element type
+	counters    map[string]*ir.Func      // outlined retains and releases of structs, by layout
 	globalStore map[string]*ir.Global    // module-level variables, by symbol
 	out         *ir.Module
 	prefix      string
