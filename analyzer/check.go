@@ -655,7 +655,12 @@ func (c *checker) recordModule(imp Import, staging, scope *Scope) {
 		if tn, ok := sym.(*TypeNameSymbol); ok && tn.Type() != nil {
 			if _, already := c.info.ImportedTypes[tn.Type()]; !already {
 				c.info.ImportedTypes[tn.Type()] = imp.Name
-				c.info.ImportedTypes[tn.Type().Underlying()] = imp.Name
+				// A typealias declares no type: what it names is its own
+				// module's, which a module re-exporting it by an alias --
+				// `typealias Model = arch.Model` -- does not take over.
+				if n, isAlias := tn.Type().(*types.Named); !isAlias || n.Aliased() == nil {
+					c.info.ImportedTypes[tn.Type().Underlying()] = imp.Name
+				}
 			}
 		}
 	}

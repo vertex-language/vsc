@@ -104,6 +104,78 @@ type printer struct {
 	// isolated is whether the type whose members are being written is
 	// @MainActor, which its members then are unless they say otherwise.
 	isolated bool
+	// foreign is the module of each imported type the interface may name,
+	// by the name it prints as; made on first use.
+	foreign map[string]string
+}
+
+// typeText is a type as the interface spells it: another module's types
+// qualified by it, as a swiftinterface qualifies them, so that a client
+// reads `any arch.Model` where this module wrote a typealias of it --
+// and not a Model of this module's that the interface does not declare.
+func (p *printer) typeText(t types.Type) string {
+	text := typeText(t)
+	if p.m.Info == nil {
+		return text
+	}
+	if p.foreign == nil {
+		p.foreign = map[string]string{}
+		local := map[string]bool{}
+		for _, sym := range p.m.Info.Defs {
+			if tn, ok := sym.(*analyzer.TypeNameSymbol); ok {
+				local[tn.Name()] = true
+			}
+		}
+		clash := map[string]bool{}
+		for it, mod := range p.m.Info.ImportedTypes {
+			if mod == "" || mod == "Swift" || mod == p.m.Name {
+				continue
+			}
+			name := ""
+			switch n := it.(type) {
+			case *types.Struct:
+				name = n.Name
+			case *types.Class:
+				name = n.Name
+			case *types.Enum:
+				name = n.Name
+			case *types.Protocol:
+				name = n.Name
+			}
+			if name == "" || local[name] || strings.Contains(name, ".") {
+				continue
+			}
+			if was, ok := p.foreign[name]; ok && was != mod {
+				clash[name] = true
+			}
+			p.foreign[name] = mod
+		}
+		for name := range clash {
+			delete(p.foreign, name)
+		}
+	}
+	if len(p.foreign) == 0 {
+		return text
+	}
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		if !identStart(text[i]) {
+			b.WriteByte(text[i])
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(text) && identPart(text[j]) {
+			j++
+		}
+		word := text[i:j]
+		if mod, ok := p.foreign[word]; ok && (i == 0 || text[i-1] != '.') {
+			b.WriteString(mod + ".")
+		}
+		b.WriteString(word)
+		i = j
+	}
+	return b.String()
 }
 
 func (p *printer) line(format string, args ...any) {
@@ -246,7 +318,7 @@ func (p *printer) nominal(keyword string, name *ast.Ident, mods []*ast.Modifier,
 		fields, methods, inits = t.Fields, t.Methods, t.Inits
 		computed, statics, subscripts = t.Computed, t.Statics, t.Subscripts
 		if t.Superclass != nil {
-			inherits = append(inherits, typeText(t.Superclass))
+			inherits = append(inherits, p.typeText(t.Superclass))
 		}
 		inherits = append(inherits, protocolNames(t.Conformances)...)
 	default:
@@ -326,7 +398,7 @@ func (p *printer) subscripts(subs []*types.Subscript) {
 			b.WriteString(p.paramText(&q))
 		}
 		b.WriteString(") -> ")
-		b.WriteString(typeText(sub.Result))
+		b.WriteString(p.typeText(sub.Result))
 		if sub.Settable {
 			b.WriteString(" { get set }")
 		} else {
@@ -390,7 +462,7 @@ func (p *printer) property(f *types.Field, static bool) {
 		prefix = "  " + p.isolation(f.Isolated) + access + " static "
 	}
 	if !f.IsComputed {
-		p.line("%s%s %s: %s", prefix, kw, escape(f.Name), typeText(f.Type))
+		p.line("%s%s %s: %s", prefix, kw, escape(f.Name), p.typeText(f.Type))
 		return
 	}
 	// A computed property is always `var`: it has accessors, not storage.
@@ -398,7 +470,7 @@ func (p *printer) property(f *types.Field, static bool) {
 	if f.HasSetter {
 		accessors = "{ get set }"
 	}
-	p.line("%svar %s: %s %s", prefix, escape(f.Name), typeText(f.Type), accessors)
+	p.line("%svar %s: %s %s", prefix, escape(f.Name), p.typeText(f.Type), accessors)
 }
 
 // isolation is what a member of a type writes before its access where
@@ -437,7 +509,7 @@ func (p *printer) enum(n *ast.EnumDecl) {
 	// are lowered from these.
 	inherits := protocolNames(e.Conformances)
 	if e.RawType != nil {
-		inherits = append([]string{typeText(e.RawType)}, inherits...)
+		inherits = append([]string{p.typeText(e.RawType)}, inherits...)
 	}
 	p.line("%s enum %s%s {", acc, p.ident(n.Name), inheritText(inherits))
 	for _, c := range e.Cases {
@@ -445,7 +517,7 @@ func (p *printer) enum(n *ast.EnumDecl) {
 			continue
 		}
 		if c.AssociatedType != nil {
-			p.line("  case %s(%s)", escape(c.Name), typeText(c.AssociatedType))
+			p.line("  case %s(%s)", escape(c.Name), p.typeText(c.AssociatedType))
 			continue
 		}
 		if raw := p.rawValueText(c); raw != "" {
@@ -503,7 +575,7 @@ func (p *printer) function(acc, name string, sig *types.Signature) string {
 	}
 	if sig.Results != nil && !isVoid(sig.Results) {
 		b.WriteString(" -> ")
-		b.WriteString(typeText(sig.Results))
+		b.WriteString(p.typeText(sig.Results))
 	}
 	return b.String()
 }
@@ -547,7 +619,7 @@ func (p *printer) paramText(param *types.Param) string {
 		b.WriteString(" ")
 	}
 	if param.Type != nil {
-		b.WriteString(typeText(param.Type))
+		b.WriteString(p.typeText(param.Type))
 	}
 	if param.Variadic {
 		b.WriteString("...")

@@ -1553,6 +1553,16 @@ func (g *gen) ownedExistential(v *sil.Value) *sil.Value {
 // expression that is one already: copied out of a variable, taken over
 // from a temporary.
 func (g *gen) intoExistential(src *sil.Value, slot *sil.Value) {
+	// One held as a value -- a class-bound existential a call returned,
+	// which is loadable -- is stored, not copied from memory it is not in.
+	if src != nil && !src.Type().IsAddress() {
+		if src.Ownership() == sil.Owned {
+			g.blk.Store(g.consume(src), slot, "init")
+		} else {
+			g.blk.Store(g.blk.CopyValue(src), slot, "init")
+		}
+		return
+	}
 	if g.storage[src] {
 		g.blk.CopyAddr(src, slot, "init")
 		return

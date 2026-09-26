@@ -925,10 +925,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			lhs = c.checkExpr(e.X, c.closureOperandContext(scope, opName, rhs, 0), scope)
 		} else if _, lit := unparen(e.Y).(*ast.ArrayLit); lit && (opName == "==" || opName == "!=") {
 			// An array literal compared with what one makes -- an option
-			// set -- is one of those: `p == [.read, .write]`.
+			// set -- is one of those: `p == [.read, .write]`. So is one
+			// compared with an array, where its elements need the array's
+			// element type to mean anything: `kinds == [.Unknown, .Byte]`.
 			lhs = c.checkExpr(e.X, operandCtx, scope)
 			ctx := operandCtx
-			if takesArrayLiteral(lhs) && !isArrayType(lhs) {
+			if takesArrayLiteral(lhs) && (!isArrayType(lhs) || literalHasImplicitMember(e.Y)) {
 				ctx = lhs
 			}
 			rhs = c.checkExpr(e.Y, ctx, scope)
@@ -3897,4 +3899,19 @@ func (c *checker) collectionEquals(e *ast.BinaryExpr, t types.Type, scope *Scope
 		return
 	}
 	c.info.CollectionEquals[e] = call
+}
+
+// literalHasImplicitMember reports whether an array literal has an element
+// that is a leading-dot member, which has no type without a context.
+func literalHasImplicitMember(e ast.Expr) bool {
+	lit, ok := unparen(e).(*ast.ArrayLit)
+	if !ok {
+		return false
+	}
+	for _, el := range lit.Items {
+		if implicitOperand(el) {
+			return true
+		}
+	}
+	return false
 }

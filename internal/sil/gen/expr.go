@@ -996,7 +996,19 @@ func (g *gen) applyValue(e *ast.CallExpr, id ast.Expr) *sil.Value {
 		return nil
 	}
 	var args []*sil.Value
-	if e.Args != nil {
+	// A nested function that captures is called as a value, but it is
+	// still a declared function: its defaults fill what the call leaves
+	// out, as they would for any other call of it.
+	if name, ok := id.(*ast.IdentExpr); ok && name.Name != nil {
+		if fn, ok := g.info.Uses[name.Name].(*analyzer.FuncSymbol); ok && fn.Signature() != nil && len(fn.Signature().TypeParams) == 0 {
+			filled, ok := g.arguments(e, fn.Signature())
+			if !ok {
+				return nil
+			}
+			args = filled
+		}
+	}
+	if args == nil && e.Args != nil {
 		for _, a := range e.Args.Args {
 			// Borrowed where they are, as an ordinary call's arguments
 			// are: a closure's parameters are borrowed too, and taking one

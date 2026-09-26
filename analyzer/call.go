@@ -404,6 +404,15 @@ func (c *checker) resolveMethodOverload(mem *ast.MemberExpr, args []*ast.CallArg
 		return c.extensionOverload(mem, base, args, scope)
 	}
 	if len(methods) < 2 {
+		// The type's one method of the name, where the arguments fit it;
+		// else an overload a protocol's extension gives it: a class's
+		// Decode(_:removeSpecial:special:) beside its protocol's
+		// Decode(_:), as Swift finds both.
+		if len(subst) == 0 && c.methodByArguments(methods, args, scope) == nil {
+			if sig := c.extensionOverload(mem, base, args, scope); sig != nil {
+				return sig
+			}
+		}
 		return nil
 	}
 	// Those an extension gives only where the arguments are something
@@ -1549,8 +1558,14 @@ func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args [
 				protocols = append(protocols, p)
 			}
 		}
+	case *types.Existential:
+		protocols = tt.Protocols
 	default:
-		protocols = c.conformancesOfType(t)
+		if ex, ok := t.Underlying().(*types.Existential); ok {
+			protocols = ex.Protocols
+		} else {
+			protocols = c.conformancesOfType(t)
+		}
 	}
 	name := mem.Name.Text(c.file)
 	var owners []*types.Protocol
@@ -1560,7 +1575,7 @@ func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args [
 		// What the protocol requires -- Collection's index(after:) beside
 		// BidirectionalCollection's index(before:) -- where t stands for
 		// its Self, a type parameter or an associated type.
-		if _, abstract := t.(*types.TypeParam); abstract || isDependent(t) {
+		if _, abstract := t.(*types.TypeParam); abstract || isDependent(t) || isExistentialOf(t, p) {
 			for _, r := range p.Requirements {
 				if r == nil || r.Sig == nil || r.Name != name || r.IsStatic != static {
 					continue
@@ -1586,11 +1601,17 @@ func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args [
 			candidates = append(candidates, &types.Method{Name: m.Name, Sig: sig, IsStatic: m.IsStatic, IsMutating: m.IsMutating, Origin: m})
 		}
 	}
-	if len(candidates) < 2 {
+	if len(candidates) == 0 {
 		return nil
 	}
 	picked := c.methodByArguments(candidates, args, scope)
 	if picked == nil {
+		return nil
+	}
+	// A requirement chosen on an existential is called the ordinary way,
+	// through the existential's witness table: it was a candidate only so
+	// that an extension's overload could be told from it.
+	if _, isEx := t.Underlying().(*types.Existential); isEx && picked.Origin == nil {
 		return nil
 	}
 	for i, m := range candidates {
@@ -1607,4 +1628,19 @@ func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args [
 func isDependent(t types.Type) bool {
 	_, ok := t.(*types.Dependent)
 	return ok
+}
+
+// isExistentialOf reports whether t is an existential of p (any P, or a
+// composition holding it): its methods are p's requirements.
+func isExistentialOf(t types.Type, p *types.Protocol) bool {
+	ex, ok := t.Underlying().(*types.Existential)
+	if !ok {
+		return false
+	}
+	for _, q := range ex.Protocols {
+		if q == p {
+			return true
+		}
+	}
+	return false
 }

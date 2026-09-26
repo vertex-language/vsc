@@ -28,6 +28,10 @@ func (g *gen) arrayLiteral(e *ast.ArrayLit) *sil.Value {
 		return nil
 	}
 	elems := make([]*sil.Value, 0, len(e.Items))
+	// Each element made is the array's once it is built; until then it
+	// is a cleanup, so that a later element that throws -- `[try a(),
+	// try b()]` -- ends the ones before it.
+	var held []*sil.Value
 	for _, item := range e.Items {
 		v := g.rvalue(item)
 		if v == nil {
@@ -36,7 +40,15 @@ func (g *gen) arrayLiteral(e *ast.ArrayLit) *sil.Value {
 		// An element of [Any] is its value in an existential, as an
 		// argument to a variadic Any... is; one of [T?] is wrapped.
 		v = g.optionalFor(item, v, g.typeOf(item), arr.Elem)
-		elems = append(elems, g.existentialFor(item, v, g.typeOf(item), arr.Elem))
+		v = g.existentialFor(item, v, g.typeOf(item), arr.Elem)
+		if v != nil && v.Ownership() == sil.Owned && !g.pendingDestroy(v) {
+			g.destroyLater(v)
+			held = append(held, v)
+		}
+		elems = append(elems, v)
+	}
+	for _, v := range held {
+		g.forget(v)
 	}
 	return g.makeArray(e, t, arr.Elem, elems)
 }
