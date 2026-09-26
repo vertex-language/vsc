@@ -67,15 +67,16 @@ func compileRuntimeDefining(target ir.Target, unit, object string, asm bool, def
 
 // runtimes are the runtime objects this process has already produced, by
 // cache key: a test binary links hundreds of programs against one.
-var runtimes sync.Map // buildcache.Key -> []byte
+// runtimes is each runtime unit this process has compiled, or is
+// compiling, by key: one compile however many ask, WarmRuntime among them.
+var runtimes sync.Map // buildcache.Key -> *runtimeOnce
 
-// compileRuntimeWith is compileRuntimeDefining with assembly of the unit's
-// own appended to its module.
-//
-// The runtime's source is embedded in the compiler, so the compiler's
-// identity and these arguments are everything its object depends on:
-// it is compiled once per compiler and target, and read from the build
-// cache after that (see buildcache).
+type runtimeOnce struct {
+	once sync.Once
+	data []byte
+	err  error
+}
+
 func compileRuntimeWith(target ir.Target, unit, object string, asm bool, defs []string, own string) (Input, error) {
 	key := buildcache.New("runtime").
 		String(target.String()).
@@ -85,21 +86,33 @@ func compileRuntimeWith(target ir.Target, unit, object string, asm bool, defs []
 		String(own).
 		Key()
 	defer timing.Start("runtime")()
-	if data, ok := runtimes.Load(key); ok {
-		return Input{Name: object, Data: data.([]byte)}, nil
+	v, _ := runtimes.LoadOrStore(key, &runtimeOnce{})
+	r := v.(*runtimeOnce)
+	r.once.Do(func() {
+		if data, ok := buildcache.Get(key); ok {
+			timing.Count("cache hit: runtime", 1)
+			r.data = data
+			return
+		}
+		in, err := buildRuntime(target, unit, object, asm, defs, own)
+		if err != nil {
+			r.err = err
+			return
+		}
+		r.data = in.Data
+		buildcache.Put(key, in.Data)
+	})
+	if r.err != nil {
+		return Input{}, r.err
 	}
-	if data, ok := buildcache.Get(key); ok {
-		timing.Count("cache hit: runtime", 1)
-		runtimes.Store(key, data)
-		return Input{Name: object, Data: data}, nil
-	}
-	in, err := buildRuntime(target, unit, object, asm, defs, own)
-	if err != nil {
-		return in, err
-	}
-	runtimes.Store(key, in.Data)
-	buildcache.Put(key, in.Data)
-	return in, nil
+	return Input{Name: object, Data: r.data}, nil
+}
+
+// WarmRuntime starts compiling target's runtime, which every program links
+// and none changes: a cold build otherwise compiled it last, in the link,
+// after everything else was done. The link takes it from here.
+func WarmRuntime(target ir.Target) {
+	go Runtime(target)
 }
 
 // buildRuntime compiles one runtime unit through vcx.

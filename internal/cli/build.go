@@ -182,6 +182,9 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 	// A program linked whole has its packages built as the importer finds
 	// them; see packageStream.
 	var stream *packageStream
+	if mode.name == "exe" && !bf.freestanding {
+		build.WarmRuntime(target)
+	}
 	if mode.name == "exe" || mode.name == "lib" {
 		minOS := bf.main.minOS(target)
 		streamDir := progDir
