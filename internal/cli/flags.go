@@ -34,6 +34,9 @@ type common struct {
 	// natives are the C++ modules of the folders read so far, by
 	// directory, bound once however often they are imported.
 	natives map[string]*native
+	// finding is the modules being found ahead of bind, by directory:
+	// see PrefetchNative.
+	finding *findTable
 }
 
 // includePath collects repeated -I or -P flags in order.
@@ -82,6 +85,9 @@ func (c *common) resolve() (ir.Target, error) {
 
 // options constructs vsc.Options for compilation.
 func (c *common) options(t ir.Target, stop vsc.Phase) vsc.Options {
+	if c.finding == nil {
+		c.finding = &findTable{m: map[string]*found{}}
+	}
 	return vsc.Options{
 		Module:       c.module,
 		Target:       t,

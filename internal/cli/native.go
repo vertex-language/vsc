@@ -7,6 +7,7 @@ import (
 	"github.com/vertex-language/vsc/timing"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -45,6 +46,70 @@ func (p *packages) NativeSources(dir, path, pkgName string, public bool) ([]vsc.
 	return nat, nil
 }
 
+// A findTable is the modules found, or being found, ahead of bind.
+type findTable struct {
+	mu sync.Mutex
+	m  map[string]*found
+}
+
+// found is one module's cachedFindNative, and what it was asked.
+type found struct {
+	done    chan struct{}
+	sources []string
+	target  ir.Target
+	minOS   string
+	n       *build.Native
+	key     buildcache.Key
+	err     error
+}
+
+// PrefetchNative starts finding the C++ module in dir, so that bind finds
+// it done. It reads only what the build settled before compiling began.
+func (p *packages) PrefetchNative(dir string, sources []string) {
+	c := (*common)(p)
+	if c.finding == nil {
+		return
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return
+	}
+	target, err := c.resolve()
+	if err != nil {
+		return
+	}
+	f := &found{done: make(chan struct{}), sources: sources, target: target, minOS: c.main.minOS(target)}
+	c.finding.mu.Lock()
+	if c.finding.m[abs] != nil {
+		c.finding.mu.Unlock()
+		return
+	}
+	c.finding.m[abs] = f
+	c.finding.mu.Unlock()
+	go func() {
+		defer close(f.done)
+		f.n, f.key, f.err = cachedFindNative(abs, f.sources, f.target, f.minOS)
+	}()
+}
+
+// findNative is cachedFindNative, taken from a prefetch of the same
+// question where there is one.
+func (c *common) findNative(abs string, sources []string, target ir.Target, minOS string) (*build.Native, buildcache.Key, error) {
+	if c.finding != nil {
+		c.finding.mu.Lock()
+		f := c.finding.m[abs]
+		delete(c.finding.m, abs)
+		c.finding.mu.Unlock()
+		if f != nil {
+			<-f.done
+			if slices.Equal(f.sources, sources) && f.target.String() == target.String() && f.minOS == minOS {
+				return f.n, f.key, f.err
+			}
+		}
+	}
+	return cachedFindNative(abs, sources, target, minOS)
+}
+
 // bind reads the C++ module in dir once per build.
 func (c *common) bind(dir, path, pkgName string, public bool, target ir.Target) ([]vsc.Source, error) {
 	abs, err := filepath.Abs(dir)
@@ -65,7 +130,7 @@ func (c *common) bind(dir, path, pkgName string, public bool, target ir.Target) 
 	if len(folder.Native) == 0 {
 		return nil, nil
 	}
-	n, findKey, err := cachedFindNative(abs, folder.Native, target, c.main.minOS(target))
+	n, findKey, err := c.findNative(abs, folder.Native, target, c.main.minOS(target))
 	if err != nil {
 		return nil, err
 	}

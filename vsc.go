@@ -102,6 +102,14 @@ type NativeBinder interface {
 	NativeSources(dir, path, pkgName string, public bool) ([]Source, error)
 }
 
+// A NativePrefetcher may start the slow part of binding a folder's C++ --
+// finding its module, which reads every header it includes -- as soon as
+// the importer sees the folder, before NativeSources asks. It is called
+// from the importer's read-ahead goroutines.
+type NativePrefetcher interface {
+	PrefetchNative(dir string, sources []string)
+}
+
 // A Phase is one step of the compiler pipeline, in execution order.
 type Phase int
 
@@ -771,11 +779,15 @@ func (l *importer) readAhead(dir string) *prefetch {
 	l.ahead[dir] = pre
 	use := l.target.Use()
 	cfg := l.ifcfg
+	packages := l.packages
 	go func() {
 		defer close(pre.done)
 		pre.folder, pre.err = pkg.ReadFolder(dir, pkg.PlatformOf(use), pkg.ArchOf(use))
 		if pre.err != nil || pre.folder.Empty() {
 			return
+		}
+		if pf, ok := packages.(NativePrefetcher); ok && len(pre.folder.Native) > 0 {
+			pf.PrefetchNative(dir, pre.folder.Native)
 		}
 		pre.read = make([]readFile, len(pre.folder.Vertex))
 		var wg sync.WaitGroup
