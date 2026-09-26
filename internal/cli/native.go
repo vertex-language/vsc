@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/vertex-language/vcx/preprocessor"
 	"github.com/vertex-language/vsc/build/buildcache"
 	"github.com/vertex-language/vsc/timing"
 	"os"
@@ -88,7 +89,7 @@ func (p *packages) PrefetchNative(dir string, sources []string) {
 	c.finding.mu.Unlock()
 	go func() {
 		defer close(f.done)
-		f.n, f.key, f.err = cachedFindNative(abs, f.sources, f.target, f.minOS)
+		f.n, f.key, f.err = cachedFindNative(abs, f.sources, f.target, f.minOS, c.headers)
 	}()
 }
 
@@ -107,7 +108,7 @@ func (c *common) findNative(abs string, sources []string, target ir.Target, minO
 			}
 		}
 	}
-	return cachedFindNative(abs, sources, target, minOS)
+	return cachedFindNative(abs, sources, target, minOS, c.headers)
 }
 
 // bind reads the C++ module in dir once per build.
@@ -355,7 +356,7 @@ type foundNative struct {
 	Libraries, Frameworks []string
 }
 
-func cachedFindNative(dir string, sources []string, target ir.Target, minOS string) (*build.Native, buildcache.Key, error) {
+func cachedFindNative(dir string, sources []string, target ir.Target, minOS string, headers *preprocessor.Cache) (*build.Native, buildcache.Key, error) {
 	sdk, _ := build.SDK()
 	h := buildcache.New("native-find").String(target.String()).String(minOS).String(sdk).String(dir).Strings(sources)
 	hashFiles(h, folderFiles(dir))
@@ -367,11 +368,11 @@ func cachedFindNative(dir string, sources []string, target ir.Target, minOS stri
 			return &build.Native{
 				Dir: dir, Sources: sources, Target: target, MinOS: minOS,
 				Module: f.Module, Interface: f.Interface, Imports: f.Imports,
-				Libraries: f.Libraries, Frameworks: f.Frameworks,
+				Libraries: f.Libraries, Frameworks: f.Frameworks, Headers: headers,
 			}, key, nil
 		}
 	}
-	n, err := build.FindNative(dir, sources, target, minOS)
+	n, err := build.FindNative(dir, sources, target, minOS, headers)
 	if err != nil {
 		return nil, key, err
 	}

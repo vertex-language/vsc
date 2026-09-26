@@ -54,13 +54,18 @@ type Native struct {
 	// package links.
 	Libraries  []string
 	Frameworks []string
+	// Headers, when set, is the build's header cache, shared by every
+	// compile of every folder: nil reads each unit's headers afresh.
+	Headers *preprocessor.Cache
 }
 
 // FindNative reads what module the C++ sources of a folder are. Exactly
 // one of them is the module's interface unit (`export module M;`), and
 // every other is one of M's units or a unit of no module at all.
-func FindNative(dir string, sources []string, target ir.Target, minOS string) (*Native, error) {
-	n := &Native{Dir: dir, Sources: sources, Target: target, MinOS: minOS}
+//
+// headers is the build's header cache, kept on the Native; nil is none.
+func FindNative(dir string, sources []string, target ir.Target, minOS string, headers *preprocessor.Cache) (*Native, error) {
+	n := &Native{Dir: dir, Sources: sources, Target: target, MinOS: minOS, Headers: headers}
 	c := n.compiler()
 	for _, src := range sources {
 		sc, diags, err := c.Scan(vcx.File(src))
@@ -184,7 +189,8 @@ func (n *Native) compiler() *vcx.Compiler {
 		IncludeDirs: []string{n.Dir},
 		Modules:     modules,
 		// The objects are for the macOS the program links for.
-		MinOS: minOS,
+		MinOS:   minOS,
+		Headers: n.Headers,
 	}
 }
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"github.com/vertex-language/vcx/preprocessor"
 	"github.com/vertex-language/vsc/timing"
 	"io"
 	"os"
@@ -37,6 +38,9 @@ type common struct {
 	// finding is the modules being found ahead of bind, by directory:
 	// see PrefetchNative.
 	finding *findTable
+	// headers is the build's header cache: every C++ unit of every
+	// folder reads the same libc++ and SDK headers.
+	headers *preprocessor.Cache
 }
 
 // includePath collects repeated -I or -P flags in order.
@@ -87,6 +91,7 @@ func (c *common) resolve() (ir.Target, error) {
 func (c *common) options(t ir.Target, stop vsc.Phase) vsc.Options {
 	if c.finding == nil {
 		c.finding = &findTable{m: map[string]*found{}}
+		c.headers = preprocessor.NewCache()
 	}
 	return vsc.Options{
 		Module:       c.module,
