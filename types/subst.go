@@ -262,6 +262,22 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 	}
 }
 
+// UnifyArg is Unify for an argument passed to a parameter, which may
+// convert on the way: a value given where its optional is wanted is
+// wrapped, so `f(3)` binds T to Int for `f<T>(_ x: T?)`, as Swift's
+// value-to-optional conversion lets it.
+func UnifyArg(param, arg Type, subst map[*TypeParam]Type) bool {
+	if Unify(param, arg, subst) {
+		return true
+	}
+	if p, ok := param.(*Optional); ok && arg != nil {
+		if _, argOptional := arg.(*Optional); !argOptional {
+			return UnifyArg(p.Wrapped, arg, subst)
+		}
+	}
+	return false
+}
+
 // Unify matches an argument's type against a parameter's, binding the
 // type parameters it meets along the way, and reports whether the two
 // have the same shape.

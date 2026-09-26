@@ -195,6 +195,11 @@ extension Array {
         self = filter { (x: Element) -> Bool in !shouldBeRemoved(x) }
     }
 
+    // The elements in subrange taken away.
+    mutating func removeSubrange(_ subrange: Range<Int>) {
+        replaceSubrange(subrange, with: [])
+    }
+
     // The elements in subrange replaced by newElements.
     mutating func replaceSubrange(_ subrange: Range<Int>, with newElements: [Element]) {
         if subrange.lowerBound < 0 || subrange.upperBound > count { fatalError("Array replace: subrange extends past the end") }
@@ -3997,5 +4002,31 @@ struct _UnsafeMutableBufferIterator<Element>: IteratorProtocol {
         let x = (_buffer.baseAddress! + _at).pointee
         _at += 1
         return x
+    }
+}
+
+// Swift's spelling of a buffer pointer's initializer: where the elements
+// start, and how many there are.
+extension UnsafeBufferPointer {
+    init(start: UnsafePointer<Element>?, count: Int) {
+        self.init(baseAddress: start, count: count)
+    }
+}
+
+extension UnsafeMutableBufferPointer {
+    init(start: UnsafeMutablePointer<Element>?, count: Int) {
+        self.init(baseAddress: start, count: count)
+    }
+}
+
+extension UnsafeRawBufferPointer {
+    init(start: UnsafeRawPointer?, count: Int) {
+        self.init(baseAddress: start, count: count)
+    }
+}
+
+extension UnsafeMutableRawBufferPointer {
+    init(start: UnsafeMutableRawPointer?, count: Int) {
+        self.init(baseAddress: start, count: count)
     }
 }

@@ -314,7 +314,7 @@ func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) b
 	// of its shape, each parameter bound to what stands in its place.
 	if mentionsTypeParam(p.Type) {
 		subst := map[*types.TypeParam]types.Type{}
-		if types.Unify(p.Type, literalDefaults(t), subst) {
+		if types.UnifyArg(p.Type, literalDefaults(t), subst) {
 			for tp, bound := range subst {
 				if !c.meetsConstraints(bound, tp) {
 					return false
@@ -632,7 +632,7 @@ func (c *checker) inferFromInits(instance types.Type, params []*types.TypeParam,
 		for _, p := range sig.Params {
 			if next < len(args) && c.labelFits(args[next], p) && c.argFitsParam(args[next], argTypes[next], p) {
 				if argTypes[next] != nil {
-					types.Unify(p.BodyType(), argTypes[next], subst)
+					types.UnifyArg(p.BodyType(), argTypes[next], subst)
 				}
 				next++
 			}
@@ -698,7 +698,7 @@ func (c *checker) inferInstance(instance types.Type, call *ast.CallExpr, scope *
 		}
 		argType := c.checkExpr(arg.X, want, scope)
 		if field != nil {
-			types.Unify(field.Type, argType, subst)
+			types.UnifyArg(field.Type, argType, subst)
 		}
 	}
 	if len(params) == 0 || len(fields) == 0 {
@@ -990,7 +990,7 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 		if tp, ok := sig.Params[i].Type.(*types.TypeParam); ok {
 			got = c.meetSameTypes(e, arg.X, got, tp, sig.TypeParams, subst, scope)
 		}
-		types.Unify(sig.Params[i].Type, got, subst)
+		types.UnifyArg(sig.Params[i].Type, got, subst)
 	}
 	for _, i := range operators {
 		want := types.Substitute(sig.Params[i].Type, subst)
@@ -999,7 +999,7 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 		}
 		got := c.checkExpr(args[i].X, want, scope)
 		if !mentionsParamOf(got, sig.TypeParams) && !mentionsInvalid(got) {
-			types.Unify(sig.Params[i].Type, got, subst)
+			types.UnifyArg(sig.Params[i].Type, got, subst)
 		}
 	}
 	for _, i := range literals {
@@ -1007,7 +1007,7 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 		if mentionsParamOf(want, sig.TypeParams) {
 			want = nil
 		}
-		types.Unify(sig.Params[i].Type, c.checkExpr(args[i].X, want, scope), subst)
+		types.UnifyArg(sig.Params[i].Type, c.checkExpr(args[i].X, want, scope), subst)
 	}
 	// A closure is read after the other arguments, against the function
 	// type it is passed as with what they have said already in place: its
@@ -1021,7 +1021,7 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 		// an extension of Array -- is a type like any other there; only
 		// the call's own, still to be inferred, say nothing.
 		if !mentionsParamOf(got, sig.TypeParams) && !mentionsInvalid(got) {
-			types.Unify(sig.Params[i].Type, got, subst)
+			types.UnifyArg(sig.Params[i].Type, got, subst)
 		}
 	}
 	// With every argument's say in, one more look at those passed as a
@@ -1404,6 +1404,8 @@ func mentionsParamWhere(t types.Type, open func(*types.TypeParam) bool) bool {
 	case *types.Array:
 		return mentionsTypeParam(x.Elem)
 	case *types.Set:
+		return mentionsTypeParam(x.Elem)
+	case *types.Pointer:
 		return mentionsTypeParam(x.Elem)
 	case *types.Dictionary:
 		return mentionsTypeParam(x.Key) || mentionsTypeParam(x.Value)
