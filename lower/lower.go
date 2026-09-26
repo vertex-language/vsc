@@ -2,8 +2,11 @@ package lower
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/vsc/internal/sil"
@@ -45,16 +48,20 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 	// lowered: a caller allocates the callee's, so it has to know.
 	l.asyncSizes = map[string]int64{}
 	l.plans = map[string]*asyncPlan{}
-	for _, f := range m.Funcs() {
-		p, err := planAsync(l, f)
-		if err != nil {
-			return nil, err
+	// Each plan reads its own function and nothing else, so they are
+	// worked out on every core and taken in order.
+	funcs := m.Funcs()
+	plans := make([]*asyncPlan, len(funcs))
+	errs := make([]error, len(funcs))
+	eachParallel(len(funcs), func(i int) { plans[i], errs[i] = planAsync(l, funcs[i]) })
+	for i, f := range funcs {
+		if errs[i] != nil {
+			return nil, errs[i]
 		}
-		if p == nil {
-			continue
+		if p := plans[i]; p != nil {
+			l.plans[f.Name()] = p
+			l.asyncSizes[f.Name()] = p.size
 		}
-		l.plans[f.Name()] = p
-		l.asyncSizes[f.Name()] = p.size
 	}
 	for _, f := range m.Funcs() {
 		if err := l.declare(f); err != nil {
@@ -218,6 +225,33 @@ func (l *lowerer) declaredHere(f *sil.Func) bool {
 		return true
 	}
 	return !l.device && f.Linkage() == sil.PublicExternal
+}
+
+// eachParallel calls fn(i) for every i below n, on every core.
+func eachParallel(n int, fn func(i int)) {
+	workers := min(runtime.GOMAXPROCS(0), n)
+	if workers <= 1 {
+		for i := range n {
+			fn(i)
+		}
+		return
+	}
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= n {
+					return
+				}
+				fn(i)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // sym prepends the platform symbol prefix to a SIL identifier.
