@@ -1,6 +1,8 @@
 package vsc
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/vertex-language/ir"
@@ -80,6 +82,19 @@ type Options struct {
 	// It is how a build that has the module's object cached already
 	// learns what to link without compiling the module again.
 	AfterImports func(pkgs []Package, opaque bool) bool
+	// Summaries, when set, keeps what an importer reads of each folder it
+	// imports: the files with the bodies no client compiles blanked (see
+	// prune), which parse far faster than the source. Nil parses the
+	// source every time.
+	Summaries SummaryCache
+}
+
+// A SummaryCache holds pruned folders of source, by a key covering the
+// files' names and contents and the target (see summaryKey). An
+// implementation adds the compiler's identity to it.
+type SummaryCache interface {
+	Get(key [32]byte) ([]byte, bool)
+	Put(key [32]byte, data []byte)
 }
 
 // A PackageResolver finds the source of a package named by a string
@@ -201,7 +216,7 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 		return u, diags
 	}
 	done = timing.Start("imports")
-	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg, opts.Target)
+	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg, opts.Target, opts.Summaries)
 	done()
 	u.Packages = pkgs
 	diags = append(diags, importDiags...)
@@ -323,8 +338,8 @@ var errNoTarget = errors.New("no target: lowering needs a machine to lower for")
 
 // loadImports resolves and loads all transitive module and package imports.
 func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []string,
-	packages PackageResolver, ifcfg ifconfig.Config, target ir.Target) ([]analyzer.Import, []Package, []Diagnostic) {
-	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, ifcfg: ifcfg, target: target}
+	packages PackageResolver, ifcfg ifconfig.Config, target ir.Target, summaries SummaryCache) ([]analyzer.Import, []Package, []Diagnostic) {
+	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, ifcfg: ifcfg, target: target, summaries: summaries}
 	for i, f := range files {
 		unit := f.Unit
 		if i < len(units) && units[i] != nil {
@@ -354,9 +369,16 @@ type importer struct {
 	// ahead is folders being read and parsed before the walk reaches
 	// them, by directory.
 	ahead map[string]*prefetch
-	out   []analyzer.Import
-	pkgs  []Package
-	diags []Diagnostic
+	// found is each import path's folder, by the path and the directory
+	// of the file importing it: every import of net/tcp in a folder is
+	// resolved once, not once per file (294 for http_server's 26
+	// packages, each reading a directory).
+	found map[[2]string]foundFolder
+	// summaries keeps the pruned text of folders read before.
+	summaries SummaryCache
+	out       []analyzer.Import
+	pkgs      []Package
+	diags     []Diagnostic
 }
 
 // readAll reads every module a file imports. `via` is the module
@@ -544,6 +566,25 @@ func findFolder(path, fromDir string, pkgPaths []string) (string, bool) {
 //  4. The resolver's fetch: the standard library from
 //     github.com/vertex-language, or a repository the path names.
 func (l *importer) folder(path, fromDir string) (string, error) {
+	k := [2]string{path, fromDir}
+	if r, ok := l.found[k]; ok {
+		return r.dir, r.err
+	}
+	dir, err := l.resolveFolder(path, fromDir)
+	if l.found == nil {
+		l.found = map[[2]string]foundFolder{}
+	}
+	l.found[k] = foundFolder{dir, err}
+	return dir, err
+}
+
+type foundFolder struct {
+	dir string
+	err error
+}
+
+// resolveFolder is folder, unremembered.
+func (l *importer) resolveFolder(path, fromDir string) (string, error) {
 	// The built-in gpu module is the compiler's own, whatever is on disk.
 	if path == GPUModule {
 		return GPUSourceDir()
@@ -800,6 +841,8 @@ func (l *importer) readAhead(dir string) *prefetch {
 	use := l.target.Use()
 	cfg := l.ifcfg
 	packages := l.packages
+	summaries := l.summaries
+	target := l.target.String()
 	go func() {
 		defer close(pre.done)
 		pre.folder, pre.err = pkg.ReadFolder(dir, pkg.PlatformOf(use), pkg.ArchOf(use))
@@ -809,23 +852,111 @@ func (l *importer) readAhead(dir string) *prefetch {
 		if pf, ok := packages.(NativePrefetcher); ok && len(pre.folder.Native) > 0 {
 			pf.PrefetchNative(dir, pre.folder.Native)
 		}
-		pre.read = make([]readFile, len(pre.folder.Vertex))
-		var wg sync.WaitGroup
-		for i, name := range pre.folder.Vertex {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				text, err := os.ReadFile(name)
-				if err != nil {
-					pre.read[i].err = err
-					return
-				}
-				pre.read[i] = parseSource(Source{Name: name, Text: text}, cfg)
-			}()
+		names := pre.folder.Vertex
+		pre.read = make([]readFile, len(names))
+		texts := make([][]byte, len(names))
+		each := func(fn func(i int)) {
+			var wg sync.WaitGroup
+			for i := range names {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					fn(i)
+				}()
+			}
+			wg.Wait()
 		}
-		wg.Wait()
+		each(func(i int) {
+			texts[i], pre.read[i].err = os.ReadFile(names[i])
+		})
+		for _, r := range pre.read {
+			if r.err != nil {
+				return
+			}
+		}
+		// What was read of this folder before, pruned, where nothing in
+		// it has changed since: the importer's trees are of that, and the
+		// package keeps its source for its own compile.
+		var key [32]byte
+		if summaries != nil {
+			key = summaryKey(target, names, texts)
+			if data, ok := summaries.Get(key); ok {
+				if pruned, ok := decodeSummary(data, len(names)); ok {
+					each(func(i int) {
+						r := parseSource(Source{Name: names[i], Text: pruned[i]}, cfg)
+						r.src = Source{Name: names[i], Text: texts[i]}
+						pre.read[i] = r
+					})
+					if !anyBad(pre.read) {
+						return
+					}
+				}
+			}
+		}
+		each(func(i int) {
+			pre.read[i] = parseSource(Source{Name: names[i], Text: texts[i]}, cfg)
+		})
+		if summaries != nil && !anyBad(pre.read) {
+			files := make([]*ast.File, len(names))
+			units := make([]*token.File, len(names))
+			for i, r := range pre.read {
+				files[i], units[i] = r.parsed, r.unit
+			}
+			summaries.Put(key, encodeSummary(prune(files, units)))
+		}
 	}()
 	return pre
+}
+
+func anyBad(rs []readFile) bool {
+	for _, r := range rs {
+		if r.bad || r.err != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// summaryKey covers everything a folder's pruned text depends on: which
+// files, what they say, and the target their #if blocks are settled for.
+func summaryKey(target string, names []string, texts [][]byte) [32]byte {
+	h := sha256.New()
+	fmt.Fprintf(h, "summary 1\n%s\n%d\n", target, len(names))
+	for i, n := range names {
+		fmt.Fprintf(h, "%d:%s\n%d\n", len(n), n, len(texts[i]))
+		h.Write(texts[i])
+	}
+	var k [32]byte
+	h.Sum(k[:0])
+	return k
+}
+
+func encodeSummary(texts [][]byte) []byte {
+	var out []byte
+	out = binary.AppendUvarint(out, uint64(len(texts)))
+	for _, t := range texts {
+		out = binary.AppendUvarint(out, uint64(len(t)))
+		out = append(out, t...)
+	}
+	return out
+}
+
+func decodeSummary(data []byte, n int) ([][]byte, bool) {
+	count, w := binary.Uvarint(data)
+	if w <= 0 || count != uint64(n) {
+		return nil, false
+	}
+	data = data[w:]
+	out := make([][]byte, n)
+	for i := range out {
+		l, w := binary.Uvarint(data)
+		if w <= 0 || uint64(len(data)-w) < l {
+			return nil, false
+		}
+		out[i] = data[w : w+int(l)]
+		data = data[w+int(l):]
+	}
+	return out, len(data) == 0
 }
 
 // prefetchImports starts reading every folder f imports that is neither

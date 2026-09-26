@@ -39,6 +39,47 @@ import (
 // position, the body is taken out whole, so that an edit adding lines to
 // it is cut off too.
 func surface(files []*ast.File, units []*token.File) [32]byte {
+	s := newSurfacer(files, units)
+	h := sha256.New()
+	fmt.Fprintf(h, "surface 1\n%d\n", len(files))
+	for i, f := range files {
+		if s.file(f, unitOf(f, units, i)) {
+			s.write(h)
+		}
+	}
+	var sum [32]byte
+	h.Sum(sum[:0])
+	return sum
+}
+
+// prune is each file's text with the bodies no client compiles blanked:
+// every byte of them but line breaks made a space, so that each position
+// left reads the same line, column and offset as in the source. It is
+// what an importer needs of the files, and parses in a fraction of the
+// time. Its surface is the source's.
+func prune(files []*ast.File, units []*token.File) [][]byte {
+	s := newSurfacer(files, units)
+	out := make([][]byte, len(files))
+	for i, f := range files {
+		unit := unitOf(f, units, i)
+		if !s.file(f, unit) {
+			continue
+		}
+		text := bytes.Clone(unit.Text())
+		for _, r := range s.strip {
+			for j := r[0]; j < r[1]; j++ {
+				if c := text[j]; c != '\n' && c != '\r' {
+					text[j] = ' '
+				}
+			}
+		}
+		out[i] = text
+	}
+	return out
+}
+
+// newSurfacer readies a walk of a package's files.
+func newSurfacer(files []*ast.File, units []*token.File) *surfacer {
 	s := &surfacer{nonGeneric: map[string]bool{}}
 	// A type the package declares without type parameters is the only
 	// kind an extension or receiver of it is certainly not generic for.
@@ -60,23 +101,20 @@ func surface(files []*ast.File, units []*token.File) [32]byte {
 	for name := range generic {
 		delete(s.nonGeneric, name)
 	}
+	return s
+}
 
-	h := sha256.New()
-	fmt.Fprintf(h, "surface 1\n%d\n", len(files))
-	for i, f := range files {
-		unit := unitOf(f, units, i)
-		if unit == nil {
-			continue
-		}
-		s.unit, s.strip, s.kept = unit, s.strip[:0], s.kept[:0]
-		for _, d := range topDecls(f) {
-			s.top(d)
-		}
-		s.write(h)
+// file finds the bodies of f to take out, and those a client compiles.
+// It reports false for a file with no source.
+func (s *surfacer) file(f *ast.File, unit *token.File) bool {
+	if unit == nil {
+		return false
 	}
-	var sum [32]byte
-	h.Sum(sum[:0])
-	return sum
+	s.unit, s.strip, s.kept = unit, s.strip[:0], s.kept[:0]
+	for _, d := range topDecls(f) {
+		s.top(d)
+	}
+	return true
 }
 
 type surfacer struct {
@@ -319,9 +357,19 @@ func (s *surfacer) write(h hash.Hash) {
 	for _, r := range s.kept {
 		reads = max(reads, r[0])
 	}
+	// A #line in a body taken out reads nothing a client compiles, and
+	// the pruned text has it blanked: only kept text counts.
 	for _, w := range []string{"#line", "#column", "#sourceLocation"} {
-		if i := bytes.LastIndex(src, []byte(w)); i > reads {
-			reads = i
+		for at := len(src); ; {
+			i := bytes.LastIndex(src[:at], []byte(w))
+			if i < 0 || i <= reads {
+				break
+			}
+			if !s.stripped(i) {
+				reads = i
+				break
+			}
+			at = i
 		}
 	}
 	at := 0
@@ -353,6 +401,16 @@ func (s *surfacer) write(h hash.Hash) {
 	}
 	h.Write(src[at:])
 	h.Write([]byte{0})
+}
+
+// stripped reports whether offset i is inside a body taken out.
+func (s *surfacer) stripped(i int) bool {
+	for _, r := range s.strip {
+		if r[0] <= i && i < r[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // restOfLineBlank reports whether nothing but spaces and tabs precede

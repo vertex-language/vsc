@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/vertex-language/vcx/preprocessor"
+	"github.com/vertex-language/vsc/build/buildcache"
 	"github.com/vertex-language/vsc/timing"
 	"io"
 	"os"
@@ -93,7 +94,7 @@ func (c *common) options(t ir.Target, stop vsc.Phase) vsc.Options {
 		c.finding = &findTable{m: map[string]*found{}}
 		c.headers = preprocessor.NewCache()
 	}
-	return vsc.Options{
+	opts := vsc.Options{
 		Module:       c.module,
 		Target:       t,
 		Stop:         stop,
@@ -101,6 +102,29 @@ func (c *common) options(t ir.Target, stop vsc.Phase) vsc.Options {
 		PackagePaths: c.packagePaths(),
 		Packages:     (*packages)(c),
 	}
+	if buildcache.Enabled() && os.Getenv("VSC_SUMMARIES") != "off" {
+		opts.Summaries = summaryCache{}
+	}
+	return opts
+}
+
+// summaryCache keeps the importer's pruned folders in the build cache,
+// whose keys start from the compiler's identity: a new compiler, which
+// may prune differently, reads none of an old one's.
+type summaryCache struct{}
+
+func (summaryCache) Get(k [32]byte) ([]byte, bool) {
+	data, ok := buildcache.Get(buildcache.New("summary").Bytes(k[:]).Key())
+	if ok {
+		timing.Count("cache hit: summary", 1)
+	} else {
+		timing.Count("cache miss: summary", 1)
+	}
+	return data, ok
+}
+
+func (summaryCache) Put(k [32]byte, data []byte) {
+	buildcache.Put(buildcache.New("summary").Bytes(k[:]).Key(), data)
 }
 
 // A packages resolves import paths for the compiler by fetching them.

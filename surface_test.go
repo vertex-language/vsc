@@ -1,6 +1,8 @@
 package vsc
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/vertex-language/vsc/ast"
@@ -173,5 +175,61 @@ func TestSurfacePositions(t *testing.T) {
 	}
 	if surfaceOf(t, tail+one) != surfaceOf(t, tail+two) {
 		t.Error("a line added below the generic function changed the surface")
+	}
+}
+
+// The pruned text an importer reads keeps every position, parses, and has
+// the source's surface: whichever a build read, its keys are the same.
+func TestPrune(t *testing.T) {
+	const src = `package p
+
+struct Point { var x: int }
+
+public func area(_ p: Point) -> int {
+    let s = "a } b"   // a brace in a string
+    return p.x * 2
+}
+
+func g<T>(_ x: T) -> T {
+    precondition(true)
+    return x
+}
+
+extension Point {
+    func twice() -> int { return x * 2 }
+    var half: int { return x / 2 }
+}
+`
+	tf := token.NewFile("p/a.vs", []byte(src))
+	f, ds := parser.ParseFile(tf, 0)
+	if len(ds) > 0 {
+		t.Fatal(ds)
+	}
+	pruned := prune([]*ast.File{f}, []*token.File{tf})[0]
+	if len(pruned) != len(src) || bytes.Count(pruned, []byte("\n")) != strings.Count(src, "\n") {
+		t.Fatalf("pruning moved positions:\n%s", pruned)
+	}
+	if bytes.Contains(pruned, []byte("p.x * 2")) || bytes.Contains(pruned, []byte("x * 2 }")) {
+		t.Errorf("a body no client compiles is still there:\n%s", pruned)
+	}
+	if !bytes.Contains(pruned, []byte("precondition(true)")) {
+		t.Errorf("the generic function's body was taken out:\n%s", pruned)
+	}
+	ptf := token.NewFile("p/a.vs", pruned)
+	pf, ds := parser.ParseFile(ptf, 0)
+	if len(ds) > 0 {
+		t.Fatalf("the pruned text does not parse: %v\n%s", ds, pruned)
+	}
+	if surface([]*ast.File{pf}, []*token.File{ptf}) != surface([]*ast.File{f}, []*token.File{tf}) {
+		t.Error("the pruned text's surface differs from the source's")
+	}
+}
+
+// A #line in a body no client compiles reads nothing a client depends on.
+func TestSurfaceLineInStrippedBody(t *testing.T) {
+	one := "package p\nfunc f() -> int {\n    return 1\n}\nfunc h() -> int { return #line }\n"
+	two := "package p\nfunc f() -> int {\n    let a = 1\n    return a\n}\nfunc h() -> int { return #line }\n"
+	if surfaceOf(t, one) != surfaceOf(t, two) {
+		t.Error("a #line in a stripped body made an earlier body's lines count")
 	}
 }
