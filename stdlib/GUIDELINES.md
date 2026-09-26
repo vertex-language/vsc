@@ -40,7 +40,7 @@ Some of what the compiler emits calls to belongs to a feature most programs neve
 
 ## 3. Native Bridge Architecture
 
-A package's native code is a **C++ named module in the package's own folder**. vsc reads the module's `export`s through vcx and gives them to the package's Vertex as ordinary declarations. There is no manifest, no C header, no `bindings.vs` and no `@_silgen_name`. The design is `~/Desktop/proposed_vsc_import_v2.md`.
+A package's native code is a **C++ named module in the package's own folder**. vsc reads the module's `export`s through vcx and gives them to the package's Vertex as ordinary declarations; nothing else describes them. The vsc README's *Native C++ in a Package* section walks through one.
 
 ### File Layout
 

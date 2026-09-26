@@ -391,6 +391,10 @@ geo/                         ← repository: module github.com/you/geo
 - **Name exported API in `UpperCamelCase`:** `fs.Open`, `png.Decode`,
   `window.Create`. Keep internals `lowerCamelCase`. A reader can tell from the
   call site what is part of the package's contract.
+- **Share across the repository with `package`,** not `public`: a helper
+  `db/sqlite` needs from `db/sql` is `package func`, so it isn't part of
+  either package's API. Anything unmarked is internal, and another package
+  that names it gets "inaccessible due to 'internal' protection level".
 - **Keep one idea per folder.** Subfolders are separate packages
   (`rdp/codec/planar`), so a large package splits into small ones that import
   each other, and each is testable alone.
