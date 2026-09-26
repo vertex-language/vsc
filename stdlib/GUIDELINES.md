@@ -105,7 +105,7 @@ All native code compiles in-process through vcx (no external toolchain):
 * **Return Conventions:** Return `0` or byte counts on success, and negative error codes on failure. Export a `last_error()` to surface underlying OS error numbers (`errno`, `GetLastError()`).
 * **Universal Target Support:** Every exported function must be implemented on every supported target (`aarch64-macos`, `x86_64-windows`, `aarch64-android`). An unsupported operation returns an "unsupported" code rather than being omitted or panicking.
 * **Thin Adapters:** The bridge handles OS call translation only. Parsing, business logic, default values, and data structures belong in Vertex.
-* **Privileged Packages Only:** Native code is restricted to core platform modules (`os`, `sync`, `fs`, `time`, `net/*`, `ui/window`, `ui/font`, `image/format`, `crypto/cert`) and the `gpu` repository's function packages (`gpu/*`). `gpu` itself isn't a package: it's built into the compiler (§1.1).
+* **Privileged Packages Only:** Native code is restricted to core platform modules (`os`, `sync`, `fs`, `time`, `net/*`, `ui/window`, `text/font`, `image/format`, `crypto/cert`) and the `gpu` repository's function packages (`gpu/*`). `gpu` itself isn't a package: it's built into the compiler (§1.1).
 
 ---
 
