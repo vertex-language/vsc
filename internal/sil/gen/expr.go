@@ -1117,8 +1117,11 @@ func (g *gen) memberwise(e *ast.CallExpr, t types.Type, st *types.Struct) *sil.V
 		args = e.Args.Args
 	}
 
-	// Evaluate one value per stored property in declaration order.
+	// Evaluate one value per stored property in declaration order. One
+	// made before a later one throws is released on the way out (hold).
 	values := make([]*sil.Value, 0, len(st.Fields))
+	var held []*sil.Value
+	defer func() { g.release(held) }()
 	next := 0
 	for _, f := range st.Fields {
 		if f == nil {
@@ -1159,6 +1162,7 @@ func (g *gen) memberwise(e *ast.CallExpr, t types.Type, st *types.Struct) *sil.V
 			return nil
 		}
 		values = append(values, v)
+		held = g.hold(held, v)
 	}
 	if next != len(args) {
 		g.refuse(e, "a constructor whose arguments do not match the properties in order")

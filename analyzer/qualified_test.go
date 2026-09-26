@@ -188,6 +188,38 @@ func TestAModuleIsNotAValue(t *testing.T) {
 	}
 }
 
+// TestSameNamedTypesFromTwoModulesAreTwoTypes: safetensors.DType and
+// torch.DType are different types, so a function overloaded on them
+// is two functions, not a redeclaration. The checker compared nominal
+// types by name alone, and said it was one.
+func TestSameNamedTypesFromTwoModulesAreTwoTypes(t *testing.T) {
+	program := `
+import A
+import B
+func kind(_ t: A.DType) -> Int { return 1 }
+func kind(_ t: B.DType) -> Int { return 2 }
+let a = kind(A.DType.x)
+let b = kind(B.DType.y)
+`
+	pf, _ := parseSnippet(t, program)
+	var imports []Import
+	for _, m := range []struct{ name, iface string }{
+		{"A", "public enum DType { case x }\n"},
+		{"B", "public enum DType { case y }\n"},
+	} {
+		u := token.NewFile(m.name+".vinterface", []byte(m.iface))
+		f, diags := parser.ParseFile(u, 0)
+		for _, d := range diags {
+			t.Fatalf("the interface did not parse: %s", d.Print(u))
+		}
+		imports = append(imports, Import{Name: m.name, Files: []*ast.File{f}, Units: []*token.File{u}})
+	}
+	_, diags := CheckImporting([]*ast.File{pf}, imports)
+	for _, d := range diags {
+		t.Errorf("%s", d.Message)
+	}
+}
+
 // checkImporting checks a program against one hand-written interface.
 func checkImporting(t *testing.T, program, module, iface string) (*Info, []token.Diagnostic) {
 	t.Helper()

@@ -375,6 +375,10 @@ func (n *Named) String() string { return n.Name }
 
 // Struct represents a nominal value type.
 type Struct struct {
+	// Pkg is the module that declared it, when it was read from an
+	// import's interface; "" for the module being checked. Two types
+	// of one name from different modules are different types.
+	Pkg          string
 	Name         string
 	TypeParams   []*TypeParam
 	Fields       []*Field
@@ -438,6 +442,10 @@ func (s *Struct) String() string   { return s.Name }
 
 // Class represents a nominal reference type.
 type Class struct {
+	// Pkg is the module that declared it, when it was read from an
+	// import's interface; "" for the module being checked. Two types
+	// of one name from different modules are different types.
+	Pkg          string
 	Inits        []*Signature
 	Name         string
 	TypeParams   []*TypeParam
@@ -485,6 +493,10 @@ type EnumCase struct {
 
 // Enum represents a nominal enumeration type.
 type Enum struct {
+	// Pkg is the module that declared it, when it was read from an
+	// import's interface; "" for the module being checked. Two types
+	// of one name from different modules are different types.
+	Pkg          string
 	Name         string
 	TypeParams   []*TypeParam
 	RawType      Type
@@ -506,6 +518,10 @@ func (e *Enum) String() string   { return e.Name }
 
 // Protocol represents a protocol definition.
 type Protocol struct {
+	// Pkg is the module that declared it, when it was read from an
+	// import's interface; "" for the module being checked. Two types
+	// of one name from different modules are different types.
+	Pkg          string
 	Name         string
 	Inherited    []*Protocol
 	Requirements []*Requirement

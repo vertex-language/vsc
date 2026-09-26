@@ -12,7 +12,7 @@ func (c *checker) declareProtocol(d *ast.ProtocolDecl, scope *Scope) {
 		return
 	}
 	name := d.Name.Text(c.file)
-	pr := &types.Protocol{Name: name}
+	pr := &types.Protocol{Name: name, Pkg: c.importing}
 	pr.Self = &types.TypeParam{Name: "Self", Constraints: []types.Type{pr}}
 	if d.Primary != nil {
 		for _, p := range d.Primary.Params {

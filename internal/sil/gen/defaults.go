@@ -35,6 +35,8 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 
 	want := existentialParams(sig)
 	out := make([]*sil.Value, 0, len(sig.Params))
+	var held []*sil.Value
+	defer func() { g.release(held) }()
 	next := 0
 	for i, p := range sig.Params {
 		if next < len(args) && g.argFits(args[next], p) && !(p.HasDefault && closureSkips(args[next], p)) {
@@ -47,6 +49,7 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 				return nil, false
 			}
 			out = append(out, boxed)
+			held = g.hold(held, boxed)
 			next++
 			continue
 		}
@@ -72,6 +75,7 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 			return nil, false
 		}
 		out = append(out, boxed)
+		held = g.hold(held, boxed)
 	}
 	if next != len(args) {
 		g.refuse(e, "a call whose arguments this could not match to parameters")
@@ -85,6 +89,8 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 func (g *gen) argumentValues(args []*ast.CallArg, sig *types.Signature) []*sil.Value {
 	want := existentialParams(sig)
 	out := make([]*sil.Value, 0, len(args))
+	var held []*sil.Value
+	defer func() { g.release(held) }()
 	for i, a := range args {
 		v := g.expr(a.X)
 		if v == nil {
@@ -95,8 +101,32 @@ func (g *gen) argumentValues(args []*ast.CallArg, sig *types.Signature) []*sil.V
 			return nil
 		}
 		out = append(out, boxed)
+		held = g.hold(held, boxed)
 	}
 	return out
+}
+
+// hold registers an owned argument value, made before the call's later
+// arguments are, for destruction if one of those throws: `R(key: key,
+// shape: try ints(n))` has copied key when ints fails, and the copy is
+// released on the way out, as Swift's formal-evaluation cleanups release
+// it. A value some cleanup already owns is left to it. release cancels
+// the holds once every argument is made, and the call takes the values
+// as it did before.
+func (g *gen) hold(held []*sil.Value, v *sil.Value) []*sil.Value {
+	if v == nil || v.Ownership() != sil.Owned || v.Type().IsAddress() || g.pendingDestroy(v) {
+		return held
+	}
+	s := g.top()
+	s.cleanups = append(s.cleanups, cleanup{destroy: v})
+	return append(held, v)
+}
+
+// release cancels hold's cleanups.
+func (g *gen) release(held []*sil.Value) {
+	for _, v := range held {
+		g.forget(v)
+	}
 }
 
 func unparen(e ast.Expr) ast.Expr {

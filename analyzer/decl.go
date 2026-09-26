@@ -507,7 +507,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 		switch d := d.(type) {
 		case *ast.StructDecl:
 			name := d.Name.Text(c.file)
-			st := &types.Struct{Name: name, Copyable: true}
+			st := &types.Struct{Name: name, Copyable: true, Pkg: c.importing}
 			sym := NewTypeName(name, st, d.Name.Pos())
 			sym.SetDecl(d)
 			if old := scope.Insert(sym); old != nil {
@@ -527,7 +527,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 
 		case *ast.ClassDecl:
 			name := d.Name.Text(c.file)
-			cl := &types.Class{Name: name}
+			cl := &types.Class{Name: name, Pkg: c.importing}
 			sym := NewTypeName(name, cl, d.Name.Pos())
 			sym.SetDecl(d)
 			if old := scope.Insert(sym); old != nil {
@@ -547,7 +547,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 
 		case *ast.ActorDecl:
 			name := d.Name.Text(c.file)
-			cl := &types.Class{Name: name, IsActor: true}
+			cl := &types.Class{Name: name, IsActor: true, Pkg: c.importing}
 			sym := NewTypeName(name, cl, d.Name.Pos())
 			sym.SetDecl(d)
 			if old := scope.Insert(sym); old != nil {
@@ -558,7 +558,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 
 		case *ast.EnumDecl:
 			name := d.Name.Text(c.file)
-			en := &types.Enum{Name: name, Indirect: c.hasModifier(d.Mods, "indirect")}
+			en := &types.Enum{Name: name, Indirect: c.hasModifier(d.Mods, "indirect"), Pkg: c.importing}
 			sym := NewTypeName(name, en, d.Name.Pos())
 			sym.SetDecl(d)
 			if old := scope.Insert(sym); old != nil {

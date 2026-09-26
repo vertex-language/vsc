@@ -98,19 +98,19 @@ func Identical(x, y Type) bool {
 		}
 	case *Struct:
 		if yt, ok := y.(*Struct); ok {
-			return xt == yt || (xt.Name != "" && xt.Name == yt.Name)
+			return xt == yt || (xt.Name != "" && xt.Name == yt.Name && samePkg(xt.Pkg, yt.Pkg))
 		}
 	case *Class:
 		if yt, ok := y.(*Class); ok {
-			return xt == yt || (xt.Name != "" && xt.Name == yt.Name)
+			return xt == yt || (xt.Name != "" && xt.Name == yt.Name && samePkg(xt.Pkg, yt.Pkg))
 		}
 	case *Enum:
 		if yt, ok := y.(*Enum); ok {
-			return xt == yt || (xt.Name != "" && xt.Name == yt.Name)
+			return xt == yt || (xt.Name != "" && xt.Name == yt.Name && samePkg(xt.Pkg, yt.Pkg))
 		}
 	case *Protocol:
 		if yt, ok := y.(*Protocol); ok {
-			return xt == yt || (xt.Name != "" && xt.Name == yt.Name)
+			return xt == yt || (xt.Name != "" && xt.Name == yt.Name && samePkg(xt.Pkg, yt.Pkg))
 		}
 	case *Array:
 		if yt, ok := y.(*Array); ok {
@@ -731,4 +731,11 @@ func OwnInstance(g *GenericInstance, bare Type) bool {
 		}
 	}
 	return true
+}
+
+// samePkg is whether two nominal types' modules may be one module: a
+// type the module being checked declares carries no module, and may be
+// the one an interface of it describes.
+func samePkg(x, y string) bool {
+	return x == "" || y == "" || x == y
 }
