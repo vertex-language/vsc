@@ -308,3 +308,60 @@ extension float32: Shape { @inlinable public static func Sides() -> Int32 { retu
 		}
 	}
 }
+
+// TestInternalStaysInItsPackage: another package sees what a package made
+// public -- or package, the repository's -- and nothing else. Its internal
+// functions, types and methods are its own, as they would be through an
+// interface, which lists only the public ones; a public extension's members
+// are public without saying so each.
+func TestInternalStaysInItsPackage(t *testing.T) {
+	root := t.TempDir()
+	writePackage(t, filepath.Join(root, "geo"), "geo", `
+public struct Circle {
+    public var r: Int32
+    public init(r: Int32) { self.r = r }
+}
+public func area(_ c: Circle) -> Int32 { return 3 * c.r * c.r + helper() }
+package func shared() -> Int32 { return 1 }
+func helper() -> Int32 { return 0 }
+struct Hidden {}
+func (c: borrowing Circle) twice() -> Int32 { return 2 * c.r }
+extension Circle {
+    func half() -> Int32 { return r / 2 }
+    static func unit() -> Circle { return Circle(r: 1) }
+}
+public extension Circle {
+    func third() -> Int32 { return r / 3 }
+}
+`)
+	_, diags := compile(t, `
+import "geo"
+func main() -> Int32 {
+    let c = geo.Circle(r: 6)
+    return geo.area(c) + geo.shared() + c.third()
+}
+`, vsc.Options{PackagePaths: []string{root}})
+	for _, d := range diags {
+		t.Errorf("public use refused: %v", d)
+	}
+
+	for _, use := range []struct{ name, src string }{
+		{"helper", "let x = geo.helper()"},
+		{"Hidden", "let x: geo.Hidden? = nil"},
+		{"twice", "let x = geo.Circle(r: 1).twice()"},
+		{"half", "let x = geo.Circle(r: 1).half()"},
+		{"unit", "let x = geo.Circle.unit()"},
+	} {
+		_, diags := compile(t, "import \"geo\"\n"+use.src+"\n", vsc.Options{PackagePaths: []string{root}})
+		want := "'" + use.name + "' is inaccessible due to 'internal' protection level"
+		found := false
+		for _, d := range diags {
+			if strings.Contains(d.Message, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: got %v, want %q", use.src, diags, want)
+		}
+	}
+}

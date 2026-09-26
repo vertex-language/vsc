@@ -111,6 +111,14 @@ type checker struct {
 	checkedEarly map[*ast.FuncDecl]bool
 	// opaqueParams is the generic parameter each `some P` parameter type is.
 	opaqueParams map[ast.Type]*types.TypeParam
+	// hidden and hiddenMethods are an imported source package's
+	// declarations that are not public, which it declares for its own
+	// bodies and which the program may not name (access.go).
+	hidden        map[Symbol]Access
+	hiddenMethods map[*types.Method]Access
+	// extAccess is the access an extension being read gives the members
+	// that write none of their own: `public extension` makes them public.
+	extAccess *Access
 }
 
 // typeErrorf reports a type diagnostic unless one of the types is types.Invalid.
@@ -385,6 +393,8 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		c.currAsync = false
 	}
 
+	c.checkImportedAccess()
+
 	token.SortDiagnostics(info.Diagnostics)
 	return info, info.Diagnostics
 }
@@ -642,6 +652,7 @@ func (c *checker) recordModule(imp Import, staging, scope *Scope) {
 		}
 	}
 	for _, sym := range staging.Symbols() {
+		c.hideImported(imp, sym, unitOf)
 		own.Insert(sym)
 		if _, already := c.info.Imported[sym]; !already {
 			c.info.Imported[sym] = imp.Name

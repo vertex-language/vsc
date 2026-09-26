@@ -75,6 +75,7 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 		// Check lexical scope first
 		if tn := scope.LookupType(name); tn != nil {
 			base = tn.Type()
+			c.checkHiddenType(t.Pos(), name, tn)
 		}
 		// Check universe builtins
 		if base == nil {
@@ -391,6 +392,7 @@ func (c *checker) moduleMember(t *ast.MemberType, module, name string, scope *Sc
 	var base types.Type
 	if sym, ok := c.modules[module].Lookup(name).(*TypeNameSymbol); ok {
 		base = sym.Type()
+		c.checkHiddenType(t.Pos(), name, sym)
 	}
 	// Swift's own scope holds what core declares; the rest of what
 	// Swift names is the universe, which an unqualified name reaches
@@ -1097,15 +1099,17 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			sig := c.buildGenericFuncSig(m, typeScope)
 			unlabelOperator(name, sig)
 			sig.Isolated = c.declIsolated(m.Attrs, m.Mods)
-			*methods = append(*methods, &types.Method{
+			method := &types.Method{
 				Name: name, Sig: sig, IsStatic: isStatic(m.Mods),
 				IsMutating:  c.isMutating(m.Mods),
 				IsConsuming: c.hasModifier(m.Mods, "consuming"),
 				Exported:    exported(c.accessOf(m.Mods)),
-			})
+			}
+			*methods = append(*methods, method)
 			sym := NewFunc(name, sig, m.Name.Pos())
 			sym.SetDecl(m)
 			sym.SetAccess(c.accessOf(m.Mods))
+			c.hideImportedMethod(method, sym, c.memberAccessOf(m.Mods))
 			// Methods may share a name, told apart by their labels.
 			if prev, ok := typeScope.Insert(sym).(*FuncSymbol); ok {
 				prev.AddOverload(sym)
@@ -1512,7 +1516,14 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 			restore = c.restoreTypeParams(c.typeParamsOf(extType))
 			c.applyWhere(ext.Where, typeScope)
 		}
+		prevAccess := c.extAccess
+		c.extAccess = nil
+		if c.hasAccessModifier(ext.Mods) {
+			a := c.accessOf(ext.Mods)
+			c.extAccess = &a
+		}
 		c.readMembers(ext.Body, typeScope, fields, methods, en, inits, computed, statics, subscripts)
+		c.extAccess = prevAccess
 		restore()
 		c.memberIsolated = false
 		if isBuiltin && builtin != nil && c.importing != "" {
@@ -1756,14 +1767,16 @@ func (c *checker) resolveReceivers(decls []ast.Decl, scope *Scope) {
 		c.memberIsolated = c.info.MainActor[recv.Underlying()]
 		sig.Isolated = c.declIsolated(fn.Attrs, fn.Mods)
 		c.memberIsolated = false
-		*methods = append(*methods, &types.Method{
+		method := &types.Method{
 			Name: name, Sig: sig, IsStatic: isStatic(fn.Mods),
 			IsMutating: c.ownershipOf(fn.Recv.Mods) == types.InOut,
 			Exported:   exported(c.accessOf(fn.Mods)),
-		})
+		}
+		*methods = append(*methods, method)
 		sym := NewFunc(name, sig, fn.Name.Pos())
 		sym.SetDecl(fn)
 		sym.SetAccess(c.accessOf(fn.Mods))
+		c.hideImportedMethod(method, sym, c.accessOf(fn.Mods))
 		if prev, ok := typeScope.Insert(sym).(*FuncSymbol); ok {
 			prev.AddOverload(sym)
 		}

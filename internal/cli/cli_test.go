@@ -472,3 +472,47 @@ func writeTree(t *testing.T, root string, files map[string]string) {
 		}
 	}
 }
+
+// TestAMixedFoldersCxxIsInternal: in a folder that has Vertex of its own,
+// the C++ exports are the package's, for its Vertex to call. A program
+// importing the package sees only what that Vertex made public.
+func TestAMixedFoldersCxxIsInternal(t *testing.T) {
+	hosted(t)
+	root := filepath.Join(t.TempDir(), "answers")
+	writeTree(t, root, map[string]string{
+		"vs.mod": "module github.com/vertex-language/answers\n",
+		"calc/calc.cpp": `export module answers.calc;
+export int raw() { return 40; }
+`,
+		"calc/calc.vs": `package calc
+
+public func Answer() -> int32 { return int32(raw()) + 2 }
+`,
+		"cmd/check/main.vs": `package main
+
+import "answers/calc"
+
+func main() -> int32 { return calc.Answer() }
+`,
+		"cmd/leak/main.vs": `package main
+
+import "answers/calc"
+
+func main() -> int32 { return int32(calc.raw()) }
+`,
+	})
+	t.Chdir(root)
+	out := filepath.Join(t.TempDir(), "check")
+	if code, _, stderr := run(t, "build", "-offline", "-o", out, "check"); code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	cmd := exec.Command(out)
+	_ = cmd.Run()
+	if got := cmd.ProcessState.ExitCode(); got != 42 {
+		t.Errorf("exit status = %d, want 42", got)
+	}
+	code, _, stderr := run(t, "build", "-offline", "-o", out, "leak")
+	if code == 0 || !strings.Contains(stderr, "'raw' is inaccessible due to 'internal' protection level") {
+		t.Errorf("a C++ export of a mixed folder was callable from another package (exit %d):\n%s", code, stderr)
+	}
+}
