@@ -362,12 +362,14 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 func packageObjects(pkgs []vsc.Package, bf *buildFlags, target ir.Target, mainDir, minOS string, stderr io.Writer) ([][]byte, int) {
 	objs := make([][]byte, len(pkgs))
 	keys := map[string]buildcache.Key{}
+	surfaces := map[string]buildcache.Key{}
 	keyed := make([]bool, len(pkgs))
 	var miss []int
 	for i, p := range pkgs {
-		key, ok := packageKey(p, target, minOS, keys)
+		key, ok := packageKey(p, target, minOS, surfaces)
 		if ok {
 			keys[p.Dir] = key
+			surfaces[p.Dir] = surfaceKey(p, surfaces)
 			keyed[i] = true
 			if obj, hit := buildcache.Get(key); hit {
 				timing.Count("cache hit: package", 1)
@@ -394,7 +396,11 @@ func packageObjects(pkgs []vsc.Package, bf *buildFlags, target ir.Target, mainDi
 	return objs, exitOK
 }
 
-func packageKey(pkg vsc.Package, target ir.Target, minOS string, keys map[string]buildcache.Key) (buildcache.Key, bool) {
+// packageKey is what a package's object is cached under: the package's own
+// source, and what its compile can depend on of each package it imports --
+// their surfaces, not their sources. An edit to a body no client compiles
+// changes the edited package's key and no other's: early cutoff.
+func packageKey(pkg vsc.Package, target ir.Target, minOS string, surfaces map[string]buildcache.Key) (buildcache.Key, bool) {
 	if pkg.Opaque || !buildcache.Enabled() {
 		return buildcache.Key{}, false
 	}
@@ -408,13 +414,25 @@ func packageKey(pkg vsc.Package, target ir.Target, minOS string, keys map[string
 	}
 	h.String(fmt.Sprint(len(pkg.Deps)))
 	for _, d := range pkg.Deps {
-		k, ok := keys[d]
+		k, ok := surfaces[d]
 		if !ok {
 			return buildcache.Key{}, false
 		}
 		h.Bytes(k[:])
 	}
 	return h.Key(), true
+}
+
+// surfaceKey is what a client's compile can depend on of pkg: its surface
+// and, since a client reads them too, those of everything it imports.
+// pkg's imports come before it, and are in surfaces already.
+func surfaceKey(pkg vsc.Package, surfaces map[string]buildcache.Key) buildcache.Key {
+	h := buildcache.New("surface").Bytes(pkg.Surface[:]).String(fmt.Sprint(len(pkg.Deps)))
+	for _, d := range pkg.Deps {
+		k := surfaces[d]
+		h.Bytes(k[:])
+	}
+	return h.Key()
 }
 
 // buildPackage compiles one imported folder as its own module.

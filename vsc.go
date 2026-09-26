@@ -167,6 +167,9 @@ type Package struct {
 	// Opaque says the package imports a module from an interface file,
 	// which Deps does not name.
 	Opaque bool
+	// Surface hashes what a client's compile can depend on of the
+	// package: its source less the bodies no client compiles. See surface.
+	Surface [32]byte
 }
 
 // Compile runs the compiler phases in order, stopping at the first phase that reports
@@ -756,7 +759,8 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		}
 	}
 	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units})
-	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque})
+	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque,
+		Surface: surface(files, units)})
 	return dir
 }
 
