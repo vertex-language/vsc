@@ -10,6 +10,11 @@ import (
 )
 
 type checker struct {
+	// opStamp numbers operatorChoices' calls, and opFound is its
+	// scratch; see operatorChoices.
+	opStamp uint64
+	opFound []*FuncSymbol
+
 	// deferDefaults queues parameter defaults while declarations are
 	// read, to be checked once every type has its members: a default of
 	// `.stdout` names a case an enum in a later file declares. Swift

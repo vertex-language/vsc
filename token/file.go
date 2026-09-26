@@ -3,6 +3,7 @@ package token
 import (
 	"fmt"
 	"sort"
+	"unsafe"
 )
 
 // Position is a resolved location in a File. Line and Column are
@@ -91,6 +92,19 @@ func (f *File) Offset(p Pos) int {
 // span covers. Feed this to decoders.
 func (f *File) Slice(pos, end Pos) []byte {
 	return f.src[f.Offset(pos):f.Offset(end)]
+}
+
+// String is Slice as a string, sharing the source's bytes rather than
+// copying them: a File's source is never written once it is made, so the
+// string is as immutable as any other. Names are asked for constantly --
+// every identifier the checker resolves -- and the copies were a tenth of
+// what checking allocated.
+func (f *File) String(pos, end Pos) string {
+	b := f.Slice(pos, end)
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(&b[0], len(b))
 }
 
 // Position resolves a Pos to offset, line, and column.

@@ -17,7 +17,8 @@ func (c *checker) resolveType(astType ast.Type, scope *Scope) types.Type {
 	}
 	t := c.resolveTypeUncached(astType, scope)
 	if c.resolved == nil {
-		c.resolved = make(map[ast.Type]types.Type)
+		// The core alone writes about this many types.
+		c.resolved = make(map[ast.Type]types.Type, 4<<10)
 	}
 	c.resolved[astType] = t
 	return t

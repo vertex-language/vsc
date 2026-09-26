@@ -3,6 +3,7 @@ package analyzer
 import (
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/types"
+	"slices"
 )
 
 // An operator is a function like any other, and Swift finds one in two
@@ -111,7 +112,23 @@ func (c *checker) operatorChoices(scope *Scope, op string, operands []types.Type
 		out = append(out, requirementOperators(t, op, len(operands))...)
 	}
 
-	seen := map[*FuncSymbol]bool{}
+	// Every declaration of op in scope, once each, in the order the scopes
+	// give them. An operator like + has hundreds, and this runs for every
+	// use of one: a stamp per call rather than a set, and one slice kept
+	// between calls, is what keeps it from being most of what checking
+	// allocates.
+	c.opStamp++
+	stamp := c.opStamp
+	found := c.opFound[:0]
+	take := func(f *FuncSymbol) {
+		if f.opStamp == stamp {
+			return
+		}
+		f.opStamp = stamp
+		if sig := f.Signature(); sig != nil && len(sig.Params) == len(operands) {
+			found = append(found, f)
+		}
+	}
 	add := func(s *Scope) {
 		if s == nil {
 			return
@@ -120,14 +137,9 @@ func (c *checker) operatorChoices(scope *Scope, op string, operands []types.Type
 		if !ok {
 			return
 		}
-		for _, f := range fs.Overloads() {
-			if seen[f] {
-				continue
-			}
-			seen[f] = true
-			if sig := f.Signature(); sig != nil && len(sig.Params) == len(operands) {
-				out = append(out, operatorChoice{fn: f})
-			}
+		take(fs)
+		for _, f := range fs.others {
+			take(f)
 		}
 	}
 	// A function's own scopes, out to the module's: an operator is only
@@ -141,6 +153,11 @@ func (c *checker) operatorChoices(scope *Scope, op string, operands []types.Type
 	for _, m := range c.modules {
 		add(m)
 	}
+	out = slices.Grow(out, len(found))
+	for _, f := range found {
+		out = append(out, operatorChoice{fn: f})
+	}
+	c.opFound = found[:0]
 	return out
 }
 

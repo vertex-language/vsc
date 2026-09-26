@@ -89,6 +89,10 @@ type FuncSymbol struct {
 
 	// others holds alternate function declarations sharing the same identifier.
 	others []*FuncSymbol
+
+	// opStamp marks the symbol found by the operatorChoices call whose
+	// stamp it is, so that one found through two scopes is taken once.
+	opStamp uint64
 }
 
 func NewFunc(name string, sig *types.Signature, pos token.Pos) *FuncSymbol {

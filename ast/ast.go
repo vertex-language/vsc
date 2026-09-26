@@ -64,7 +64,7 @@ func (id *Ident) Name(f *token.File) string {
 	if id.Synth != "" {
 		return id.Synth
 	}
-	return string(f.Slice(id.Lo, id.Hi))
+	return f.String(id.Lo, id.Hi)
 }
 
 // Text returns the identifier's unescaped text name.

@@ -325,14 +325,26 @@ type SubscriptRef struct {
 }
 
 // NewInfo allocates an empty Info container.
+// What checking the core records, for any module: the maps start the
+// size they will be at least, rather than growing to it a doubling at a
+// time (the growth was a third of what checking allocated).
+const (
+	coreTypes  = 12 << 10
+	coreDefs   = 2560
+	coreUses   = 4 << 10
+	coreScopes = 2560
+	coreFolded = 1400
+	coreValues = 1200
+)
+
 func NewInfo() *Info {
 	return &Info{
-		Types:             make(map[ast.Expr]types.Type),
-		Defs:              make(map[*ast.Ident]Symbol),
-		Uses:              make(map[*ast.Ident]Symbol),
-		Scopes:            make(map[ast.Node]*Scope),
-		Folded:            make(map[*ast.SequenceExpr]ast.Expr),
-		Operators:         make(map[ast.Expr]Symbol),
+		Types:             make(map[ast.Expr]types.Type, coreTypes),
+		Defs:              make(map[*ast.Ident]Symbol, coreDefs),
+		Uses:              make(map[*ast.Ident]Symbol, coreUses),
+		Scopes:            make(map[ast.Node]*Scope, coreScopes),
+		Folded:            make(map[*ast.SequenceExpr]ast.Expr, coreFolded),
+		Operators:         make(map[ast.Expr]Symbol, coreFolded),
 		PatternTypes:      make(map[ast.Pattern]types.Type),
 		CoreTypes:         make(map[types.Type]bool),
 		LiteralInits:      make(map[ast.Expr]*LiteralInit),
@@ -350,7 +362,7 @@ func NewInfo() *Info {
 		CallSites:         make(map[*ast.CallExpr]CallSite),
 		PatternMatches:    make(map[*ast.ExprPattern]*FuncSymbol),
 		WrapperInits:      make(map[*ast.PatternBinding]*ast.CallExpr),
-		Values:            make(map[ast.Node]Value),
+		Values:            make(map[ast.Node]Value, coreValues),
 		Methods:           make(map[*ast.MemberExpr]*MethodRef),
 		Extensions:        make(map[*ast.ExtensionDecl]types.Type),
 		Builtins:          make(map[string]*BuiltinMembers),
