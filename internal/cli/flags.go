@@ -3,6 +3,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"github.com/vertex-language/vsc/timing"
 	"io"
 	"os"
 	"path/filepath"
@@ -99,6 +100,7 @@ type packages common
 // checkout -replace names for it, one a vs.work uses or the main module's
 // vs.mod replaces it with, or the checkout the importing file is in.
 func (p *packages) Local(path, fromDir string) (string, error) {
+	defer timing.Start("resolve: local")()
 	if dir, sub, ok := p.replaced(path); ok {
 		return importer.Checkout(path, dir, sub)
 	}
@@ -115,6 +117,7 @@ func (p *packages) Local(path, fromDir string) (string, error) {
 // version is the one the main module's vs.mod requires, and what is
 // fetched at it must hash as its vs.sum records.
 func (p *packages) Fetch(path string) (string, error) {
+	defer timing.Start("resolve: fetch")()
 	if _, ok := importer.Lookup(path); !ok {
 		return "", nil
 	}

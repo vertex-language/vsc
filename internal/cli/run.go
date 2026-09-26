@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/vertex-language/vsc/timing"
 	"io"
 	"os"
 	"os/exec"
@@ -53,7 +54,9 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	bf.output = vsc.ImageName(target, filepath.Join(dir, "prog"))
-	if _, code := doBuild(&bf, fs.Args(), stdout, stderr); code != exitOK {
+	_, code := doBuild(&bf, fs.Args(), stdout, stderr)
+	timing.Print(stderr)
+	if code != exitOK {
 		return code
 	}
 

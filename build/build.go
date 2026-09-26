@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/vertex-language/vsc/timing"
 	"runtime"
 
 	"github.com/vertex-language/ir"
@@ -48,10 +49,12 @@ func Object(m *ir.Module, opts Options) ([]byte, error) {
 }
 
 func aarch64MachO(m *ir.Module, opts Options) ([]byte, error) {
+	done := timing.Start("isel+regalloc")
 	o, err := arm64lower.Lower(m, arm64lower.Options{
 		LibcallPrefix: "_",
 		Variadic:      arm64lower.VariadicDarwin,
 	})
+	done()
 	if err != nil {
 		return nil, fmt.Errorf("build: %w", err)
 	}
@@ -61,6 +64,7 @@ func aarch64MachO(m *ir.Module, opts Options) ([]byte, error) {
 	if opts.MinOS == "" {
 		opts.MinOS = defaultMinOS
 	}
+	defer timing.Start("encode object")()
 	var buf bytes.Buffer
 	if err := arm64macho.Write(&buf, o, arm64macho.Options{
 		Platform:    opts.Platform,

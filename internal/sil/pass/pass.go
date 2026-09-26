@@ -1,9 +1,23 @@
 package pass
 
 import (
+	"os"
+	"testing"
+
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/internal/sil/verify"
 )
+
+// checkPasses says whether the module is verified again after each
+// pipeline of passes, as well as once on the way in.
+//
+// The verification on the way in is what refuses a module SILGen got
+// wrong, and always runs. The ones after are checks on the passes
+// themselves -- that promotion and assign resolution kept the module's
+// ownership sound -- which is the compiler testing itself: they run
+// under `go test`, and with VSC_VERIFY=all, and not on every build, as
+// swiftc verifies after each pass only in a debug build of itself.
+var checkPasses = testing.Testing() || os.Getenv("VSC_VERIFY") == "all"
 
 // Mandatory runs required passes (box promotion, assign resolution)
 // and transitions the module stage to canonical. It verifies the module
@@ -18,8 +32,10 @@ func Mandatory(m *sil.Module) error {
 		promoteBoxes(f)
 		resolveAssigns(f)
 	}
-	if err := verify.Module(m); err != nil {
-		return err
+	if checkPasses {
+		if err := verify.Module(m); err != nil {
+			return err
+		}
 	}
 	m.SetStage(sil.StageCanonical)
 	return nil
@@ -33,5 +49,8 @@ func Optimize(m *sil.Module) error {
 		elideHomeHops(f)
 		promoteSlots(f)
 	}
-	return verify.Module(m)
+	if checkPasses {
+		return verify.Module(m)
+	}
+	return nil
 }

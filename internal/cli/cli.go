@@ -105,6 +105,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return cmdAST(rest, stdout, stderr)
 	case "tokens":
 		return cmdTokens(rest, stdout, stderr)
+	case "__compile-package":
+		return cmdCompilePackage(rest, stderr)
 	case "env":
 		return cmdEnv(rest, stdout, stderr)
 	case "help", "-h", "--help", "-help":

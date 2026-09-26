@@ -50,6 +50,7 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 	if info != nil && len(info.ImportedFiles) > 0 {
 		lookup = append(append([]*ast.File{}, lookup...), info.ImportedFiles...)
 	}
+	idx := &fileIndex{files: lookup}
 	methods := genericMethodDecls(lookup, info)
 	inits := genericInitDecls(lookup, info)
 	publicTypes := map[string]bool{}
@@ -57,7 +58,7 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 		if f == script {
 			continue
 		}
-		pre := &gen{m: m, info: info, file: f.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes}
+		pre := &gen{m: m, info: info, file: f.Unit, files: lookup, fileIdx: idx, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes}
 		pre.declareModuleVars(f)
 		for _, stmt := range f.Stmts {
 			if decl, ok := stmt.(*ast.DeclStmt); ok {
@@ -74,12 +75,12 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 		diags = append(diags, pre.diags...)
 	}
 	if script != nil {
-		pre := &gen{m: m, info: info, file: script.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes}
+		pre := &gen{m: m, info: info, file: script.Unit, files: lookup, fileIdx: idx, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes}
 		pre.declareScriptVars(script)
 		diags = append(diags, pre.diags...)
 	}
 	for _, f := range files {
-		g := &gen{m: m, info: info, file: f.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes, script: script != nil}
+		g := &gen{m: m, info: info, file: f.Unit, files: lookup, fileIdx: idx, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes, script: script != nil}
 		reportedTopLevel := false
 		for _, stmt := range f.Stmts {
 			decl, ok := stmt.(*ast.DeclStmt)
@@ -144,7 +145,7 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 	}
 
 	if script != nil {
-		g := &gen{m: m, info: info, file: script.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: true}
+		g := &gen{m: m, info: info, file: script.Unit, files: lookup, fileIdx: idx, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: true}
 		g.topLevelMain(scriptStmts)
 		diags = append(diags, g.diags...)
 		sawEntry = true
@@ -157,7 +158,7 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 	// code, has the body to inline. Swift's available_externally.
 	if info != nil {
 		for _, f := range info.ImportedFiles {
-			g := &gen{m: m, info: info, file: f.Unit, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes, inlinable: true}
+			g := &gen{m: m, info: info, file: f.Unit, files: lookup, fileIdx: idx, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, publicTypes: publicTypes, inlinable: true}
 			for _, stmt := range f.Stmts {
 				decl, ok := stmt.(*ast.DeclStmt)
 				if !ok {
@@ -188,7 +189,7 @@ func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []
 	}
 
 	// Emit vtables and witness tables after all function symbols exist.
-	tg := &gen{m: m, info: info, files: lookup, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: script != nil}
+	tg := &gen{m: m, info: info, files: lookup, fileIdx: idx, module: name, poly: poly, vars: vars, getters: getters, stated: stated, methods: methods, inits: inits, script: script != nil}
 	if len(files) > 0 {
 		tg.file = files[0].Unit
 	}
@@ -456,8 +457,8 @@ type gen struct {
 	m            *sil.Module
 	info         *analyzer.Info
 	file         *token.File
-	files        []*ast.File              // every file of the module: code written in one is lowered in another
-	nodeFiles    map[ast.Node]*token.File // which file a node came from, as fileOf finds it
+	files        []*ast.File // every file of the module: code written in one is lowered in another
+	fileIdx      *fileIndex  // which file a node came from, shared by the module's gens
 	module       string
 
 	fn    *sil.Func

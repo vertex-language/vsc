@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/vertex-language/vsc/build/buildcache"
+	"github.com/vertex-language/vsc/timing"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/vertex-language/ir"
@@ -26,6 +31,7 @@ type native struct {
 // NativeSources reads the C++ module of the folder dir, and is the Vertex
 // declarations its exports are. See vsc.NativeBinder.
 func (p *packages) NativeSources(dir, path, pkgName string, public bool) ([]vsc.Source, error) {
+	defer timing.Start("native bindings")()
 	c := (*common)(p)
 	target, err := c.resolve()
 	if err != nil {
@@ -58,7 +64,7 @@ func (c *common) bind(dir, path, pkgName string, public bool, target ir.Target) 
 	if len(folder.Native) == 0 {
 		return nil, nil
 	}
-	n, err := build.FindNative(abs, folder.Native, target, c.main.minOS(target))
+	n, findKey, err := cachedFindNative(abs, folder.Native, target, c.main.minOS(target))
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +118,7 @@ func (c *common) bind(dir, path, pkgName string, public bool, target ir.Target) 
 		nat.deps = append(nat.deps, dabs)
 	}
 
-	vs, thunks, skipped, err := n.Bindings(pkgName, public)
+	vs, thunks, skipped, err := cachedBindings(n, findKey, pkgName, public)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +200,9 @@ func (c *common) nativeObjects(dir string) ([]build.Input, build.Linkage, error)
 		if nat == nil {
 			return nil
 		}
+		doneNative := timing.Start("native C++ objects")
 		o, n, err := nat.n.Objects(nat.thunks, nativeWork())
+		doneNative()
 		if err != nil {
 			return err
 		}
@@ -211,4 +219,112 @@ func (c *common) nativeObjects(dir string) ([]build.Input, build.Linkage, error)
 		return nil, need, err
 	}
 	return objs, need, nil
+}
+
+// The two halves of binding a folder's C++, through the build cache.
+//
+// Both run vcx over the module's interface and every header it includes
+// -- the SDK's among them -- to learn what a build already learned last
+// time: which module the folder is, and what Vertex declarations its
+// exports are. The inputs are the folder's files, the interface units of
+// the modules it imports, the SDK and the compiler, as for the native
+// objects themselves (build.Native's cacheKey).
+
+type foundNative struct {
+	Module, Interface     string
+	Imports               []string
+	Libraries, Frameworks []string
+}
+
+func cachedFindNative(dir string, sources []string, target ir.Target, minOS string) (*build.Native, buildcache.Key, error) {
+	sdk, _ := build.SDK()
+	h := buildcache.New("native-find").String(target.String()).String(minOS).String(sdk).String(dir).Strings(sources)
+	hashFiles(h, folderFiles(dir))
+	key := h.Key()
+	if data, ok := buildcache.Get(key); ok {
+		var f foundNative
+		if json.Unmarshal(data, &f) == nil {
+			timing.Count("cache hit: native find", 1)
+			return &build.Native{
+				Dir: dir, Sources: sources, Target: target, MinOS: minOS,
+				Module: f.Module, Interface: f.Interface, Imports: f.Imports,
+				Libraries: f.Libraries, Frameworks: f.Frameworks,
+			}, key, nil
+		}
+	}
+	n, err := build.FindNative(dir, sources, target, minOS)
+	if err != nil {
+		return nil, key, err
+	}
+	if data, err := json.Marshal(foundNative{n.Module, n.Interface, n.Imports, n.Libraries, n.Frameworks}); err == nil {
+		buildcache.Put(key, data)
+	}
+	return n, key, nil
+}
+
+type boundNative struct {
+	VS, Thunks []byte
+	Skipped    []string
+}
+
+func cachedBindings(n *build.Native, findKey buildcache.Key, pkgName string, public bool) ([]byte, []byte, []string, error) {
+	h := buildcache.New("native-bind").Bytes(findKey[:]).String(pkgName).String(fmt.Sprint(public))
+	var mods []string
+	for name, file := range n.Modules {
+		mods = append(mods, name+"="+file)
+	}
+	sort.Strings(mods)
+	h.Strings(mods)
+	var files []string
+	for _, file := range n.Modules {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	hashFiles(h, files)
+	key := h.Key()
+	if data, ok := buildcache.Get(key); ok {
+		var b boundNative
+		if json.Unmarshal(data, &b) == nil {
+			timing.Count("cache hit: native bindings", 1)
+			return b.VS, b.Thunks, b.Skipped, nil
+		}
+	}
+	vs, thunks, skipped, err := n.Bindings(pkgName, public)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if data, err := json.Marshal(boundNative{vs, thunks, skipped}); err == nil {
+		buildcache.Put(key, data)
+	}
+	return vs, thunks, skipped, nil
+}
+
+// folderFiles is every file directly in dir, sorted.
+func folderFiles(dir string) []string {
+	var files []string
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		// The folder's Vertex is no input to its C++: an edit to a .vs
+		// file must not rebind and rebuild the module.
+		if !e.IsDir() && filepath.Ext(e.Name()) != ".vs" {
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+	sort.Strings(files)
+	return files
+}
+
+// hashFiles adds each file's name and contents to h; a file that cannot
+// be read is added as missing.
+func hashFiles(h *buildcache.Hasher, files []string) {
+	h.String(fmt.Sprint(len(files)))
+	for _, f := range files {
+		h.String(f)
+		data, err := os.ReadFile(f)
+		if err != nil {
+			h.String("<missing>")
+			continue
+		}
+		h.Bytes(data)
+	}
 }

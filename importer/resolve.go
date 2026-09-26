@@ -62,12 +62,15 @@ func sourceDirIn(m Module, root, sub string) (string, error) {
 // hasSource reports whether a directory holds a package: Vertex source, or
 // a C++ module.
 func hasSource(dir string) error {
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
+	// One read of the directory, not a glob per extension: every import
+	// of every build comes through here.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return fmt.Errorf("no directory %s", dir)
 	}
-	for _, pattern := range []string{"*.vs", "*.cpp", "*.cppm", "*.mm"} {
-		if found, err := filepath.Glob(filepath.Join(dir, pattern)); err == nil && len(found) > 0 {
+	for _, e := range entries {
+		switch filepath.Ext(e.Name()) {
+		case ".vs", ".cpp", ".cppm", ".mm":
 			return nil
 		}
 	}

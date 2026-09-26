@@ -194,36 +194,73 @@ func cCompatible(sig *types.Signature) bool {
 // node itself. A position counts from the start of its own file, so every
 // file has the same ones, and a position alone cannot say which.
 func (g *gen) fileOf(n ast.Node) *token.File {
-	if n == nil {
+	if n == nil || g.fileIdx == nil {
 		return nil
 	}
-	if f, ok := g.nodeFiles[n]; ok {
+	return g.fileIdx.of(n)
+}
+
+// A fileIndex answers which file of a module a node is in, for every gen
+// of the module at once: each file's gen asks, and the index is built
+// once, the first time any of them does.
+//
+// It replaces a walk per question. A node from the core or an import was
+// looked for in the module's own files first, walked to the end of each,
+// once per function the module named.
+//
+// Two tiers. Almost every question is about a declaration, so the first
+// is every node outside a function body -- declarations, their
+// parameters and defaults, their members -- which is a small part of an
+// imported file. Only a node inside a body (a local function) walks the
+// rest, once. The core's own declarations are in neither file list and
+// are answered "no file" by the first tier without walking anything.
+type fileIndex struct {
+	files   []*ast.File
+	shallow map[ast.Node]*token.File
+	deep    map[ast.Node]*token.File
+}
+
+func (x *fileIndex) of(n ast.Node) *token.File {
+	if x.shallow == nil {
+		x.shallow = make(map[ast.Node]*token.File, 1024)
+		for _, f := range x.files {
+			if f != nil && f.Unit != nil {
+				index(x.shallow, f, f.Unit, false)
+			}
+		}
+		if core, _, _ := core.Files(); core != nil {
+			index(x.shallow, core, nil, false)
+		}
+	}
+	if f, ok := x.shallow[n]; ok {
 		return f
 	}
-	var found *token.File
-	for _, f := range g.files {
-		if f == nil || f.Unit == nil {
-			continue
+	if x.deep == nil {
+		x.deep = make(map[ast.Node]*token.File, 4096)
+		for _, f := range x.files {
+			if f != nil && f.Unit != nil {
+				index(x.deep, f, f.Unit, true)
+			}
 		}
-		ast.Inspect(f, func(x ast.Node) bool {
-			if found != nil {
-				return false
-			}
-			if x == n {
-				found = f.Unit
-				return false
-			}
+	}
+	return x.deep[n]
+}
+
+// index records unit as the file of every node in f -- the first file to
+// claim a node keeps it -- going into function bodies only when deep.
+func index(m map[ast.Node]*token.File, f *ast.File, unit *token.File, deep bool) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		if n == nil {
 			return true
-		})
-		if found != nil {
-			break
 		}
-	}
-	if g.nodeFiles == nil {
-		g.nodeFiles = map[ast.Node]*token.File{}
-	}
-	g.nodeFiles[n] = found
-	return found
+		if _, dup := m[n]; !dup {
+			m[n] = unit
+		}
+		if _, body := n.(*ast.CodeBlock); body && !deep {
+			return false
+		}
+		return true
+	})
 }
 
 // builtinOp is the instruction `@_builtin` makes a core function, if it

@@ -3,11 +3,14 @@ package build
 import (
 	"fmt"
 	"io/fs"
+	"sync"
 
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/vcx"
 
+	"github.com/vertex-language/vsc/build/buildcache"
 	"github.com/vertex-language/vsc/stdlib"
+	"github.com/vertex-language/vsc/timing"
 )
 
 // Runtime compiles and returns the in-tree C++ Vertex runtime object for target.
@@ -62,9 +65,45 @@ func compileRuntimeDefining(target ir.Target, unit, object string, asm bool, def
 	return compileRuntimeWith(target, unit, object, asm, defs, "")
 }
 
+// runtimes are the runtime objects this process has already produced, by
+// cache key: a test binary links hundreds of programs against one.
+var runtimes sync.Map // buildcache.Key -> []byte
+
 // compileRuntimeWith is compileRuntimeDefining with assembly of the unit's
 // own appended to its module.
+//
+// The runtime's source is embedded in the compiler, so the compiler's
+// identity and these arguments are everything its object depends on:
+// it is compiled once per compiler and target, and read from the build
+// cache after that (see buildcache).
 func compileRuntimeWith(target ir.Target, unit, object string, asm bool, defs []string, own string) (Input, error) {
+	key := buildcache.New("runtime").
+		String(target.String()).
+		String(unit).
+		String(fmt.Sprint(asm)).
+		Strings(defs).
+		String(own).
+		Key()
+	defer timing.Start("runtime")()
+	if data, ok := runtimes.Load(key); ok {
+		return Input{Name: object, Data: data.([]byte)}, nil
+	}
+	if data, ok := buildcache.Get(key); ok {
+		timing.Count("cache hit: runtime", 1)
+		runtimes.Store(key, data)
+		return Input{Name: object, Data: data}, nil
+	}
+	in, err := buildRuntime(target, unit, object, asm, defs, own)
+	if err != nil {
+		return in, err
+	}
+	runtimes.Store(key, in.Data)
+	buildcache.Put(key, in.Data)
+	return in, nil
+}
+
+// buildRuntime compiles one runtime unit through vcx.
+func buildRuntime(target ir.Target, unit, object string, asm bool, defs []string, own string) (Input, error) {
 	src := stdlib.Runtime()
 	text, err := fs.ReadFile(src, unit)
 	if err != nil {

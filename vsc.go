@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/vsc/iface"
+	"github.com/vertex-language/vsc/timing"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
@@ -149,6 +152,13 @@ type Package struct {
 	// Native says the folder has a C++ module, whose objects the program
 	// links.
 	Native bool
+	// Deps are the folders (Dir) of the packages this one imports, each
+	// earlier in the list than it. What a package compiles to depends on
+	// them too: it specializes their generics and inlines their bodies.
+	Deps []string
+	// Opaque says the package imports a module from an interface file,
+	// which Deps does not name.
+	Opaque bool
 }
 
 // Compile runs the compiler phases in order, stopping at the first phase that reports
@@ -158,6 +168,7 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	var diags []Diagnostic
 
 	ifcfg := ifconfig.ForTarget(opts.Target.String())
+	done := timing.Start("parse")
 	for _, src := range srcs {
 		tf := token.NewFile(src.Name, src.Text)
 		file, ds := parser.ParseFile(tf, 0)
@@ -167,16 +178,21 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 		u.Positions = append(u.Positions, tf)
 		diags = append(diags, attribute(ds, tf)...)
 	}
+	done()
 	if opts.Stop == Parsed || Errors(diags) {
 		return u, diags
 	}
+	done = timing.Start("imports")
 	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg, opts.Target)
+	done()
 	u.Packages = pkgs
 	diags = append(diags, importDiags...)
 	if Errors(diags) {
 		return u, diags
 	}
+	done = timing.Start("check")
 	info, checks := analyzer.CheckModule(opts.Module, u.Files, imports)
+	done()
 	u.Info = info
 	// What the module's types get by conforming, which the checker wrote:
 	// lowered, and described in an interface, with the module's own files.
@@ -190,13 +206,17 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 		return u, diags
 	}
 
+	done = timing.Start("silgen")
 	m, gens := gen.Files(opts.Module, u.Files, info)
+	done()
 	u.SIL = m
 	diags = append(diags, attribute(gens, u.only())...)
 	if opts.Stop == Raw || Errors(diags) {
 		return u, diags
 	}
 
+	done = timing.Start("sil passes")
+	defer func() { done() }()
 	if err := pass.Mandatory(m); err != nil {
 		return u, append(diags, phaseError(err))
 	}
@@ -214,6 +234,8 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 		return u, diags
 	}
 
+	done()
+	done = func() {}
 	if !opts.Target.Valid() {
 		return u, append(diags, phaseError(errNoTarget))
 	}
@@ -223,10 +245,12 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	if Errors(diags) {
 		return u, diags
 	}
+	doneVIR := timing.Start("sil to vir")
 	out, err := lower.Module(m, opts.Target, lower.Options{
 		SymbolPrefix: SymbolPrefix(opts.Target),
 		Kernels:      kernels,
 	})
+	doneVIR()
 	if err != nil {
 		return u, append(diags, phaseError(err))
 	}
@@ -304,7 +328,10 @@ type importer struct {
 
 // readAll reads every module a file imports. `via` is the module
 // whose interface asked for them, empty for the program's own.
-func (l *importer) readAll(f *ast.File, unit *token.File, via string) {
+//
+// It returns the folders the file imports, and whether it imports a
+// module from an interface file, which a build cache key does not cover.
+func (l *importer) readAll(f *ast.File, unit *token.File, via string) (deps []string, opaque bool) {
 	for _, stmt := range f.Stmts {
 		decl, ok := stmt.(*ast.DeclStmt)
 		if !ok {
@@ -318,7 +345,9 @@ func (l *importer) readAll(f *ast.File, unit *token.File, via string) {
 		// module built elsewhere. A group is punctuation standing for
 		// one import each, so it is the same loop.
 		for _, spec := range imp.Paths {
-			l.readFolder(spec, imp, unit, via)
+			if dir := l.readFolder(spec, imp, unit, via); dir != "" {
+				deps = append(deps, dir)
+			}
 		}
 		if len(imp.Path) == 0 {
 			continue
@@ -327,12 +356,17 @@ func (l *importer) readAll(f *ast.File, unit *token.File, via string) {
 		// it names something inside one, which this does not narrow
 		// to yet.
 		name := imp.Path[0].Text(unit)
-		if name == "" || l.seen[name] || builtinModule(name) {
+		if name == "" || builtinModule(name) {
+			continue
+		}
+		opaque = true
+		if l.seen[name] {
 			continue
 		}
 		l.seen[name] = true
 		l.read(name, imp, unit, via)
 	}
+	return deps, opaque
 }
 
 // builtinModule reports whether name is a built-in module provided implicitly.
@@ -563,7 +597,7 @@ func packageNameOf(files []*ast.File, units []*token.File) string {
 const SourceExtension = ".vs"
 
 // readFolder loads a package from a directory of source files.
-func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *token.File, via string) {
+func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *token.File, via string) (dir string) {
 	severity := token.Error
 	if via != "" {
 		severity = token.Warn
@@ -584,48 +618,60 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	path, ok := importPathText(spec.Path, unit)
 	if !ok || path == "" {
 		fail("an import path must be a plain string")
-		return
+		return ""
 	}
 	dir, err := l.folder(path, filepath.Dir(unit.Name()))
 	if err != nil {
 		fail(err.Error())
-		return
+		return ""
 	}
 	use := l.target.Use()
 	folder, err := pkg.ReadFolder(dir, pkg.PlatformOf(use), pkg.ArchOf(use))
 	if err != nil {
 		fail("package '" + path + "': " + err.Error())
-		return
+		return ""
 	}
 	if folder.Empty() {
 		fail("package '" + path + "' has no source for this target: " + dir)
-		return
+		return ""
 	}
 
 	var files []*ast.File
 	var units []*token.File
 	var srcs []Source
-	add := func(src Source) bool {
-		tf := token.NewFile(src.Name, src.Text)
-		parsed, ds := parser.ParseFile(tf, 0)
-		if len(ds) > 0 {
-			fail("package '" + path + "' has a file this compiler cannot read: " + src.Name)
+	add := func(r readFile) bool {
+		if r.bad {
+			fail("package '" + path + "' has a file this compiler cannot read: " + r.src.Name)
 			return false
 		}
-		ifconfig.Resolve(parsed, l.ifcfg)
-		files = append(files, parsed)
-		units = append(units, tf)
-		srcs = append(srcs, src)
+		files = append(files, r.parsed)
+		units = append(units, r.unit)
+		srcs = append(srcs, r.src)
 		return true
 	}
-	for _, name := range folder.Vertex {
-		text, err := os.ReadFile(name)
-		if err != nil {
+	// The folder's files are read and parsed at once, and added in order.
+	read := make([]readFile, len(folder.Vertex))
+	var wg sync.WaitGroup
+	for i, name := range folder.Vertex {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			text, err := os.ReadFile(name)
+			if err != nil {
+				read[i].err = err
+				return
+			}
+			read[i] = parseSource(Source{Name: name, Text: text}, l.ifcfg)
+		}()
+	}
+	wg.Wait()
+	for i, name := range folder.Vertex {
+		if err := read[i].err; err != nil {
 			fail("cannot read '" + name + "': " + err.Error())
-			return
+			return ""
 		}
-		if !add(Source{Name: name, Text: text}) {
-			return
+		if !add(read[i]) {
+			return ""
 		}
 	}
 
@@ -635,14 +681,14 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	}
 	if name == "" {
 		fail("cannot name the module for '" + path + "': add a package declaration")
-		return
+		return ""
 	}
 	as := name
 	if spec.Alias != nil {
 		as = spec.Alias.Text(unit)
 	}
 	if l.seen[as] {
-		return
+		return dir
 	}
 	l.seen[as] = true
 
@@ -653,25 +699,54 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		nb, ok := l.packages.(NativeBinder)
 		if !ok {
 			fail("package '" + path + "' has C++, which this build does not compile")
-			return
+			return ""
 		}
 		native, err := nb.NativeSources(dir, path, name, len(folder.Vertex) == 0)
 		if err != nil {
 			fail("package '" + path + "': " + err.Error())
-			return
+			return ""
 		}
 		for _, src := range native {
-			if !add(src) {
-				return
+			if !add(parseSource(src, l.ifcfg)) {
+				return ""
 			}
 		}
 	}
 
+	var deps []string
+	opaque := false
 	for i, f := range files {
-		l.readAll(f, units[i], name)
+		d, o := l.readAll(f, units[i], name)
+		opaque = opaque || o
+		for _, x := range d {
+			if !slices.Contains(deps, x) {
+				deps = append(deps, x)
+			}
+		}
 	}
 	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units})
-	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0})
+	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque})
+	return dir
+}
+
+// readFile is one source of an imported folder, read and parsed.
+type readFile struct {
+	src    Source
+	unit   *token.File
+	parsed *ast.File
+	bad    bool  // the parser reported something
+	err    error // the file could not be read
+}
+
+// parseSource parses an imported source and resolves its #if blocks.
+func parseSource(src Source, cfg ifconfig.Config) readFile {
+	tf := token.NewFile(src.Name, src.Text)
+	parsed, ds := parser.ParseFile(tf, 0)
+	if len(ds) > 0 {
+		return readFile{src: src, bad: true}
+	}
+	ifconfig.Resolve(parsed, cfg)
+	return readFile{src: src, unit: tf, parsed: parsed}
 }
 
 // lastSegment returns the trailing folder name from a path.

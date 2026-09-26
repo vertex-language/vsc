@@ -3,6 +3,7 @@ package build
 import (
 	"errors"
 	"fmt"
+	"github.com/vertex-language/vsc/timing"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,7 @@ type LinkOptions struct {
 // vertex-language's, shared with vcx, and takes bytes and returns
 // Executable links objects into a runnable image and returns its bytes.
 func Executable(objs []Input, opts LinkOptions) ([]byte, error) {
+	defer timing.Start("link (incl. runtime)")()
 	if len(objs) == 0 {
 		return nil, fmt.Errorf("%w: nothing to link", ErrLink)
 	}

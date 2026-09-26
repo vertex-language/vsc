@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/vertex-language/vsc/timing"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/vertex-language/vsc"
 	"github.com/vertex-language/vsc/build"
+	"github.com/vertex-language/vsc/build/buildcache"
 	"github.com/vertex-language/vsc/iface"
 	"github.com/vertex-language/vsc/internal/sil/text"
 )
@@ -85,6 +87,7 @@ func cmdBuild(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	_, code := doBuild(&bf, fs.Args(), stdout, stderr)
+	timing.Print(stderr)
 	return code
 }
 
@@ -235,8 +238,14 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 	inputs := []build.Input{{Name: outputName(srcs, ".o"), Data: obj}}
 	seen := map[string]bool{inputs[0].Name: true}
 	var need []build.Linkage
+	// early holds native objects compiled ahead, while the packages were.
+	early := map[string]nativeResult{}
 	addNative := func(dir string) int {
-		objs, n, err := bf.nativeObjects(dir)
+		r, ok := early[dir]
+		if !ok {
+			r.objs, r.need, r.err = bf.nativeObjects(dir)
+		}
+		objs, n, err := r.objs, r.need, r.err
 		if err != nil {
 			fmt.Fprintln(stderr, "vsc:", err)
 			return exitDiags
@@ -257,11 +266,46 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 			return "", code
 		}
 	}
-	for _, p := range u.Packages {
-		pobj, code := buildPackage(p, bf, target, minOS, stderr)
-		if code != exitOK {
-			return "", code
+	mainDir := progDir
+	if mainDir == "" {
+		mainDir = wd
+	}
+	// The packages' C++ does not depend on their Vertex, so where the
+	// packages compile in worker processes it compiles here meanwhile.
+	// In-process package builds share the bound natives with it, and
+	// run after as before.
+	nativeDone := func() {}
+	if jobs() > 1 {
+		var dirs []string
+		for _, p := range u.Packages {
+			if p.Native {
+				dirs = append(dirs, p.Dir)
+			}
 		}
+		if len(dirs) > 0 {
+			results := make([]nativeResult, len(dirs))
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for i, d := range dirs {
+					results[i].objs, results[i].need, results[i].err = bf.nativeObjects(d)
+				}
+			}()
+			nativeDone = func() {
+				<-done
+				for i, d := range dirs {
+					early[d] = results[i]
+				}
+			}
+		}
+	}
+	pobjs, code := packageObjects(u.Packages, bf, target, mainDir, minOS, stderr)
+	nativeDone()
+	if code != exitOK {
+		return "", code
+	}
+	for i, p := range u.Packages {
+		pobj := pobjs[i]
 		if !seen[p.Name+".o"] {
 			seen[p.Name+".o"] = true
 			inputs = append(inputs, build.Input{Name: p.Name + ".o", Data: pobj})
@@ -306,6 +350,75 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 	return out, write(out, stdout, stderr, exe, true)
 }
 
+// packageObjects is the object of every imported package, by index:
+// from the build cache where it has one, and compiled -- in parallel
+// where there are several -- where it does not.
+//
+// A package's object depends on the compiler, the target, its own
+// sources, and the packages it imports -- it specializes their generics
+// and inlines their bodies -- so its key is those, with each import's
+// own key standing for the import. pkgs lists an import before anything
+// that imports it, so every key can be made before anything compiles. A
+// package with no key (an import from an interface file somewhere under
+// it) is compiled every time.
+func packageObjects(pkgs []vsc.Package, bf *buildFlags, target ir.Target, mainDir, minOS string, stderr io.Writer) ([][]byte, int) {
+	objs := make([][]byte, len(pkgs))
+	keys := map[string]buildcache.Key{}
+	keyed := make([]bool, len(pkgs))
+	var miss []int
+	for i, p := range pkgs {
+		key, ok := packageKey(p, target, minOS, keys)
+		if ok {
+			keys[p.Dir] = key
+			keyed[i] = true
+			if obj, hit := buildcache.Get(key); hit {
+				timing.Count("cache hit: package", 1)
+				objs[i] = obj
+				continue
+			}
+		}
+		miss = append(miss, i)
+	}
+	if len(miss) == 0 {
+		return objs, exitOK
+	}
+	timing.Count("cache miss: package", len(miss))
+	built, code := compilePackages(pkgs, miss, bf, mainDir, minOS, stderr)
+	if code != exitOK {
+		return nil, code
+	}
+	for _, i := range miss {
+		objs[i] = built[i]
+		if keyed[i] {
+			buildcache.Put(keys[pkgs[i].Dir], built[i])
+		}
+	}
+	return objs, exitOK
+}
+
+func packageKey(pkg vsc.Package, target ir.Target, minOS string, keys map[string]buildcache.Key) (buildcache.Key, bool) {
+	if pkg.Opaque || !buildcache.Enabled() {
+		return buildcache.Key{}, false
+	}
+	h := buildcache.New("package").
+		String(target.String()).
+		String(minOS).
+		String(pkg.Name).
+		String(fmt.Sprint(len(pkg.Sources)))
+	for _, s := range pkg.Sources {
+		h.String(s.Name).Bytes(s.Text)
+	}
+	h.String(fmt.Sprint(len(pkg.Deps)))
+	for _, d := range pkg.Deps {
+		k, ok := keys[d]
+		if !ok {
+			return buildcache.Key{}, false
+		}
+		h.Bytes(k[:])
+	}
+	return h.Key(), true
+}
+
 // buildPackage compiles one imported folder as its own module.
 func buildPackage(pkg vsc.Package, bf *buildFlags, target ir.Target, minOS string, stderr io.Writer) ([]byte, int) {
 	opts := bf.options(target, vsc.All)
@@ -328,4 +441,11 @@ func write(name string, stdout, stderr io.Writer, data []byte, exec bool) int {
 		return exitUsage
 	}
 	return exitOK
+}
+
+// nativeResult is what nativeObjects returned for one folder.
+type nativeResult struct {
+	objs []build.Input
+	need build.Linkage
+	err  error
 }

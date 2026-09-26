@@ -922,7 +922,9 @@ func (n *Native) cacheKey(thunks []byte) string {
 	var files []string
 	entries, _ := os.ReadDir(n.Dir)
 	for _, e := range entries {
-		if !e.IsDir() {
+		// Vertex source is no input to the C++ (the thunks above are
+		// what the Vertex side contributes).
+		if !e.IsDir() && filepath.Ext(e.Name()) != ".vs" {
 			files = append(files, filepath.Join(n.Dir, e.Name()))
 		}
 	}
