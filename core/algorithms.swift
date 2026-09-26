@@ -2996,6 +2996,9 @@ extension Double {
     var isSignMinus: Bool { bitPattern >> 63 != 0 }
 
     func squareRoot() -> Double { _sqrt(self) }
+    /// addingProduct is self + lhs·rhs, rounded once.
+    func addingProduct(_ lhs: Double, _ rhs: Double) -> Double { _fma(lhs, rhs, self) }
+    mutating func addProduct(_ lhs: Double, _ rhs: Double) { self = _fma(lhs, rhs, self) }
     mutating func formSquareRoot() { self = _sqrt(self) }
 
     func rounded(_ rule: FloatingPointRoundingRule) -> Double {
@@ -3125,6 +3128,9 @@ extension Float {
     var isSignMinus: Bool { bitPattern >> 31 != 0 }
 
     func squareRoot() -> Float { _sqrt(self) }
+    /// addingProduct is self + lhs·rhs, rounded once.
+    func addingProduct(_ lhs: Float, _ rhs: Float) -> Float { _fma(lhs, rhs, self) }
+    mutating func addProduct(_ lhs: Float, _ rhs: Float) { self = _fma(lhs, rhs, self) }
     mutating func formSquareRoot() { self = _sqrt(self) }
 
     func rounded(_ rule: FloatingPointRoundingRule) -> Float {
@@ -3418,6 +3424,9 @@ extension Float16 {
     var isSignMinus: Bool { bitPattern >> 15 != 0 }
 
     func squareRoot() -> Float16 { _sqrt(self) }
+    /// addingProduct is self + lhs·rhs, rounded once.
+    func addingProduct(_ lhs: Float16, _ rhs: Float16) -> Float16 { _fma(lhs, rhs, self) }
+    mutating func addProduct(_ lhs: Float16, _ rhs: Float16) { self = _fma(lhs, rhs, self) }
     mutating func formSquareRoot() { self = _sqrt(self) }
 
     func rounded(_ rule: FloatingPointRoundingRule) -> Float16 {
@@ -3491,6 +3500,9 @@ extension BFloat16 {
     var isSignMinus: Bool { bitPattern >> 15 != 0 }
 
     func squareRoot() -> BFloat16 { _sqrt(self) }
+    /// addingProduct is self + lhs·rhs, rounded once.
+    func addingProduct(_ lhs: BFloat16, _ rhs: BFloat16) -> BFloat16 { _fma(lhs, rhs, self) }
+    mutating func addProduct(_ lhs: BFloat16, _ rhs: BFloat16) { self = _fma(lhs, rhs, self) }
     mutating func formSquareRoot() { self = _sqrt(self) }
 
     func rounded(_ rule: FloatingPointRoundingRule) -> BFloat16 {

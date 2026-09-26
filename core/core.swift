@@ -673,6 +673,7 @@ protocol FloatingPoint: SignedNumeric, Comparable, Hashable, CustomStringConvert
     var isZero: Bool { get }
     var nextUp: Self { get }
     func squareRoot() -> Self
+    func addingProduct(_ lhs: Self, _ rhs: Self) -> Self
     func rounded(_ rule: FloatingPointRoundingRule) -> Self
     init(_ value: Int)
 }
@@ -899,6 +900,8 @@ func _rint(_ x: Double) -> Double
 func _fabs(_ x: Double) -> Double
 @_builtin("int_copysign")
 func _copysign(_ x: Double, _ y: Double) -> Double
+@_builtin("int_fma")
+func _fma(_ a: Double, _ b: Double, _ c: Double) -> Double
 @_builtin("int_sqrt")
 func _sqrt(_ x: Float) -> Float
 @_builtin("int_floor")
@@ -913,6 +916,8 @@ func _rint(_ x: Float) -> Float
 func _fabs(_ x: Float) -> Float
 @_builtin("int_copysign")
 func _copysign(_ x: Float, _ y: Float) -> Float
+@_builtin("int_fma")
+func _fma(_ a: Float, _ b: Float, _ c: Float) -> Float
 @_builtin("bitcast")
 func _bits(_ x: Double) -> UInt64
 @_builtin("bitcast")
@@ -935,6 +940,8 @@ func _rint(_ x: Float16) -> Float16
 func _fabs(_ x: Float16) -> Float16
 @_builtin("int_copysign")
 func _copysign(_ x: Float16, _ y: Float16) -> Float16
+@_builtin("int_fma")
+func _fma(_ a: Float16, _ b: Float16, _ c: Float16) -> Float16
 @_builtin("bitcast")
 func _bits(_ x: Float16) -> UInt16
 @_builtin("int_sqrt")
@@ -951,6 +958,8 @@ func _rint(_ x: BFloat16) -> BFloat16
 func _fabs(_ x: BFloat16) -> BFloat16
 @_builtin("int_copysign")
 func _copysign(_ x: BFloat16, _ y: BFloat16) -> BFloat16
+@_builtin("int_fma")
+func _fma(_ a: BFloat16, _ b: BFloat16, _ c: BFloat16) -> BFloat16
 @_builtin("bitcast")
 func _bits(_ x: BFloat16) -> UInt16
 @_builtin("bitcast")

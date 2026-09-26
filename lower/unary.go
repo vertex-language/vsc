@@ -74,17 +74,21 @@ func (c *fn) intUnary(name, verb string, r repr, args []ir.Value) ([]ir.Value, b
 	}
 }
 
-// floatUnary lowers a one-operand or sign-copying float builtin, and
-// reports whether name was one. int_rint rounds to nearest, ties to even.
+// floatUnary lowers a one-operand, sign-copying or fused multiply-add
+// float builtin, and reports whether name was one. int_rint rounds to
+// nearest, ties to even; int_fma is a·b + c rounded once.
 func (c *fn) floatUnary(name, verb string, r repr, args []ir.Value) ([]ir.Value, bool, error) {
 	switch verb {
-	case "int_sqrt", "int_floor", "int_ceil", "int_trunc", "int_rint", "int_fabs", "int_copysign":
+	case "int_sqrt", "int_floor", "int_ceil", "int_trunc", "int_rint", "int_fabs", "int_copysign", "int_fma":
 	default:
 		return nil, false, nil
 	}
 	want := 1
 	if verb == "int_copysign" {
 		want = 2
+	}
+	if verb == "int_fma" {
+		want = 3
 	}
 	if len(args) < want {
 		return nil, true, c.fail(ErrBuiltin, "builtin", name+": too few operands")

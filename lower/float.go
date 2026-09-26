@@ -21,6 +21,7 @@ type floatNS[V ir.Value] interface {
 	Trunc(a V) V
 	Nearest(a V) V
 	CopySign(a, c V) V
+	FMA(a, c, d V) V
 	Eq(a, c V) ir.I1
 	Ne(a, c V) ir.I1
 	Lt(a, c V) ir.I1
@@ -102,6 +103,13 @@ func floatUnaryIn[V ir.Value](c *fn, ns floatNS[V], name, verb string, args []ir
 	b, ok := args[1].(V)
 	if !ok {
 		return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand of the wrong float type")
+	}
+	if verb == "int_fma" {
+		d, ok := args[2].(V)
+		if !ok {
+			return nil, true, c.fail(ErrBuiltin, "builtin", name+": operand of the wrong float type")
+		}
+		return []ir.Value{ns.FMA(a, b, d)}, true, nil
 	}
 	return []ir.Value{ns.CopySign(a, b)}, true, nil
 }
