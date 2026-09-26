@@ -73,6 +73,13 @@ type Options struct {
 	// supplies. Nil never fetches anything, which is what compiling
 	// against what is already on disk wants.
 	Packages PackageResolver
+	// AfterImports, when set, is asked once the imports are loaded
+	// whether the rest of the compile is wanted: false stops it there,
+	// with the Unit's Packages filled in. opaque says the module imports
+	// something from an interface file, which Packages does not cover.
+	// It is how a build that has the module's object cached already
+	// learns what to link without compiling the module again.
+	AfterImports func(pkgs []Package, opaque bool) bool
 }
 
 // A PackageResolver finds the source of a package named by a string
@@ -200,6 +207,15 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	diags = append(diags, importDiags...)
 	if Errors(diags) {
 		return u, diags
+	}
+	if opts.AfterImports != nil {
+		opaque := len(imports) > len(pkgs)
+		for _, p := range pkgs {
+			opaque = opaque || p.Opaque
+		}
+		if !opts.AfterImports(pkgs, opaque) {
+			return u, diags
+		}
 	}
 	done = timing.Start("check")
 	info, checks := analyzer.CheckModule(opts.Module, u.Files, imports)

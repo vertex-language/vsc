@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"github.com/vertex-language/vsc/timing"
@@ -172,8 +173,42 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 	}
 
 	opts := bf.options(target, mode.stop)
+	// A program linked whole may have its own object cached: then the
+	// compile stops once its imports are known, which is what the link
+	// needs of it.
+	var mainKey buildcache.Key
+	var cachedMain []byte
+	keyedMain := false
+	if mode.name == "exe" || mode.name == "lib" {
+		minOS := bf.main.minOS(target)
+		opts.AfterImports = func(pkgs []vsc.Package, opaque bool) bool {
+			if opaque {
+				return true
+			}
+			mainKey, keyedMain = programKey(srcs, bf.module, target, minOS, pkgs)
+			if !keyedMain {
+				return true
+			}
+			if entry, hit := buildcache.Get(mainKey); hit {
+				if warnings, obj, ok := splitMain(entry); ok {
+					timing.Count("cache hit: main", 1)
+					stderr.Write(warnings)
+					cachedMain = obj
+					return false
+				}
+			}
+			timing.Count("cache miss: main", 1)
+			return true
+		}
+	}
 	u, diags := vsc.Compile(srcs, opts)
-	if printDiags(stderr, diags) {
+	// A program taken from the cache has had its warnings, the imports'
+	// among them, printed from the cache already.
+	var warnings bytes.Buffer
+	if cachedMain != nil && !vsc.Errors(diags) {
+		diags = nil
+	}
+	if printDiags(io.MultiWriter(stderr, &warnings), diags) {
 		return "", exitDiags
 	}
 
@@ -230,10 +265,17 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		fmt.Fprintf(stderr, "vsc: --emit lib builds for aarch64-android only, not %s\n", target.Use())
 		return "", exitUsage
 	}
-	obj, err := build.Object(u.VIR, build.Options{MinOS: minOS})
-	if err != nil {
-		fmt.Fprintln(stderr, "vsc:", err)
-		return "", exitUsage
+	obj := cachedMain
+	if obj == nil {
+		var err error
+		obj, err = build.Object(u.VIR, build.Options{MinOS: minOS})
+		if err != nil {
+			fmt.Fprintln(stderr, "vsc:", err)
+			return "", exitUsage
+		}
+		if keyedMain {
+			buildcache.Put(mainKey, joinMain(warnings.Bytes(), obj))
+		}
 	}
 	inputs := []build.Input{{Name: outputName(srcs, ".o"), Data: obj}}
 	seen := map[string]bool{inputs[0].Name: true}
@@ -330,7 +372,7 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 		Target:       target,
 		Entry:        bf.entry,
 		Freestanding: bf.freestanding,
-		Swift:        len(u.Info.SwiftModules) > 0,
+		Swift:        u.Info != nil && len(u.Info.SwiftModules) > 0,
 		Shared:       mode.name == "lib",
 		MinOS:        minOS,
 	}
@@ -340,12 +382,104 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 	for _, n := range need {
 		link = n.Options(link)
 	}
-	exe, err := build.Executable(inputs, link)
-	if err != nil {
-		fmt.Fprintln(stderr, "vsc:", err)
-		return "", exitUsage
+	lk, keyedLink := linkKey(inputs, link)
+	exe, hit := []byte(nil), false
+	if keyedLink {
+		exe, hit = buildcache.Get(lk)
+	}
+	if hit {
+		timing.Count("cache hit: link", 1)
+	} else {
+		var err error
+		exe, err = build.Executable(inputs, link)
+		if err != nil {
+			fmt.Fprintln(stderr, "vsc:", err)
+			return "", exitUsage
+		}
+		if keyedLink {
+			buildcache.Put(lk, exe)
+		}
 	}
 	return out, write(out, stdout, stderr, exe, true)
+}
+
+// programKey is what the program's own object is cached under: its
+// sources, the module it is compiled as, and the surface of every package
+// it imports (see packageKey). ok is false where a package has no key.
+func programKey(srcs []vsc.Source, module string, target ir.Target, minOS string, pkgs []vsc.Package) (buildcache.Key, bool) {
+	if !buildcache.Enabled() {
+		return buildcache.Key{}, false
+	}
+	surfaces := map[string]buildcache.Key{}
+	h := buildcache.New("program").String(target.String()).String(minOS).String(module).
+		String(fmt.Sprint(len(srcs)))
+	for _, s := range srcs {
+		h.String(s.Name).Bytes(s.Text)
+	}
+	h.String(fmt.Sprint(len(pkgs)))
+	for _, p := range pkgs {
+		if p.Opaque {
+			return buildcache.Key{}, false
+		}
+		for _, d := range p.Deps {
+			if _, ok := surfaces[d]; !ok {
+				return buildcache.Key{}, false
+			}
+		}
+		k := surfaceKey(p, surfaces)
+		surfaces[p.Dir] = k
+		h.String(p.Dir).Bytes(k[:])
+	}
+	return h.Key(), true
+}
+
+// A cached program object is stored with the warnings its compile gave,
+// which a build that takes it from the cache prints again.
+func joinMain(warnings, obj []byte) []byte {
+	out := binary.AppendUvarint(nil, uint64(len(warnings)))
+	out = append(out, warnings...)
+	return append(out, obj...)
+}
+
+func splitMain(entry []byte) (warnings, obj []byte, ok bool) {
+	n, w := binary.Uvarint(entry)
+	if w <= 0 || uint64(len(entry)-w) < n {
+		return nil, nil, false
+	}
+	return entry[w : w+int(n)], entry[w+int(n):], true
+}
+
+// linkKey is what a linked image is cached under: every input, every
+// option, and the SDK its stubs are read from. On macOS a named library
+// is found in the SDK, whose settings the key hashes; a link that searches
+// directories of its own, or links for anything else, has no key, since
+// what it reads there may change under it.
+func linkKey(inputs []build.Input, link build.LinkOptions) (buildcache.Key, bool) {
+	if !buildcache.Enabled() || link.Target.Use() != "aarch64/macos" ||
+		len(link.LibDirs) > 0 || len(link.FrameworkDirs) > 0 {
+		return buildcache.Key{}, false
+	}
+	h := buildcache.New("link").String(link.Target.String()).String(link.Entry).String(link.MinOS).
+		String(link.SDK).Strings(link.Frameworks).Strings(link.LibNames).
+		Strings(build.LibraryDirs(link.Target, link.Freestanding)).
+		String(fmt.Sprint(link.Swift, link.NoRuntime, link.Freestanding, link.Shared)).String(link.SOName)
+	sdk := link.SDK
+	if sdk == "" {
+		sdk, _ = build.SDK()
+	}
+	h.String(sdk)
+	if settings, err := os.ReadFile(filepath.Join(sdk, "SDKSettings.json")); err == nil {
+		h.Bytes(settings)
+	}
+	h.String(fmt.Sprint(len(link.Libs)))
+	for _, in := range link.Libs {
+		h.String(in.Name).Bytes(in.Data)
+	}
+	h.String(fmt.Sprint(len(inputs)))
+	for _, in := range inputs {
+		h.String(in.Name).Bytes(in.Data)
+	}
+	return h.Key(), true
 }
 
 // packageObjects is the object of every imported package, by index:
