@@ -226,6 +226,7 @@ func (c *common) nativeObjectsAll(dirs []string) []nativeResult {
 	for _, d := range mods {
 		built[d] = &nativeResult{}
 	}
+	doneAll := timing.Start("natives (parallel wall)")
 	var wg sync.WaitGroup
 	for _, d := range mods {
 		wg.Add(1)
@@ -238,6 +239,7 @@ func (c *common) nativeObjectsAll(dirs []string) []nativeResult {
 		}()
 	}
 	wg.Wait()
+	doneAll()
 
 	for i := range dirs {
 		if out[i].err != nil {

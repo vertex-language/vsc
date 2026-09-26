@@ -107,6 +107,9 @@ type printer struct {
 	// foreign is the module of each imported type the interface may name,
 	// by the name it prints as; made on first use.
 	foreign map[string]string
+	// clash is the names two imported modules both declare, which
+	// foreign leaves out and typeText qualifies type by type.
+	clash map[string]bool
 }
 
 // typeText is a type as the interface spells it: another module's types
@@ -122,8 +125,12 @@ func (p *printer) typeText(t types.Type) string {
 		p.foreign = map[string]string{}
 		local := map[string]bool{}
 		for _, sym := range p.m.Info.Defs {
+			// Imports are declared through the same passes, so Defs
+			// holds their types too; only this module's own are local.
 			if tn, ok := sym.(*analyzer.TypeNameSymbol); ok {
-				local[tn.Name()] = true
+				if _, imported := p.m.Info.ImportedTypes[tn.Type()]; !imported {
+					local[tn.Name()] = true
+				}
 			}
 		}
 		clash := map[string]bool{}
@@ -153,8 +160,32 @@ func (p *printer) typeText(t types.Type) string {
 		for name := range clash {
 			delete(p.foreign, name)
 		}
+		p.clash = clash
 	}
-	if len(p.foreign) == 0 {
+	// A name two imports both declare -- tcp's and udp's SocketAddress --
+	// is qualified by the module of the type actually named here, which
+	// the type itself says.
+	var here map[string]string
+	if len(p.clash) > 0 {
+		nominalsIn(t, func(n types.Type, name string) {
+			if !p.clash[name] {
+				return
+			}
+			mod, ok := p.m.Info.ImportedTypes[n]
+			if !ok || mod == "" || mod == "Swift" || mod == p.m.Name {
+				return
+			}
+			if here == nil {
+				here = map[string]string{}
+			}
+			if was, seen := here[name]; seen && was != mod {
+				here[name] = "" // both in one type: leave it as written
+				return
+			}
+			here[name] = mod
+		})
+	}
+	if len(p.foreign) == 0 && len(here) == 0 {
 		return text
 	}
 	var b strings.Builder
@@ -169,7 +200,12 @@ func (p *printer) typeText(t types.Type) string {
 			j++
 		}
 		word := text[i:j]
-		if mod, ok := p.foreign[word]; ok && (i == 0 || text[i-1] != '.') {
+		mod, ok := p.foreign[word]
+		if !ok {
+			mod, ok = here[word]
+			ok = ok && mod != ""
+		}
+		if ok && (i == 0 || text[i-1] != '.') {
 			b.WriteString(mod + ".")
 		}
 		b.WriteString(word)
@@ -856,4 +892,57 @@ func memberKey(kind string, params []*types.Param) string {
 		}
 	}
 	return kind + "(" + strings.Join(labels, ":") + ")"
+}
+
+// nominalsIn calls fn for every struct, class, enum and protocol a type
+// is built from, with the name it is printed by.
+func nominalsIn(t types.Type, fn func(n types.Type, name string)) {
+	switch x := t.(type) {
+	case nil:
+	case *types.Struct:
+		fn(x, x.Name)
+	case *types.Class:
+		fn(x, x.Name)
+	case *types.Enum:
+		fn(x, x.Name)
+	case *types.Protocol:
+		fn(x, x.Name)
+	case *types.Array:
+		nominalsIn(x.Elem, fn)
+	case *types.Set:
+		nominalsIn(x.Elem, fn)
+	case *types.Dictionary:
+		nominalsIn(x.Key, fn)
+		nominalsIn(x.Value, fn)
+	case *types.Pointer:
+		nominalsIn(x.Elem, fn)
+	case *types.Optional:
+		nominalsIn(x.Wrapped, fn)
+	case *types.Range:
+		nominalsIn(x.Element, fn)
+	case *types.Metatype:
+		nominalsIn(x.Instance, fn)
+	case *types.Existential:
+		for _, pr := range x.Protocols {
+			nominalsIn(pr, fn)
+		}
+	case *types.GenericInstance:
+		nominalsIn(x.Base, fn)
+		for _, a := range x.Args {
+			nominalsIn(a, fn)
+		}
+	case *types.Tuple:
+		for _, e := range x.Elements {
+			nominalsIn(e.Type, fn)
+		}
+	case *types.Signature:
+		for _, pa := range x.Params {
+			nominalsIn(pa.Type, fn)
+		}
+		nominalsIn(x.Results, fn)
+	case *types.Named:
+		if u := x.Underlying(); u != nil && u != types.Type(x) {
+			nominalsIn(u, fn)
+		}
+	}
 }

@@ -365,3 +365,38 @@ func main() -> Int32 {
 		}
 	}
 }
+
+// TestInterfaceQualifiesImportedTypes: an imported type is written with its
+// module, even where two imports both declare that name -- net/tcp and
+// net/udp each have a SocketAddress -- and even though the checker lists
+// imported types among the module's definitions.
+func TestInterfaceQualifiesImportedTypes(t *testing.T) {
+	root := t.TempDir()
+	writePackage(t, filepath.Join(root, "lib", "a"), "a", `public enum Addr { case any }`)
+	writePackage(t, filepath.Join(root, "lib", "b"), "b", `public enum Addr { case none }`)
+	for _, tc := range []struct{ src, want string }{
+		{`
+import "lib/b"
+public func use(_ x: b.Addr) -> Int32 { return 0 }
+`, "public func use(_ x: b.Addr) -> int32"},
+		{`
+import "lib/a"
+import "lib/b"
+public func both(_ x: a.Addr, _ y: b.Addr?) -> Int32 { return 0 }
+`, "public func both(_ x: a.Addr, _ y: b.Addr?) -> int32"},
+	} {
+		u, diags := compile(t, tc.src, vsc.Options{Module: "c", Stop: vsc.Checked, PackagePaths: []string{root}, Packages: &fakePackages{}})
+		for _, d := range diags {
+			if d.Severity == token.Error {
+				t.Fatalf("compile: %v", d)
+			}
+		}
+		var b strings.Builder
+		if err := iface.Print(&b, iface.Module{Name: "c", Files: u.Files, Units: u.Positions, Info: u.Info}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(b.String(), tc.want) {
+			t.Errorf("want %q in:\n%s", tc.want, b.String())
+		}
+	}
+}
