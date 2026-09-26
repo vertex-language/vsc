@@ -139,9 +139,13 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		}
 		tt, _ := g.typeOf(n).Underlying().(*types.Tuple)
 		elems := make([]*sil.Value, 0, len(n.Elems))
+		// An element made before a later one throws is released on the
+		// way out, as a call's arguments are (hold).
+		var held []*sil.Value
 		for i, el := range n.Elems {
 			v := g.rvalue(el.X)
 			if v == nil {
+				g.release(held)
 				return nil
 			}
 			// An element the tuple holds as an optional is wrapped.
@@ -149,7 +153,9 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 				v = g.optionalFor(el.X, v, g.typeOf(el.X), tt.Elements[i].Type)
 			}
 			elems = append(elems, v)
+			held = g.hold(held, v)
 		}
+		g.release(held)
 		// The tuple owns its elements now, and is let go of as any
 		// temporary is, unless something takes it.
 		tuple := g.blk.Tuple(lowerType(g.typeOf(n)), elems...)

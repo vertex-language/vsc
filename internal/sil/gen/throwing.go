@@ -339,8 +339,15 @@ func (g *gen) tryScope(e *ast.TryExpr, x ast.Expr, optional bool) *sil.Value {
 	dispatch := g.fn.Block()
 	box := dispatch.Arg(errorBoxType(), sil.Owned)
 	g.catches = append(g.catches, catchTarget{dispatch: dispatch, depth: len(g.scopes)})
+	// x's temporaries -- the array `try? names().first` reads -- end
+	// with x, on the path where x was made: the scope the statement
+	// ends would release them after the join, where the failed path
+	// never made them. A failure unwinds what of them it had made.
+	g.push()
 	v := g.rvalue(x)
 	g.catches = g.catches[:len(g.catches)-1]
+	g.forget(v)
+	g.popReachable()
 	if v == nil {
 		g.fn.RemoveBlock(dispatch)
 		return nil
