@@ -39,6 +39,9 @@ type Native struct {
 	// the interface unit among them.
 	Sources []string
 	Target  ir.Target
+	// MinOS is the macOS the program the objects link into runs on; empty
+	// is the link's default.
+	MinOS string
 	// Modules are the other named modules the folder's units may import,
 	// by name: their interface units.
 	Modules map[string]string
@@ -55,8 +58,8 @@ type Native struct {
 // FindNative reads what module the C++ sources of a folder are. Exactly
 // one of them is the module's interface unit (`export module M;`), and
 // every other is one of M's units or a unit of no module at all.
-func FindNative(dir string, sources []string, target ir.Target) (*Native, error) {
-	n := &Native{Dir: dir, Sources: sources, Target: target}
+func FindNative(dir string, sources []string, target ir.Target, minOS string) (*Native, error) {
+	n := &Native{Dir: dir, Sources: sources, Target: target, MinOS: minOS}
 	c := n.compiler()
 	for _, src := range sources {
 		sc, diags, err := c.Scan(vcx.File(src))
@@ -170,11 +173,17 @@ func (n *Native) compiler() *vcx.Compiler {
 	if n.Module != "" {
 		modules[n.Module] = n.Interface
 	}
+	minOS := n.MinOS
+	if minOS == "" {
+		minOS = defaultMinOS
+	}
 	return &vcx.Compiler{
 		Target:      targetName(n.Target),
 		Std:         vcx.Cxx23,
 		IncludeDirs: []string{n.Dir},
 		Modules:     modules,
+		// The objects are for the macOS the program links for.
+		MinOS: minOS,
 	}
 }
 

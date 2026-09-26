@@ -55,13 +55,6 @@ func TestPackagesMatchSwiftPM(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, tg := range p.Targets {
-				for _, src := range tg.Sources {
-					if src.Language == pkg.ObjCXX {
-						t.Skip("Objective-C++ is not compiled yet: vcx has no Objective-C half")
-					}
-				}
-			}
 			work := t.TempDir()
 			products, err := build.BuildPackage(p, build.PackageOptions{Target: target, Work: work})
 			if err != nil {

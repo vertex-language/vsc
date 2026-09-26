@@ -58,7 +58,7 @@ func (c *common) bind(dir, path, pkgName string, public bool, target ir.Target) 
 	if len(folder.Native) == 0 {
 		return nil, nil
 	}
-	n, err := build.FindNative(abs, folder.Native, target)
+	n, err := build.FindNative(abs, folder.Native, target, c.main.minOS(target))
 	if err != nil {
 		return nil, err
 	}

@@ -59,6 +59,9 @@ func CInterface(ci CImport) ([]byte, []string, error) {
 		Target:      name,
 		IncludeDirs: append([]string{headersDir}, ci.IncludeDirs...),
 		Defs:        ci.Defines,
+		// The headers are read for the macOS vsc links for, whose
+		// availability macros they test.
+		MinOS: defaultMinOS,
 	}
 	file, _, err := c.Parse(vcx.Text(ci.Module+"-import.cpp", tu.Bytes()), parser.DefaultMode)
 	if err != nil {

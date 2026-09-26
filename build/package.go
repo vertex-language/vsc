@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -440,7 +439,9 @@ func (cc *cCompilers) cacheKey() string {
 // object compiles one source file to object bytes.
 func (cc *cCompilers) object(src pkg.SourceFile) ([]byte, error) {
 	switch src.Language {
-	case pkg.CXX:
+	case pkg.CXX, pkg.ObjCXX:
+		// vcx compiles Objective-C++ as C++ with Objective-C on top; the
+		// file's extension says which.
 		if cc.cxx == nil {
 			cc.cxx = &vcx.Compiler{
 				Target:      targetName(cc.b.opts.Target),
@@ -450,6 +451,8 @@ func (cc *cCompilers) object(src pkg.SourceFile) ([]byte, error) {
 				// reads them; cxxSettings are C++'s alone, and come after.
 				Defs:   append(append([]string(nil), cc.flags.defines["c"]...), cc.flags.defines["cxx"]...),
 				Undefs: append(append([]string(nil), cc.flags.undefines["c"]...), cc.flags.undefines["cxx"]...),
+				// The objects are for the macOS the program links for.
+				MinOS: deploymentTarget(cc.b.p.Manifest, cc.b.opts.Target),
 			}
 		}
 		data, diags, err := cc.cxx.Object(vcx.File(src.Path))
@@ -457,8 +460,6 @@ func (cc *cCompilers) object(src pkg.SourceFile) ([]byte, error) {
 			err = &vcx.DiagnosticError{Diagnostics: diags}
 		}
 		return data, err
-	case pkg.ObjCXX:
-		return nil, errors.New("Objective-C++ is not compiled yet: vcx has no Objective-C half")
 	}
 	return nil, fmt.Errorf("no compiler for this kind of source")
 }

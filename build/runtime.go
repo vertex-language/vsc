@@ -81,6 +81,7 @@ func compileRuntimeWith(target ir.Target, unit, object string, asm bool, defs []
 		Freestanding: true,
 		Defs:         defs,
 		IncludeFS:    []vcx.SystemInclude{{Name: "<vertex>", FS: include}},
+		MinOS:        defaultMinOS,
 	}
 	m, diags, err := c.IR(vcx.Input{Name: unit, Data: text, FS: src})
 	if err == nil && vcx.HasErrors(diags) {

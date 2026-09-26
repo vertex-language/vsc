@@ -39,7 +39,7 @@ int32_t hidden(int32_t x) { return x; }
 	if err := os.WriteFile(iface, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, err := FindNative(dir, []string{iface}, ir.AArch64MacOS)
+	n, err := FindNative(dir, []string{iface}, ir.AArch64MacOS, "")
 	if err != nil {
 		t.Fatal(err)
 	}
