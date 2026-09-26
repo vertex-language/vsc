@@ -1,14 +1,40 @@
 package verify
 
-import "github.com/vertex-language/vsc/internal/sil"
+import (
+	"runtime"
+	"sync"
 
-// Module checks every function in m and returns all faults found.
+	"github.com/vertex-language/vsc/internal/sil"
+)
+
+// Module checks every function in m and returns all faults found, in
+// function order.
+//
+// A function's check reads that function and nothing it could change, so
+// the functions are checked side by side. This is the verification every
+// build runs on what SILGen made.
 func Module(m *sil.Module) error {
+	funcs := m.Funcs()
+	found := make([]Errors, len(funcs))
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for w := min(runtime.GOMAXPROCS(0), len(funcs)); w > 0; w-- {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				found[i] = check(funcs[i])
+			}
+		}()
+	}
+	for i := range funcs {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
 	var all Errors
-	for _, f := range m.Funcs() {
-		if err := check(f); err != nil {
-			all = append(all, err...)
-		}
+	for _, errs := range found {
+		all = append(all, errs...)
 	}
 	if len(all) == 0 {
 		return nil
