@@ -112,12 +112,11 @@ func (m *mainModule) minOS(target ir.Target) string {
 
 // programDir finds the program a build names by name alone: `vsc run
 // tcp-echo` is the checkout's cmd/tcp-echo, as the folder a Go command is.
-// "" where the name is not one.
+// A bare name is the program even beside a folder of that name -- remote
+// has the library hub/ and the tool cmd/hub -- and `./hub` names the
+// folder. "" where the name is not one.
 func programDir(name string) string {
-	if name == "" || filepath.Ext(name) != "" {
-		return ""
-	}
-	if _, err := os.Stat(name); err == nil {
+	if name == "" || filepath.Ext(name) != "" || strings.ContainsAny(name, `/\`) {
 		return ""
 	}
 	wd, err := os.Getwd()
