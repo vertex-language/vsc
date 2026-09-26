@@ -6,6 +6,7 @@
 package ifconfig
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 
@@ -65,6 +66,12 @@ func ForTarget(target string) Config {
 // Resolve replaces every `#if` in f by its active clause's statements.
 func Resolve(f *ast.File, cfg Config) {
 	if f == nil || f.Unit == nil {
+		return
+	}
+	// Only a #if in the text makes an #if in the tree. Most files have
+	// none, and walking every node of every imported file to find that
+	// out cost more than parsing them.
+	if !bytes.Contains(f.Unit.Text(), []byte("#if")) {
 		return
 	}
 	r := &resolver{cfg: cfg, file: f.Unit}
