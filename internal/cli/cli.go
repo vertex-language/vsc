@@ -81,8 +81,8 @@ Geometry.vinterface in each -I directory, in order. An interface
 is source -- valid Vertex with the bodies taken out -- which is why
 compiling against one needs no separate module format.
 
-Not yet: --emit asm, --emit device, -L, -l, -static, cross-target
-builds. The target table has one row.
+Targets: aarch64-macos, aarch64-android and x86_64-windows; vsc env
+lists them. Not yet: --emit asm, --emit device, -L, -l, -static.
 
 Exit codes: 0 no errors, 1 diagnostics with errors, 2 usage or I/O.
 `

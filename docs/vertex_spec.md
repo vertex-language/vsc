@@ -144,7 +144,8 @@ func pipelineNode(input: Stream) graph -> Stream { ... }
 ```
 
 - **Placement**: Stood between the `throws` clause and the return arrow.
-- **Lowering**: Contextual keywords that parse and typecheck. If the active backend target lacks compute code emission, lowering produces a compile-time error.
+- **`kernel`**: compiled for the device, and launched with the `Launch` or `Map` method the compiler writes for it. The rules and the `gpu` API are in the README's Kernels section and `proposed_vertex_kernel.md`.
+- **`graph`**: reserved. It parses and type-checks, and lowering refuses it.
 
 ---
 
@@ -192,6 +193,7 @@ A module's canonical identifier is determined in order:
 | Package Declarations | §3.1 | Complete |
 | Directory & Grouped Imports | §3.2 | Complete |
 | Receiver Methods | §3.3 | Complete |
-| Execution Modifiers (`kernel`, `graph`) | §3.4 | Reserved (Parsed & Checked; Refused at Lowering) |
+| `kernel` | §3.4 | Complete (Metal and the CPU device) |
+| `graph` | §3.4 | Reserved (parsed and checked; refused at lowering) |
 | Relaxed Argument Labels | §4 | Complete |
 | Folder Modules & Resolution | §5 | Complete |

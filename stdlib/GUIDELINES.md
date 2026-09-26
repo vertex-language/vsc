@@ -49,7 +49,7 @@ net/tcp/                  ← import "net/tcp"
 ├── sock.cpp              # export module net.tcp;   the interface unit (exactly one)
 ├── sock_posix.cpp        # module net.tcp;          implementation units, any number
 ├── sock_windows.cpp      # module net.tcp;
-├── window_darwin.mm      # module ui.window;        Objective-C++ for Apple frameworks (vcx, once it has it)
+├── window_darwin.mm      # module ui.window;        Objective-C++ for Apple frameworks, with ARC
 └── *.vs                  # package tcp: the public Vertex API, types, policy, validation
 ```
 
@@ -85,15 +85,14 @@ All native code compiles in-process through vcx (no external toolchain):
 | Extension | Compiler | Usage |
 | --- | --- | --- |
 | `.cpp`, `.cc`, `.cxx`, `.cppm` | **vcx** / `v++` (C++23) | **Default.** Every bridge. |
-| `.mm` | **vcx** (Objective-C++) | Apple-only frameworks. Not compiled yet: vcx has no Objective-C half. |
+| `.mm` | **vcx** (Objective-C++, ARC) | Apple-only frameworks (`ui/window/window_darwin.mm`). |
 | `.cu`, `.cuh`, `.hip`, `.metal` | **vcx** | Only in the `gpu` repository's function packages, for kernels that need vendor tuning. Everywhere else a kernel is `.vs`. |
 
 `.c` and `.m` are errors in any package, `Package.swift` ones included: vsc builds `.vs` and C++, and nothing else. C belongs to vcc and Objective-C to objv, which are separate compilers.
 
 **Known gaps:**
-* **Objective-C++ (`.mm`):** not compiled yet.
 * **`std::span`:** vcx can't construct one from a pointer and a length yet, nor iterate one with range-`for`. Pass a pointer and a count.
-* **C++ importing another package's module** (`import net.tcp;` from another package's C++): not wired yet. vcx resolves module imports; vsc does not yet hand it other packages' interface units.
+* **Constants:** only integer `constexpr`s import; a `constexpr double` is left out. Export a function returning it.
 
 ---
 
