@@ -397,19 +397,39 @@ func (g *gen) methodLabelled(t types.Type, name string, want *types.Signature) (
 			cur = next
 		}
 	}
+	// Of those with the requirement's labels, the one of its parameter
+	// types, where the conformer overloads by type: put(_: Int) beside
+	// put(_: String). A parameter type still naming Self or another
+	// parameter says nothing either way.
+	var byLabel *types.Method
 	for _, m := range methods {
 		if m == nil || m.Name != name || m.Sig == nil || len(m.Sig.Params) != len(want.Params) {
 			continue
 		}
-		same := true
+		same, typed := true, true
 		for i, p := range m.Sig.Params {
 			if p.Label != want.Params[i].Label {
 				same = false
+				break
+			}
+			w := g.substituted(want.Params[i].Type)
+			if !mentionsTypeParam(w) && !mentionsTypeParam(p.Type) &&
+				!types.Identical(g.substituted(p.Type), w) {
+				typed = false
 			}
 		}
-		if same {
+		if !same {
+			continue
+		}
+		if typed {
 			return owner, m
 		}
+		if byLabel == nil {
+			byLabel = m
+		}
+	}
+	if byLabel != nil {
+		return owner, byLabel
 	}
 	return nil, nil
 }

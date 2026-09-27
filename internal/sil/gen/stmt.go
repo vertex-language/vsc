@@ -14,6 +14,9 @@ func (g *gen) block(b *ast.CodeBlock) {
 	if b == nil {
 		return
 	}
+	if g.initDI != nil {
+		defer g.initDI.enter()()
+	}
 	g.push()
 	for _, s := range b.Stmts {
 		g.stmt(s)
@@ -43,6 +46,13 @@ func (g *gen) stmtBody(s ast.Stmt) {
 			g.varDecl(d)
 		case *ast.FuncDecl:
 			g.nestedFunc(d)
+		case *ast.StructDecl, *ast.ClassDecl, *ast.EnumDecl:
+			// A type of the function's own: its members are lowered with
+			// the module's types (withLocalTypes), and the statement does
+			// nothing where it is.
+			if !g.localType(n.D) {
+				g.refuse(n, declKind(n.D))
+			}
 		default:
 			g.refuse(n, declKind(n.D))
 		}
@@ -259,6 +269,26 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 			g.setterCallValue(mem, recv, f, g.consume(v))
 			return
 		}
+		// Through an existential: read by the getter row, written by the
+		// setter row.
+		if _, isEx := existentialOf(recv); isEx {
+			written := g.existentialPropertyWrite(mem, func() *sil.Value {
+				cur, rhs := g.expr(e.X), g.expr(e.Y)
+				if cur == nil || rhs == nil {
+					return nil
+				}
+				t := g.typeOf(e.X)
+				v := g.operate(e, op, t, t, cur, rhs)
+				if v == nil {
+					g.unsupported(e)
+					return nil
+				}
+				return g.consume(v)
+			})
+			if written {
+				return
+			}
+		}
 	}
 	// Through a subscript a type declares: read by its getter, written
 	// by its setter.
@@ -346,6 +376,7 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 
 // assign lowers a store to a variable.
 func (g *gen) assign(e *ast.BinaryExpr) {
+	g.noteInitAssign(e.X)
 	// A destination the checker read as another -- a dynamic member as
 	// its subscript -- is written as that one.
 	if to, ok := g.info.ImplicitSelf[e.X]; ok {
@@ -361,6 +392,10 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 			g.setterCall(mem, recv, f, e.Y)
 			return
 		}
+		// A settable requirement through an existential: its setter row.
+		if g.existentialPropertyWrite(mem, func() *sil.Value { return g.rvalue(e.Y) }) {
+			return
+		}
 	}
 	// `(a, b) = (b, a)`: the whole value first, then each part to its
 	// own destination.
@@ -372,10 +407,17 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 		g.assignTuple(tu, v, g.substituted(g.typeOf(e.Y)))
 		return
 	}
-	// `_ = v` evaluates v and discards the result.
+	// `_ = v` evaluates v and discards the result, there and then: a
+	// class instance made for nothing ends before the next statement, as
+	// Swift ends it.
 	if _, discard := e.X.(*ast.WildcardExpr); discard {
-		if v := g.expr(e.Y); v != nil {
+		v := g.rvalue(e.Y)
+		switch {
+		case v == nil:
+		case v.Type().IsAddress():
 			g.destroyLater(v)
+		case !v.Type().Trivial() && v.Ownership() == sil.Owned:
+			g.endValue(v)
 		}
 		return
 	}

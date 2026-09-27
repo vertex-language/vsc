@@ -28,6 +28,9 @@ const (
 type Nominal struct {
 	Name string
 	Kind NominalKind
+	// Local is a type declared inside a function's discriminator, from
+	// 1; 0 for any other type. See types.Struct.Local.
+	Local int
 }
 
 // A Decl is a declaration to be given a symbol: where it lives, what
@@ -458,11 +461,12 @@ func (m *mangler) context(d Decl) error {
 		if err := m.identifier(n.Name); err != nil {
 			return err
 		}
+		m.localDiscriminator(n.Local)
 		m.writeByte(byte(n.Kind))
 		if chain != "" {
 			chain += "."
 		}
-		chain += n.Name
+		chain += n.Name + localKey(n.Local)
 		m.remember("nominal:" + d.Module + "." + chain)
 	}
 	return nil
@@ -845,4 +849,26 @@ func isTuple(t types.Type) bool {
 	}
 	tu, ok := t.Underlying().(*types.Tuple)
 	return ok && len(tu.Elements) > 0
+}
+
+// localDiscriminator writes what marks a type declared inside a function,
+// as Swift writes a local entity's: `L_` for the first, `L0_` for the
+// second, and on. It writes nothing for any other type.
+func (m *mangler) localDiscriminator(local int) {
+	switch {
+	case local <= 0:
+	case local == 1:
+		m.write("L_")
+	default:
+		m.write("L" + strconv.Itoa(local-2) + "_")
+	}
+}
+
+// localKey is what tells two local types of one name apart in the
+// substitution table.
+func localKey(local int) string {
+	if local <= 0 {
+		return ""
+	}
+	return "#" + strconv.Itoa(local)
 }

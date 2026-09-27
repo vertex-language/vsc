@@ -19,14 +19,15 @@ func File(name string, f *ast.File, info *analyzer.Info) (*sil.Module, []token.D
 func Files(name string, files []*ast.File, info *analyzer.Info) (*sil.Module, []token.Diagnostic) {
 	m := sil.NewModule(name, sil.StageRaw)
 	m.Import("Builtin")
+	// Identify script file (e.g. main.swift) containing top-level executable statements.
+	script := scriptFile(name, files)
+	files = withLocalTypes(files, info)
 
 	// Identify classes involved in inheritance hierarchies for vtable generation.
 	poly := polymorphic(files, info)
 
 	var diags []token.Diagnostic
 	sawEntry := false
-	// Identify script file (e.g. main.swift) containing top-level executable statements.
-	script := scriptFile(name, files)
 	var scriptStmts []ast.Stmt
 	// Module-level variables first: a use in one file may come before the
 	// declaration in another.
@@ -337,8 +338,9 @@ func (g *gen) members(name *ast.Ident, body *ast.MemberBlock) {
 			}
 			g.initializer(m, sym.Type())
 		case *ast.DeinitDecl:
+			// A generic class's is lowered for each instance made, with
+			// its table (instanceTable).
 			if len(nominalTypeParams(sym.Type())) > 0 {
-				g.refuse(m, "a deinit of a generic class")
 				continue
 			}
 			if isStructType(sym.Type()) {
@@ -499,9 +501,10 @@ type gen struct {
 	subst       map[*types.TypeParam]types.Type
 	specialized map[string]bool
 	tables      map[string]bool
-	self        *local // receiver storage for mutating initializers
-	initReturn  func() // early return handler for initializers
-	initFail    func() // `return nil` in a failable initializer
+	self        *local       // receiver storage for mutating initializers
+	initReturn  func()       // early return handler for initializers
+	initDI      *initTracker // a class initializer's stored properties set so far
+	initFail    func()       // `return nil` in a failable initializer
 	// convenience is set in a class's convenience initializer, and
 	// convSelf is the instance its `self.init(...)` made, which self is
 	// from there on.
@@ -1568,4 +1571,40 @@ func (g *gen) extensionMemberModule(recv types.Type, d *ast.FuncDecl) string {
 		}
 	}
 	return ""
+}
+
+// withLocalTypes is files and, after them, a file of declarations for
+// each file whose functions declare types of their own -- `struct S`
+// inside a function -- so that those types' members, metadata and tables
+// are lowered as the module's other types' are.
+func withLocalTypes(files []*ast.File, info *analyzer.Info) []*ast.File {
+	if info == nil || len(info.LocalTypes) == 0 {
+		return files
+	}
+	byUnit := map[*token.File]*ast.File{}
+	out := append([]*ast.File(nil), files...)
+	for _, lt := range info.LocalTypes {
+		f := byUnit[lt.Unit]
+		if f == nil {
+			f = &ast.File{Unit: lt.Unit}
+			byUnit[lt.Unit] = f
+			out = append(out, f)
+		}
+		f.Stmts = append(f.Stmts, &ast.DeclStmt{D: lt.Decl})
+	}
+	return out
+}
+
+// localType reports whether d is a type a function declares that the
+// checker recorded, whose members withLocalTypes lowers.
+func (g *gen) localType(d ast.Decl) bool {
+	if g.info == nil {
+		return false
+	}
+	for _, lt := range g.info.LocalTypes {
+		if lt.Decl == d {
+			return true
+		}
+	}
+	return false
 }

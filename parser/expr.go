@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"strings"
+
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/token"
 )
@@ -258,6 +260,16 @@ func (p *parser) parsePostfixSuffixes(x ast.Expr, lo token.Pos, fl exprFlags) as
 			e := p.pos()
 			p.next()
 			x = &ast.ForceExpr{Span: p.span(lo), X: x, Exclaim: e}
+
+		// What is left after a generic list's `>` split from `>?` or `>!`.
+		case p.split > 0 && (strings.HasPrefix(p.cur(), "?") || strings.HasPrefix(p.cur(), "!")):
+			c := p.cur()[0]
+			pos := p.takeOperChar()
+			if c == '?' {
+				x = &ast.OptionalExpr{Span: p.span(lo), X: x, Question: pos}
+			} else {
+				x = &ast.ForceExpr{Span: p.span(lo), X: x, Exclaim: pos}
+			}
 
 		case p.kind() == token.OPER_POSTFIX:
 			op := p.oper()

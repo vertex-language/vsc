@@ -172,24 +172,36 @@ func (g *gen) coreTypeMember(mem ast.Node, recv types.Type) bool {
 	return false
 }
 
-// coreSubscript lowers the getter of a subscript a core extension
-// declares, where the module calls it.
+// coreSubscript lowers the accessors of a subscript a core extension
+// declares -- its getter, and its setter -- where the module calls them.
 func (g *gen) coreSubscript(m *ast.SubscriptDecl, recv types.Type, wanted func(string) bool) bool {
 	sub := g.info.SubscriptDecls[m]
 	if sub == nil {
 		return false
 	}
 	getter := m.Body
+	var setter *ast.Accessor
 	if m.Accessors != nil {
 		for _, a := range m.Accessors.Accessors {
-			if a != nil && a.Keyword != nil && a.Body != nil && g.text(a.Keyword) == "get" {
+			if a == nil || a.Keyword == nil || a.Body == nil {
+				continue
+			}
+			switch g.text(a.Keyword) {
+			case "get":
 				getter = a.Body
+			case "set":
+				setter = a
 			}
 		}
 	}
-	if getter == nil || !wanted(g.subscriptSymbol(m, recv, sub, false)) {
-		return false
+	lowered := false
+	if getter != nil && wanted(g.subscriptSymbol(m, recv, sub, false)) {
+		g.emitSubscriptAccessor(m, recv, sub, getter, nil, sil.Private)
+		lowered = true
 	}
-	g.emitSubscriptAccessor(m, recv, sub, getter, nil, sil.Private)
-	return true
+	if setter != nil && wanted(g.subscriptSymbol(m, recv, sub, true)) {
+		g.emitSubscriptAccessor(m, recv, sub, setter.Body, setter, sil.Private)
+		lowered = true
+	}
+	return lowered
 }

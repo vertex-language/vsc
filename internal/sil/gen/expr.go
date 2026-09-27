@@ -1041,6 +1041,14 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *sil.Value
 		return g.rawInit(e, en)
 	}
 	t := g.typeOf(e)
+	// An initializer a protocol's extension declares, for the type made.
+	if pi, ok := g.info.ProtocolInits[e]; ok {
+		made := g.substituted(t)
+		if o, isOpt := made.(*types.Optional); isOpt && pi.Sig.Failable {
+			made = o.Wrapped
+		}
+		return g.protocolExtInit(e, made, pi)
+	}
 	// An init? call is typed as the optional it makes; the type it makes
 	// one of is what is constructed.
 	if sig := g.info.Inits[e]; sig != nil && sig.Failable {
@@ -1211,8 +1219,10 @@ func (g *gen) instanceDefault(t types.Type, name string) (ast.Expr, map[*types.T
 		for k, v := range g.subst {
 			subst[k] = v
 		}
+		// An argument may itself be a parameter of the specialization in
+		// force, as Container<T> is inside Named<T>: Container<T>.
 		for i, p := range params {
-			subst[p] = gi.Args[i]
+			subst[p] = g.substituted(gi.Args[i])
 		}
 		return from, subst
 	}
@@ -1544,7 +1554,12 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *sil.Value {
 	// A method a protocol's extension adds is the extension's, lowered
 	// for the receiver's type; see protocolExtensionMethod.
 	if p, ok := ref.Recv.(*types.Protocol); ok && p.IsExtensionMethod(ref.Method) {
-		if _, isEx := existentialOf(g.substituted(recv)); isEx {
+		// On an existential, the extension is lowered with the
+		// existential as Self: what it calls of the protocol's own is
+		// dispatched through it. That is Swift's opened type only where
+		// nothing in the method's type is Self's.
+		if _, isEx := existentialOf(g.substituted(recv)); isEx &&
+			(mutatingRef(ref) || mentionsTypeParam(ref.Method.Sig)) {
 			g.refuse(e, "a method of "+p.Name+"'s extension called on an existential")
 			return nil
 		}
@@ -1760,7 +1775,18 @@ func (g *gen) dynamicCall(e *ast.CallExpr, ref *analyzer.MethodRef, cl *types.Cl
 	var introType types.Type = intro
 	if mem, ok := e.Fun.(*ast.MemberExpr); ok {
 		recvType := g.typeOf(mem.X)
-		if subst := types.InstanceSubst(recvType); subst != nil {
+		// A method a superclass declared reads that level's parameters:
+		// Named<Int>'s inherited add takes Container<Int>'s T.
+		var subst map[*types.TypeParam]types.Type
+		for _, level := range typeChain(recvType) {
+			for k, v := range types.InstanceSubst(level) {
+				if subst == nil {
+					subst = map[*types.TypeParam]types.Type{}
+				}
+				subst[k] = v
+			}
+		}
+		if subst != nil {
 			if sig, ok := types.Substitute(ref.Method.Sig, subst).(*types.Signature); ok {
 				m := *ref.Method
 				m.Sig = sig
@@ -1969,13 +1995,14 @@ func nominalOf(t types.Type) (mangle.Nominal, bool) {
 	if name == "" {
 		return mangle.Nominal{}, false
 	}
+	local := types.LocalOf(t.Underlying())
 	switch t.Underlying().(type) {
 	case *types.Struct:
-		return mangle.Nominal{Name: name, Kind: mangle.Struct}, true
+		return mangle.Nominal{Name: name, Kind: mangle.Struct, Local: local}, true
 	case *types.Class:
-		return mangle.Nominal{Name: name, Kind: mangle.Class}, true
+		return mangle.Nominal{Name: name, Kind: mangle.Class, Local: local}, true
 	case *types.Enum:
-		return mangle.Nominal{Name: name, Kind: mangle.Enum}, true
+		return mangle.Nominal{Name: name, Kind: mangle.Enum, Local: local}, true
 	}
 	return mangle.Nominal{}, false
 }

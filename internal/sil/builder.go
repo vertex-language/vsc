@@ -222,8 +222,9 @@ func (b *Block) InitExistentialAddr(addr *Value, concrete Type, meta *Value) *Va
 }
 
 // OpenExistentialAddr yields the address of the value inside an existential.
-func (b *Block) OpenExistentialAddr(addr *Value, t Type) *Value {
-	return b.add(OpenExistentialAddr, Aux{}, []*Value{addr}, t).Result()
+// With the attribute mutable_access, the value is opened to be changed.
+func (b *Block) OpenExistentialAddr(addr *Value, t Type, attrs ...string) *Value {
+	return b.add(OpenExistentialAddr, Aux{Attrs: attrs}, []*Value{addr}, t).Result()
 }
 
 // Apply calls a function value.

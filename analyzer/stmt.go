@@ -106,7 +106,7 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		if s.X != nil {
 			retType = c.checkExpr(s.X, c.currFuncRet, scope)
 		}
-		if c.currFuncRet != nil && !types.AssignableTo(retType, c.currFuncRet) {
+		if c.currFuncRet != nil && !c.assignableTo(retType, c.currFuncRet) {
 			c.typeErrorf(s.Pos(), "cannot convert return value of type '%s' to expected return type '%s'", retType, c.currFuncRet)
 		}
 
@@ -345,7 +345,7 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 				switch {
 				case member == nil:
 					c.typeErrorf(p.Name.Pos(), "type '%s' has no member '%s'", owner, name)
-				case subjectType != nil && !isInvalid(subjectType) && !types.AssignableTo(member, subjectType):
+				case subjectType != nil && !isInvalid(subjectType) && !c.assignableTo(member, subjectType):
 					c.typeErrorf(p.Name.Pos(), "expression pattern of type '%s' cannot match values of type '%s'", member, subjectType)
 				default:
 					c.info.PatternTypes[p] = owner
@@ -420,8 +420,7 @@ func (c *checker) checkCodeBlock(block *ast.CodeBlock, parent *Scope) {
 	}
 	blockScope := NewScope(parent, block.Pos(), block.End())
 	c.info.Scopes[block] = blockScope
-	// Functions in a block are visible throughout the block.
-	c.declareFunctions(declsOf(block.Stmts), blockScope)
+	c.declareBlock(declsOf(block.Stmts), blockScope)
 	for _, s := range block.Stmts {
 		c.checkStmt(s, blockScope)
 	}
@@ -501,7 +500,7 @@ func (c *checker) checkStored(b *ast.PatternBinding, isConst bool, scope *Scope)
 		expectedType = initType
 	} else if hasInit {
 		initType = c.checkExpr(b.Value, expectedType, scope)
-		if expectedType != nil && !types.AssignableTo(initType, expectedType) {
+		if expectedType != nil && !c.assignableTo(initType, expectedType) {
 			c.typeErrorf(b.Value.Pos(), "cannot convert value of type '%s' to specified type '%s'", initType, expectedType)
 		}
 	}
@@ -969,7 +968,7 @@ func (c *checker) checkBinding(b *ast.PatternBinding, scope *Scope) {
 	}
 	if b.Value != nil {
 		valueType := c.checkExpr(b.Value, declared, scope)
-		if declared != nil && !types.AssignableTo(valueType, declared) {
+		if declared != nil && !c.assignableTo(valueType, declared) {
 			c.typeErrorf(b.Value.Pos(), "cannot convert value of type '%s' to specified type '%s'", valueType, declared)
 		}
 	}
@@ -1257,7 +1256,7 @@ func (c *checker) checkFuncBody(d *ast.FuncDecl, scope *Scope) {
 		implicitReturn(d.Body, sig.Results)
 		bodyScope := NewScope(fnScope, d.Body.Pos(), d.Body.End())
 		c.info.Scopes[d.Body] = bodyScope
-		c.declareFunctions(declsOf(d.Body.Stmts), bodyScope)
+		c.declareBlock(declsOf(d.Body.Stmts), bodyScope)
 		for _, st := range d.Body.Stmts {
 			c.checkStmt(st, bodyScope)
 		}
@@ -1614,12 +1613,12 @@ func (c *checker) patternMatchOperator(p *ast.ExprPattern, subject types.Type, s
 		if sig == nil || len(sig.Params) != 2 || len(sig.TypeParams) > 0 {
 			continue
 		}
-		if !types.AssignableTo(subject, sig.Params[1].Type) {
+		if !c.assignableTo(subject, sig.Params[1].Type) {
 			continue
 		}
 		quiet := len(c.info.Diagnostics)
 		t := c.checkExpr(p.X, sig.Params[0].Type, scope)
-		fits := len(c.info.Diagnostics) == quiet && !isInvalid(t) && types.AssignableTo(t, sig.Params[0].Type)
+		fits := len(c.info.Diagnostics) == quiet && !isInvalid(t) && c.assignableTo(t, sig.Params[0].Type)
 		c.info.Diagnostics = c.info.Diagnostics[:quiet]
 		if fits {
 			c.checkExpr(p.X, sig.Params[0].Type, scope)
@@ -1656,4 +1655,49 @@ func (c *checker) shareCaseBindings(pat ast.Pattern, subjectType types.Type, cas
 		c.info.Defs[p.Name] = first
 		return true
 	})
+}
+
+// declareBlock declares what a block of statements declares, visible
+// throughout the block: its functions, and its types -- `struct S` inside
+// a function -- which are declared as a module's are, pass by pass,
+// before anything in the block uses them.
+func (c *checker) declareBlock(decls []ast.Decl, scope *Scope) {
+	if local := localTypeDecls(decls); len(local) > 0 {
+		c.declareTypes(decls, scope)
+		c.resolveTypeMembers(decls, scope)
+		c.inheritInitializers(decls, scope)
+		c.resolveAssociatedTypes(decls, scope)
+		c.checkProtocolConformances(scope)
+		for _, d := range local {
+			c.info.LocalTypes = append(c.info.LocalTypes, LocalType{Decl: d, Unit: c.file})
+			n := len(c.info.LocalTypes)
+			switch d := d.(type) {
+			case *ast.StructDecl:
+				if st, ok := c.declaredType(d.Name, scope).(*types.Struct); ok {
+					st.Local = n
+				}
+			case *ast.ClassDecl:
+				if cl, ok := c.declaredType(d.Name, scope).(*types.Class); ok {
+					cl.Local = n
+				}
+			case *ast.EnumDecl:
+				if en, ok := c.declaredType(d.Name, scope).(*types.Enum); ok {
+					en.Local = n
+				}
+			}
+		}
+	}
+	c.declareFunctions(decls, scope)
+}
+
+// localTypeDecls is the nominal types among declarations.
+func localTypeDecls(decls []ast.Decl) []ast.Decl {
+	var out []ast.Decl
+	for _, d := range decls {
+		switch d.(type) {
+		case *ast.StructDecl, *ast.ClassDecl, *ast.EnumDecl:
+			out = append(out, d)
+		}
+	}
+	return out
 }

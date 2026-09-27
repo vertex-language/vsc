@@ -175,15 +175,12 @@ func entryBody(sil string) (string, bool) {
 // and not on whether it verifies.
 func TestARefusedReturnInventsNothing(t *testing.T) {
 	got, said := refusals(t, `
-protocol P { func size() -> Int32 }
-struct Wide: P {
-    var a: Int32 = 0; var b: Int32 = 0; var c: Int32 = 0; var d: Int32 = 0; var e: Int32 = 0
-    var f: Int32 = 0; var g: Int32 = 0; var h: Int32 = 0; var i: Int32 = 0; var j: Int32 = 0
-    func size() -> Int32 { return 40 }
-}
-func measure(_ p: P) -> Int32 { return p.size() }
+protocol Container { associatedtype Item
+    func get() -> Item }
+struct Ints: Container { func get() -> Int32 { return 7 } }
+func take(_ c: any Container) -> Int32 { return 1 }
 func main() -> Int32 {
-    return measure(Wide())
+    return take(Ints())
 }`)
 	if said == "" {
 		t.Fatal("refused the body and said nothing")

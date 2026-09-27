@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"strings"
+
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/token"
 )
@@ -529,6 +531,12 @@ func (p *parser) genericArgsFollow() bool {
 		token.PERIOD, token.PERIOD_PREFIX, token.QUESTION_POSTFIX,
 		token.EXCLAIM_POSTFIX, token.ASSIGN, token.ARROW:
 		return p.split == 0
+	}
+	// What is left of a split `>?` or `>!` is a postfix `?` or `!`, as in
+	// `[Box<Int>?]()`.
+	if p.split > 0 {
+		rest := strings.Trim(p.cur(), "?!")
+		return rest == "" && p.cur() != ""
 	}
 	return false
 }

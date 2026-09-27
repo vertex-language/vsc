@@ -227,7 +227,7 @@ func (c *checker) pickOperator(scope *Scope, op string, xs []ast.Expr, operands 
 			if exact && !types.Identical(t, want) {
 				return false
 			}
-			if !types.AssignableTo(t, want) {
+			if !c.assignableTo(t, want) {
 				return false
 			}
 		}
@@ -266,14 +266,14 @@ func (c *checker) pickOperator(scope *Scope, op string, xs []ast.Expr, operands 
 		ok := true
 		for i, t := range operands {
 			want := ch.sig().Params[i].Type
-			if types.AssignableTo(t, want) {
+			if c.assignableTo(t, want) {
 				continue
 			}
 			if i >= len(xs) {
 				ok = false
 				break
 			}
-			if nt, adopted := c.adoptTree(xs[i], want, scope); !adopted || !types.AssignableTo(nt, want) {
+			if nt, adopted := c.adoptTree(xs[i], want, scope); !adopted || !c.assignableTo(nt, want) {
 				ok = false
 				break
 			}
@@ -364,7 +364,7 @@ func (c *checker) inferOperator(sig *types.Signature, operands []types.Type) (ma
 		return nil, false
 	}
 	for i, t := range operands {
-		if !types.AssignableTo(t, out.Params[i].Type) {
+		if !c.assignableTo(t, out.Params[i].Type) {
 			return nil, false
 		}
 	}
@@ -461,7 +461,7 @@ func (c *checker) implicitOperandContext(scope *Scope, op string, other types.Ty
 			continue
 		}
 		params := ch.sig().Params
-		if !types.AssignableTo(other, params[1-implicitIndex].Type) {
+		if !c.assignableTo(other, params[1-implicitIndex].Type) {
 			continue
 		}
 		want := params[implicitIndex].Type
@@ -482,7 +482,7 @@ func (c *checker) closureOperandContext(scope *Scope, op string, other types.Typ
 	}
 	for _, ch := range c.operatorChoices(scope, op, []types.Type{other, other}) {
 		params := ch.sig().Params
-		if len(params) != 2 || !types.AssignableTo(other, params[1-index].Type) {
+		if len(params) != 2 || !c.assignableTo(other, params[1-index].Type) {
 			continue
 		}
 		if _, isFunc := params[index].Type.Underlying().(*types.Signature); isFunc {
@@ -497,7 +497,7 @@ func (c *checker) closureOperandContext(scope *Scope, op string, other types.Typ
 func (c *checker) fitsQuietly(e ast.Expr, want types.Type, scope *Scope) bool {
 	quiet := len(c.info.Diagnostics)
 	t := c.checkExpr(e, want, scope)
-	ok := len(c.info.Diagnostics) == quiet && t != nil && !isInvalid(t) && types.AssignableTo(t, want)
+	ok := len(c.info.Diagnostics) == quiet && t != nil && !isInvalid(t) && c.assignableTo(t, want)
 	c.info.Diagnostics = c.info.Diagnostics[:quiet]
 	return ok
 }

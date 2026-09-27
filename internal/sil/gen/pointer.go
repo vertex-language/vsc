@@ -168,8 +168,7 @@ func (g *gen) bitsOfPointer(e *ast.CallExpr, arg ast.Expr, to types.Type) (*sil.
 	from := g.typeOf(arg)
 	if o, isOpt := optionalOf(from); isOpt {
 		if _, wraps := pointerOf(o.Wrapped); wraps {
-			g.refuse(e, "the bit pattern of an optional pointer")
-			return nil, true
+			return g.bitsOfOptionalPointer(arg, o, to), true
 		}
 	}
 	if _, ok := pointerOf(from); !ok {
@@ -181,6 +180,27 @@ func (g *gen) bitsOfPointer(e *ast.CallExpr, arg ast.Expr, to types.Type) (*sil.
 	}
 	word := g.blk.Builtin("ptrtoint_Word", sil.Object(builtinFor(to)), v)
 	return g.blk.Struct(lowerType(to), word), true
+}
+
+// bitsOfOptionalPointer is an optional pointer's address as a word, and
+// zero where it is nil.
+func (g *gen) bitsOfOptionalPointer(arg ast.Expr, o *types.Optional, to types.Type) *sil.Value {
+	wrapped := lowerType(o.Wrapped)
+	v, own := g.switchable(arg, wrapped)
+	if v == nil {
+		return nil
+	}
+	word := sil.Object(builtinFor(to))
+	some, none, join := g.fn.Block(), g.fn.Block(), g.fn.Block()
+	payload := some.Arg(wrapped, own)
+	answer := join.Arg(word, sil.None)
+	g.blk.SwitchEnum(v,
+		sil.Case{Member: optionalSome, Dest: some},
+		sil.Case{Member: optionalNone, Dest: none})
+	some.Br(join, some.Builtin("ptrtoint_Word", word, payload))
+	none.Br(join, none.IntegerLiteral(word, 0))
+	g.blk = join
+	return g.blk.Struct(lowerType(to), answer)
 }
 
 // pointerFromBits lowers `UnsafeMutablePointer<T>(bitPattern: n)`: the

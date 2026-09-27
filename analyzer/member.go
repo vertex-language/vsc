@@ -29,9 +29,13 @@ func (c *checker) lookupMemberFor(e *ast.MemberExpr, t types.Type, name string) 
 	return got
 }
 
-// nestedIn returns the named type nested inside outer, or nil.
+// nestedIn returns the named type nested inside outer, or nil. Through an
+// instance of a generic type, a type nested inside it that is generic over
+// the outer type's parameters is its instance for the same arguments:
+// `Box<Int>.Inner`.
 func (c *checker) nestedIn(outer types.Type, name string) types.Type {
-	if inst, ok := outer.(*types.GenericInstance); ok {
+	inst, _ := outer.(*types.GenericInstance)
+	if inst != nil {
 		outer = inst.Base
 	}
 	scope := c.typeScope(outer)
@@ -41,6 +45,9 @@ func (c *checker) nestedIn(outer types.Type, name string) types.Type {
 	sym, _ := scope.LookupLocal(name).(*TypeNameSymbol)
 	if sym == nil {
 		return nil
+	}
+	if inst != nil && len(typeParamsOf(sym.Type())) == len(inst.Args) && len(inst.Args) > 0 {
+		return &types.GenericInstance{Base: sym.Type(), Args: inst.Args}
 	}
 	return sym.Type()
 }

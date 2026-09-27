@@ -173,6 +173,59 @@ func (g *gen) instanceTable(inst *types.GenericInstance) {
 			t.Entry(s.member, s.impl)
 		}
 	}
+	// Its deinit, lowered for the instance: what its destroyer runs
+	// before letting go of what the instance holds.
+	if d := g.classDeinitDecl(inst.Base); d != nil {
+		t.Deinit = deinitSymbol(g.module, inst)
+		g.emitDeinitSpecialization(d, inst)
+	}
+}
+
+// classDeinitDecl is the deinit a class declares, or nil.
+func (g *gen) classDeinitDecl(base types.Type) *ast.DeinitDecl {
+	for _, f := range g.files {
+		for _, stmt := range f.Stmts {
+			ds, ok := stmt.(*ast.DeclStmt)
+			if !ok {
+				continue
+			}
+			cd, ok := ds.D.(*ast.ClassDecl)
+			if !ok || cd.Name == nil || cd.Body == nil {
+				continue
+			}
+			if sym, ok := g.info.Defs[cd.Name].(*analyzer.TypeNameSymbol); !ok || sym.Type() != base {
+				continue
+			}
+			for _, m := range cd.Body.Members {
+				if d, ok := m.(*ast.DeinitDecl); ok {
+					return d
+				}
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// emitDeinitSpecialization lowers a generic class's deinit for one
+// instance, reading it in the file it was written in.
+func (g *gen) emitDeinitSpecialization(d *ast.DeinitDecl, inst *types.GenericInstance) {
+	params := nominalTypeParams(inst.Base)
+	if len(params) != len(inst.Args) {
+		return
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(params))
+	for i, p := range params {
+		subst[p] = inst.Args[i]
+	}
+	prevFile, prevSubst := g.file, g.subst
+	defer func() { g.file, g.subst = prevFile, prevSubst }()
+	if f := g.fileOf(d); f != nil {
+		g.file = f
+	}
+	g.subst = subst
+	defer g.asSpecialization()()
+	g.deinitializer(d, inst)
 }
 
 // genericStructInit lowers a call to a declared initializer of a generic
@@ -272,4 +325,48 @@ func (g *gen) emitStructInitSpecialization(decl *ast.InitDecl, inst types.Type, 
 	g.subst = subst
 	defer g.asSpecialization()()
 	g.structInitBody(decl, inst, sig, name)
+}
+
+// protocolExtInit makes a t with an initializer a protocol's extension
+// declares: its body lowered for t, with Self t, under a name that says
+// which -- as a method of a protocol's extension is (see
+// protocolExtensionMethod) -- and called as t's own initializer would be.
+func (g *gen) protocolExtInit(e *ast.CallExpr, t types.Type, pi analyzer.ProtocolInit) *sil.Value {
+	p := pi.Protocol
+	decl := g.info.ProtocolInitDecls[pi.Sig]
+	if decl == nil || p.Self == nil {
+		g.refuse(e, "an initializer of "+p.Name+"'s extension whose declaration this cannot find")
+		return nil
+	}
+	if !isStructType(t) && !isEnumType(t) {
+		g.refuse(e, "an initializer of "+p.Name+"'s extension making something other than a struct or an enum")
+		return nil
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+1)
+	for k, v := range g.subst {
+		subst[k] = v
+	}
+	subst[p.Self] = t
+	spec, ok := types.Substitute(pi.Sig, subst).(*types.Signature)
+	if !ok {
+		g.refuse(e, "an initializer of "+p.Name+"'s extension whose signature this cannot substitute")
+		return nil
+	}
+	var name strings.Builder
+	name.WriteString("$sVSCextinit_")
+	name.WriteString(identifierSafe(p.Name))
+	for _, prm := range pi.Sig.Params {
+		name.WriteString("_")
+		name.WriteString(identifierSafe(prm.Label))
+	}
+	name.WriteString("_Tv")
+	name.WriteString(identifierSafe(t.String()))
+	out := *spec
+	out.Results = t
+	g.emitStructInitSpecialization(decl, t, &out, name.String(), subst)
+	var args []*ast.CallArg
+	if e.Args != nil {
+		args = e.Args.Args
+	}
+	return g.applyInitNamed(e, t, &out, args, name.String())
 }

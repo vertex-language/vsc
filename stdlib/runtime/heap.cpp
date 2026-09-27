@@ -300,4 +300,82 @@ bool vertex_is_uniquely_referenced(HeapObject* const* slot) {
   return *slot != nullptr && vertex_is_unique(*slot);
 }
 
+// vertex_existential_open_mutable is the address of the value an
+// existential's buffer holds, opened to be changed: a mutating method
+// called through `any P`. A value too wide for the buffer is in a box
+// that copies of the existential share, so a shared box is copied into
+// one of this existential's own first, as Swift's runtime does for a
+// boxed opaque existential. Inline values are the buffer itself.
+void* vertex_existential_open_mutable(HeapObject** buffer, const Metadata* type) {
+  auto* vwt = reinterpret_cast<const ValueWitnessTable* const*>(type)[-1];
+  if ((vwt->flags & vwIsNonInline) == 0)
+    return buffer;
+  usize off = boxValueOffset(vwt->flags);
+  HeapObject* box = *buffer;
+  if (!vertex_is_unique(box)) {
+    HeapObject* fresh = vertex_box_allocate(type);
+    vwt->initializeWithCopy(reinterpret_cast<u8*>(fresh) + off, reinterpret_cast<u8*>(box) + off, type);
+    vertex_release(box);
+    *buffer = fresh;
+    box = fresh;
+  }
+  return reinterpret_cast<u8*>(box) + off;
+}
+
+// vertex_init_unfinished says, for a class initializer that threw, whether
+// the instance was left unfinished: 1 where the allocator's reference is
+// the only one. A body that threw with every stored property set took a
+// second reference first (vertex_init_complete), which this lets go of, answering 0: the
+// instance is complete, and is released as any other is, deinit and all.
+void vertex_init_complete(HeapObject* obj) { vertex_retain(obj); }
+
+u64 vertex_init_unfinished(HeapObject* obj) {
+  if (vertex_is_unique(obj))
+    return 1;
+  vertex_release(obj);
+  return 0;
+}
+
+// vertex_raw_allocate is UnsafeMutableRawPointer.allocate(byteCount:
+// alignment:), and what a typed pointer's allocate(capacity:) makes:
+// bytes nothing owns, until vertex_raw_deallocate returns them. The
+// platform's allocator promises 16-byte alignment, so memory aligned
+// more strictly is carved out of a larger block; the block's own address
+// is kept in the word before the memory handed out, which is how
+// deallocate, told nothing else, finds it.
+void* vertex_raw_allocate(i64 bytes, i64 alignment) {
+  usize align = alignment > 16 ? static_cast<usize>(alignment) : 16;
+  usize size = bytes > 0 ? static_cast<usize>(bytes) : 0;
+  auto* block = static_cast<u8*>(vertex_pal_alloc(size + align, 16));
+  if (block == nullptr)
+    vertex_pal_abort();
+  usize at = (reinterpret_cast<usize>(block) + align) & ~(align - 1);
+  reinterpret_cast<void**>(at)[-1] = block;
+  return reinterpret_cast<void*>(at);
+}
+
+void vertex_raw_deallocate(void* p) {
+  if (p != nullptr)
+    vertex_pal_free(static_cast<void**>(p)[-1], 0, 16);
+}
+
+// vertex_raw_move is copyMemory(from:byteCount:): the bytes at src, to
+// dest, where the two may overlap.
+void vertex_raw_move(void* dest, const void* src, i64 count) {
+  if (count <= 0 || dest == src)
+    return;
+  auto* d = static_cast<u8*>(dest);
+  auto* s = static_cast<const u8*>(src);
+  usize n = static_cast<usize>(count);
+  if (d + n <= s || s + n <= d) {
+    copyBytes(d, s, n);
+  } else if (d < s) {
+    for (usize i = 0; i < n; i++)
+      d[i] = s[i];
+  } else {
+    for (usize i = n; i > 0; i--)
+      d[i - 1] = s[i - 1];
+  }
+}
+
 }

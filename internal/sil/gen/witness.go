@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/vertex-language/vsc/analyzer"
@@ -100,7 +101,18 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 		}
 	}
 	table := g.m.WitnessTable(typeNameOf(concrete), p.Name, g.module, sil.Hidden)
-	if sym, descr, ok := g.conformanceSymbols(at, concrete, p); ok {
+	// An instance of a generic type -- Box<Int>, [Int] -- has a table of
+	// its own, specialized, under a name of its own: the conformance's
+	// symbols are the generic type's, one for every instance, which Swift
+	// instantiates at run time and this does not.
+	sym, descr, named := g.conformanceSymbols(at, concrete, p)
+	if named && g.genericInstance(concrete) && hasTableSymbol(g.m, sym) {
+		// Named by witnessTableSymbol's rule, from the instance; the
+		// first instance has the conformance's own symbols, which the
+		// runtime finds it by.
+		named = false
+	}
+	if named {
 		table.Symbol, table.Descriptor = sym, descr
 		// The protocol's descriptor, wherever it is defined: core's in the
 		// runtime, another module's in that module, this module's here
@@ -128,6 +140,15 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 				continue
 			}
 			table.Entry(p.Name+"."+r.Name, thunk)
+			if r.Settable && !r.IsStatic {
+				set, ok := g.setterWitnessThunk(concrete, p, r)
+				if !ok {
+					g.errorAt(at, "'"+typeNameOf(concrete)+"' does not provide a setter for '"+
+						r.Name+"', which '"+p.Name+"' requires")
+					continue
+				}
+				table.Entry(p.Name+"."+r.Name+setterRow, set)
+			}
 			continue
 		}
 		if r == nil || r.Sig == nil {
@@ -140,7 +161,7 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 					r.Name+"', which '"+p.Name+"' requires")
 				continue
 			}
-			table.Entry(p.Name+"."+r.Name, thunk)
+			table.Entry(p.Name+"."+requirementKey(p, r), thunk)
 			continue
 		}
 		found, m := g.methodMatching(concrete, r)
@@ -148,7 +169,7 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 			// A Sequence that is its own iterator: makeIterator() is a
 			// copy of self, as Swift's default makes it.
 			if _, next := g.methodOn(concrete, "next"); next != nil {
-				table.Entry(p.Name+"."+r.Name, g.selfIteratorThunk(concrete, p))
+				table.Entry(p.Name+"."+requirementKey(p, r), g.selfIteratorThunk(concrete, p))
 				continue
 			}
 		}
@@ -156,7 +177,7 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 			// The default a protocol extension gives, specialized for
 			// the conformer.
 			if thunk, ok := g.extensionWitness(at, concrete, p, r); ok {
-				table.Entry(p.Name+"."+r.Name, thunk)
+				table.Entry(p.Name+"."+requirementKey(p, r), thunk)
 				continue
 			}
 			g.errorAt(at, "'"+typeNameOf(concrete)+"' does not provide '"+
@@ -167,7 +188,7 @@ func (g *gen) witnessTable(at ast.Node, concrete types.Type, p *types.Protocol) 
 		if thunk == "" {
 			continue
 		}
-		table.Entry(p.Name+"."+r.Name, thunk)
+		table.Entry(p.Name+"."+requirementKey(p, r), thunk)
 	}
 }
 
@@ -261,12 +282,27 @@ func (g *gen) witnessThunkCalling(concrete, found types.Type, p *types.Protocol,
 	if !m.IsMutating {
 		self = g.blk.Load(selfAddr, loadQualifier(ct))
 	}
+	calleeRef := &analyzer.MethodRef{Recv: found, Method: m}
 	if symbol == "" {
-		symbol = g.methodSymbol(&analyzer.MethodRef{Recv: found, Method: m})
+		// An instance of a generic type calls its method specialized
+		// for it.
+		if inst, ok := concrete.(*types.GenericInstance); ok {
+			if name, spec, ok := g.instanceMethod(nil, inst, m); ok {
+				symbol, calleeRef = name, &analyzer.MethodRef{Recv: inst, Method: spec}
+			}
+		} else if b := builtinOf(g.info, concrete); b != nil && len(b.Params) > 0 && len(m.Sig.TypeParams) == 0 {
+			// An extension's method of [Int], Optional<T>, ...
+			if spec, name, ok := g.builtinMethod(nil, calleeRef, b, concrete); ok && name != "" {
+				symbol, calleeRef = name, spec
+			}
+		}
+	}
+	if symbol == "" {
+		symbol = g.methodSymbol(calleeRef)
 	}
 	callee := g.m.Func(symbol).SetSourceName(m.Name)
 	if g.needsType(callee) {
-		g.declareMethod(callee, &analyzer.MethodRef{Recv: found, Method: m})
+		g.declareMethod(callee, calleeRef)
 	}
 	ref := g.blk.FunctionRef(callee)
 	args = append(args, self)
@@ -429,6 +465,174 @@ func (g *gen) existentialProperty(e *ast.MemberExpr, ex *types.Existential) (*si
 	return nil, false
 }
 
+// existentialPropertyWrite assigns v to a settable property requirement
+// of the existential mem.X is, through the setter row of its table: the
+// value opened to be changed, which a boxed one shared with a copy is
+// made its own for first. It reports false where mem is no such
+// property.
+func (g *gen) existentialPropertyWrite(mem *ast.MemberExpr, v func() *sil.Value) bool {
+	ex, ok := existentialOf(g.typeOf(mem.X))
+	if !ok || mem.Name == nil {
+		return false
+	}
+	name := g.text(mem.Name)
+	var req *types.Requirement
+	for _, p := range ex.Protocols {
+		for _, r := range allRequirements(p) {
+			if r.Name == name && r.Sig == nil && r.Type != nil && r.Settable && !r.IsStatic {
+				req = r
+			}
+		}
+	}
+	if req == nil {
+		return false
+	}
+	p, path, ok := protocolProviding(ex, name)
+	if !ok {
+		return false
+	}
+	if _, ok := g.layoutOrder(mem, p); !ok {
+		return true
+	}
+	addr := g.lvalue(mem.X)
+	if addr == nil {
+		g.refuse(mem, "an assignment through an existential that is not storage")
+		return true
+	}
+	value := v()
+	if value == nil {
+		return true
+	}
+	value = g.optionalFor(mem, value, g.typeOf(mem), req.Type)
+	vt := lowerType(req.Type)
+	ft := &sil.FuncType{Convention: sil.ConvWitness}
+	ft.Params = append(ft.Params, sil.Param{Type: vt, Convention: ownedConvention(vt)},
+		sil.Param{Type: lowerType(ex).Address(), Convention: sil.ParamInout})
+	access := g.blk.BeginAccess(addr, "modify", "unknown")
+	method := g.blk.WitnessMethodOn(access, witnessMember(path, name)+setterRow, sil.Object(ft))
+	opened := g.blk.OpenExistentialAddr(access, lowerType(ex).Address(), "mutable_access")
+	g.blk.Apply(method, sil.Object(types.Typ[types.Void]), g.consume(value), opened)
+	g.blk.EndAccess(access)
+	return true
+}
+
+// ownedConvention is how a value handed over is passed: owned, or, with
+// nothing to own, unowned.
+func ownedConvention(t sil.Type) sil.ParamConvention {
+	if t.Trivial() {
+		return sil.ParamUnowned
+	}
+	return sil.ParamOwned
+}
+
+// setterWitnessThunk emits the setter row of a settable property
+// requirement: a witness given the new value and the conformer's storage,
+// which stores the value in a stored property or passes it to a computed
+// one's setter.
+func (g *gen) setterWitnessThunk(concrete types.Type, p *types.Protocol, r *types.Requirement) (string, bool) {
+	var field *types.Field
+	computed := false
+	if f, ok := g.setterField(concrete, r.Name); ok {
+		field, computed = f, true
+	} else {
+		fields, _, _, _, _, _ := storedSinks(concrete)
+		for _, f := range fields {
+			if f != nil && f.Name == r.Name && !f.IsConst {
+				field = f
+			}
+		}
+	}
+	if field == nil {
+		return "", false
+	}
+	setterSpec := ""
+	if g.genericInstance(concrete) && computed {
+		spec, _, generic := g.genericAccessor(nil, concrete, field, true)
+		if generic {
+			if spec == "" {
+				return "", false
+			}
+			setterSpec = spec
+		}
+	}
+	d := mangle.Decl{
+		Module:    g.memberModule(concrete, field),
+		Context:   memberChain(concrete),
+		Extended:  extendedBuiltin(concrete),
+		Name:      field.Name,
+		Signature: &types.Signature{Results: field.Type},
+		ModuleOf:  g.moduleOfType,
+	}
+	setter, err := mangle.Setter(d)
+	if err != nil {
+		return "", false
+	}
+	name := setter + "TW" + identifierSafe(typeNameOf(concrete)) + "_" + identifierSafe(p.Name)
+	if existing := g.m.Lookup(name); existing != nil && !existing.IsDeclaration() {
+		return name, true
+	}
+	f := g.m.Func(name).SetSourceName(r.Name).SetLinkage(sil.Private).SetAttr("ossa")
+
+	outerFn, outerEntry, outerBlk := g.fn, g.entry, g.blk
+	defer func() { g.fn, g.entry, g.blk = outerFn, outerEntry, outerBlk }()
+	g.fn, g.entry = f, false
+	f.Type().Params = nil
+	g.blk = f.Entry()
+
+	ct := lowerType(concrete)
+	vt := lowerType(field.Type)
+	value := f.Param(vt, ownedConvention(vt))
+	selfAddr := f.Param(ct.Address(), sil.ParamInout)
+	f.Type().Convention = sil.ConvWitness
+
+	switch {
+	case computed:
+		if setterSpec != "" {
+			setter = setterSpec
+		} else {
+			g.emitCoreSetter(concrete, field, setter)
+		}
+		callee := g.m.Func(setter).SetSourceName(field.Name)
+		conv := paramConvention(&types.Param{Type: field.Type}, vt)
+		if g.needsType(callee) {
+			callee.Type().Params = append(callee.Type().Params, sil.Param{Type: vt, Convention: conv})
+			if isClass(concrete) {
+				callee.Type().Params = append(callee.Type().Params, sil.Param{Type: ct, Convention: selfConvention(ct)})
+			} else {
+				callee.Type().Params = append(callee.Type().Params, sil.Param{Type: ct.Address(), Convention: sil.ParamInout})
+			}
+			callee.Type().Convention = sil.Method
+		}
+		self := selfAddr
+		if isClass(concrete) {
+			self = g.blk.Load(selfAddr, loadQualifier(ct))
+		}
+		g.blk.Apply(g.blk.FunctionRef(callee), sil.Object(types.Typ[types.Void]), value, self)
+		if !vt.Trivial() && conv == sil.ParamGuaranteed {
+			g.blk.DestroyValue(value)
+		}
+		if isClass(concrete) && !ct.Trivial() {
+			g.blk.DestroyValue(self)
+		}
+	case isClass(concrete):
+		self := g.blk.Load(selfAddr, loadQualifier(ct))
+		borrowed := g.blk.BeginBorrow(self)
+		at := g.blk.RefElementAddr(borrowed, memberName(concrete, field.Name), vt.Address())
+		access := g.blk.BeginAccess(at, "modify", "dynamic")
+		g.blk.Assign(value, access)
+		g.blk.EndAccess(access)
+		g.blk.EndBorrow(borrowed)
+		g.blk.DestroyValue(self)
+	default:
+		at := g.blk.StructElementAddr(selfAddr, memberName(concrete, field.Name), vt.Address())
+		access := g.blk.BeginAccess(at, "modify", "unknown")
+		g.blk.Assign(value, access)
+		g.blk.EndAccess(access)
+	}
+	g.blk.Return(g.void())
+	return name, true
+}
+
 // allRequirements is a protocol's requirements and those of every
 // protocol it inherits.
 func allRequirements(p *types.Protocol) []*types.Requirement {
@@ -478,8 +682,16 @@ func (g *gen) witnessApply(at ast.Node, x ast.Expr, ex *types.Existential, m *ty
 		args = append(args, boxed)
 	}
 
-	method := g.blk.WitnessMethodOn(addr, witnessMember(path, m.Name), witnessType(m, ex))
-	opened := g.blk.OpenExistentialAddr(addr, lowerType(ex).Address())
+	row := m.Name
+	if r := requirementFor(path[len(path)-1], m); r != nil {
+		row = requirementKey(path[len(path)-1], r)
+	}
+	method := g.blk.WitnessMethodOn(addr, witnessMember(path, row), witnessType(m, ex))
+	var access []string
+	if m.IsMutating {
+		access = append(access, "mutable_access")
+	}
+	opened := g.blk.OpenExistentialAddr(addr, lowerType(ex).Address(), access...)
 	args = append(args, opened)
 
 	// A throwing requirement is try_applied, as a call to the method
@@ -560,12 +772,69 @@ func (g *gen) layoutOrder(at ast.Node, p *types.Protocol) ([]string, bool) {
 		if r == nil || (r.Sig == nil && r.Type == nil) {
 			continue
 		}
-		// A property requirement's row is its getter.
-		names = append(names, p.Name+"."+r.Name)
+		// A property requirement's row is its getter, and a settable
+		// one's setter follows it.
+		names = append(names, p.Name+"."+requirementKey(p, r))
+		if r.Sig == nil && r.Settable && !r.IsStatic {
+			names = append(names, p.Name+"."+r.Name+setterRow)
+		}
 	}
 	g.m.Requirements(p.Name, names)
 	return names, true
 }
+
+// genericInstance reports whether t is an instance of a generic type:
+// one of the program's, or a built-in one with its arguments.
+func (g *gen) genericInstance(t types.Type) bool {
+	if _, ok := t.(*types.GenericInstance); ok {
+		return true
+	}
+	return builtinParams(g.info, t) != nil
+}
+
+// requirementKey is a requirement's row name within p: its name, and for
+// the second and later of methods sharing one -- put(_: Int) beside
+// put(_: String) -- which of them it is.
+func requirementKey(p *types.Protocol, r *types.Requirement) string {
+	if r == nil || r.Sig == nil {
+		return r.Name
+	}
+	k := 0
+	for _, q := range p.Requirements {
+		if q == r {
+			break
+		}
+		if q != nil && q.Sig != nil && q.Name == r.Name {
+			k++
+		}
+	}
+	if k == 0 {
+		return r.Name
+	}
+	return r.Name + "#" + strconv.Itoa(k)
+}
+
+// requirementFor is the requirement of p a call chose: the one of its
+// signature where the name is overloaded, else the one of the name.
+func requirementFor(p *types.Protocol, m *types.Method) *types.Requirement {
+	var byName *types.Requirement
+	for _, r := range p.Requirements {
+		if r == nil || r.Sig == nil || r.Name != m.Name {
+			continue
+		}
+		if r.Sig == m.Sig {
+			return r
+		}
+		if byName == nil {
+			byName = r
+		}
+	}
+	return byName
+}
+
+// setterRow is what a settable property requirement's setter row adds
+// to the getter row's name.
+const setterRow = "$set"
 
 // baseRow returns the entry key for an inherited protocol witness table.
 func baseRow(p, up *types.Protocol) string { return p.Name + ":" + up.Name }
@@ -628,13 +897,22 @@ func typeNameOf(t types.Type) string {
 	}
 	switch n := t.Underlying().(type) {
 	case *types.Struct:
-		return n.Name
+		return n.Name + localSuffix(n.Local)
 	case *types.Class:
-		return n.Name
+		return n.Name + localSuffix(n.Local)
 	case *types.Enum:
-		return n.Name
+		return n.Name + localSuffix(n.Local)
 	}
 	return t.String()
+}
+
+// localSuffix tells a type declared inside a function from others of
+// its name, in a table's key: lower's typeNameOfType says the same.
+func localSuffix(local int) string {
+	if local <= 0 {
+		return ""
+	}
+	return "#" + itoa(local)
 }
 
 // witnessTableSymbol names a conformance's table.
@@ -704,13 +982,8 @@ func (g *gen) existentialFor(at ast.Node, v *sil.Value, from, to types.Type) *si
 func (g *gen) initExistential(at ast.Node, slot, v *sil.Value, from types.Type, ex *types.Existential) bool {
 	// A value wider than the buffer's three words is boxed: lowering
 	// makes the box, and opening the existential finds the value in it.
-	// One wider than four words is also passed to its witnesses by
-	// address, which a witness thunk does not do yet.
-	if size := types.Sizeof(from, types.DefaultTarget64); size > 32 && hasRequirements(ex.Protocols) {
-		g.refuse(at, "a value of "+size64(size)+" bytes in an existential of a protocol: "+
-			"it is boxed, and a witness called on a boxed value wider than four words is not lowered")
-		return false
-	}
+	// Copies share the box; a mutating witness is given one of its own
+	// (open_existential_addr [mutable_access]).
 	// Validate that non-trivial payload types have appropriate value witness support.
 	// A class instance is one reference, whose witnesses count it.
 	classInAny := isClass(from)
@@ -786,6 +1059,17 @@ func existentialParams(sig *types.Signature) []types.Type {
 
 // hasWitnessTable reports whether the module already describes this
 // conformance.
+// hasTableSymbol reports whether a table already in the module has the
+// symbol sym.
+func hasTableSymbol(m *sil.Module, sym string) bool {
+	for _, t := range m.WitnessTables() {
+		if t != nil && t.Symbol == sym {
+			return true
+		}
+	}
+	return false
+}
+
 func hasWitnessTable(m *sil.Module, typ, proto string) bool {
 	for _, t := range m.WitnessTables() {
 		if t != nil && t.Type == typ && t.Protocol == proto {
@@ -794,9 +1078,6 @@ func hasWitnessTable(m *sil.Module, typ, proto string) bool {
 	}
 	return false
 }
-
-// size64 spells a byte count.
-func size64(n int64) string { return itoa(int(n)) }
 
 // associatedIn is the name of an associated type a protocol or one of
 // its inherited protocols declares, and whether there was one.
@@ -1267,7 +1548,7 @@ func (g *gen) getterWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 	resultType := field.Type
 	// An instance of a generic type has its getter specialized for it,
 	// lowered here the first time, as a call to it would.
-	if _, isInst := concrete.(*types.GenericInstance); isInst && computed != nil {
+	if g.genericInstance(concrete) && computed != nil {
 		spec, t, generic := g.genericAccessor(nil, concrete, computed, false)
 		if generic {
 			if spec == "" {
@@ -1684,36 +1965,6 @@ func conformsToAll(t types.Type, ex *types.Existential) bool {
 		}
 	}
 	return true
-}
-
-// hasRequirements reports whether any of the protocols -- or those they
-// inherit -- requires something a witness answers. Error requires
-// nothing, so a value too wide for the buffer is boxed and no witness is
-// ever called on it.
-func hasRequirements(ps []*types.Protocol) bool {
-	seen := map[*types.Protocol]bool{}
-	var walk func(p *types.Protocol) bool
-	walk = func(p *types.Protocol) bool {
-		if p == nil || seen[p] {
-			return false
-		}
-		seen[p] = true
-		if len(p.Requirements) > 0 {
-			return true
-		}
-		for _, up := range p.Inherited {
-			if walk(up) {
-				return true
-			}
-		}
-		return false
-	}
-	for _, p := range ps {
-		if walk(p) {
-			return true
-		}
-	}
-	return false
 }
 
 // protocolClosure is the protocols given and every protocol they refine,

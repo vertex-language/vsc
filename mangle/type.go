@@ -111,6 +111,19 @@ func (m *mangler) extendedType(t types.Type) error {
 		m.write("Sh")
 	case *types.Optional:
 		m.write("Sq")
+	case *types.Pointer:
+		switch {
+		case t.Opaque:
+			m.write("s13OpaquePointerV")
+		case t.Elem == nil && t.Mutable:
+			m.write("Sv")
+		case t.Elem == nil:
+			m.write("SV")
+		case t.Mutable:
+			m.write("Sp")
+		default:
+			m.write("SP")
+		}
 	default:
 		return fail(ErrUnsupported, "an extension of "+t.String())
 	}
@@ -365,6 +378,7 @@ func (m *mangler) nominalType(t types.Type) error {
 	if err := m.identifier(name); err != nil {
 		return err
 	}
+	m.localDiscriminator(types.LocalOf(t))
 	m.writeByte(byte(kind))
 	m.remember(key)
 	return nil
@@ -404,6 +418,7 @@ func chainOf(t types.Type) string {
 	if !ok {
 		return ""
 	}
+	name += localKey(types.LocalOf(t))
 	if in := enclosing(t); in != nil {
 		return chainOf(in) + "." + name
 	}

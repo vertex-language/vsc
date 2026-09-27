@@ -324,6 +324,9 @@ func (g *gen) callBuiltinOp(e *ast.CallExpr, sym *analyzer.FuncSymbol, op string
 		g.refuse(e, "a builtin called with other than its operands")
 		return nil
 	}
+	if v, ok := g.memoryBuiltin(e, op); ok {
+		return v
+	}
 	machine, ok := builtinMachine(sig.Params[0].Type)
 	if !ok {
 		g.refuse(e, "a builtin on a type that is not a number or a metatype")
@@ -371,4 +374,62 @@ func builtinMachine(t types.Type) (string, bool) {
 	}
 	_, machine, ok := core.Layout(t)
 	return machine, ok
+}
+
+// memoryBuiltin lowers the core's builtins over a typed pointer's
+// memory, which are not machine instructions but what SIL does to an
+// address: `initialize` stores a value into memory holding none,
+// `deinitialize` ends the value memory holds, and `take` moves it out,
+// leaving the memory holding none. Swift's Builtin.initialize,
+// Builtin.destroy and Builtin.take. The element is the pointer's, as the
+// call is specialized.
+func (g *gen) memoryBuiltin(e *ast.CallExpr, op string) (*sil.Value, bool) {
+	args := e.Args.Args
+	switch op {
+	case "initialize", "deinitialize", "take":
+	case "addressof":
+		// The inout argument's own address, as a raw pointer.
+		x := args[0].X
+		if in, ok := x.(*ast.InOutExpr); ok {
+			x = in.X
+		}
+		addr := g.lvalue(x)
+		if addr == nil {
+			return nil, true
+		}
+		return g.blk.AddressToPointer(addr, lowerType(&types.Pointer{Mutable: true})), true
+	default:
+		return nil, false
+	}
+	p, ok := pointerOf(g.substituted(g.typeOf(args[0].X)))
+	if !ok || !p.Dereferenceable() {
+		g.refuse(e, "a memory builtin on other than a typed pointer")
+		return nil, true
+	}
+	ptr := g.rvalue(args[0].X)
+	if ptr == nil {
+		return nil, true
+	}
+	elem := lowerType(g.substituted(p.Elem))
+	addr := g.blk.PointerToAddress(ptr, elem.Address())
+	switch op {
+	case "initialize":
+		v := g.rvalue(args[1].X)
+		if v == nil {
+			return nil, true
+		}
+		v = g.optionalFor(args[1].X, v, g.typeOf(args[1].X), p.Elem)
+		if v.Type().IsAddress() {
+			g.blk.CopyAddr(v, addr, "take", "init")
+		} else {
+			g.blk.Store(v, addr, storeQualifier(elem))
+		}
+		return g.void(), true
+	case "deinitialize":
+		if !elem.Trivial() {
+			g.blk.DestroyAddr(addr)
+		}
+		return g.void(), true
+	}
+	return g.loaded(g.blk.Load(addr, loadQualifierTake(elem)), elem), true
 }

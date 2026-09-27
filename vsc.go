@@ -134,6 +134,10 @@ type NativeBinder interface {
 // from the importer's read-ahead goroutines.
 type NativePrefetcher interface {
 	PrefetchNative(dir string, sources []string)
+	// PrefetchBindings may start binding the module as package pkgName,
+	// public as for NativeSources, once the folder's source is read. It
+	// is a guess: a binding asked for differently is made then.
+	PrefetchBindings(dir, pkgName string, public bool)
 }
 
 // A Phase is one step of the compiler pipeline, in execution order.
@@ -852,8 +856,12 @@ func (l *importer) readAhead(dir string) *prefetch {
 	packages := l.packages
 	summaries := l.summaries
 	target := l.target.String()
+	pf, _ := packages.(NativePrefetcher)
 	go func() {
 		defer close(pre.done)
+		if pf != nil {
+			defer bindAhead(pf, dir, pre)
+		}
 		pre.folder, pre.err = pkg.ReadFolder(dir, pkg.PlatformOf(use), pkg.ArchOf(use))
 		if pre.err != nil || pre.folder.Empty() {
 			return
@@ -915,6 +923,26 @@ func (l *importer) readAhead(dir string) *prefetch {
 		}
 	}()
 	return pre
+}
+
+// bindAhead starts binding the folder's C++ module as the package its
+// source names, once that source is read: see PrefetchBindings. A folder
+// of C++ alone is the package its directory is named for, and its
+// exports are its API.
+func bindAhead(pf NativePrefetcher, dir string, pre *prefetch) {
+	if pre.err != nil || pre.folder == nil || len(pre.folder.Native) == 0 || anyBad(pre.read) {
+		return
+	}
+	var files []*ast.File
+	var units []*token.File
+	for _, r := range pre.read {
+		files, units = append(files, r.parsed), append(units, r.unit)
+	}
+	name := packageNameOf(files, units)
+	if name == "" {
+		name = filepath.Base(dir)
+	}
+	pf.PrefetchBindings(dir, name, len(pre.folder.Vertex) == 0)
 }
 
 func anyBad(rs []readFile) bool {

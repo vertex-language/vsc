@@ -8,6 +8,16 @@ import (
 
 // Info holds the results of semantic analysis for a parsed unit or package.
 type Info struct {
+	// LocalTypes are the nominal types declared inside function bodies,
+	// in the order they were checked, each with the file it is in: SILGen
+	// lowers their members as it does a module's own types'.
+	LocalTypes []LocalType
+	// ProtocolInitDecls are the declarations of the initializers
+	// protocols' extensions declare, by signature.
+	ProtocolInitDecls map[*types.Signature]*ast.InitDecl
+	// ProtocolInits are the calls that make a value with an initializer
+	// a protocol's extension declares, and which one.
+	ProtocolInits map[*ast.CallExpr]ProtocolInit
 	// Types maps each evaluated expression to its resolved semantic type.
 	Types map[ast.Expr]types.Type
 
@@ -339,6 +349,8 @@ const (
 
 func NewInfo() *Info {
 	return &Info{
+		ProtocolInitDecls: map[*types.Signature]*ast.InitDecl{},
+		ProtocolInits:     map[*ast.CallExpr]ProtocolInit{},
 		Types:             make(map[ast.Expr]types.Type, coreTypes),
 		Defs:              make(map[*ast.Ident]Symbol, coreDefs),
 		Uses:              make(map[*ast.Ident]Symbol, coreUses),
@@ -582,4 +594,17 @@ func (info *Info) SelfConditionsMet(m *types.Method, t types.Type) bool {
 type Layout struct {
 	Of   types.Type
 	Kind string
+}
+
+// A LocalType is a nominal type declared inside a function body.
+type LocalType struct {
+	Decl ast.Decl
+	Unit *token.File
+}
+
+// A ProtocolInit is an initializer a protocol's extension declares, as a
+// call makes a conforming type with it.
+type ProtocolInit struct {
+	Protocol *types.Protocol
+	Sig      *types.Signature
 }

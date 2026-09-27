@@ -62,7 +62,7 @@ func (c *checker) checkExpr(expr ast.Expr, expected types.Type, scope *Scope) ty
 // as it is, it is a plain optional: `let p = f()` makes p a T?.
 func (c *checker) implicitlyUnwrapped(expr ast.Expr, o *types.Optional, expected types.Type) types.Type {
 	plain := &types.Optional{Wrapped: o.Wrapped}
-	if expected == nil || types.AssignableTo(plain, expected) || !types.AssignableTo(o.Wrapped, expected) {
+	if expected == nil || c.assignableTo(plain, expected) || !c.assignableTo(o.Wrapped, expected) {
 		c.implicit[expr] = true
 		return plain
 	}
@@ -231,7 +231,7 @@ func (c *checker) adopt(e ast.Expr, want types.Type) (types.Type, bool) {
 		return nil, false
 	}
 	b, ok := want.Underlying().(*types.Basic)
-	if !ok || b.Info()&types.IsNumeric == 0 || !types.AssignableTo(untyped, want) {
+	if !ok || b.Info()&types.IsNumeric == 0 || !c.assignableTo(untyped, want) {
 		return nil, false
 	}
 	c.info.Types[e] = want
@@ -355,14 +355,14 @@ func (c *checker) checkStmtExpr(e *ast.StmtExpr, expected types.Type, scope *Sco
 		case types.Identical(t, types.Typ[types.Never]):
 			// A branch that does not come back gives no value.
 		case expected != nil:
-			if !types.AssignableTo(t, expected) {
+			if !c.assignableTo(t, expected) {
 				c.typeErrorf(v.X.Pos(), "cannot convert value of type '%s' to specified type '%s'", t, expected)
 				return types.Typ[types.Invalid]
 			}
 			result = expected
 		case result == nil:
 			result = literalDefault(t)
-		case !types.Identical(result, literalDefault(t)) && !types.AssignableTo(t, result):
+		case !types.Identical(result, literalDefault(t)) && !c.assignableTo(t, result):
 			c.typeErrorf(v.X.Pos(), "branches have mismatching types '%s' and '%s'", result, t)
 			return types.Typ[types.Invalid]
 		}
@@ -855,7 +855,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 			// `(a, _) = pair`: the `_` takes whatever is there.
 			lhs = wildcardsTake(e.X, lhs, rhs)
-			if !types.AssignableTo(rhs, lhs) {
+			if !c.assignableTo(rhs, lhs) {
 				c.typeErrorf(e.Op.Pos(), "cannot assign value of type '%s' to type '%s'", rhs, lhs)
 			}
 			return types.Typ[types.Void]
@@ -1008,7 +1008,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			} else if opName == "==" || opName == "!=" {
 				c.collectionEquals(e, lhs, scope)
 			}
-			if !types.AssignableTo(rhs, lhs) && !types.AssignableTo(lhs, rhs) {
+			if !c.assignableTo(rhs, lhs) && !c.assignableTo(lhs, rhs) {
 				c.typeErrorf(e.Op.Pos(), "binary operator '%s' cannot be applied to operands of type '%s' and '%s'", opName, lhs, rhs)
 			}
 			return types.Typ[types.Bool]
@@ -1025,9 +1025,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					rhs = t
 				}
 				switch {
-				case types.AssignableTo(rhs, opt.Wrapped):
+				case c.assignableTo(rhs, opt.Wrapped):
 					return opt.Wrapped
-				case types.AssignableTo(rhs, lhs):
+				case c.assignableTo(rhs, lhs):
 					return lhs
 				}
 				c.typeErrorf(e.Op.Pos(),
@@ -1046,10 +1046,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				}
 			}
 			// Arithmetic: deduce common numeric type
-			if types.AssignableTo(rhs, lhs) {
+			if c.assignableTo(rhs, lhs) {
 				return lhs
 			}
-			if types.AssignableTo(lhs, rhs) {
+			if c.assignableTo(lhs, rhs) {
 				return rhs
 			}
 			c.typeErrorf(e.Op.Pos(), "binary operator '%s' cannot be applied to operands of type '%s' and '%s'", opName, lhs, rhs)
@@ -1092,7 +1092,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if t, ok := c.adopt(e.Y, lhs); ok {
 				rhs = t
 			}
-			if !types.AssignableTo(rhs, lhs) {
+			if !c.assignableTo(rhs, lhs) {
 				c.typeErrorf(e.Op.Pos(), "cannot assign value of type '%s' to type '%s'", rhs, lhs)
 			}
 			return types.Typ[types.Void]
@@ -1132,14 +1132,14 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			thenT = &types.Optional{Wrapped: elseT}
 			c.checkExpr(e.Then, thenT, scope)
 		}
-		if expected != nil && types.AssignableTo(thenT, expected) &&
-			types.AssignableTo(elseT, expected) {
+		if expected != nil && c.assignableTo(thenT, expected) &&
+			c.assignableTo(elseT, expected) {
 			return expected
 		}
-		if types.AssignableTo(elseT, thenT) {
+		if c.assignableTo(elseT, thenT) {
 			return thenT
 		}
-		if types.AssignableTo(thenT, elseT) {
+		if c.assignableTo(thenT, elseT) {
 			return elseT
 		}
 		c.typeErrorf(e.Colon, "result values in '? :' expression have mismatching types '%s' and '%s'", thenT, elseT)
@@ -1244,6 +1244,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if t, ok := c.coreInitCall(e, scope); ok {
 			return t
 		}
+		if t, ok := c.barePointerCall(e, expected, scope); ok {
+			return t
+		}
 		// `Array(repeating: v, count: n)`: n copies of v, as
 		// `[T](repeating:count:)` makes them with T what v is.
 		if id, ok := e.Fun.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil && id.Name.Text(c.file) == "Array" &&
@@ -1255,7 +1258,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				elem = arr.Elem
 			}
 			vt := literalDefault(c.checkExpr(e.Args.Args[0].X, elem, scope))
-			if nt := c.checkExpr(e.Args.Args[1].X, types.Typ[types.Int], scope); !types.AssignableTo(nt, types.Typ[types.Int]) {
+			if nt := c.checkExpr(e.Args.Args[1].X, types.Typ[types.Int], scope); !c.assignableTo(nt, types.Typ[types.Int]) {
 				c.typeErrorf(e.Args.Args[1].Pos(), "cannot convert value of type '%s' to expected argument type 'Int'", nt)
 			}
 			if isInvalid(vt) {
@@ -1354,6 +1357,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					sig = chosen
 				}
 			}
+			if expected != nil && len(sig.TypeParams) > 0 {
+				if c.resultWants == nil {
+					c.resultWants = map[*ast.CallExpr]types.Type{}
+				}
+				c.resultWants[e] = expected
+			}
 			return c.checkCallArguments(e, sig, args, scope).Results
 		}
 		// An initializer call.
@@ -1372,7 +1381,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if en, isEnum := meta.Instance.Underlying().(*types.Enum); isEnum && en.RawType != nil &&
 				len(args) == 1 && args[0].Label != nil && args[0].Label.Text(c.file) == "rawValue" {
 				got := c.checkExpr(args[0].X, en.RawType, scope)
-				if !types.AssignableTo(got, en.RawType) {
+				if !c.assignableTo(got, en.RawType) {
 					c.typeErrorf(args[0].Pos(), "cannot convert value of type '%s' to expected argument type '%s'", got, en.RawType)
 				}
 				c.info.RawInits[e] = en
@@ -1397,6 +1406,13 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				}
 			}
 			inst := c.inferInstance(meta.Instance, e, scope)
+			// Literals alone say less than the type wanted does:
+			// `let e: Epi<Double> = Epi(scale: 2)` makes an Epi<Double>.
+			if got, isInst := inst.(*types.GenericInstance); isInst && c.literalConstruction(e, scope) {
+				if want, ok := unwrappedContext(expected).(*types.GenericInstance); ok && types.Identical(want.Base, got.Base) {
+					inst = want
+				}
+			}
 			// Where the arguments leave the parameters open, the type
 			// wanted says them: `let d: C<String> = C()`.
 			if _, open := inst.(*types.GenericInstance); !open && len(typeParamsOf(inst)) > 0 {
@@ -1408,6 +1424,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					// is a Named<Int>.
 					inst = inferFromSuperclass(inst, want)
 				}
+			}
+			// An initializer a protocol's extension declares, where none
+			// of the type's own takes these labels.
+			if t, ok := c.protocolExtInit(e, inst, args, scope); ok {
+				return t
 			}
 			if st, ok := inst.Underlying().(*types.Struct); ok {
 				// The memberwise initializer is read off the instance's own
@@ -1551,6 +1572,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 						c.info.ArrayCopies[e] = inst
 						return inst
 					}
+					// Any other sequence of T -- `[UInt8](xs[1..<4])` -- is its
+					// elements, as `Array(xs)` reads them.
+					if it := c.iteration(t); it != nil && types.Identical(it.Element, meta.Instance) {
+						c.info.ArraySequences[e] = it
+						return inst
+					}
 					if !isInvalid(t) {
 						c.typeErrorf(e.Pos(), "no initializer of '%s' takes a '%s' yet", inst, t)
 					}
@@ -1558,10 +1585,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				}
 				if len(args) == 2 && args[0].Label != nil && args[1].Label != nil &&
 					args[0].Label.Text(c.file) == "repeating" && args[1].Label.Text(c.file) == "count" {
-					if vt := c.checkExpr(args[0].X, meta.Instance, scope); !types.AssignableTo(vt, meta.Instance) {
+					if vt := c.checkExpr(args[0].X, meta.Instance, scope); !c.assignableTo(vt, meta.Instance) {
 						c.typeErrorf(args[0].Pos(), "cannot convert value of type '%s' to expected argument type '%s'", vt, meta.Instance)
 					}
-					if ct := c.checkExpr(args[1].X, types.Typ[types.Int], scope); !types.AssignableTo(ct, types.Typ[types.Int]) {
+					if ct := c.checkExpr(args[1].X, types.Typ[types.Int], scope); !c.assignableTo(ct, types.Typ[types.Int]) {
 						c.typeErrorf(args[1].Pos(), "cannot convert value of type '%s' to expected argument type 'Int'", ct)
 					}
 					return inst
@@ -1619,7 +1646,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				return t
 			}
 			if t := c.lookupMember(&types.Metatype{Instance: base}, name); t != nil {
-				if _, isFunc := t.(*types.Signature); !isFunc && types.AssignableTo(t, base) {
+				if _, isFunc := t.(*types.Signature); !isFunc && c.assignableTo(t, base) {
 					return t
 				}
 			}
@@ -1856,7 +1883,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			// `(true, 1)` for a `(Bool?, Int)` -- is the tuple's as the
 			// optional, wrapped when the tuple is made.
 			if elemWant != nil && !isInvalid(t) && !types.Identical(t, elemWant) {
-				if _, isOpt := elemWant.(*types.Optional); isOpt && types.AssignableTo(t, elemWant) {
+				if _, isOpt := elemWant.(*types.Optional); isOpt && c.assignableTo(t, elemWant) {
 					t = elemWant
 				}
 			}
@@ -2100,7 +2127,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				inferredRet := c.checkExpr(exprStmt.X, want, closureScope)
 				if retType == nil || open || types.Identical(retType, types.Typ[types.Void]) {
 					retType = inferredRet
-				} else if !types.AssignableTo(inferredRet, retType) {
+				} else if !c.assignableTo(inferredRet, retType) {
 					c.typeErrorf(exprStmt.X.Pos(), "cannot convert return value of type '%s' to expected return type '%s'", inferredRet, retType)
 				}
 			} else {
@@ -2309,6 +2336,14 @@ func (c *checker) pickInitializerByType(inits []*types.Signature, args []*ast.Ca
 		argTypes[i] = c.checkExpr(arg.X, nil, scope)
 	}
 	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	// An argument whose type is not known yet -- a closure's `$1` -- fits
+	// any parameter, and says nothing for an extension's initializer over
+	// the built-in conversion: `UInt64($1)` is the conversion.
+	for i, arg := range args {
+		if arg.Label == nil && (argTypes[i] == nil || isInvalid(argTypes[i])) {
+			return nil
+		}
+	}
 	var fits []*types.Signature
 	for _, sig := range labelled {
 		if c.sigFits(sig, args, argTypes, c.labelFits) {
@@ -2443,18 +2478,18 @@ func (c *checker) optionalOperands(e *ast.BinaryExpr, lhs, rhs types.Type, scope
 	ro, rIsOpt := rhs.(*types.Optional)
 	switch {
 	case lIsOpt && rIsOpt:
-		return types.AssignableTo(ro.Wrapped, lo.Wrapped) ||
-			types.AssignableTo(lo.Wrapped, ro.Wrapped)
+		return c.assignableTo(ro.Wrapped, lo.Wrapped) ||
+			c.assignableTo(lo.Wrapped, ro.Wrapped)
 	case lIsOpt:
 		if t, adopted := c.adoptTree(e.Y, lo.Wrapped, scope); adopted {
 			rhs = t
 		}
-		return types.AssignableTo(rhs, lo.Wrapped)
+		return c.assignableTo(rhs, lo.Wrapped)
 	case rIsOpt:
 		if t, adopted := c.adoptTree(e.X, ro.Wrapped, scope); adopted {
 			lhs = t
 		}
-		return types.AssignableTo(lhs, ro.Wrapped)
+		return c.assignableTo(lhs, ro.Wrapped)
 	}
 	return false
 }
@@ -2511,7 +2546,7 @@ func (c *checker) operatorReference(e *ast.OperatorExpr, expected types.Type, sc
 			if t == nil || isInvalid(t) {
 				continue
 			}
-			if !types.AssignableTo(t, sig.Params[i].Type) {
+			if !c.assignableTo(t, sig.Params[i].Type) {
 				fits = false
 			}
 		}
@@ -2730,7 +2765,7 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 				continue
 			}
 			got := c.checkExpr(arg.X, ref.Subscript.Params[i].Type, scope)
-			if !isInvalid(got) && !types.AssignableTo(got, ref.Subscript.Params[i].Type) {
+			if !isInvalid(got) && !c.assignableTo(got, ref.Subscript.Params[i].Type) {
 				ok = false
 				break
 			}
@@ -2792,7 +2827,7 @@ func (c *checker) declaredSubscript(e *ast.SubscriptExpr, baseType types.Type, s
 		if t, adopted := c.adopt(arg.X, want); adopted {
 			got = t
 		}
-		if !isInvalid(got) && !types.AssignableTo(got, want) {
+		if !isInvalid(got) && !c.assignableTo(got, want) {
 			c.typeErrorf(arg.X.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", got, want)
 		}
 	}
@@ -2853,7 +2888,7 @@ func (c *checker) payloadOperator(scope *Scope, op string, e *ast.BinaryExpr, lh
 		}
 		other = o.Wrapped
 	}
-	if !types.AssignableTo(other, w) {
+	if !c.assignableTo(other, w) {
 		w = other
 	}
 	c.info.OptionalCompares[e] = w
@@ -3236,14 +3271,14 @@ func (c *checker) basicInit(e *ast.CallExpr, b *types.Basic, inst types.Type, ar
 		quiet := len(c.info.Diagnostics)
 		t := c.checkExpr(args[0].X, bytes, scope)
 		c.info.Diagnostics = c.info.Diagnostics[:quiet]
-		if !types.AssignableTo(t, bytes) && !isInvalid(t) {
+		if !c.assignableTo(t, bytes) && !isInvalid(t) {
 			if seq, ok := c.coreProtocol("Sequence"); ok && c.conformsTo(t, seq) {
 				span := ast.Span{Lo: args[0].X.Pos(), Hi: args[0].X.End()}
 				fun := &ast.IdentExpr{Span: span, Name: &ast.Ident{Span: span, Synth: "Array"}}
 				args[0].X = &ast.CallExpr{Span: span, Fun: fun, Args: &ast.CallArgs{Args: []*ast.CallArg{{X: args[0].X}}}}
 			}
 		}
-		if t := c.checkExpr(args[0].X, bytes, scope); !types.AssignableTo(t, bytes) {
+		if t := c.checkExpr(args[0].X, bytes, scope); !c.assignableTo(t, bytes) {
 			c.typeErrorf(args[0].X.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", t, bytes)
 		}
 		codec := c.checkExpr(args[1].X, nil, scope)
@@ -3412,7 +3447,7 @@ func (c *checker) optionalSome(e *ast.CallExpr, expected types.Type, scope *Scop
 	} else if t, ok := c.adopt(e.Args.Args[0].X, opt.Wrapped); ok {
 		arg = t
 	}
-	if !isInvalid(arg) && !types.AssignableTo(arg, opt.Wrapped) {
+	if !isInvalid(arg) && !c.assignableTo(arg, opt.Wrapped) {
 		c.typeErrorf(e.Args.Args[0].X.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", arg, opt.Wrapped)
 	}
 	c.info.Types[e.Fun] = &types.Metatype{Instance: opt}
@@ -3914,4 +3949,119 @@ func literalHasImplicitMember(e ast.Expr) bool {
 		}
 	}
 	return false
+}
+
+// barePointerCall types `UnsafeMutablePointer(mutating: p)`,
+// `UnsafePointer(q)` and `UnsafeMutablePointer(bitPattern: n)` written
+// without the element, which Swift infers: from the typed pointer passed,
+// or, for a bit pattern, from the pointer the call is wanted to be. It
+// reports false for any other call.
+func (c *checker) barePointerCall(e *ast.CallExpr, expected types.Type, scope *Scope) (types.Type, bool) {
+	id, ok := e.Fun.(*ast.IdentExpr)
+	if !ok || id.Name == nil || id.Args != nil || e.Args == nil || len(e.Args.Args) != 1 {
+		return nil, false
+	}
+	name := id.Name.Text(c.file)
+	if name != "UnsafePointer" && name != "UnsafeMutablePointer" || scope.LookupType(name) != nil {
+		return nil, false
+	}
+	arg := e.Args.Args[0]
+	label := ""
+	if arg.Label != nil {
+		label = arg.Label.Text(c.file)
+	}
+	var elem types.Type
+	switch label {
+	case "bitPattern":
+		if p, ok := unwrappedContext(expected).(*types.Pointer); ok && p.Dereferenceable() {
+			elem = p.Elem
+		}
+		t := c.checkExpr(arg.X, types.Typ[types.Int], scope)
+		if !isWord(t) && !isInvalid(t) {
+			c.typeErrorf(arg.Pos(), "cannot convert value of type '%s' to expected argument type 'Int'", t)
+		}
+	case "", "mutating":
+		t := c.checkExpr(arg.X, nil, scope)
+		if isInvalid(t) {
+			return t, true
+		}
+		if p, ok := t.Underlying().(*types.Pointer); ok && p.Dereferenceable() {
+			elem = p.Elem
+		}
+	default:
+		return nil, false
+	}
+	if elem == nil {
+		c.typeErrorf(e.Pos(), "generic parameter 'Pointee' could not be inferred")
+		return types.Typ[types.Invalid], true
+	}
+	inst := &types.Pointer{Elem: elem, Mutable: name == "UnsafeMutablePointer"}
+	if label == "bitPattern" {
+		return &types.Optional{Wrapped: inst}, true
+	}
+	return inst, true
+}
+
+// protocolExtInit checks a call making a t with an initializer an
+// extension of one of t's protocols declares -- `S(twice: 4)` with
+// `extension Made { init(twice m: Int) }` -- where none of t's own
+// initializers takes the call's labels. Self is t. It reports false where
+// no such initializer fits.
+func (c *checker) protocolExtInit(e *ast.CallExpr, t types.Type, args []*ast.CallArg, scope *Scope) (types.Type, bool) {
+	var own []*types.Signature
+	var protos []*types.Protocol
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		own = u.Inits
+		if m := u.Memberwise(); m != nil {
+			own = append(own, m)
+		}
+		protos = u.Conformances
+	case *types.Class:
+		own, protos = u.Inits, u.Conformances
+	case *types.Enum:
+		own, protos = u.Inits, u.Conformances
+	case *types.TypeParam:
+		protos = constraintProtocols(u)
+	default:
+		return nil, false
+	}
+	for _, sig := range own {
+		if sig != nil && c.labelsFit(sig, args) {
+			return nil, false
+		}
+	}
+	for _, p := range allProtocols(protos) {
+		if p.Self == nil {
+			continue
+		}
+		for _, sig := range p.ExtInits {
+			if sig == nil || !c.labelsFit(sig, args) {
+				continue
+			}
+			spec, ok := types.Substitute(sig, map[*types.TypeParam]types.Type{p.Self: t}).(*types.Signature)
+			if !ok {
+				continue
+			}
+			c.info.ProtocolInits[e] = ProtocolInit{Protocol: p, Sig: sig}
+			c.checkCallArguments(e, spec, args, scope)
+			if sig.Failable {
+				return &types.Optional{Wrapped: t}, true
+			}
+			return t, true
+		}
+	}
+	return nil, false
+}
+
+// constraintProtocols is the protocols a type parameter is constrained
+// to.
+func constraintProtocols(tp *types.TypeParam) []*types.Protocol {
+	var out []*types.Protocol
+	for _, con := range tp.Constraints {
+		if p, ok := protocolOf(con); ok {
+			out = append(out, p)
+		}
+	}
+	return out
 }

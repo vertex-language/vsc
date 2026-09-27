@@ -321,7 +321,7 @@ func (c *checker) kernelLaunch(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) t
 		} else if isTagStruct(p.Type) {
 			// A struct with no stored properties is only its type, which
 			// the specialization already is: nothing is passed.
-			if got := c.checkExpr(a.X, p.Type, scope); !isInvalid(got) && !types.AssignableTo(got, p.Type) {
+			if got := c.checkExpr(a.X, p.Type, scope); !isInvalid(got) && !c.assignableTo(got, p.Type) {
 				c.typeErrorf(a.X.Pos(), "cannot launch %s with '%s' for '%s': it takes '%s'", sym.Name(), got, p.Name, p.Type)
 				ok = false
 			}
@@ -336,7 +336,7 @@ func (c *checker) kernelLaunch(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) t
 			ok = false
 			continue
 		}
-		if !types.AssignableTo(got, expect) {
+		if !c.assignableTo(got, expect) {
 			c.typeErrorf(a.X.Pos(), "cannot launch %s with '%s' for '%s': it takes '%s'", sym.Name(), got, p.Name, expect)
 			ok = false
 			continue
@@ -507,7 +507,7 @@ func (c *checker) kernelMap(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) type
 			good = false
 			continue
 		}
-		if !types.AssignableTo(got, p.Type) {
+		if !c.assignableTo(got, p.Type) {
 			c.typeErrorf(a.X.Pos(), "cannot map %s with '%s' for '%s': it takes '%s', or a gpu.Buffer of it",
 				sym.Name(), got, p.Name, p.Type)
 			good = false
@@ -518,7 +518,7 @@ func (c *checker) kernelMap(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) type
 	if into != nil {
 		want := &types.GenericInstance{Base: buffer, Args: []types.Type{sig.Results}}
 		got := c.checkExpr(into.X, want, scope)
-		if !isInvalid(got) && !types.AssignableTo(got, want) {
+		if !isInvalid(got) && !c.assignableTo(got, want) {
 			c.typeErrorf(into.X.Pos(), "%s.Map writes '%s' into: it takes a '%s'", sym.Name(), got, want)
 			good = false
 		}

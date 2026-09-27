@@ -7,6 +7,7 @@ import (
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/mangle"
+	"github.com/vertex-language/vsc/stdlib"
 	"github.com/vertex-language/vsc/types"
 )
 
@@ -309,6 +310,13 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 
 	g.classFieldDefaults(recv, self)
 	g.defaultAncestors(recv, self)
+	// What the body sets, as it is lowered: an error leaving it once
+	// everything is set leaves a complete instance (classAllocator).
+	if sig.Throws {
+		prevDI := g.initDI
+		g.initDI = newInitTracker(recv, self)
+		defer func() { g.initDI = prevDI }()
+	}
 
 	// A subclass's initializer that does not run one of its superclass's
 	// runs the superclass's init() at its end, as Swift has it.
@@ -387,6 +395,9 @@ func (g *gen) callSuperInit(at ast.Node, recv types.Type, sig *types.Signature, 
 	cl, ok := recv.Underlying().(*types.Class)
 	if !ok || cl.Superclass == nil {
 		return false
+	}
+	if g.initDI != nil {
+		defer func() { g.initDI.superDone = true }()
 	}
 	super := cl.Superclass
 	out := *sig
@@ -563,9 +574,14 @@ func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body s
 		g.blk.Return(made)
 		return
 	}
-	// The body threw: the instance was never finished, so its memory is
-	// given back without running deinit, as Swift's dealloc_partial_ref
-	// does. The error goes on to the caller.
+	// The body threw. Where it threw with every stored property set, the
+	// instance is complete, and it said so by taking a reference of its
+	// own (classInitBody): it is released as any other instance is, and
+	// its deinit runs. Otherwise it was never finished: what its
+	// properties hold so far is let go of -- the rest are still zero,
+	// which ends nothing -- and its memory given back without running
+	// deinit, as Swift's dealloc_partial_ref does. The error goes on to
+	// the caller either way.
 	normal, failed := f.Block(), f.Block()
 	made := normal.Arg(t, sil.Owned)
 	err := failed.Arg(errorBoxType(), sil.Owned)
@@ -574,8 +590,68 @@ func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body s
 	g.blk.DestroyValue(obj)
 	g.blk.Return(made)
 	g.blk = failed
+	unfinished := g.runtimeResult(stdlib.InitUnfinished,
+		[]sil.Param{{Type: t, Convention: sil.ParamGuaranteed}},
+		sil.Object(sil.BuiltinInt64), obj)
+	bit := g.blk.Builtin("cmp_ne_Int64", sil.Object(sil.BuiltinInt1), unfinished,
+		g.blk.IntegerLiteral(sil.Object(sil.BuiltinInt64), 0))
+	partial, complete := f.Block(), f.Block()
+	g.blk.CondBr(bit, partial, nil, complete, nil)
+	g.blk = complete
+	g.blk.DestroyValue(obj)
+	g.blk.Throw(err)
+	g.blk = partial
+	g.endStoredProperties(recv, obj)
 	g.blk.DeallocRef(obj)
 	g.blk.Throw(err)
+}
+
+// endStoredProperties lets go of what an unfinished instance's stored
+// properties hold -- its class's and its superclasses' -- in place: one
+// not yet given a value is zero, which ends nothing.
+func (g *gen) endStoredProperties(recv types.Type, obj *sil.Value) {
+	borrowed := g.blk.BeginBorrow(obj)
+	for t := recv; t != nil; {
+		cl, ok := t.Underlying().(*types.Class)
+		if !ok {
+			break
+		}
+		for _, fld := range cl.Fields {
+			if fld == nil || fld.Ref != "" {
+				continue
+			}
+			ft := lowerType(g.substituted(types.Substitute(fld.Type, instanceSubst(t))))
+			if ft.Trivial() {
+				continue
+			}
+			at := g.blk.RefElementAddr(borrowed, memberName(t, fld.Name), ft)
+			if _, isEx := existentialOf(fld.Type); isEx {
+				g.blk.DestroyAddr(at)
+				continue
+			}
+			g.blk.DestroyValue(g.blk.Load(at, "take"))
+		}
+		t = cl.Superclass
+	}
+	g.blk.EndBorrow(borrowed)
+}
+
+// instanceSubst is what an instance of a generic class puts in place of
+// its parameters: nothing, for a class that is not one.
+func instanceSubst(t types.Type) map[*types.TypeParam]types.Type {
+	inst, ok := t.(*types.GenericInstance)
+	if !ok {
+		return nil
+	}
+	params := nominalTypeParams(inst.Base)
+	if len(params) != len(inst.Args) {
+		return nil
+	}
+	out := make(map[*types.TypeParam]types.Type, len(params))
+	for i, p := range params {
+		out[p] = inst.Args[i]
+	}
+	return out
 }
 
 // classInitSignature is the initializer's type among the ones the
@@ -843,7 +919,7 @@ func (g *gen) callInit(e *ast.CallExpr, t types.Type, st *types.Struct) *sil.Val
 	if e.Args != nil {
 		args = e.Args.Args
 	}
-	sig := g.info.Inits[e]
+	sig := g.ownInit(st.Inits, g.info.Inits[e], args)
 	if sig == nil {
 		sig = pickInit(st, args)
 	}
@@ -873,12 +949,35 @@ func (g *gen) delegatingInit(e *ast.CallExpr, ref *ast.InitRefExpr) (*sil.Value,
 	if _, isSelf := ref.X.(*ast.SelfExpr); !isSelf || g.self == nil || g.recv == nil || isClass(g.recv) {
 		return nil, false
 	}
+	// In an initializer a protocol's extension declares, lowered for a
+	// conforming enum: the enum's own initializer of those labels.
+	if en, ok := g.recv.Underlying().(*types.Enum); ok {
+		var args []*ast.CallArg
+		if e.Args != nil {
+			args = e.Args.Args
+		}
+		sig := g.ownInit(en.Inits, g.info.Inits[e], args)
+		if sig == nil {
+			return nil, false
+		}
+		out := *sig
+		out.Results = g.recv
+		v := g.applyInit(e, g.recv, &out, args)
+		if v == nil {
+			return nil, true
+		}
+		v = g.consume(v)
+		access := g.blk.BeginAccess(g.self.addr, "modify", "unknown")
+		g.blk.Assign(v, access)
+		g.blk.EndAccess(access)
+		return g.void(), true
+	}
 	st, ok := g.recv.Underlying().(*types.Struct)
 	if !ok {
 		return nil, false
 	}
 	var v *sil.Value
-	if g.info.Inits[e] == nil && st.Memberwise() != nil {
+	if g.info.Inits[e] == nil && st.Memberwise() != nil && g.ownInit(st.Inits, nil, argsOf(e)) == nil {
 		// An extension's initializer handing on to the memberwise one.
 		v = g.memberwise(e, g.recv, st)
 	} else {
@@ -1080,6 +1179,46 @@ func pickInit(st *types.Struct, args []*ast.CallArg) *types.Signature {
 	return pickInitFrom(st.Inits, args)
 }
 
+// ownInit is the initializer of inits a call means: the one the checker
+// chose, where it is one of them, and otherwise -- in a protocol
+// extension's initializer lowered for a conforming type, whose
+// `self.init(n:)` the checker read against the protocol's requirement --
+// the one whose labels are the call's.
+func (g *gen) ownInit(inits []*types.Signature, chosen *types.Signature, args []*ast.CallArg) *types.Signature {
+	for _, sig := range inits {
+		if sig == chosen && sig != nil {
+			return sig
+		}
+	}
+	for _, sig := range inits {
+		if sig == nil || len(sig.Params) != len(args) {
+			continue
+		}
+		fits := true
+		for i, p := range sig.Params {
+			label := ""
+			if args[i].Label != nil {
+				label = g.text(args[i].Label)
+			}
+			if p.Label != label {
+				fits = false
+			}
+		}
+		if fits {
+			return sig
+		}
+	}
+	return nil
+}
+
+// argsOf is a call's arguments.
+func argsOf(e *ast.CallExpr) []*ast.CallArg {
+	if e == nil || e.Args == nil {
+		return nil
+	}
+	return e.Args.Args
+}
+
 // pickInitFrom is pickInit over a list, which is what a class needs:
 // the same question, asked of a type that is not a struct.
 func pickInitFrom(inits []*types.Signature, args []*ast.CallArg) *types.Signature {
@@ -1229,21 +1368,31 @@ func (g *gen) classFieldDefaults(recv types.Type, self *sil.Value) {
 				continue
 			}
 			def := g.info.FieldDefaults[fld]
+			var subst map[*types.TypeParam]types.Type
 			if def == nil {
 				// An instance of a generic class: the default is recorded
-				// against the declaration's property, and the
-				// specialization in force reads it for this instance.
-				def, _ = g.instanceDefault(recv, fld.Name)
+				// against the declaration's property, and read under the
+				// instance's arguments.
+				def, subst = g.instanceDefault(recv, fld.Name)
 			}
 			if def == nil {
 				continue
 			}
+			prev := g.subst
+			if subst != nil {
+				g.subst = subst
+			}
 			v := g.rvalue(def)
+			var from types.Type
+			if v != nil {
+				from = g.typeOf(def)
+			}
+			g.subst = prev
 			if v == nil {
 				continue
 			}
 			ft := lowerType(fld.Type)
-			v = g.optionalFor(def, v, g.typeOf(def), fld.Type)
+			v = g.optionalFor(def, v, from, fld.Type)
 			at := g.blk.RefElementAddr(self, memberName(recv, fld.Name), ft)
 			g.blk.Store(v, at, storeQualifier(ft))
 		}
@@ -1267,4 +1416,98 @@ func (g *gen) defaultAncestors(recv types.Type, self *sil.Value) {
 		g.classFieldDefaults(up, self)
 		up = ucl.Superclass
 	}
+}
+
+// initTracker follows a throwing class initializer's body as it is
+// lowered: which of the class's stored properties it has set where it is,
+// and whether it has run its superclass's initializer. That is Swift's
+// definite initialization, over the straight line of each block: a
+// property set inside a nested block counts only inside it. Where every
+// one is set, the instance is complete, and an error that leaves the body
+// leaves a complete instance behind.
+type initTracker struct {
+	self      *sil.Value
+	required  map[string]bool
+	assigned  map[string]bool
+	needSuper bool
+	superDone bool
+}
+
+func newInitTracker(recv types.Type, self *sil.Value) *initTracker {
+	t := &initTracker{self: self, required: map[string]bool{}, assigned: map[string]bool{}}
+	cl, ok := recv.Underlying().(*types.Class)
+	if !ok {
+		return t
+	}
+	t.needSuper = cl.Superclass != nil
+	for _, f := range cl.Fields {
+		if f == nil || f.HasDefault || f.IsComputed {
+			continue
+		}
+		// An optional var starts as nil, as Swift has it.
+		if _, opt := f.Type.(*types.Optional); opt && !f.IsConst {
+			continue
+		}
+		t.required[f.Name] = true
+	}
+	return t
+}
+
+// complete reports whether every stored property is set here, and the
+// superclass's initializer has run where there is one.
+func (t *initTracker) complete() bool {
+	if t.needSuper && !t.superDone {
+		return false
+	}
+	for name := range t.required {
+		if !t.assigned[name] {
+			return false
+		}
+	}
+	return true
+}
+
+// enter is where a nested block starts: what it sets is forgotten where
+// it ends.
+func (t *initTracker) enter() func() {
+	saved := make(map[string]bool, len(t.assigned))
+	for k, v := range t.assigned {
+		saved[k] = v
+	}
+	superDone := t.superDone
+	return func() { t.assigned, t.superDone = saved, superDone }
+}
+
+// noteInitAssign records an assignment to one of self's stored
+// properties, `self.x = v` or `x = v`, in a throwing class initializer.
+func (g *gen) noteInitAssign(x ast.Expr) {
+	if g.initDI == nil {
+		return
+	}
+	if to, ok := g.info.ImplicitSelf[x]; ok {
+		x = to
+	}
+	switch x := unparenExpr(x).(type) {
+	case *ast.MemberExpr:
+		if _, onSelf := x.X.(*ast.SelfExpr); onSelf && x.Name != nil {
+			g.initDI.assigned[g.text(x.Name)] = true
+		}
+	case *ast.IdentExpr:
+		// A property named alone: not a local of the initializer's.
+		if x.Name != nil && g.locals[g.info.Uses[x.Name]] == nil {
+			g.initDI.assigned[g.text(x.Name)] = true
+		}
+	}
+}
+
+// leaveCompleteInit is what an error leaving a throwing class initializer
+// does first where the instance is complete: take a reference of its own,
+// which tells the allocator so (vertex_init_unfinished).
+func (g *gen) leaveCompleteInit() {
+	if g.initDI == nil || !g.initDI.complete() || g.blk == nil || g.blk.Term() != nil {
+		return
+	}
+	t := g.initDI.self.Type()
+	g.runtimeResult(stdlib.InitComplete, []sil.Param{{Type: t, Convention: sil.ParamGuaranteed}},
+		lowerType(types.Typ[types.Void]), g.initDI.self)
 }

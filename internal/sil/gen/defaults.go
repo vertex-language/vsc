@@ -183,6 +183,24 @@ func closureSkips(a *ast.CallArg, p *types.Param) bool {
 
 // defaultValue lowers a constant default argument expression at the call site.
 func (g *gen) defaultValue(at ast.Node, e ast.Expr) *sil.Value {
+	// A generic function's default is its declaration's, read with the
+	// call's type arguments: `e: Epi<T>? = nil` of apply(4) is an Epi<Int>?.
+	if call, ok := at.(*ast.CallExpr); ok {
+		if spec, ok := g.info.Specializations[call]; ok && len(spec.Params) == len(spec.Args) {
+			subst := make(map[*types.TypeParam]types.Type, len(g.subst)+len(spec.Params))
+			for k, v := range g.subst {
+				subst[k] = v
+			}
+			for i, p := range spec.Params {
+				if spec.Args[i] != nil {
+					subst[p] = g.substituted(spec.Args[i])
+				}
+			}
+			prev := g.subst
+			g.subst = subst
+			defer func() { g.subst = prev }()
+		}
+	}
 	if v, ok := g.callSiteMagic(at, e); ok {
 		return v
 	}

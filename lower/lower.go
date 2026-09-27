@@ -1090,7 +1090,13 @@ func (l *lowerer) classDestroyer(t *sil.VTable) *ir.Func {
 	// superclass's, which is Swift's order.
 	var deinits []ir.Callee
 	for c := cl; c != nil; {
-		if vt := l.vtableFor(c.Name); vt != nil && vt.Deinit != "" {
+		vt := l.vtableFor(c.Name)
+		// The class's own is the table's being lowered: an instance of a
+		// generic class has one of its own, under the instance's name.
+		if c == cl {
+			vt = t
+		}
+		if vt != nil && vt.Deinit != "" {
 			if callee, ok := l.callee[l.sym(vt.Deinit)]; ok {
 				deinits = append(deinits, callee)
 			} else if def, ok := l.defs[vt.Deinit]; ok {

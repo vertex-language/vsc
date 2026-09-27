@@ -49,6 +49,9 @@ type checker struct {
 	// implicit is the expressions whose value is an implicitly unwrapped
 	// optional taken as an optional; see implicitlyUnwrapped.
 	implicit map[ast.Expr]bool
+	// resultWants is the type a generic call's result is to have, where
+	// its context says: `let a: Int = zero(3)` makes zero's T an Int.
+	resultWants map[*ast.CallExpr]types.Type
 
 	// declSites tracks top-level declaration locations and access levels.
 	declSites  map[Symbol]declSite

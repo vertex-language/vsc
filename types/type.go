@@ -348,6 +348,9 @@ type Requirement struct {
 	// IsMutating a method requirement's.
 	IsStatic   bool
 	IsMutating bool
+	// Settable is a property requirement written `{ get set }`: its
+	// witness table has a setter row after the getter's.
+	Settable bool
 }
 
 // Named represents a nominal type alias or unresolved type name.
@@ -378,7 +381,11 @@ type Struct struct {
 	// Pkg is the module that declared it, when it was read from an
 	// import's interface; "" for the module being checked. Two types
 	// of one name from different modules are different types.
-	Pkg          string
+	Pkg string
+	// Local is, for a type declared inside a function, its place among
+	// the module's such types, from 1; 0 for any other. Two functions'
+	// `struct S` are two types, and their symbols say which.
+	Local        int
 	Name         string
 	TypeParams   []*TypeParam
 	Fields       []*Field
@@ -445,7 +452,11 @@ type Class struct {
 	// Pkg is the module that declared it, when it was read from an
 	// import's interface; "" for the module being checked. Two types
 	// of one name from different modules are different types.
-	Pkg          string
+	Pkg string
+	// Local is, for a type declared inside a function, its place among
+	// the module's such types, from 1; 0 for any other. Two functions'
+	// `struct S` are two types, and their symbols say which.
+	Local        int
 	Inits        []*Signature
 	Name         string
 	TypeParams   []*TypeParam
@@ -496,7 +507,11 @@ type Enum struct {
 	// Pkg is the module that declared it, when it was read from an
 	// import's interface; "" for the module being checked. Two types
 	// of one name from different modules are different types.
-	Pkg          string
+	Pkg string
+	// Local is, for a type declared inside a function, its place among
+	// the module's such types, from 1; 0 for any other. Two functions'
+	// `struct S` are two types, and their symbols say which.
+	Local        int
 	Name         string
 	TypeParams   []*TypeParam
 	RawType      Type
@@ -543,6 +558,12 @@ type Protocol struct {
 	ExtMethods  []*Method
 	ExtComputed []*Field
 	ExtStatics  []*Field
+	// ExtInits are the initializers its extensions declare, which make
+	// a conforming type's value through the initializers it requires:
+	// `init(twice m: Int) { self.init(n: m * 2) }`. Their results are Self.
+	ExtInits []*Signature
+	// Inits are the initializers it requires: `init(n: Int)`.
+	Inits []*Signature
 }
 
 // ExtensionMethod is the method named name an extension of p, or of a
@@ -940,4 +961,18 @@ func (g *GenericInstance) String() string {
 	}
 	sb.WriteString(">")
 	return sb.String()
+}
+
+// LocalOf is a nominal type's Local: which of its module's types declared
+// inside functions it is, from 1, or 0.
+func LocalOf(t Type) int {
+	switch n := t.(type) {
+	case *Struct:
+		return n.Local
+	case *Class:
+		return n.Local
+	case *Enum:
+		return n.Local
+	}
+	return 0
 }

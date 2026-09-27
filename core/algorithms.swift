@@ -1214,6 +1214,11 @@ extension String {
         return Substring(_base: self, _start: r.lowerBound._offset, _end: index(after: r.upperBound)._offset)
     }
 
+    // `s[..<i]`, `s[...i]` and `s[i...]`: from the start, or to the end.
+    subscript(r: PartialRangeUpTo<_StringIndex>) -> Substring { return self[startIndex..<r.upperBound] }
+    subscript(r: PartialRangeThrough<_StringIndex>) -> Substring { return self[startIndex...r.upperBound] }
+    subscript(r: PartialRangeFrom<_StringIndex>) -> Substring { return self[r.lowerBound..<endIndex] }
+
     // The first and last Characters, if there are any.
     var first: Character? { return isEmpty ? nil : self[startIndex] }
     var last: Character? { return isEmpty ? nil : self[index(before: endIndex)] }
@@ -1547,6 +1552,10 @@ extension Substring {
         return self[r.lowerBound..<index(after: r.upperBound)]
     }
 
+    subscript(r: PartialRangeUpTo<_StringIndex>) -> Substring { return self[startIndex..<r.upperBound] }
+    subscript(r: PartialRangeThrough<_StringIndex>) -> Substring { return self[startIndex...r.upperBound] }
+    subscript(r: PartialRangeFrom<_StringIndex>) -> Substring { return self[r.lowerBound..<endIndex] }
+
     // The first maxLength Characters, or all of them.
     func prefix(_ maxLength: Int) -> Substring {
         var at = _start
@@ -1721,9 +1730,9 @@ extension PartialRangeFrom {
     func contains(_ element: Bound) -> Bool { return lowerBound <= element }
 }
 
-// A range of integers is a collection of them, counted out in order. Swift
-// says so of every Strideable bound with an integer stride; these say it
-// of Int.
+// A range of integers is a collection of them, counted out in order, as
+// Swift says of every Strideable bound with an integer stride: here, of
+// every fixed-width integer.
 
 extension _IntRangeIterator: IteratorProtocol {
     mutating func next() -> Int? {
@@ -1734,17 +1743,36 @@ extension _IntRangeIterator: IteratorProtocol {
     }
 }
 
-extension Range where Bound == Int {
-    // How many integers the range holds.
-    var count: Int { return upperBound - lowerBound }
+// What for-in over a range of an integer type walks, when it is walked as
+// a Sequence. The last value is kept rather than one past it, which a
+// range up to the type's max -- `UInt8(0)...255` -- has no room for.
+struct _IntegerRangeIterator<Bound: FixedWidthInteger>: IteratorProtocol {
+    var _at: Bound
+    let _last: Bound
+    var _done: Bool
 
-    func makeIterator() -> _IntRangeIterator {
-        return _IntRangeIterator(_at: lowerBound, _end: upperBound)
+    mutating func next() -> Bound? {
+        if _done { return nil }
+        let x = _at
+        if _at == _last { _done = true } else { _at += 1 }
+        return x
+    }
+}
+
+extension Range where Bound: FixedWidthInteger {
+    // How many integers the range holds.
+    var count: Int { return Int(upperBound) - Int(lowerBound) }
+
+    func makeIterator() -> _IntegerRangeIterator<Bound> {
+        if lowerBound == upperBound {
+            return _IntegerRangeIterator(_at: lowerBound, _last: lowerBound, _done: true)
+        }
+        return _IntegerRangeIterator(_at: lowerBound, _last: upperBound - 1, _done: false)
     }
 
     // The integers, last first.
-    func reversed() -> [Int] {
-        var out: [Int] = []
+    func reversed() -> [Bound] {
+        var out: [Bound] = []
         var i = upperBound
         while i > lowerBound {
             i -= 1
@@ -1754,43 +1782,43 @@ extension Range where Bound == Int {
     }
 
     // A new array of what transform makes of each integer, in order.
-    func map<T>(_ transform: (Int) -> T) -> [T] {
+    func map<T>(_ transform: (Bound) -> T) -> [T] {
         var out: [T] = []
         for x in self { out.append(transform(x)) }
         return out
     }
 
     // The integers isIncluded keeps, in order.
-    func filter(_ isIncluded: (Int) -> Bool) -> [Int] {
-        var out: [Int] = []
+    func filter(_ isIncluded: (Bound) -> Bool) -> [Bound] {
+        var out: [Bound] = []
         for x in self where isIncluded(x) { out.append(x) }
         return out
     }
 
     // The integers combined in order, starting from initialResult.
-    func reduce<Result>(_ initialResult: Result, _ nextPartialResult: (Result, Int) -> Result) -> Result {
+    func reduce<Result>(_ initialResult: Result, _ nextPartialResult: (Result, Bound) -> Result) -> Result {
         var acc = initialResult
         for x in self { acc = nextPartialResult(acc, x) }
         return acc
     }
 
     // body, called with each integer in order.
-    func forEach(_ body: (Int) -> Void) {
+    func forEach(_ body: (Bound) -> Void) {
         for x in self { body(x) }
     }
 }
 
-extension ClosedRange where Bound == Int {
+extension ClosedRange where Bound: FixedWidthInteger {
     // How many integers the range holds.
-    var count: Int { return upperBound - lowerBound + 1 }
+    var count: Int { return Int(upperBound) - Int(lowerBound) + 1 }
 
-    func makeIterator() -> _IntRangeIterator {
-        return _IntRangeIterator(_at: lowerBound, _end: upperBound + 1)
+    func makeIterator() -> _IntegerRangeIterator<Bound> {
+        return _IntegerRangeIterator(_at: lowerBound, _last: upperBound, _done: false)
     }
 
     // The integers, last first.
-    func reversed() -> [Int] {
-        var out: [Int] = []
+    func reversed() -> [Bound] {
+        var out: [Bound] = []
         var i = upperBound
         while i >= lowerBound {
             out.append(i)
@@ -1801,28 +1829,28 @@ extension ClosedRange where Bound == Int {
     }
 
     // A new array of what transform makes of each integer, in order.
-    func map<T>(_ transform: (Int) -> T) -> [T] {
+    func map<T>(_ transform: (Bound) -> T) -> [T] {
         var out: [T] = []
         for x in self { out.append(transform(x)) }
         return out
     }
 
     // The integers isIncluded keeps, in order.
-    func filter(_ isIncluded: (Int) -> Bool) -> [Int] {
-        var out: [Int] = []
+    func filter(_ isIncluded: (Bound) -> Bool) -> [Bound] {
+        var out: [Bound] = []
         for x in self where isIncluded(x) { out.append(x) }
         return out
     }
 
     // The integers combined in order, starting from initialResult.
-    func reduce<Result>(_ initialResult: Result, _ nextPartialResult: (Result, Int) -> Result) -> Result {
+    func reduce<Result>(_ initialResult: Result, _ nextPartialResult: (Result, Bound) -> Result) -> Result {
         var acc = initialResult
         for x in self { acc = nextPartialResult(acc, x) }
         return acc
     }
 
     // body, called with each integer in order.
-    func forEach(_ body: (Int) -> Void) {
+    func forEach(_ body: (Bound) -> Void) {
         for x in self { body(x) }
     }
 }
@@ -3879,20 +3907,28 @@ extension Array: RandomAccessCollection {
 
 // A range of integers is a collection of them, each at its own position,
 // as Swift's ranges of Strideable integer bounds are.
-extension Range: RandomAccessCollection where Bound == Int {
-    var startIndex: Int { return lowerBound }
-    var endIndex: Int { return upperBound }
-    subscript(position: Int) -> Int { return position }
-    func index(after i: Int) -> Int { return i + 1 }
-    func index(before i: Int) -> Int { return i - 1 }
+extension Range: RandomAccessCollection where Bound: FixedWidthInteger {
+    typealias Index = Bound
+    typealias Element = Bound
+    typealias Iterator = _IntegerRangeIterator<Bound>
+    var startIndex: Bound { return lowerBound }
+    var endIndex: Bound { return upperBound }
+    subscript(position: Bound) -> Bound { return position }
+    func index(after i: Bound) -> Bound { return i + 1 }
+    func index(before i: Bound) -> Bound { return i - 1 }
 }
 
-extension ClosedRange: RandomAccessCollection where Bound == Int {
-    var startIndex: Int { return lowerBound }
-    var endIndex: Int { return upperBound + 1 }
-    subscript(position: Int) -> Int { return position }
-    func index(after i: Int) -> Int { return i + 1 }
-    func index(before i: Int) -> Int { return i - 1 }
+// Its positions are its values, and its end one past the last: a range
+// up to the type's max has no end position, as its iterator needs none.
+extension ClosedRange: RandomAccessCollection where Bound: FixedWidthInteger {
+    typealias Index = Bound
+    typealias Element = Bound
+    typealias Iterator = _IntegerRangeIterator<Bound>
+    var startIndex: Bound { return lowerBound }
+    var endIndex: Bound { return upperBound + 1 }
+    subscript(position: Bound) -> Bound { return position }
+    func index(after i: Bound) -> Bound { return i + 1 }
+    func index(before i: Bound) -> Bound { return i - 1 }
 }
 
 // A string is a collection of its Characters, at the positions of their
@@ -4028,5 +4064,307 @@ extension UnsafeRawBufferPointer {
 extension UnsafeMutableRawBufferPointer {
     init(start: UnsafeMutableRawPointer?, count: Int) {
         self.init(baseAddress: start, count: count)
+    }
+}
+
+// ---- Pointers' own members ----
+
+// Typed pointers: memory for count elements a program allocates and
+// frees itself, the values in it put there and ended, and the pointer
+// moved by elements. Swift's UnsafeMutablePointer's, over the core's
+// memory builtins.
+extension UnsafeMutablePointer {
+    static func allocate(capacity count: Int) -> UnsafeMutablePointer<Pointee> {
+        let bytes = MemoryLayout<Pointee>.stride * count
+        return UnsafeMutablePointer<Pointee>(_rawAllocate(bytes, MemoryLayout<Pointee>.alignment))
+    }
+
+    func deallocate() { _rawDeallocate(UnsafeMutableRawPointer(self)) }
+
+    func initialize(to value: Pointee) { _initialize(self, value) }
+
+    func initialize(repeating repeatedValue: Pointee, count: Int) {
+        var i = 0
+        while i < count {
+            _initialize(self + i, repeatedValue)
+            i += 1
+        }
+    }
+
+    func initialize(from source: UnsafePointer<Pointee>, count: Int) {
+        var i = 0
+        while i < count {
+            _initialize(self + i, (source + i).pointee)
+            i += 1
+        }
+    }
+
+    @discardableResult
+    func deinitialize(count: Int) -> UnsafeMutableRawPointer {
+        var i = 0
+        while i < count {
+            _deinitialize(self + i)
+            i += 1
+        }
+        return UnsafeMutableRawPointer(self)
+    }
+
+    func move() -> Pointee { return _take(self) }
+
+    func update(repeating repeatedValue: Pointee, count: Int) {
+        var i = 0
+        while i < count {
+            (self + i).pointee = repeatedValue
+            i += 1
+        }
+    }
+
+    func advanced(by n: Int) -> UnsafeMutablePointer<Pointee> { return self + n }
+    func successor() -> UnsafeMutablePointer<Pointee> { return self + 1 }
+    func predecessor() -> UnsafeMutablePointer<Pointee> { return self - 1 }
+}
+
+extension UnsafePointer {
+    func deallocate() { _rawDeallocate(UnsafeMutableRawPointer(mutating: self)) }
+
+    func advanced(by n: Int) -> UnsafePointer<Pointee> { return self + n }
+    func successor() -> UnsafePointer<Pointee> { return self + 1 }
+    func predecessor() -> UnsafePointer<Pointee> { return self - 1 }
+}
+
+// Raw pointers: bytes read and written as values of a type, and the
+// pointer moved by bytes.
+extension UnsafeRawPointer {
+    func load<T>(fromByteOffset offset: Int = 0, as type: T.Type) -> T {
+        return UnsafePointer<T>(self + offset).pointee
+    }
+
+    func assumingMemoryBound<T>(to: T.Type) -> UnsafePointer<T> { return UnsafePointer<T>(self) }
+
+    func bindMemory<T>(to type: T.Type, capacity count: Int) -> UnsafePointer<T> {
+        return UnsafePointer<T>(self)
+    }
+
+    func advanced(by n: Int) -> UnsafeRawPointer { return self + n }
+
+    func deallocate() { _rawDeallocate(UnsafeMutableRawPointer(mutating: self)) }
+}
+
+extension UnsafeMutableRawPointer {
+    static func allocate(byteCount: Int, alignment: Int) -> UnsafeMutableRawPointer {
+        return _rawAllocate(byteCount, alignment)
+    }
+
+    func deallocate() { _rawDeallocate(self) }
+
+    func load<T>(fromByteOffset offset: Int = 0, as type: T.Type) -> T {
+        return UnsafeMutablePointer<T>(self + offset).pointee
+    }
+
+    // Swift asks that T be trivial here, so nothing is ended: the bytes
+    // are written over.
+    func storeBytes<T>(of value: T, toByteOffset offset: Int = 0, as type: T.Type) {
+        _initialize(UnsafeMutablePointer<T>(self + offset), value)
+    }
+
+    func copyMemory(from source: UnsafeRawPointer, byteCount: Int) {
+        _rawMove(self, source, byteCount)
+    }
+
+    func assumingMemoryBound<T>(to: T.Type) -> UnsafeMutablePointer<T> {
+        return UnsafeMutablePointer<T>(self)
+    }
+
+    func bindMemory<T>(to type: T.Type, capacity count: Int) -> UnsafeMutablePointer<T> {
+        return UnsafeMutablePointer<T>(self)
+    }
+
+    @discardableResult
+    func initializeMemory<T>(as type: T.Type, repeating repeatedValue: T, count: Int) -> UnsafeMutablePointer<T> {
+        let p = UnsafeMutablePointer<T>(self)
+        p.initialize(repeating: repeatedValue, count: count)
+        return p
+    }
+
+    func advanced(by n: Int) -> UnsafeMutableRawPointer { return self + n }
+}
+
+// Raw buffers are collections of their bytes, as Swift's are.
+extension UnsafeRawBufferPointer: RandomAccessCollection {
+    typealias Index = Int
+    typealias Element = UInt8
+    typealias Iterator = _UnsafeRawBufferIterator
+
+    func makeIterator() -> _UnsafeRawBufferIterator {
+        return _UnsafeRawBufferIterator(_base: baseAddress, _at: 0, _end: count)
+    }
+
+    var startIndex: Int { return 0 }
+    var endIndex: Int { return count }
+    func index(after i: Int) -> Int { return i + 1 }
+    func index(before i: Int) -> Int { return i - 1 }
+
+    subscript(i: Int) -> UInt8 {
+        return baseAddress!.load(fromByteOffset: i, as: UInt8.self)
+    }
+
+    func load<T>(fromByteOffset offset: Int = 0, as type: T.Type) -> T {
+        return baseAddress!.load(fromByteOffset: offset, as: type)
+    }
+}
+
+extension UnsafeMutableRawBufferPointer: RandomAccessCollection {
+    typealias Index = Int
+    typealias Element = UInt8
+    typealias Iterator = _UnsafeRawBufferIterator
+
+    func makeIterator() -> _UnsafeRawBufferIterator {
+        let base: UnsafeRawPointer? = baseAddress == nil ? nil : UnsafeRawPointer(baseAddress!)
+        return _UnsafeRawBufferIterator(_base: base, _at: 0, _end: count)
+    }
+
+    var startIndex: Int { return 0 }
+    var endIndex: Int { return count }
+    func index(after i: Int) -> Int { return i + 1 }
+    func index(before i: Int) -> Int { return i - 1 }
+
+    subscript(i: Int) -> UInt8 {
+        get { return baseAddress!.load(fromByteOffset: i, as: UInt8.self) }
+        nonmutating set { baseAddress!.storeBytes(of: newValue, toByteOffset: i, as: UInt8.self) }
+    }
+
+    func load<T>(fromByteOffset offset: Int = 0, as type: T.Type) -> T {
+        return baseAddress!.load(fromByteOffset: offset, as: type)
+    }
+
+    func storeBytes<T>(of value: T, toByteOffset offset: Int = 0, as type: T.Type) {
+        baseAddress!.storeBytes(of: value, toByteOffset: offset, as: type)
+    }
+
+    func copyMemory(from source: UnsafeRawBufferPointer) {
+        if let from = source.baseAddress { baseAddress!.copyMemory(from: from, byteCount: source.count) }
+    }
+}
+
+// What for-in over a raw buffer walks: its bytes, in order.
+struct _UnsafeRawBufferIterator: IteratorProtocol {
+    let _base: UnsafeRawPointer?
+    var _at: Int
+    let _end: Int
+
+    mutating func next() -> UInt8? {
+        if _at >= _end { return nil }
+        let x = _base!.load(fromByteOffset: _at, as: UInt8.self)
+        _at += 1
+        return x
+    }
+}
+
+// A variable's memory, lent to body for the length of the call: the
+// value itself, typed, or its bytes. Swift's with-functions.
+func withUnsafeMutablePointer<T, Result>(to value: inout T,
+                                         _ body: (UnsafeMutablePointer<T>) throws -> Result) rethrows -> Result {
+    return try body(UnsafeMutablePointer<T>(_addressOf(&value)))
+}
+
+func withUnsafePointer<T, Result>(to value: inout T,
+                                  _ body: (UnsafePointer<T>) throws -> Result) rethrows -> Result {
+    return try body(UnsafePointer<T>(_addressOf(&value)))
+}
+
+func withUnsafePointer<T, Result>(to value: T,
+                                  _ body: (UnsafePointer<T>) throws -> Result) rethrows -> Result {
+    var copy = value
+    return try body(UnsafePointer<T>(_addressOf(&copy)))
+}
+
+func withUnsafeMutableBytes<T, Result>(of value: inout T,
+                                       _ body: (UnsafeMutableRawBufferPointer) throws -> Result) rethrows -> Result {
+    return try body(UnsafeMutableRawBufferPointer(start: _addressOf(&value), count: MemoryLayout<T>.size))
+}
+
+func withUnsafeBytes<T, Result>(of value: inout T,
+                                _ body: (UnsafeRawBufferPointer) throws -> Result) rethrows -> Result {
+    return try body(UnsafeRawBufferPointer(start: UnsafeRawPointer(_addressOf(&value)), count: MemoryLayout<T>.size))
+}
+
+func withUnsafeBytes<T, Result>(of value: T,
+                                _ body: (UnsafeRawBufferPointer) throws -> Result) rethrows -> Result {
+    var copy = value
+    return try body(UnsafeRawBufferPointer(start: UnsafeRawPointer(_addressOf(&copy)), count: MemoryLayout<T>.size))
+}
+
+// A number read from a Substring, as from the String it is a piece of:
+// Swift's init?(_ text: some StringProtocol).
+extension Int {
+    init?(_ text: Substring) {
+        guard let v = Int(String(text)) else { return nil }
+        self = v
+    }
+}
+extension Int8 {
+    init?(_ text: Substring) {
+        guard let v = Int8(String(text)) else { return nil }
+        self = v
+    }
+}
+extension Int16 {
+    init?(_ text: Substring) {
+        guard let v = Int16(String(text)) else { return nil }
+        self = v
+    }
+}
+extension Int32 {
+    init?(_ text: Substring) {
+        guard let v = Int32(String(text)) else { return nil }
+        self = v
+    }
+}
+extension Int64 {
+    init?(_ text: Substring) {
+        guard let v = Int64(String(text)) else { return nil }
+        self = v
+    }
+}
+extension UInt {
+    init?(_ text: Substring) {
+        guard let v = UInt(String(text)) else { return nil }
+        self = v
+    }
+}
+extension UInt8 {
+    init?(_ text: Substring) {
+        guard let v = UInt8(String(text)) else { return nil }
+        self = v
+    }
+}
+extension UInt16 {
+    init?(_ text: Substring) {
+        guard let v = UInt16(String(text)) else { return nil }
+        self = v
+    }
+}
+extension UInt32 {
+    init?(_ text: Substring) {
+        guard let v = UInt32(String(text)) else { return nil }
+        self = v
+    }
+}
+extension UInt64 {
+    init?(_ text: Substring) {
+        guard let v = UInt64(String(text)) else { return nil }
+        self = v
+    }
+}
+extension Double {
+    init?(_ text: Substring) {
+        guard let v = Double(String(text)) else { return nil }
+        self = v
+    }
+}
+extension Float {
+    init?(_ text: Substring) {
+        guard let v = Float(String(text)) else { return nil }
+        self = v
     }
 }

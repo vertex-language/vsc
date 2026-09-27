@@ -148,18 +148,6 @@ func main() -> Int32 { return outer(Square(side: 5)) }`)
 // something already gone. The messages are what a reader gets instead.
 func TestExistentialLimitsAreNamed(t *testing.T) {
 	for _, c := range []struct{ name, src, want string }{
-		{"a value too wide for the buffer", `
-protocol Shape { func area() -> Int32 }
-struct Wide: Shape {
-    var a: Int32; var b: Int32; var c: Int32
-    var d: Int32; var e: Int32; var f: Int32
-    var g: Int32; var h: Int32; var i: Int32; var j: Int32
-    func area() -> Int32 { return a }
-}
-func measure(_ s: Shape) -> Int32 { return s.area() }
-func main() -> Int32 { return measure(Wide(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10)) }`,
-			"it is boxed"},
-
 		{"a protocol with an associated type", `
 protocol Container { associatedtype Item
     func get() -> Item }

@@ -126,6 +126,11 @@ func (c *checker) resolveProtocol(d *ast.ProtocolDecl, scope *Scope) {
 				pr.Subscripts = append(pr.Subscripts, sub)
 			}
 
+		case *ast.InitDecl:
+			sig := c.buildFuncSig(m.Sig, inner)
+			sig.Failable = m.Question.IsValid() || m.Exclaim.IsValid()
+			pr.Inits = append(pr.Inits, sig)
+
 		case *ast.FuncDecl:
 			if m.Name == nil {
 				continue
@@ -155,6 +160,7 @@ func (c *checker) resolveProtocol(d *ast.ProtocolDecl, scope *Scope) {
 					IsVar:    m.Kind == token.VAR,
 					IsConst:  m.Kind == token.LET,
 					IsStatic: isStatic(m.Mods),
+					Settable: c.hasSetAccessor(b.Accessors),
 				})
 			}
 		}
@@ -662,6 +668,23 @@ func inferFromMembers(protocols []*types.Protocol, name string, t types.Type) ty
 // its witnesses -- for requirements it implements none of -- say the
 // associated type name is.
 func inferFromDefaults(protocols []*types.Protocol, name string, t types.Type, own []*types.Method) types.Type {
+	// A protocol's extension methods include those of the protocols it
+	// refines, written against their own Self: BidirectionalCollection's
+	// makeIterator() is Collection's, returning IndexingIterator<Self>.
+	selves := map[*types.TypeParam]types.Type{}
+	var add func(p *types.Protocol)
+	add = func(p *types.Protocol) {
+		if p == nil || p.Self == nil || selves[p.Self] != nil {
+			return
+		}
+		selves[p.Self] = t
+		for _, up := range p.Inherited {
+			add(up)
+		}
+	}
+	for _, p := range protocols {
+		add(p)
+	}
 	for _, p := range protocols {
 		for _, req := range p.Requirements {
 			if req == nil || req.Sig == nil {
@@ -678,7 +701,7 @@ func inferFromDefaults(protocols []*types.Protocol, name string, t types.Type, o
 			}
 			for _, q := range protocols {
 				for _, m := range q.ExtensionMethods(req.Name, req.IsStatic) {
-					got, _ := types.Substitute(m.Sig, map[*types.TypeParam]types.Type{q.Self: t}).(*types.Signature)
+					got, _ := types.Substitute(m.Sig, selves).(*types.Signature)
 					if got == nil || len(got.Params) != len(req.Sig.Params) {
 						continue
 					}
@@ -690,4 +713,18 @@ func inferFromDefaults(protocols []*types.Protocol, name string, t types.Type, o
 		}
 	}
 	return nil
+}
+
+// hasSetAccessor reports whether a property requirement's accessors,
+// `{ get set }`, include a setter.
+func (c *checker) hasSetAccessor(block *ast.AccessorBlock) bool {
+	if block == nil {
+		return false
+	}
+	for _, a := range block.Accessors {
+		if a != nil && a.Keyword != nil && a.Keyword.Text(c.file) == "set" {
+			return true
+		}
+	}
+	return false
 }

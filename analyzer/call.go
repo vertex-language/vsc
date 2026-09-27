@@ -296,11 +296,25 @@ func (c *checker) sigFits(sig *types.Signature, args []*ast.CallArg, argTypes []
 
 // argFitsParam reports whether one argument's type fits a parameter.
 func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) bool {
-	if t == nil || isInvalid(t) || types.AssignableTo(t, p.Type) {
+	// An inout parameter takes `&x` and nothing else, and `&x` goes to an
+	// inout parameter or a pointer: `withUnsafeBytes(of: v)` is the
+	// by-value overload beside the inout one.
+	if arg != nil {
+		_, amp := unparen(arg.X).(*ast.InOutExpr)
+		if p.Ownership == types.InOut && !amp {
+			return false
+		}
+		if amp && p.Ownership != types.InOut {
+			if _, ptr := unwrappedContext(p.Type).(*types.Pointer); !ptr && !mentionsTypeParam(p.Type) {
+				return false
+			}
+		}
+	}
+	if t == nil || isInvalid(t) || c.assignableTo(t, p.Type) {
 		return true
 	}
 	if fn, ok := p.Type.Underlying().(*types.Signature); ok && p.Autoclosure {
-		return types.AssignableTo(t, fn.Results)
+		return c.assignableTo(t, fn.Results)
 	}
 	// A parameter whose type is a type parameter takes any argument that
 	// meets its constraints: `Count<R: AsyncReader>(_: inout R)` fits a
@@ -814,7 +828,7 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 		// function it becomes returns.
 		if fn, ok := param.Type.Underlying().(*types.Signature); ok && param.Autoclosure {
 			argType := c.checkExpr(arg.X, fn.Results, scope)
-			if !types.AssignableTo(argType, fn.Results) {
+			if !c.assignableTo(argType, fn.Results) {
 				c.typeErrorf(arg.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", argType, fn.Results)
 			}
 			c.info.Autoclosures[arg.X] = fn
@@ -824,7 +838,7 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 			c.applyBuilder(arg.X, param.Builder)
 		}
 		argType := c.checkExpr(arg.X, param.Type, scope)
-		if !types.AssignableTo(argType, param.Type) {
+		if !c.assignableTo(argType, param.Type) {
 			if isString(argType) && cStringParam(param.Type) {
 				c.info.CStrings[arg.X] = param.Type
 				continue
@@ -954,14 +968,25 @@ func arity(least, most int, variadic bool) string {
 
 // inferGenericCall infers type parameters from argument types and returns the specialized signature.
 func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args []*ast.CallArg, scope *Scope) *types.Signature {
-	if len(sig.TypeParams) == 0 || len(args) == 0 {
+	var want types.Type
+	if e != nil {
+		want = c.resultWants[e]
+	}
+	if len(sig.TypeParams) == 0 || len(args) == 0 && want == nil {
 		return sig
 	}
 	subst := make(map[*types.TypeParam]types.Type, len(sig.TypeParams))
 	quiet := len(c.info.Diagnostics)
-	var closures, operators, literals []int
+	// Each argument against the parameter it is for: past the defaulted
+	// ones the call leaves out, `load(as: T.self)` beside a
+	// `fromByteOffset:` before it.
+	params := sig.Params
+	if _, variadic := variadicIndex(sig); !variadic && e != nil && len(args) != len(params) {
+		params = c.matchByLabel(e, sig.Params, args)
+	}
+	var closures, operators, literals, built []int
 	for i, arg := range args {
-		if i >= len(sig.Params) {
+		if i >= len(params) {
 			break
 		}
 		if _, isClosure := arg.X.(*ast.ClosureExpr); isClosure {
@@ -986,28 +1011,44 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 			literals = append(literals, i)
 			continue
 		}
+		// A value made of literals alone -- `Epi(scale: 2)` -- is read
+		// once the literals have spoken: beside 2.5 it is an Epi<Double>.
+		if c.literalConstruction(arg.X, scope) {
+			built = append(built, i)
+			continue
+		}
 		got := c.checkExpr(arg.X, nil, scope)
-		if tp, ok := sig.Params[i].Type.(*types.TypeParam); ok {
+		if tp, ok := params[i].Type.(*types.TypeParam); ok {
 			got = c.meetSameTypes(e, arg.X, got, tp, sig.TypeParams, subst, scope)
 		}
-		types.UnifyArg(sig.Params[i].Type, got, subst)
+		types.UnifyArg(params[i].Type, got, subst)
 	}
 	for _, i := range operators {
-		want := types.Substitute(sig.Params[i].Type, subst)
+		want := types.Substitute(params[i].Type, subst)
 		if fn, ok := want.(*types.Signature); ok {
 			want = alikeOperands(fn, sig.TypeParams, subst)
 		}
 		got := c.checkExpr(args[i].X, want, scope)
 		if !mentionsParamOf(got, sig.TypeParams) && !mentionsInvalid(got) {
-			types.UnifyArg(sig.Params[i].Type, got, subst)
+			types.UnifyArg(params[i].Type, got, subst)
 		}
 	}
 	for _, i := range literals {
-		want := types.Substitute(sig.Params[i].Type, subst)
+		want := types.Substitute(params[i].Type, subst)
 		if mentionsParamOf(want, sig.TypeParams) {
 			want = nil
 		}
-		types.UnifyArg(sig.Params[i].Type, c.checkExpr(args[i].X, want, scope), subst)
+		types.UnifyArg(params[i].Type, c.checkExpr(args[i].X, want, scope), subst)
+	}
+	for _, i := range built {
+		want := types.Substitute(params[i].Type, subst)
+		if mentionsParamOf(want, sig.TypeParams) {
+			want = nil
+		}
+		got := c.checkExpr(args[i].X, want, scope)
+		if !mentionsParamOf(got, sig.TypeParams) && !mentionsInvalid(got) {
+			types.UnifyArg(params[i].Type, got, subst)
+		}
 	}
 	// A closure is read after the other arguments, against the function
 	// type it is passed as with what they have said already in place: its
@@ -1015,13 +1056,13 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 	// the rest of the call's parameters are. One whose type still names a
 	// parameter says nothing about it.
 	for _, i := range closures {
-		want := types.Substitute(sig.Params[i].Type, subst)
+		want := types.Substitute(params[i].Type, subst)
 		got := c.checkExpr(args[i].X, want, scope)
 		// A type parameter of the code around the call -- the Element of
 		// an extension of Array -- is a type like any other there; only
 		// the call's own, still to be inferred, say nothing.
 		if !mentionsParamOf(got, sig.TypeParams) && !mentionsInvalid(got) {
-			types.UnifyArg(sig.Params[i].Type, got, subst)
+			types.UnifyArg(params[i].Type, got, subst)
 		}
 	}
 	// With every argument's say in, one more look at those passed as a
@@ -1029,10 +1070,10 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 	// B.Element` -- can only be met once both are known, and a literal
 	// is read last.
 	for i, arg := range args {
-		if i >= len(sig.Params) {
+		if i >= len(params) {
 			break
 		}
-		tp, ok := sig.Params[i].Type.(*types.TypeParam)
+		tp, ok := params[i].Type.(*types.TypeParam)
 		if !ok || subst[tp] == nil {
 			continue
 		}
@@ -1041,6 +1082,18 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 		}
 		if got := c.meetSameTypes(e, arg.X, subst[tp], tp, sig.TypeParams, subst, scope); !types.Identical(got, subst[tp]) {
 			subst[tp] = got
+		}
+	}
+	// What the arguments leave open, the type the result is to have
+	// says: `let b: Double = zero(4)`.
+	if want != nil && !mentionsParamOf(want, sig.TypeParams) && !mentionsInvalid(want) {
+		fromResult := map[*types.TypeParam]types.Type{}
+		if types.Unify(sig.Results, want, fromResult) {
+			for _, p := range sig.TypeParams {
+				if subst[p] == nil && fromResult[p] != nil {
+					subst[p] = fromResult[p]
+				}
+			}
 		}
 	}
 	c.info.Diagnostics = c.info.Diagnostics[:quiet]
@@ -1061,6 +1114,31 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 		return out
 	}
 	return sig
+}
+
+// literalConstruction reports whether e calls a type by its bare name
+// with literals alone for arguments, `Epi(scale: 2)`: what it makes may
+// take its type from the rest of the call.
+func (c *checker) literalConstruction(e ast.Expr, scope *Scope) bool {
+	call, ok := unparen(e).(*ast.CallExpr)
+	if !ok || call.Args == nil || len(call.Args.Args) == 0 || call.Trailing != nil {
+		return false
+	}
+	id, ok := call.Fun.(*ast.IdentExpr)
+	if !ok || id.Name == nil || id.Args != nil {
+		return false
+	}
+	// Only a generic type's: Float(5) is a Float wherever it goes.
+	tn := scope.LookupType(id.Name.Text(c.file))
+	if tn == nil || len(typeParamsOf(tn.Type())) == 0 {
+		return false
+	}
+	for _, a := range call.Args.Args {
+		if !literalOperand(a.X) {
+			return false
+		}
+	}
+	return true
 }
 
 // isNumericType reports whether t is a numeric basic type.
@@ -1572,6 +1650,7 @@ func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args [
 	name := mem.Name.Text(c.file)
 	var owners []*types.Protocol
 	var candidates []*types.Method
+	reqs := map[int]*types.Requirement{}
 	seen := map[*types.Method]bool{}
 	for _, p := range allProtocols(protocols) {
 		// What the protocol requires -- Collection's index(after:) beside
@@ -1587,6 +1666,7 @@ func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args [
 					continue
 				}
 				owners = append(owners, p)
+				reqs[len(candidates)] = r
 				candidates = append(candidates, &types.Method{Name: r.Name, Sig: sig, IsStatic: r.IsStatic, IsMutating: r.IsMutating})
 			}
 		}
@@ -1614,6 +1694,19 @@ func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args [
 	// through the existential's witness table: it was a candidate only so
 	// that an extension's overload could be told from it.
 	if _, isEx := t.Underlying().(*types.Existential); isEx && picked.Origin == nil {
+		// Unless the protocol overloads the name: then which of them was
+		// chosen is recorded, by the requirement's own signature, for
+		// the call to find its row.
+		for i, m := range candidates {
+			r := reqs[i]
+			if m != picked || r == nil || !overloadedRequirement(owners[i], r) {
+				continue
+			}
+			c.info.Methods[mem] = &MethodRef{Recv: owners[i],
+				Method: &types.Method{Name: r.Name, Sig: r.Sig, IsStatic: r.IsStatic, IsMutating: r.IsMutating}}
+			c.info.Types[mem] = m.Sig
+			return m.Sig
+		}
 		return nil
 	}
 	for i, m := range candidates {
@@ -1624,6 +1717,16 @@ func (c *checker) extensionOverload(mem *ast.MemberExpr, base types.Type, args [
 		}
 	}
 	return nil
+}
+
+// overloadedRequirement reports whether p requires another method of r's name.
+func overloadedRequirement(p *types.Protocol, r *types.Requirement) bool {
+	for _, q := range p.Requirements {
+		if q != nil && q != r && q.Sig != nil && q.Name == r.Name && q.IsStatic == r.IsStatic {
+			return true
+		}
+	}
+	return false
 }
 
 // isDependent reports whether t is an associated type path.
@@ -1645,4 +1748,45 @@ func isExistentialOf(t types.Type, p *types.Protocol) bool {
 		}
 	}
 	return false
+}
+
+// assignableTo is types.AssignableTo, and a value going into an
+// existential of protocols its type conforms to by an extension --
+// `extension Array: Counted`, `extension Int: Shape` -- which only the
+// checker knows of: the types of the built-in types are shared, and
+// carry no conformances a program gives them.
+func (c *checker) assignableTo(v, t types.Type) bool {
+	if types.AssignableTo(v, t) {
+		return true
+	}
+	if v == nil || t == nil {
+		return false
+	}
+	if o, ok := t.(*types.Optional); ok {
+		if _, already := v.(*types.Optional); already {
+			return false
+		}
+		t = o.Wrapped
+	}
+	var protos []*types.Protocol
+	switch x := t.(type) {
+	case *types.Existential:
+		protos = x.Protocols
+	case *types.Protocol:
+		protos = []*types.Protocol{x}
+	}
+	if len(protos) == 0 {
+		return false
+	}
+	v = literalDefaults(v)
+	switch v.(type) {
+	case *types.Existential, *types.Protocol:
+		return false
+	}
+	for _, p := range protos {
+		if p == nil || !c.conformsTo(v, p) {
+			return false
+		}
+	}
+	return true
 }

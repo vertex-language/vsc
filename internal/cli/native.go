@@ -2,10 +2,12 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/vertex-language/vcx/preprocessor"
 	"github.com/vertex-language/vsc/build/buildcache"
 	"github.com/vertex-language/vsc/timing"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -62,6 +64,16 @@ type found struct {
 	n       *build.Native
 	key     buildcache.Key
 	err     error
+
+	// The module's bindings, where PrefetchBindings could make them
+	// ahead: closed when they are done, and what they were made for.
+	bound       chan struct{}
+	bindPkg     string
+	bindPublic  bool
+	bindModules map[string]string
+	vs, thunks  []byte
+	skipped     []string
+	bindErr     error
 }
 
 // PrefetchNative starts finding the C++ module in dir, so that bind finds
@@ -93,9 +105,65 @@ func (p *packages) PrefetchNative(dir string, sources []string) {
 	}()
 }
 
+// PrefetchBindings starts binding the C++ module in dir as package
+// pkgName, once it is found, where nothing but the runtime's task module
+// is imported by it -- then its bindings need nothing another folder's
+// binding decides. Binding reads the module's interface and every header
+// it includes, and the import walk waited on it where it reached the
+// folder: crypto/cert's, which reads <string_view>, held everything
+// above it back ~400 ms in a cold build, with the workers busy.
+func (p *packages) PrefetchBindings(dir, pkgName string, public bool) {
+	c := (*common)(p)
+	if c.finding == nil || pkgName == "" {
+		return
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return
+	}
+	c.finding.mu.Lock()
+	f := c.finding.m[abs]
+	if f == nil || f.bound != nil {
+		c.finding.mu.Unlock()
+		return
+	}
+	f.bound, f.bindPkg, f.bindPublic = make(chan struct{}), pkgName, public
+	c.finding.mu.Unlock()
+	go func() {
+		defer close(f.bound)
+		<-f.done
+		if f.err != nil {
+			f.bindErr = f.err
+			return
+		}
+		mods := map[string]string{}
+		for _, name := range f.n.Imports {
+			if name != build.TaskModule {
+				f.bindErr = errNotAhead
+				return
+			}
+			file, err := build.TaskModuleFile(nativeWork())
+			if err != nil {
+				f.bindErr = err
+				return
+			}
+			mods[name] = file
+		}
+		// A copy: bind sets the found module's Modules itself.
+		n := *f.n
+		n.Modules = mods
+		f.bindModules = mods
+		f.vs, f.thunks, f.skipped, f.bindErr = cachedBindings(&n, f.key, pkgName, public)
+	}()
+}
+
+// errNotAhead is a module whose bindings wait for bind.
+var errNotAhead = errors.New("bound in order")
+
 // findNative is cachedFindNative, taken from a prefetch of the same
-// question where there is one.
-func (c *common) findNative(abs string, sources []string, target ir.Target, minOS string) (*build.Native, buildcache.Key, error) {
+// question where there is one. The prefetch is returned too, for its
+// bindings.
+func (c *common) findNative(abs string, sources []string, target ir.Target, minOS string) (*build.Native, buildcache.Key, *found, error) {
 	if c.finding != nil {
 		c.finding.mu.Lock()
 		f := c.finding.m[abs]
@@ -104,11 +172,25 @@ func (c *common) findNative(abs string, sources []string, target ir.Target, minO
 		if f != nil {
 			<-f.done
 			if slices.Equal(f.sources, sources) && f.target.String() == target.String() && f.minOS == minOS {
-				return f.n, f.key, f.err
+				return f.n, f.key, f, f.err
 			}
 		}
 	}
-	return cachedFindNative(abs, sources, target, minOS, c.headers)
+	n, key, err := cachedFindNative(abs, sources, target, minOS, c.headers)
+	return n, key, nil, err
+}
+
+// prefetched is the bindings f made ahead, where they were made for
+// exactly what bind is about to make them for.
+func (f *found) prefetched(pkgName string, public bool, modules map[string]string) (vs, thunks []byte, skipped []string, ok bool) {
+	if f == nil || f.bound == nil {
+		return nil, nil, nil, false
+	}
+	<-f.bound
+	if f.bindErr != nil || f.bindPkg != pkgName || f.bindPublic != public || !maps.Equal(f.bindModules, modules) {
+		return nil, nil, nil, false
+	}
+	return f.vs, f.thunks, f.skipped, true
 }
 
 // bind reads the C++ module in dir once per build.
@@ -131,7 +213,7 @@ func (c *common) bind(dir, path, pkgName string, public bool, target ir.Target) 
 	if len(folder.Native) == 0 {
 		return nil, nil
 	}
-	n, findKey, err := c.findNative(abs, folder.Native, target, c.main.minOS(target))
+	n, findKey, pre, err := c.findNative(abs, folder.Native, target, c.main.minOS(target))
 	if err != nil {
 		return nil, err
 	}
@@ -185,9 +267,12 @@ func (c *common) bind(dir, path, pkgName string, public bool, target ir.Target) 
 		nat.deps = append(nat.deps, dabs)
 	}
 
-	vs, thunks, skipped, err := cachedBindings(n, findKey, pkgName, public)
-	if err != nil {
-		return nil, err
+	vs, thunks, skipped, ok := pre.prefetched(pkgName, public, n.Modules)
+	if !ok {
+		vs, thunks, skipped, err = cachedBindings(n, findKey, pkgName, public)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if c.notice != nil {
 		for _, s := range skipped {

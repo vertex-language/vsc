@@ -112,6 +112,19 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			}
 			return &types.GenericInstance{Base: base, Args: args}
 		}
+		// A type nested in a generic one, named bare where the outer
+		// type's parameters are in scope -- `var inner: Inner` inside
+		// `struct Box<T>` -- is its instance for them: Inner<T>.
+		if params := inheritedParams(base); len(params) > 0 {
+			args := make([]types.Type, len(params))
+			for i, p := range params {
+				if tn := scope.LookupType(p.Name); tn == nil || tn.Type() != p {
+					return base
+				}
+				args[i] = p
+			}
+			return &types.GenericInstance{Base: base, Args: args}
+		}
 		return base
 
 	case *ast.ParenType:
@@ -320,6 +333,7 @@ func (c *checker) coreNestedType(outer types.Type, name string) types.Type {
 
 // nestedType resolves a type declared inside outer, or returns nil.
 func (c *checker) nestedType(outer types.Type, name string, at *ast.MemberType, scope *Scope) types.Type {
+	outerInst := outer
 	if inst, ok := outer.(*types.GenericInstance); ok {
 		outer = inst.Base
 	}
@@ -331,12 +345,19 @@ func (c *checker) nestedType(outer types.Type, name string, at *ast.MemberType, 
 	if sym == nil {
 		return nil
 	}
-	if at.Args == nil || len(at.Args.Args) == 0 {
-		return sym.Type()
+	// Through an instance of a generic type, a type declared inside it
+	// is that type's instance for the same arguments, then its own.
+	var args []types.Type
+	if inst, ok := outerInst.(*types.GenericInstance); ok && len(typeParamsOf(sym.Type())) >= len(inst.Args) {
+		args = append(args, inst.Args...)
 	}
-	args := make([]types.Type, len(at.Args.Args))
-	for i, a := range at.Args.Args {
-		args[i] = c.resolveType(a, scope)
+	if at.Args != nil {
+		for _, a := range at.Args.Args {
+			args = append(args, c.resolveType(a, scope))
+		}
+	}
+	if len(args) == 0 {
+		return sym.Type()
 	}
 	return &types.GenericInstance{Base: sym.Type(), Args: args}
 }
@@ -776,12 +797,13 @@ func isStatic(mods []*ast.Modifier) bool {
 }
 
 // declareNested declares types inside a nominal type's body and reads their members.
-func (c *checker) declareNested(body *ast.MemberBlock, typeScope *Scope, outer types.Type) {
+func (c *checker) declareNested(body *ast.MemberBlock, typeScope *Scope, outer types.Type, outerParams []*types.TypeParam) {
 	nested := memberDecls(body)
 	if len(nested) == 0 {
 		return
 	}
 	c.declareTypes(nested, typeScope)
+	var inners []types.Type
 	for _, d := range nested {
 		var name *ast.Ident
 		switch d := d.(type) {
@@ -804,8 +826,57 @@ func (c *checker) declareNested(body *ast.MemberBlock, typeScope *Scope, outer t
 			continue
 		}
 		setEnclosing(sym.Type(), outer)
+		inners = append(inners, sym.Type())
 	}
 	c.resolveTypeMembers(nested, typeScope)
+	// Once each has its own parameters, the outer type's go before them.
+	for _, inner := range inners {
+		inheritOuterParams(inner, outerParams)
+	}
+}
+
+// inheritOuterParams makes a type declared inside a generic one generic
+// over the outer type's parameters too, before its own: `Box<T>.Inner`
+// is Inner<T>, and `Box<Int>.Inner` its instance for Int, as Swift has it.
+func inheritOuterParams(inner types.Type, outerParams []*types.TypeParam) {
+	if len(outerParams) == 0 {
+		return
+	}
+	switch n := inner.(type) {
+	case *types.Struct:
+		n.TypeParams = append(append([]*types.TypeParam(nil), outerParams...), n.TypeParams...)
+	case *types.Class:
+		n.TypeParams = append(append([]*types.TypeParam(nil), outerParams...), n.TypeParams...)
+	case *types.Enum:
+		n.TypeParams = append(append([]*types.TypeParam(nil), outerParams...), n.TypeParams...)
+	}
+}
+
+// inheritedParams is the parameters a type nested in a generic one has
+// from the outer type, where they are all it has: nil for any other.
+func inheritedParams(t types.Type) []*types.TypeParam {
+	var in types.Type
+	switch n := t.(type) {
+	case *types.Struct:
+		in = n.In
+	case *types.Class:
+		in = n.In
+	case *types.Enum:
+		in = n.In
+	}
+	if in == nil {
+		return nil
+	}
+	outer, own := typeParamsOf(in), typeParamsOf(t)
+	if len(outer) == 0 || len(own) != len(outer) {
+		return nil
+	}
+	for i := range outer {
+		if outer[i] != own[i] {
+			return nil
+		}
+	}
+	return own
 }
 
 // setEnclosing records the type a nested one is declared inside.
@@ -914,7 +985,7 @@ func (c *checker) openType(d ast.Decl, name *ast.Ident, generics *ast.GenericPar
 	c.typeScopes[name.Text(c.file)] = typeScope
 	c.rememberTypeScope(sym.Type(), typeScope)
 	params := c.declareGenericParams(generics, typeScope)
-	c.declareNested(body, typeScope, sym.Type())
+	c.declareNested(body, typeScope, sym.Type(), params)
 	return sym.Type(), typeScope, params, true
 }
 
@@ -1524,6 +1595,17 @@ func (c *checker) resolveExtensions(decls []ast.Decl, scope *Scope) {
 			c.extAccess = &a
 		}
 		c.readMembers(ext.Body, typeScope, fields, methods, en, inits, computed, statics, subscripts)
+		// A protocol's extension's initializers are lowered for each
+		// conforming type made with one, from their declarations.
+		if _, ok := extType.(*types.Protocol); ok && inits != nil && ext.Body != nil {
+			added := (*inits)[initsBefore:]
+			for _, mem := range ext.Body.Members {
+				if d, ok := mem.(*ast.InitDecl); ok && len(added) > 0 {
+					c.info.ProtocolInitDecls[added[0]] = d
+					added = added[1:]
+				}
+			}
+		}
 		c.extAccess = prevAccess
 		restore()
 		c.memberIsolated = false
@@ -1807,7 +1889,7 @@ func sinksOf(t types.Type) (fields *[]*types.Field, methods *[]*types.Method, co
 		return nil, &n.Methods, &n.Conformances, &n.Inits, &n.Computed, &n.Statics
 	// A protocol's extension adds members every conforming type has.
 	case *types.Protocol:
-		return nil, &n.ExtMethods, nil, nil, &n.ExtComputed, &n.ExtStatics
+		return nil, &n.ExtMethods, nil, &n.ExtInits, &n.ExtComputed, &n.ExtStatics
 	}
 	return nil, nil, nil, nil, nil, nil
 }
@@ -1938,7 +2020,7 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 				}
 			}
 			for _, f := range candidates {
-				if f.Name == req.Name && types.AssignableTo(f.Type, want) {
+				if f.Name == req.Name && c.assignableTo(f.Type, want) {
 					satisfied = true
 					break
 				}
@@ -1946,7 +2028,7 @@ func (c *checker) checkConformance(pos token.Pos, conformer types.Type, typeName
 			// Or by the default a protocol extension gives.
 			if !satisfied {
 				if _, f := proto.ExtensionProperty(req.Name, req.IsStatic); f != nil &&
-					types.AssignableTo(types.Substitute(f.Type, subst), want) {
+					c.assignableTo(types.Substitute(f.Type, subst), want) {
 					satisfied = true
 				}
 			}

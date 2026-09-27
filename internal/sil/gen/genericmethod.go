@@ -30,10 +30,35 @@ type genericMethodKey struct {
 // say. See genericMethodDecl.
 func genericMethodDecls(files []*ast.File, info *analyzer.Info) map[genericMethodKey][]*ast.FuncDecl {
 	out := map[genericMethodKey][]*ast.FuncDecl{}
-	add := func(t types.Type, body *ast.MemberBlock) {
+	var add func(t types.Type, body *ast.MemberBlock)
+	declared := func(name *ast.Ident) types.Type {
+		if name == nil {
+			return nil
+		}
+		if s, ok := info.Defs[name].(*analyzer.TypeNameSymbol); ok {
+			return s.Type()
+		}
+		return nil
+	}
+	// A type declared inside another is generic over the outer one's
+	// parameters when it is: its methods are indexed as its own are.
+	nested := func(body *ast.MemberBlock) {
+		for _, mem := range body.Members {
+			switch d := mem.(type) {
+			case *ast.StructDecl:
+				add(declared(d.Name), d.Body)
+			case *ast.ClassDecl:
+				add(declared(d.Name), d.Body)
+			case *ast.EnumDecl:
+				add(declared(d.Name), d.Body)
+			}
+		}
+	}
+	add = func(t types.Type, body *ast.MemberBlock) {
 		if t == nil || body == nil {
 			return
 		}
+		nested(body)
 		_, isProtocol := t.(*types.Protocol)
 		// A type that is not generic has its methods lowered ahead of
 		// time, all but those with type parameters of their own.
@@ -51,15 +76,6 @@ func genericMethodDecls(files []*ast.File, info *analyzer.Info) map[genericMetho
 				out[key] = append(out[key], fd)
 			}
 		}
-	}
-	declared := func(name *ast.Ident) types.Type {
-		if name == nil {
-			return nil
-		}
-		if s, ok := info.Defs[name].(*analyzer.TypeNameSymbol); ok {
-			return s.Type()
-		}
-		return nil
 	}
 	for _, f := range files {
 		for _, stmt := range f.Stmts {
@@ -258,6 +274,51 @@ func (g *gen) genericMethod(e *ast.CallExpr, ref *analyzer.MethodRef) (*analyzer
 	}}
 	g.emitMethodSpecialization(decl, inst, name, subst)
 	return spec, name, true
+}
+
+// instanceMethod is a generic type's method m specialized for the
+// instance inst -- `Box<Double>.area` -- lowered once, with its symbol
+// and substituted signature: what a witness table row for the instance
+// calls. A method with generic parameters of its own is not one.
+func (g *gen) instanceMethod(at ast.Node, inst *types.GenericInstance, m *types.Method) (string, *types.Method, bool) {
+	params := nominalTypeParams(inst.Base)
+	if len(params) == 0 || len(params) != len(inst.Args) || len(m.Sig.TypeParams) > 0 {
+		return "", nil, false
+	}
+	decl := g.genericMethodDecl(genericMethodKey{typ: inst.Base, name: m.Name}, m)
+	if decl == nil {
+		return "", nil, false
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(params))
+	for i, p := range params {
+		subst[p] = inst.Args[i]
+	}
+	sig, ok := types.Substitute(m.Sig, subst).(*types.Signature)
+	if !ok {
+		return "", nil, false
+	}
+	mangled, err := mangle.Function(mangle.Decl{
+		Module:    g.memberModule(inst.Base, m),
+		Context:   memberChain(inst.Base),
+		Extended:  extendedBuiltin(inst.Base),
+		Name:      m.Name,
+		Signature: sig,
+		Static:    m.IsStatic,
+		ModuleOf:  g.moduleOfType,
+	})
+	if err != nil {
+		g.refuse(at, "a method of a generic type this compiler cannot name: "+err.Error())
+		return "", nil, false
+	}
+	var b strings.Builder
+	b.WriteString(mangled)
+	b.WriteString("Tv")
+	for _, a := range inst.Args {
+		b.WriteString(identifierSafe(a.String()))
+	}
+	name := b.String()
+	g.emitMethodSpecialization(decl, inst, name, subst)
+	return name, &types.Method{Name: m.Name, Sig: sig, IsStatic: m.IsStatic, IsMutating: m.IsMutating}, true
 }
 
 // emitMethodSpecialization lowers a generic type's method for one instance,

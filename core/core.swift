@@ -1136,3 +1136,29 @@ struct _StringIterator {
     var _at: Int
     let _end: Int
 }
+
+// ---- Memory a program manages itself ----
+
+// Bytes nothing owns, aligned to at least alignment, and their return:
+// what allocate(capacity:) and deallocate() of the pointers are made of.
+@_silgen_name("vertex_raw_allocate")
+func _rawAllocate(_ byteCount: Int, _ alignment: Int) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_raw_deallocate")
+func _rawDeallocate(_ p: UnsafeMutableRawPointer)
+// The bytes at from, to to, where the two may overlap.
+@_silgen_name("vertex_raw_move")
+func _rawMove(_ to: UnsafeMutableRawPointer, _ from: UnsafeRawPointer, _ byteCount: Int)
+// The address of the variable passed in: what withUnsafeMutablePointer
+// hands its body. Swift's Builtin.addressof.
+@_builtin("addressof")
+func _addressOf<T>(_ x: inout T) -> UnsafeMutableRawPointer
+
+// What SIL does to the memory a typed pointer points at, as Swift's
+// Builtin.initialize, Builtin.destroy and Builtin.take do: put a value in
+// memory holding none, end the value it holds, move the value out.
+@_builtin("initialize")
+func _initialize<T>(_ p: UnsafeMutablePointer<T>, _ value: T)
+@_builtin("deinitialize")
+func _deinitialize<T>(_ p: UnsafeMutablePointer<T>)
+@_builtin("take")
+func _take<T>(_ p: UnsafeMutablePointer<T>) -> T

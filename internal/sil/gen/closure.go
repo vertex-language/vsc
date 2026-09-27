@@ -258,6 +258,8 @@ func (g *gen) closureCaptures(e ast.Node) ([]closureCapture, string) {
 					useSelf(g.text(x.Name))
 				} else if _, ok := g.implicitMethod(x); ok {
 					useSelf(g.text(x.Name))
+				} else if g.existentialMember(g.recv, g.text(x.Name)) {
+					useSelf(g.text(x.Name))
 				}
 			}
 		}
@@ -357,6 +359,9 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 		g.destroyLater(v)
 	}
 	// What it captures follows its parameters, borrowed from its context.
+	// The receiver, captured, is kept too, for a nested function that
+	// calls itself to hand on (below).
+	var selfCapture *local
 	for _, c := range caps {
 		if c.boxed() {
 			box := f.Param(c.loc.box.Type(), sil.ParamGuaranteed)
@@ -379,6 +384,7 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 			// its members resolve against the receiver, and selfValue
 			// finds this last argument.
 			g.recv = outer.recv
+			selfCapture = &local{value: v, typ: c.loc.typ}
 			continue
 		}
 		g.locals[c.sym] = &local{value: v, typ: c.loc.typ, cell: c.loc.cell, held: c.loc.held}
@@ -392,6 +398,10 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 		g.recursive = nil
 		inner := make([]closureCapture, len(caps))
 		for i, c := range caps {
+			if c.self {
+				inner[i] = closureCapture{sym: c.sym, loc: selfCapture, self: true}
+				continue
+			}
 			inner[i] = closureCapture{sym: c.sym, loc: g.locals[c.sym]}
 		}
 		g.locals[self] = &local{value: g.closureValue(f, sig, inner), typ: lowerType(sig)}
@@ -510,6 +520,30 @@ func (g *gen) closureSymbol() string {
 	return base + "U" + itoa(g.closures-1) + "_"
 }
 
+// existentialMember reports whether name is a method of the protocol
+// recv is an existential of -- one it requires, or one its extensions
+// add -- as a protocol extension lowered with an existential Self calls.
+func (g *gen) existentialMember(recv types.Type, name string) bool {
+	ex, ok := existentialOf(recv)
+	if !ok {
+		return false
+	}
+	for _, p := range ex.Protocols {
+		if p == nil {
+			continue
+		}
+		for _, r := range p.Requirements {
+			if r != nil && r.Sig != nil && r.Name == name {
+				return true
+			}
+		}
+		if _, m := p.ExtensionMethod(name, false); m != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // captured returns the first name captured from an outer scope, if any.
 func (g *gen) captured(e ast.Node) (string, bool) {
 	var name string
@@ -612,12 +646,6 @@ func (g *gen) capturingNestedFunc(d *ast.FuncDecl) {
 	// One that calls itself names, inside, the function value it is:
 	// its body over the captures it was given.
 	if callsItself(d.Body, sym, g.info) {
-		for _, c := range caps {
-			if c.self {
-				g.refuse(d, "a nested function that captures self and calls itself")
-				return
-			}
-		}
 		g.recursive = sym
 	}
 	syms := paramSymbols(d, g.info, g.file)

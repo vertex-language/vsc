@@ -68,15 +68,34 @@ func BuiltinKey(t types.Type) string {
 		return "Set"
 	case *types.Optional:
 		return "Optional"
+	case *types.Pointer:
+		return pointerKey(u)
 	}
 	return ""
+}
+
+// pointerKey is the name a pointer type's extensions are kept under:
+// the typed pointers by their generic name, the raw ones by theirs.
+// OpaquePointer has none.
+func pointerKey(p *types.Pointer) string {
+	switch {
+	case p.Opaque:
+		return ""
+	case p.Elem == nil && p.Mutable:
+		return "UnsafeMutableRawPointer"
+	case p.Elem == nil:
+		return "UnsafeRawPointer"
+	case p.Mutable:
+		return "UnsafeMutablePointer"
+	}
+	return "UnsafePointer"
 }
 
 // genericBuiltin reports whether name is one of the built-in generic types
 // an extension may name bare: `extension Array`.
 func genericBuiltin(name string) bool {
 	switch name {
-	case "Array", "Dictionary", "Set", "Optional":
+	case "Array", "Dictionary", "Set", "Optional", "UnsafePointer", "UnsafeMutablePointer":
 		return true
 	}
 	return false
@@ -96,6 +115,10 @@ func (b *BuiltinMembers) Args(t types.Type) []types.Type {
 		return []types.Type{u.Elem}
 	case *types.Optional:
 		return []types.Type{u.Wrapped}
+	case *types.Pointer:
+		if u.Elem != nil {
+			return []types.Type{u.Elem}
+		}
 	}
 	return nil
 }
@@ -144,6 +167,10 @@ func (c *checker) builtinMembers(key string, parent *Scope) *BuiltinMembers {
 		b.Type = &types.Set{Elem: param("Element", "Hashable")}
 	case "Optional":
 		b.Type = &types.Optional{Wrapped: param("Wrapped")}
+	case "UnsafePointer":
+		b.Type = &types.Pointer{Elem: param("Pointee")}
+	case "UnsafeMutablePointer":
+		b.Type = &types.Pointer{Elem: param("Pointee"), Mutable: true}
 	default:
 		u := types.LookupUniverse(key)
 		if u == nil {

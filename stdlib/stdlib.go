@@ -41,6 +41,9 @@ func GPU() fs.FS {
 const (
 	Alloc           = "vertex_alloc"
 	BoxAllocate     = "vertex_box_allocate"
+	OpenMutable     = "vertex_existential_open_mutable"
+	InitUnfinished  = "vertex_init_unfinished"
+	InitComplete    = "vertex_init_complete"
 	ErrorBox        = "vertex_error_box"
 	ErrorContents   = "vertex_error_contents"
 	ErrorMatches    = "vertex_error_matches"

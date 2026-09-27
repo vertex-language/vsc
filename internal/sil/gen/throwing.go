@@ -121,6 +121,7 @@ func (g *gen) raise(at ast.Node, box *sil.Value) {
 		g.blk.Unreachable()
 		return
 	}
+	g.leaveCompleteInit()
 	g.unwind()
 	if g.blk != nil && g.blk.Term() == nil {
 		g.blk.Throw(box)

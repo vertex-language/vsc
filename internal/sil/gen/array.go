@@ -119,6 +119,10 @@ func (g *gen) makeArray(at ast.Node, t, elem types.Type, elems []*sil.Value) *si
 	}
 	fresh, base := parts[0], g.blk.PointerToAddress(parts[1], lowerType(elem).Address())
 	for i, v := range elems {
+		if v == nil {
+			// Refused on the way, and said so.
+			return nil
+		}
 		addr := base
 		if i > 0 {
 			addr = g.blk.IndexAddr(base,

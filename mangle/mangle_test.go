@@ -58,22 +58,22 @@ func TestFunction(t *testing.T) {
 			"$s1m2f71aS2i_tF"},
 
 		{"a method carries the type it is on",
-			Decl{Module: "z", Context: []Nominal{{"S", Struct}}, Name: "m",
+			Decl{Module: "z", Context: []Nominal{{Name: "S", Kind: Struct}}, Name: "m",
 				Signature: sig([]*types.Param{p("", intT)}, intT)},
 			"$s1z1SV1myS2iF"},
 
 		{"a class method",
-			Decl{Module: "z", Context: []Nominal{{"K", Class}}, Name: "m",
+			Decl{Module: "z", Context: []Nominal{{Name: "K", Kind: Class}}, Name: "m",
 				Signature: sig([]*types.Param{p("", boolT)}, nil)},
 			"$s1z1KC1myySbF"},
 
 		{"an enum method",
-			Decl{Module: "z", Context: []Nominal{{"E", Enum}}, Name: "m",
+			Decl{Module: "z", Context: []Nominal{{Name: "E", Kind: Enum}}, Name: "m",
 				Signature: sig(nil, nil)},
 			"$s1z1EO1myyF"},
 
 		{"static says so after saying function",
-			Decl{Module: "z", Context: []Nominal{{"S", Struct}}, Name: "sm", Static: true,
+			Decl{Module: "z", Context: []Nominal{{Name: "S", Kind: Struct}}, Name: "sm", Static: true,
 				Signature: sig([]*types.Param{p("", intT)}, intT)},
 			"$s1z1SV2smyS2iFZ"},
 
@@ -147,7 +147,7 @@ func TestSubstitutionsFold(t *testing.T) {
 	// A method whose parameter and result are both the type it is on:
 	// the same index twice running, which carries a count.
 	got, err := Function(Decl{
-		Module: "y", Context: []Nominal{{"S", Struct}}, Name: "self1",
+		Module: "y", Context: []Nominal{{Name: "S", Kind: Struct}}, Name: "self1",
 		Signature: sig([]*types.Param{p("", s)}, s),
 	})
 	if err != nil {
@@ -402,7 +402,7 @@ func TestANestedTypeIsSpelledAsItsChain(t *testing.T) {
 func TestMetadataAccessorName(t *testing.T) {
 	got, err := MetadataAccessor(Decl{
 		Module:  "cl",
-		Context: []Nominal{{"Counter", Class}},
+		Context: []Nominal{{Name: "Counter", Kind: Class}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -419,7 +419,7 @@ func TestMetadataAccessorName(t *testing.T) {
 func TestGetterName(t *testing.T) {
 	got, err := Getter(Decl{
 		Module:    "Wider",
-		Context:   []Nominal{{"Vec", Struct}},
+		Context:   []Nominal{{Name: "Vec", Kind: Struct}},
 		Name:      "magnitude",
 		Signature: sig(nil, types.Typ[types.Int32]),
 	})
@@ -497,7 +497,7 @@ func TestALabelledTupleWritesTheLabelAfterTheType(t *testing.T) {
 // them swiftc's, read out of its own object file.
 func TestAccessorNames(t *testing.T) {
 	i32 := types.Typ[types.Int32]
-	vec := Decl{Module: "Wider", Context: []Nominal{{"Vec", Struct}}}
+	vec := Decl{Module: "Wider", Context: []Nominal{{Name: "Vec", Kind: Struct}}}
 
 	for _, c := range []struct {
 		name string

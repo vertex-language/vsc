@@ -3,6 +3,7 @@ package lower
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/vertex-language/ir"
@@ -2072,6 +2073,17 @@ func (c *fn) openExistential(in *sil.Inst) error {
 	}
 	buf := c.fieldAddr(p, existentialBuffer)
 	meta := c.b.Ptr.Load(c.fieldAddr(p, existentialMetadata))
+	// Opened to be changed, a boxed value is made this existential's
+	// own first: copies of the existential share its box.
+	if hasAttribute(in.Aux().Attrs, "mutable_access") {
+		open := c.l.runtimeFunc(stdlib.OpenMutable, ir.NewSig().Param(ir.TypePtr).Param(ir.TypePtr).Ret(ir.TypePtr))
+		at, ok := c.b.Call(open, buf, meta).Value(0).(ir.Ptr)
+		if !ok {
+			return c.fail(ErrType, in.Op(), "an opened value that is not a pointer")
+		}
+		c.def(res, at)
+		return nil
+	}
 	vwt := c.b.Ptr.Load(c.fieldAddr(meta, valueWitnessOffset))
 	flags := c.b.I64.ZExtI32(c.b.I32.Load(c.fieldAddr(vwt, valueWitnessFlags)))
 
@@ -2341,15 +2353,29 @@ func typeNameOfType(t sil.Type) string {
 	if !t.IsValid() || t.Formal() == nil {
 		return "?"
 	}
+	// Each instance of a generic type is a type of its own, with tables
+	// of its own: Box<Int> and Box<String>, as SILGen names them.
+	if _, ok := t.Formal().(*types.GenericInstance); ok {
+		return t.Formal().String()
+	}
 	switch n := t.Formal().Underlying().(type) {
 	case *types.Struct:
-		return n.Name
+		return n.Name + localSuffix(n.Local)
 	case *types.Class:
-		return n.Name
+		return n.Name + localSuffix(n.Local)
 	case *types.Enum:
-		return n.Name
+		return n.Name + localSuffix(n.Local)
 	}
 	return t.Formal().String()
+}
+
+// localSuffix tells a type declared inside a function from others of
+// its name, as SILGen's typeNameOf does.
+func localSuffix(local int) string {
+	if local <= 0 {
+		return ""
+	}
+	return "#" + strconv.Itoa(local)
 }
 
 // metatype lowers a metatype reference, emitting a metadata accessor call or record lookup when required.
@@ -2926,7 +2952,13 @@ func (c *fn) extractElement(in *sil.Inst) error {
 		return c.loadFieldInto(in, in.Result(), base, st, st.Fields[i].Name, st.Fields[i].Type)
 	}
 	parts, multi := c.parts(v)
-	if lo, hi, ok := fieldLeaves(v.Type(), itoa(i)); ok {
+	// The element by the name its image gives it: a labelled one,
+	// `button:` of (Point, button: Btn), is not called "1".
+	elem := itoa(i)
+	if st, ok := structOf(v.Type()); ok && st != nil && i < len(st.Fields) && st.Fields[i] != nil {
+		elem = st.Fields[i].Name
+	}
+	if lo, hi, ok := fieldLeaves(v.Type(), elem); ok {
 		if !multi {
 			// Every element but one holds nothing, so the whole
 			// tuple is the one register that element is in.
