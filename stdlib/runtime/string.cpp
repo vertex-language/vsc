@@ -386,6 +386,23 @@ bool vertex_string_equal(u64 a0, u64 a1, u64 b0, u64 b1) {
   StringBytes b = bytesOf(String{b0, b1}, sb);
   if (a.count == b.count && equalBytes(a.bytes, b.bytes, a.count))
     return true;
+  // Where the bytes first differ, an ASCII byte on both sides settles it:
+  // an ASCII character is a starter no composition takes as its second
+  // part, so what came before can't make the two equivalent. The same
+  // goes for a string that ends where the other goes on in ASCII. Most
+  // unequal strings are told apart here, without normalizing.
+  usize n = a.count < b.count ? a.count : b.count;
+  usize i = 0;
+  while (i < n && a.bytes[i] == b.bytes[i])
+    i++;
+  if (i < n) {
+    if (a.bytes[i] < 0x80 && b.bytes[i] < 0x80)
+      return false;
+  } else {
+    const u8* longer = a.count > b.count ? a.bytes : b.bytes;
+    if (longer[n] < 0x80)
+      return false;
+  }
   return canonicalCompare(a.bytes, a.count, b.bytes, b.count) == 0;
 }
 
