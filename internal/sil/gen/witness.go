@@ -1033,6 +1033,7 @@ func (g *gen) boxArg(a ast.Expr, v *sil.Value, want []types.Type, i int) *sil.Va
 			}
 		}
 	}
+	arg := v
 	v = g.optionalFor(a, v, from, want[i])
 	out := g.existentialFor(a, v, from, want[i])
 	// The call borrows an existential argument (@in_guaranteed), so the
@@ -1040,6 +1041,15 @@ func (g *gen) boxArg(a ast.Expr, v *sil.Value, want []types.Type, i int) *sil.Va
 	// as swiftc's SILGen destroys it.
 	if _, isEx := existentialOf(want[i]); isEx && out != nil && out.Type().IsAddress() && !g.storage[out] {
 		g.destroyAddrLater(out)
+	}
+	// An optional of a class-bound existential -- `(any P)?`, which is an
+	// object and not an address -- is the argument's value too, made here
+	// and owned by nothing else: the call borrows it, and it ends after.
+	if o, isOpt := optionalOf(want[i]); isOpt && out != nil && out != arg && !out.Type().IsAddress() &&
+		out.Ownership() == sil.Owned && !g.pendingDestroy(out) {
+		if _, isEx := existentialOf(o.Wrapped); isEx {
+			g.destroyLater(out)
+		}
 	}
 	return out
 }

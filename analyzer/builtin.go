@@ -366,6 +366,20 @@ func (c *checker) comparable(t types.Type) bool {
 	return false
 }
 
+// protocolExtensionHas reports whether an extension of a protocol t
+// conforms to gives it an instance member of the name.
+func (c *checker) protocolExtensionHas(t types.Type, name string) bool {
+	for _, p := range allProtocols(c.conformancesOfType(t)) {
+		if len(p.ExtensionMethods(name, false)) > 0 {
+			return true
+		}
+		if _, f := p.ExtensionProperty(name, false); f != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // implicitSelfMember is `self.name` for a name used alone, or called, inside
 // an extension of a built-in type, where no declaration in scope has the
 // name and the type has the member; nil otherwise. A member the extensions
@@ -405,6 +419,30 @@ func (c *checker) implicitSelfMember(expr ast.Expr, scope *Scope) ast.Expr {
 						fun := &ast.MemberExpr{Span: id.Span, X: &ast.SelfExpr{Span: id.Span}, Dot: id.Pos(), Name: id.Name}
 						return &ast.CallExpr{Span: call.Span, Fun: fun, Args: call.Args, Trailing: call.Trailing}
 					}
+				}
+			}
+		}
+	}
+	// A member a conformed protocol's extension gives a struct, class or
+	// enum -- asUnownedTaskExecutor() inside a TaskExecutor of the
+	// program's -- is self's: the type's own members are in its scope
+	// and found the ordinary way; these are not.
+	if len(c.conformancesOfType(c.currType)) > 0 && BuiltinKey(c.currType) == "" {
+		switch c.currType.Underlying().(type) {
+		case *types.Struct, *types.Class, *types.Enum:
+			if call, ok := expr.(*ast.CallExpr); ok {
+				if id, ok := call.Fun.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil {
+					name := id.Name.Text(c.file)
+					if c.lookupValue(scope, name) == nil && c.protocolExtensionHas(c.currType, name) {
+						fun := &ast.MemberExpr{Span: id.Span, X: &ast.SelfExpr{Span: id.Span}, Dot: id.Pos(), Name: id.Name}
+						return &ast.CallExpr{Span: call.Span, Fun: fun, Args: call.Args, Trailing: call.Trailing}
+					}
+				}
+			}
+			if id, ok := expr.(*ast.IdentExpr); ok && id.Name != nil && id.Args == nil {
+				name := id.Name.Text(c.file)
+				if c.lookupValue(scope, name) == nil && types.LookupUniverse(name) == nil && c.protocolExtensionHas(c.currType, name) {
+					return &ast.MemberExpr{Span: id.Span, X: &ast.SelfExpr{Span: id.Span}, Dot: id.Pos(), Name: id.Name}
 				}
 			}
 		}

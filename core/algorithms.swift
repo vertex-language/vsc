@@ -3381,9 +3381,27 @@ struct TaskGroup<ChildTaskResult>: AsyncSequence, AsyncIteratorProtocol {
     var _tasks: [Task<ChildTaskResult, Never>]
     var _next: Int
 
-    // Starts operation as a child task of the group.
+    // Starts operation as a child task of the group, which prefers the
+    // executor the group's task does.
     mutating func addTask(operation: @escaping () async -> ChildTaskResult) {
-        _tasks.append(Task { await operation() })
+        _tasks.append(Task {
+            await _vertexAdoptInheritedPreference()
+            return await operation()
+        })
+    }
+
+    // Starts operation as a child task that prefers taskExecutor, or the
+    // group's task's preference where it is nil.
+    mutating func addTask(executorPreference taskExecutor: (any TaskExecutor)?,
+                          operation: @escaping () async -> ChildTaskResult) {
+        guard let taskExecutor = taskExecutor else {
+            addTask(operation: operation)
+            return
+        }
+        _tasks.append(Task {
+            await _vertexAdoptPreference(taskExecutor)
+            return await operation()
+        })
     }
 
     // The next child's result, waited for; nil once there are none left.
@@ -3415,6 +3433,127 @@ func withTaskGroup<ChildTaskResult, GroupResult>(of childTaskResultType: ChildTa
     await group.waitForAll()
     return result
 }
+
+// ---- executors (SE-0392, SE-0417) ----
+//
+// Where a task's code runs. Code isolated to no actor runs on the pool --
+// the global concurrent executor -- unless the task prefers an executor of
+// the program's own: withTaskExecutorPreference(e) { … }, Task(executor-
+// Preference: e), group.addTask(executorPreference: e). The program's
+// executor is handed that code as jobs through its enqueue, and runs each
+// with runSynchronously(on:) on a thread of its choosing -- a thread of
+// its own, say, for long work that would otherwise hold a worker of the
+// pool for as long as it ran.
+//
+// A preference is kept by the runtime as the executor's proxy; see
+// "A program's TaskExecutors" in stdlib/runtime/task.cpp.
+
+// Executor and TaskExecutor are core.swift's, as every protocol is whose
+// descriptor the runtime defines (stdlib/runtime/conformance.cpp).
+
+extension TaskExecutor {
+    func asUnownedTaskExecutor() -> UnownedTaskExecutor {
+        UnownedTaskExecutor(_proxy: _vertexTaskExecutorProxy(self, { job in self.enqueue(ExecutorJob(_task: job)) }))
+    }
+}
+
+extension UnownedTaskExecutor {
+    // Swift's is generic over the executor's type; vsc has no generic
+    // initializers yet (see vsc_TODO), and an existential takes the same
+    // arguments.
+    init(ordinary executor: any TaskExecutor) {
+        self.init(_proxy: _vertexTaskExecutorProxy(executor, { job in executor.enqueue(ExecutorJob(_task: job)) }))
+    }
+}
+
+extension ExecutorJob {
+    // Runs the job here, now, until the task suspends.
+    func runSynchronously(on executor: UnownedTaskExecutor) {
+        _vertexTaskRunJob(_task)
+    }
+}
+
+// The global concurrent executor: the runtime's pool of workers, one per
+// core, where code isolated to no actor runs by default. Generic over
+// nothing, so that a module lowers its methods from here, as it does a
+// generic type's of core's algorithms; a class that isn't generic is taken
+// to be another module's, whose bodies it doesn't lower (see vsc_TODO).
+final class _GlobalConcurrentExecutor<_Unused>: TaskExecutor {
+    func enqueue(_ job: consuming ExecutorJob) {
+        _vertexTaskEnqueueGlobal(job._task)
+    }
+}
+
+// Read through _vertexGlobal_globalConcurrentExecutor, as a module reads
+// every core variable that has such a function (analyzer.coreGlobalRead).
+// Each read is a new object, and each is the same pool to prefer.
+var globalConcurrentExecutor: any TaskExecutor { _vertexGlobal_globalConcurrentExecutor() }
+
+func _vertexGlobal_globalConcurrentExecutor() -> any TaskExecutor {
+    _GlobalConcurrentExecutor<Int>()
+}
+
+// Runs operation with the running task preferring taskExecutor for code
+// isolated to no actor -- nil for no preference, the pool -- and then
+// prefers what it did before.
+func withTaskExecutorPreference<T>(_ taskExecutor: (any TaskExecutor)?,
+                                   operation: () async throws -> T) async rethrows -> T {
+    let saved = _vertexTaskPreferenceSwap(_vertexExecutorToken(taskExecutor))
+    await MainActor.hop(2)
+    do {
+        let result = try await operation()
+        _ = _vertexTaskPreferenceSwap(saved)
+        await MainActor.hop(2)
+        return result
+    } catch {
+        _ = _vertexTaskPreferenceSwap(saved)
+        await MainActor.hop(2)
+        throw error
+    }
+}
+
+// The word a preference for an executor is: its proxy, or 0 for none,
+// which the global concurrent executor is too.
+func _vertexExecutorToken(_ executor: (any TaskExecutor)?) -> UInt64 {
+    guard let executor = executor else { return 0 }
+    if executor is _GlobalConcurrentExecutor<Int> { return 0 }
+    return _vertexTaskExecutorProxy(executor, { job in executor.enqueue(ExecutorJob(_task: job)) })
+}
+
+// A task made with Task(executorPreference:) starts by taking it up; the
+// analyzer puts this first in its operation. It moves the task there.
+func _vertexAdoptPreference(_ executor: (any TaskExecutor)?) async {
+    let token = _vertexExecutorToken(executor)
+    if token == 0 { return }
+    _ = _vertexTaskPreferenceSwap(token)
+    await MainActor.hop(2)
+}
+
+// A structured child -- async let, a task group's -- takes up the
+// preference of the task that started it.
+func _vertexAdoptInheritedPreference() async {
+    let token = _vertexTaskPreferenceInherited()
+    if token == 0 { return }
+    _ = _vertexTaskPreferenceSwap(token)
+    await MainActor.hop(2)
+}
+
+// The proxy of a program's executor, made with the closure the runtime
+// calls to hand the executor a job.
+@_silgen_name("vertex_task_executor_proxy")
+func _vertexTaskExecutorProxy(_ executor: AnyObject, _ enqueue: @escaping (UInt64) -> Void) -> UInt64
+
+@_silgen_name("vertex_task_run_job")
+func _vertexTaskRunJob(_ job: UInt64)
+
+@_silgen_name("vertex_task_enqueue_global")
+func _vertexTaskEnqueueGlobal(_ job: UInt64)
+
+@_silgen_name("vertex_task_preference_swap")
+func _vertexTaskPreferenceSwap(_ proxy: UInt64) -> UInt64
+
+@_silgen_name("vertex_task_preference_inherited")
+func _vertexTaskPreferenceInherited() -> UInt64
 
 extension Task {
     // Whether the task this runs in has been cancelled.

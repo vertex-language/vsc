@@ -96,6 +96,8 @@ VERTEX_CORE_PROTOCOL(BidirectionalCollection, "$ss23BidirectionalCollectionMp")
 VERTEX_CORE_PROTOCOL(RandomAccessCollection, "$ss22RandomAccessCollectionMp")
 VERTEX_CORE_PROTOCOL(AsyncSequence, "$ss13AsyncSequenceMp")
 VERTEX_CORE_PROTOCOL(AsyncIteratorProtocol, "$ss21AsyncIteratorProtocolMp")
+VERTEX_CORE_PROTOCOL(Executor, "$ss8ExecutorMp")
+VERTEX_CORE_PROTOCOL(TaskExecutor, "$ss12TaskExecutorMp")
 #undef VERTEX_CORE_PROTOCOL
 
 #else

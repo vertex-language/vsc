@@ -461,6 +461,30 @@ enum MainActor {
     static func assumeIsolated(_ body: @MainActor () -> Void)
 }
 
+// A reference to a task executor that doesn't keep it alive: its proxy
+// in the runtime.
+struct UnownedTaskExecutor {
+    let _proxy: UInt64
+}
+
+// A piece of a task to run, from where the task last suspended to where
+// it next does: the task, as the runtime knows it.
+struct ExecutorJob {
+    let _task: UInt64
+}
+
+// Something that runs jobs (SE-0392). The rest of the executors' API is
+// algorithms.swift's.
+protocol Executor: AnyObject {
+    func enqueue(_ job: consuming ExecutorJob)
+}
+
+// An executor a task may prefer to run its code that is isolated to no
+// actor on (SE-0417).
+protocol TaskExecutor: Executor {
+    func asUnownedTaskExecutor() -> UnownedTaskExecutor
+}
+
 // The names Swift gives C's types, which an interface imported from a C
 // header writes: `char` is CChar, whose signedness is the platform's and
 // is signed on every target this compiler builds for.

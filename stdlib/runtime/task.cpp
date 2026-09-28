@@ -107,6 +107,18 @@ struct Task {
   // runs. A hop to the main executor is for @MainActor code, and what
   // follows it hops home again.
   struct Executor* home;
+  // Task executor preference (SE-0417): the executor the task's code
+  // that isn't isolated to an actor runs on, in place of the pool -- a
+  // program's TaskExecutor, reached through its proxy -- or null. And the
+  // preference of the task that started this one, which a structured
+  // child (async let, a task group's) takes up when it starts.
+  struct Executor* preferred;
+  struct Executor* inheritedPreferred;
+  // A sleep begun where there is no loop to keep it -- in a job a
+  // program's executor runs -- is kept by a worker: the task travels to
+  // it through its inbox, and this says to put it among the sleepers
+  // there rather than run it.
+  bool sleepOnArrival;
 };
 
 // A handle's contents: whether its task has finished, and the tasks
@@ -165,6 +177,16 @@ struct Executor {
   // executor's, see vertex_task_set_idle_wait.
   void (*idleWait)(i64 timeoutNanos);
   int index;  // 0 for the main executor, 1.. for workers
+  // A proxy for a program's TaskExecutor: not a thread's, and with no
+  // loop. A task delivered to it is handed to the executor's enqueue as
+  // an ExecutorJob. Null for the runtime's own executors.
+  HeapObject* custom;
+  void (*enqueueFn)();
+  HeapObject* enqueueContext;
+  // Where a job of such an executor is running on this thread: the
+  // context the run gives the thread for as long as the task runs, and
+  // the proxy it runs for.
+  struct Executor* foreignFor;
 };
 
 inline constexpr int pollEvery = 64;
@@ -177,6 +199,7 @@ static bool      poolStarted;
 static u32       nextWorker;  // round robin, for spawning onto the pool
 static Task*     mainTask;
 static i32       mainStatus;
+static u32       mainFinishedElsewhere;
 // Tasks alive on every executor, so the main executor knows when there is
 // nothing left anywhere.
 static i64       liveTasks;
@@ -214,7 +237,14 @@ static Task* nextRunnable(Executor* e) {
 // deliver hands a task to the executor that owns it: onto its runnable
 // list from its own thread, and into its inbox from any other, with a
 // wake where it may be waiting.
+static void enqueueOnCustom(Executor* proxy, Task* t);
+static void addSleeper(Executor* e, Task* t);
+
 static void deliver(Executor* e, Task* t) {
+  if (e->custom != nullptr) {
+    enqueueOnCustom(e, t);
+    return;
+  }
   if (e == executorHere()) {
     makeRunnable(e, t);
     return;
@@ -244,7 +274,13 @@ static void drainInbox(Executor* e) {
   }
   while (reversed != nullptr) {
     Task* next = reversed->next;
-    makeRunnable(e, reversed);
+    if (reversed->sleepOnArrival) {
+      // A sleep begun in a program executor's job, kept here until due.
+      reversed->sleepOnArrival = false;
+      addSleeper(e, reversed);
+    } else {
+      makeRunnable(e, reversed);
+    }
     reversed = next;
   }
 }
@@ -332,6 +368,10 @@ static Task* spawn(Executor* e, const AsyncFunctionPointer* fp, void* self) {
   t->owner = e;
   t->target = nullptr;
   t->home = e;
+  t->preferred = nullptr;
+  Task* parent = executorHere()->current;
+  t->inheritedPreferred = parent != nullptr ? parent->preferred : nullptr;
+  t->sleepOnArrival = false;
   __builtin_atomic_add(&liveTasks, 1ll);
   return t;
 }
@@ -471,7 +511,11 @@ static void wakeSleepers(Executor* e) {
       }
       t->arg[0] = 0;
     }
-    makeRunnable(e, t);
+    // A sleep kept here for a program executor's task goes back to it.
+    if (t->owner != nullptr && t->owner->custom != nullptr)
+      deliver(t->owner, t);
+    else
+      makeRunnable(e, t);
   }
 }
 
@@ -499,6 +543,10 @@ static void initExecutor(Executor* e, int index) {
   e->idle = 0;
   e->idleWait = nullptr;
   e->index = index;
+  e->custom = nullptr;
+  e->enqueueFn = nullptr;
+  e->enqueueContext = nullptr;
+  e->foreignFor = nullptr;
 }
 
 static void runExecutor(Executor* e);
@@ -554,6 +602,18 @@ static void startPool() {
   }
 }
 
+// startHere is where a task started here goes: this executor, or where
+// this thread is running a job of a program's executor -- which has no
+// loop to keep one -- the pool, as Swift starts an unstructured task
+// that inherits no preference.
+static Executor* startHere() {
+  Executor* e = executorHere();
+  if (e->foreignFor == nullptr)
+    return e;
+  startPool();
+  return poolExecutor();
+}
+
 } // namespace vertex
 
 using namespace vertex;
@@ -574,7 +634,7 @@ i32 vertex_task_workers(void) {
 // vertex_task_spawn starts a task running code, which runs when the
 // executor next reaches it.
 void vertex_task_spawn(const AsyncFunctionPointer* fp, void* self) {
-  Executor* e = executorHere();
+  Executor* e = startHere();
   deliver(e, spawn(e, fp, self));
 }
 
@@ -597,7 +657,7 @@ static HeapObject* startOn(Executor* e, const AsyncFunctionPointer* fp, void* se
 // it has finished. The task starts on the executor that starts it, as
 // Swift's Task {} inherits where it is made.
 HeapObject* vertex_task_start(const AsyncFunctionPointer* fp, void* self) {
-  return startOn(executorHere(), fp, self);
+  return startOn(startHere(), fp, self);
 }
 
 // vertex_task_start_detached starts a task on the pool, whatever thread
@@ -754,12 +814,24 @@ void vertex_task_join_at(AsyncContext* ctx, HeapObject* handle) {
 static Executor* hopTarget(Executor* e, Task* current, u64 where) {
   switch (where) {
   case 1:
+    // Code isolated to no actor runs where the task prefers, where it
+    // prefers somewhere: SE-0417's task executor preference.
+    if (current->preferred != nullptr)
+      return current->preferred;
     startPool();
-    return e->index > 0 ? e : poolExecutor();
+    return e->index > 0 && e->custom == nullptr && e->foreignFor == nullptr ? e : poolExecutor();
   case 2:
+    if (current->preferred != nullptr)
+      return current->preferred;
     return current->home;
   }
   return &mainExecutor;
+}
+
+// hereFor is the executor a task running on e counts as being on: the
+// program's executor a job runs for, or e itself.
+static Executor* hereFor(Executor* e) {
+  return e->foreignFor != nullptr ? e->foreignFor : e;
 }
 
 // vertex_task_needs_hop reports whether a hop to where would move the
@@ -772,7 +844,7 @@ u64 vertex_task_needs_hop(u64 where) {
   Task* current = e->current;
   if (current == nullptr)
     return 0;
-  return hopTarget(e, current, where) != e ? 1 : 0;
+  return hopTarget(e, current, where) != hereFor(e) ? 1 : 0;
 }
 
 // vertex_task_hop carries on at another executor; see hopTarget. On the
@@ -788,7 +860,7 @@ void vertex_task_hop_at(AsyncContext* ctx, u64 where) {
   }
   Executor* target = hopTarget(e, current, where);
   park(current, ctx);
-  if (target == e) {
+  if (target == hereFor(e)) {
     makeRunnable(e, current);
     return;
   }
@@ -832,6 +904,14 @@ void vertex_task_sleep_at(AsyncContext* ctx, u64 nanoseconds) {
   }
   park(current, ctx);
   current->wake = vertex_pal_now() + nanoseconds;
+  if (e->foreignFor != nullptr) {
+    // A job has no loop to keep a sleep: a worker keeps it, and hands
+    // the task back to the program's executor when it is due.
+    startPool();
+    current->sleepOnArrival = true;
+    current->target = poolExecutor();
+    return;
+  }
   addSleeper(e, current);
 }
 
@@ -872,7 +952,7 @@ void vertex_task_wait_fd_at(AsyncContext* ctx, i32 fd, i32 events, i64 timeout) 
   // Nothing to suspend, or nowhere to register it: wait on the thread and
   // answer straight away, which is what a blocking descriptor would have
   // done to the caller anyway.
-  if (current == nullptr || vertex_pal_io_register(e->io, fd, events, current) != 0) {
+  if (current == nullptr || e->io == nullptr || vertex_pal_io_register(e->io, fd, events, current) != 0) {
     u64 ready = vertex_pal_io_wait_one(fd, events, timeout) == 1 ? 1 : 0;
     carryOn(ctx, ready);
     return;
@@ -940,6 +1020,14 @@ static void finish(Executor* e, Task* t) {
   bool wasMain = t == mainTask;
   if (wasMain)
     mainStatus = t->status;
+  // The main task may end elsewhere -- in a job of an executor it
+  // preferred -- and the main executor, which ends the program when it
+  // does, has to hear of it.
+  if (wasMain && e != &mainExecutor) {
+    __builtin_atomic_store(&mainFinishedElsewhere, 1u);
+    if (mainExecutor.io != nullptr)
+      vertex_pal_io_wake(mainExecutor.io);
+  }
   vertex_release(t->captures);
   freeSlabs(&t->alloc);
   vertex_pal_free(t, sizeof(Task), 16);
@@ -1038,7 +1126,196 @@ static void runExecutor(Executor* e) {
   }
 }
 
+// ---- A program's TaskExecutors (SE-0417) ----
+//
+// A program's executor is a class conforming to TaskExecutor, which is
+// handed jobs through its enqueue and runs each with
+// ExecutorJob.runSynchronously(on:), on whatever thread it likes, when it
+// likes. The runtime knows it by a proxy: an Executor that no thread
+// runs, whose deliver calls that enqueue. A job is a task; running it is
+// entering its continuation on the thread that asked, until it suspends.
+
+// A proxy calls its executor's enqueue through a closure core hands over
+// when it makes the proxy, `{ job in executor.enqueue(ExecutorJob(job)) }`:
+// its function entered with the job in the first argument register and
+// its context in the self register, which is how Swift enters one.
+void vertex_witness_call1(void (*fn)(), const void* self, void* arg, const vertex::Metadata* type,
+                          const void* const* table);
+
+static void callEnqueue(Executor* proxy, Task* t) {
+  vertex_witness_call1(proxy->enqueueFn, proxy->enqueueContext, t, nullptr, nullptr);
+}
+
+static Executor* proxies[256];
+static int       proxyCount;
+static u32       proxyLock;
+
+// proxyFor is the proxy of a program's executor, made the first time it
+// is asked for. The proxy keeps the executor alive, as a preference for
+// it does in Swift, and lives for as long as the program.
+static Executor* proxyFor(HeapObject* executor, void (*enqueueFn)(), HeapObject* enqueueContext) {
+  while (__builtin_atomic_cas(&proxyLock, 0u, 1u) != 0u) {
+  }
+  Executor* found = nullptr;
+  for (int i = 0; i < proxyCount; i++) {
+    if (proxies[i]->custom == executor) {
+      found = proxies[i];
+      break;
+    }
+  }
+  if (found == nullptr && proxyCount < 256) {
+    auto* e = static_cast<Executor*>(vertex_pal_alloc(sizeof(Executor), 16));
+    if (e == nullptr)
+      vertex_pal_abort();
+    e->runnableHead = nullptr;
+    e->runnableTail = nullptr;
+    e->sleeping = nullptr;
+    e->waitingOnIO = 0;
+    e->switchesSincePoll = 0;
+    e->current = nullptr;
+    e->rootAllocator.slab = nullptr;
+    e->rootAllocator.next = nullptr;
+    e->io = nullptr;
+    e->inbox = 0;
+    e->idle = 0;
+    e->idleWait = nullptr;
+    e->index = -1;
+    e->custom = executor;
+    e->foreignFor = nullptr;
+    e->enqueueFn = enqueueFn;
+    e->enqueueContext = enqueueContext;
+    vertex_retain(executor);
+    if (enqueueContext != nullptr)
+      vertex_retain(enqueueContext);
+    proxies[proxyCount++] = e;
+    found = e;
+  }
+  __builtin_atomic_store(&proxyLock, 0u);
+  if (found == nullptr)
+    fatal("more than 256 task executors");
+  return found;
+}
+
+// enqueueOnCustom hands a task to a program's executor. On a thread that
+// is running a job already, it waits until that job has returned, so that
+// an executor that runs what it is given at once -- inline, in enqueue --
+// doesn't nest one run inside the last for every yield.
+static void enqueueOnCustom(Executor* proxy, Task* t) {
+  t->owner = proxy;
+  auto* here = static_cast<Executor*>(vertex_pal_thread_get());
+  if (here != nullptr && here->foreignFor != nullptr) {
+    makeRunnable(here, t);
+    return;
+  }
+  callEnqueue(proxy, t);
+}
+
+// runJob runs a task handed out as a job, on this thread, until it
+// suspends: the thread gets a context of its own for the run, which
+// counts as the program's executor for hops, and anything the run hands
+// that executor is enqueued once it is over.
+static void runJob(Task* t) {
+  auto* prev = static_cast<Executor*>(vertex_pal_thread_get());
+  Executor ctx;
+  ctx.runnableHead = nullptr;
+  ctx.runnableTail = nullptr;
+  ctx.sleeping = nullptr;
+  ctx.waitingOnIO = 0;
+  ctx.switchesSincePoll = 0;
+  ctx.current = nullptr;
+  ctx.rootAllocator.slab = nullptr;
+  ctx.rootAllocator.next = nullptr;
+  ctx.io = nullptr;
+  ctx.inbox = 0;
+  ctx.idle = 0;
+  ctx.idleWait = nullptr;
+  ctx.index = -2;
+  ctx.custom = nullptr;
+  ctx.enqueueFn = nullptr;
+  ctx.enqueueContext = nullptr;
+  ctx.foreignFor = t->owner;
+  vertex_pal_thread_set(&ctx);
+
+  ctx.current = t;
+  void (*code)() = t->resume;
+  t->resume = nullptr;
+  vertex_task_enter(code, t->ctx, t->self, t->arg[0], t->arg[1]);
+  ctx.current = nullptr;
+  if (!t->done && t->resume == nullptr)
+    vertex_pal_abort();
+  if (t->done) {
+    finish(&ctx, t);
+  } else if (t->target != nullptr) {
+    Executor* target = t->target;
+    t->target = nullptr;
+    // A sleep the pool keeps belongs to the program's executor still.
+    if (!t->sleepOnArrival)
+      t->owner = target;
+    deliver(target, t);
+  }
+
+  // What this run handed to programs' executors: to the job this one
+  // runs inside, where there is one, or enqueued now, each with this
+  // context still the thread's so that what those enqueues run inline
+  // comes back here rather than nesting.
+  if (prev != nullptr && prev->foreignFor != nullptr) {
+    while (Task* x = nextRunnable(&ctx))
+      makeRunnable(prev, x);
+  } else {
+    while (Task* x = nextRunnable(&ctx))
+      callEnqueue(x->owner, x);
+  }
+  freeSlabs(&ctx.rootAllocator);
+  vertex_pal_thread_set(prev);
+}
+
 } // namespace vertex
+
+// vertex_task_executor_proxy is the proxy of a program's TaskExecutor,
+// as a word for a preference to name, made with the closure that calls
+// its enqueue the first time it is asked for.
+//
+// The executor comes as core passes an AnyObject: the address of an
+// existential, whose buffer's first word is the object -- a class's
+// instance is one word, and held in the buffer. The object is what a
+// proxy is found by; the existential is wherever the caller made it.
+u64 vertex_task_executor_proxy(HeapObject* const* executor, void (*enqueueFn)(), HeapObject* enqueueContext) {
+  return reinterpret_cast<u64>(proxyFor(*executor, enqueueFn, enqueueContext));
+}
+
+// vertex_task_run_job is ExecutorJob.runSynchronously(on:): the task the
+// job is runs here until it suspends.
+void vertex_task_run_job(u64 job) {
+  runJob(reinterpret_cast<Task*>(job));
+}
+
+// vertex_task_enqueue_global is the global concurrent executor's enqueue:
+// the job goes to the pool.
+void vertex_task_enqueue_global(u64 job) {
+  startPool();
+  auto* t = reinterpret_cast<Task*>(job);
+  Executor* e = poolExecutor();
+  t->owner = e;
+  deliver(e, t);
+}
+
+// vertex_task_preference_swap sets the running task's executor
+// preference -- a proxy, or 0 for none -- and is the one it had.
+u64 vertex_task_preference_swap(u64 proxy) {
+  Task* t = currentTask();
+  if (t == nullptr)
+    return 0;
+  u64 old = reinterpret_cast<u64>(t->preferred);
+  t->preferred = reinterpret_cast<Executor*>(proxy);
+  return old;
+}
+
+// vertex_task_preference_inherited is the preference of the task that
+// started the running one, which a structured child takes up.
+u64 vertex_task_preference_inherited(void) {
+  Task* t = currentTask();
+  return t != nullptr ? reinterpret_cast<u64>(t->inheritedPreferred) : 0;
+}
 
 // vertex_task_run runs tasks on the main executor: the runnable ones in
 // turn, and when only sleeping or waiting ones are left, the thread waits
@@ -1052,6 +1329,8 @@ void vertex_task_run(void) {
   startPool();
   bool mainDone = false;
   for (;;) {
+    if (__builtin_atomic_load(&mainFinishedElsewhere) != 0u)
+      return;
     if (step(e, &mainDone)) {
       // As in Swift: the program is over when its async main is, whatever
       // other tasks were still to run.

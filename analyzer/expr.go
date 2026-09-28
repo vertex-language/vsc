@@ -39,6 +39,12 @@ func (c *checker) checkExpr(expr ast.Expr, expected types.Type, scope *Scope) ty
 	}
 	// Inside an extension of a built-in type, a member of it named alone
 	// -- `count`, `removeLast()` -- is that member of self.
+	if synth := c.coreGlobalRead(expr, scope); synth != nil {
+		c.info.ImplicitSelf[expr] = synth
+		typ := c.checkExpr(synth, expected, scope)
+		c.info.Types[expr] = typ
+		return typ
+	}
 	if synth := c.implicitSelfMember(expr, scope); synth != nil {
 		c.info.ImplicitSelf[expr] = synth
 		typ := c.checkExpr(synth, expected, scope)
@@ -1146,6 +1152,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return thenT
 
 	case *ast.CallExpr:
+		// Task(executorPreference: e) { … } is a Task whose operation takes
+		// e up first; see rewriteExecutorPreference.
+		c.rewriteExecutorPreference(e, scope)
 		// A key path given where a function goes -- `xs.map(\.name)` --
 		// is the closure `{ $0.name }`, and is checked and lowered as one.
 		// No parameter takes a KeyPath yet, so every argument is that.

@@ -150,7 +150,14 @@ func (g *gen) optionalToExistential(at ast.Node, v *sil.Value, from, to *types.O
 func (g *gen) existentialValue(at ast.Node, v *sil.Value, from, to types.Type) *sil.Value {
 	if isExistentialType(from) {
 		if !v.Type().IsAddress() {
-			return v
+			// Owned, as the doc says: a borrowed one -- a parameter, a
+			// capture -- is copied, not taken from its owner.
+			if v.Ownership() == sil.Guaranteed {
+				return g.blk.CopyValue(v)
+			}
+			// An owned one is taken over: whatever was to destroy it
+			// no longer does, as what it goes into owns it now.
+			return g.consume(v)
 		}
 		return g.blk.Load(v, "copy")
 	}

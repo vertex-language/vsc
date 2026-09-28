@@ -7,6 +7,7 @@ import (
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
+	"sync"
 )
 
 // Interoperability attributes @_silgen_name and @_cdecl customize exported and imported symbol names for C interoperability.
@@ -93,7 +94,7 @@ func (g *gen) silgenName(sym *analyzer.FuncSymbol) (string, bool) {
 	if g.info.Imported[sym] == "Swift" {
 		// Declared by the built-in module, so its attributes are
 		// spelled in core's text rather than this file's.
-		_, file, _ = core.Files()
+		file = coreUnitOf(sym.Decl())
 	}
 	return g.asmNameIn(file, funcAttrs(sym), attrSilgenName)
 }
@@ -287,6 +288,30 @@ func indexDecls(m map[ast.Node]*token.File, f *ast.File, unit *token.File) {
 	})
 }
 
+// coreUnitOf is the text a declaration of the built-in module is spelled
+// in: core.swift's, or algorithms.swift's for what that file declares --
+// positions count from the start of each, so reading one declaration's
+// attributes against the other's text reads the wrong bytes, or past
+// the end.
+func coreUnitOf(d ast.Node) *token.File {
+	algDeclsOnce.Do(func() {
+		algDecls = map[ast.Node]*token.File{}
+		if f, unit, _ := core.Algorithms(); f != nil {
+			index(algDecls, f, unit, false)
+		}
+	})
+	if unit, ok := algDecls[d]; ok {
+		return unit
+	}
+	_, file, _ := core.Files()
+	return file
+}
+
+var (
+	algDeclsOnce sync.Once
+	algDecls     map[ast.Node]*token.File
+)
+
 // index records unit as the file of every node in f -- the first file to
 // claim a node keeps it -- going into function bodies only when deep.
 func index(m map[ast.Node]*token.File, f *ast.File, unit *token.File, deep bool) {
@@ -310,8 +335,7 @@ func (g *gen) builtinOp(sym *analyzer.FuncSymbol) (string, bool) {
 	if sym == nil || g.info.Imported[sym] != "Swift" {
 		return "", false
 	}
-	_, file, _ := core.Files()
-	return g.asmNameIn(file, funcAttrs(sym), attrBuiltin)
+	return g.asmNameIn(coreUnitOf(sym.Decl()), funcAttrs(sym), attrBuiltin)
 }
 
 // callBuiltinOp lowers a call of a core function declared @_builtin: the
