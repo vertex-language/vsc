@@ -28,6 +28,9 @@ type common struct {
 	offline bool
 	update  bool
 	replace includePath
+	// skipVerify leaves the SIL verifier out, so that --emit sil and
+	// --emit vir print what was made even where it would be refused.
+	skipVerify bool
 	// notice reports what a build is doing that it might otherwise seem
 	// to hang on -- fetching a package. Set by the command; nil is quiet.
 	notice func(string)
@@ -68,6 +71,7 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.BoolVar(&c.offline, "offline", false, "never fetch a package: use the cache as it is")
 	fs.BoolVar(&c.update, "update", false, "fetch imported packages again, even if the cache holds them")
 	fs.Var(&c.replace, "replace", "use a local checkout for an imported package: path=dir (repeatable)")
+	fs.BoolVar(&c.skipVerify, "skip-verify", false, "don't verify the SIL, so --emit sil/vir print what the verifier would refuse (for debugging)")
 }
 
 // packagePaths returns search roots from -P flags followed by VERTEXPATH.
@@ -108,6 +112,7 @@ func (c *common) options(t ir.Target, stop vsc.Phase) vsc.Options {
 		ImportPaths:  c.include,
 		PackagePaths: c.packagePaths(),
 		Packages:     (*packages)(c),
+		SkipVerify:   c.skipVerify,
 	}
 	if buildcache.Enabled() && os.Getenv("VSC_SUMMARIES") != "off" {
 		opts.Summaries = summaryCache{}

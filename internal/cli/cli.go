@@ -41,6 +41,9 @@ Flags for build and run:
     --emit lib      compile and link a shared library (aarch64-android)
     --emit vir      stop after lowering and print the machine IR
     --emit sil      stop after the ownership passes and print the IR, as SIL
+    --emit rawsil   print the SIL as generated, before the passes verify it
+    -skip-verify    don't verify the SIL, so --emit sil and --emit vir print
+                    what the verifier would refuse (for debugging)
     --emit interface  write the module's public face, for another module
                       to be compiled against
     -I dir          look for imported modules here (repeatable)

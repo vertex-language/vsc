@@ -26,6 +26,18 @@ func Mandatory(m *sil.Module) error {
 	if err := verify.Module(m); err != nil {
 		return err
 	}
+	return runMandatory(m)
+}
+
+// MandatoryUnverified is Mandatory without the verification on the way
+// in: what `vsc build -skip-verify --emit sil` runs, to print a module
+// SILGen got wrong rather than refuse it. The passes may make less sense
+// of such a module; what they leave is for reading, not for running.
+func MandatoryUnverified(m *sil.Module) error {
+	return runMandatory(m)
+}
+
+func runMandatory(m *sil.Module) error {
 	for _, f := range m.Funcs() {
 		// Erase DI initialization marks before promotion and assign resolution.
 		eraseMarks(f)

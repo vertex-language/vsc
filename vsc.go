@@ -65,6 +65,10 @@ type Options struct {
 	Target ir.Target
 	// Stop specifies which phase to stop after (zero value runs all phases).
 	Stop Phase
+	// SkipVerify runs the SIL passes without the verifier: for printing
+	// a module the verifier refuses (--emit sil, --emit vir with
+	// -skip-verify), never for building one to run.
+	SkipVerify bool
 	// PackagePaths are search roots for string import paths (e.g. `import "std/fmt"`).
 	PackagePaths []string
 	// ImportPaths are search directories for interface files (e.g. `import Lib`).
@@ -267,7 +271,11 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 
 	done = timing.Start("sil passes")
 	defer func() { done() }()
-	if err := pass.Mandatory(m); err != nil {
+	mandatory := pass.Mandatory
+	if opts.SkipVerify {
+		mandatory = pass.MandatoryUnverified
+	}
+	if err := mandatory(m); err != nil {
 		return u, append(diags, phaseError(err))
 	}
 	if opts.Stop == Canonical {

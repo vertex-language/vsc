@@ -104,6 +104,15 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 		fmt.Fprintf(stderr, "vsc: unknown --emit %q (known: %s)\n", bf.emit, emitNames())
 		return "", exitUsage
 	}
+	if bf.skipVerify {
+		// Unverified SIL is for reading: nothing built from it is run or
+		// cached.
+		if mode.name != "sil" && mode.name != "vir" && mode.name != "rawsil" {
+			fmt.Fprintln(stderr, "vsc: -skip-verify is for --emit sil, vir or rawsil, to read what the verifier refuses")
+			return "", exitUsage
+		}
+		fmt.Fprintln(stderr, "vsc: -skip-verify: the SIL was not verified")
+	}
 	target, err := bf.resolve()
 	if err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
