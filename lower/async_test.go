@@ -93,7 +93,8 @@ func TestPlanAsyncFindsSuspensions(t *testing.T) {
 func plain(_ n: int) -> int { return n + 1 }
 func inner(_ n: int) async -> int { return n + 1 }
 
-func none(_ n: int) async -> int { return plain(n) }
+func none(_ n: int) async -> int { return n + 1 }
+func calls(_ n: int) async -> int { return plain(n) }
 func one(_ n: int) async -> int { return await inner(n) }
 func two(_ n: int) async -> int {
     let a = await inner(n)
@@ -102,12 +103,18 @@ func two(_ n: int) async -> int {
 }
 `)
 	for _, c := range []struct {
-		fn   string
-		want int
+		fn       string
+		want     int
+		suspends bool
 	}{
-		{"none", 0},
-		{"one", 1},
-		{"two", 2},
+		// Quick, and never suspending: left where its caller was.
+		{"none", 0, false},
+		// It calls something, which can take any time: it starts with
+		// the hop to its task's executor, as Swift's nonisolated async
+		// functions do (see gen.prologueHop) -- a suspension, if no await.
+		{"calls", 0, true},
+		{"one", 1, true},
+		{"two", 2, true},
 	} {
 		p := planOf(t, funcNamed(t, m, c.fn))
 		if p == nil {
@@ -116,7 +123,7 @@ func two(_ n: int) async -> int {
 		if got := len(awaits(p)); got != c.want {
 			t.Errorf("%s: %d suspensions, want %d", c.fn, got, c.want)
 		}
-		if p.hasSuspensions() != (c.want > 0) {
+		if p.hasSuspensions() != c.suspends {
 			t.Errorf("%s: hasSuspensions = %v", c.fn, p.hasSuspensions())
 		}
 	}

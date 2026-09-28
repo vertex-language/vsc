@@ -183,6 +183,13 @@ struct Executor {
   HeapObject* custom;
   void (*enqueueFn)();
   HeapObject* enqueueContext;
+  // A thread pool of the runtime's own a task may prefer: the group has
+  // its members, threads each running an executor's loop, and hands a
+  // task delivered to it to one of them; each member names its group.
+  struct Executor** members;
+  int memberCount;
+  u32 nextMember;
+  struct Executor* pool;
   // Where a job of such an executor is running on this thread: the
   // context the run gives the thread for as long as the task runs, and
   // the proxy it runs for.
@@ -244,6 +251,13 @@ static void deliver(Executor* e, Task* t) {
   if (e->custom != nullptr) {
     enqueueOnCustom(e, t);
     return;
+  }
+  if (e->members != nullptr) {
+    // A thread pool: one of its threads, round robin.
+    u32 n = static_cast<u32>(__builtin_atomic_add(&e->nextMember, 1u));
+    Executor* member = e->members[n % static_cast<u32>(e->memberCount)];
+    t->owner = member;
+    e = member;
   }
   if (e == executorHere()) {
     makeRunnable(e, t);
@@ -547,6 +561,10 @@ static void initExecutor(Executor* e, int index) {
   e->enqueueFn = nullptr;
   e->enqueueContext = nullptr;
   e->foreignFor = nullptr;
+  e->members = nullptr;
+  e->memberCount = 0;
+  e->nextMember = 0;
+  e->pool = nullptr;
 }
 
 static void runExecutor(Executor* e);
@@ -608,7 +626,7 @@ static void startPool() {
 // that inherits no preference.
 static Executor* startHere() {
   Executor* e = executorHere();
-  if (e->foreignFor == nullptr)
+  if (e->foreignFor == nullptr && e->pool == nullptr)
     return e;
   startPool();
   return poolExecutor();
@@ -819,7 +837,7 @@ static Executor* hopTarget(Executor* e, Task* current, u64 where) {
     if (current->preferred != nullptr)
       return current->preferred;
     startPool();
-    return e->index > 0 && e->custom == nullptr && e->foreignFor == nullptr ? e : poolExecutor();
+    return e->index > 0 && e->custom == nullptr && e->foreignFor == nullptr && e->pool == nullptr ? e : poolExecutor();
   case 2:
     if (current->preferred != nullptr)
       return current->preferred;
@@ -831,7 +849,9 @@ static Executor* hopTarget(Executor* e, Task* current, u64 where) {
 // hereFor is the executor a task running on e counts as being on: the
 // program's executor a job runs for, or e itself.
 static Executor* hereFor(Executor* e) {
-  return e->foreignFor != nullptr ? e->foreignFor : e;
+  if (e->foreignFor != nullptr)
+    return e->foreignFor;
+  return e->pool != nullptr ? e->pool : e;
 }
 
 // vertex_task_needs_hop reports whether a hop to where would move the
@@ -1182,6 +1202,10 @@ static Executor* proxyFor(HeapObject* executor, void (*enqueueFn)(), HeapObject*
     e->index = -1;
     e->custom = executor;
     e->foreignFor = nullptr;
+    e->members = nullptr;
+    e->memberCount = 0;
+    e->nextMember = 0;
+    e->pool = nullptr;
     e->enqueueFn = enqueueFn;
     e->enqueueContext = enqueueContext;
     vertex_retain(executor);
@@ -1234,6 +1258,10 @@ static void runJob(Task* t) {
   ctx.enqueueFn = nullptr;
   ctx.enqueueContext = nullptr;
   ctx.foreignFor = t->owner;
+  ctx.members = nullptr;
+  ctx.memberCount = 0;
+  ctx.nextMember = 0;
+  ctx.pool = nullptr;
   vertex_pal_thread_set(&ctx);
 
   ctx.current = t;
@@ -1281,6 +1309,65 @@ static void runJob(Task* t) {
 // proxy is found by; the existential is wherever the caller made it.
 u64 vertex_task_executor_proxy(HeapObject* const* executor, void (*enqueueFn)(), HeapObject* enqueueContext) {
   return reinterpret_cast<u64>(proxyFor(*executor, enqueueFn, enqueueContext));
+}
+
+// vertex_task_thread_pool is a thread pool of the runtime's own, of so
+// many threads apart from the workers, as a word for a preference to
+// name: what sync.ThreadPoolExecutor is. Long work a task prefers to do
+// there keeps the workers and the main thread free. Its threads last as
+// long as the program.
+u64 vertex_task_thread_pool(i32 threads) {
+  if (threads < 1)
+    threads = 1;
+  if (threads > maxWorkers)
+    threads = maxWorkers;
+  auto* group = static_cast<Executor*>(vertex_pal_alloc(sizeof(Executor), 16));
+  auto** members = static_cast<Executor**>(vertex_pal_alloc(sizeof(Executor*) * static_cast<usize>(threads), 16));
+  if (group == nullptr || members == nullptr)
+    vertex_pal_abort();
+  group->runnableHead = nullptr;
+  group->runnableTail = nullptr;
+  group->sleeping = nullptr;
+  group->waitingOnIO = 0;
+  group->switchesSincePoll = 0;
+  group->current = nullptr;
+  group->rootAllocator.slab = nullptr;
+  group->rootAllocator.next = nullptr;
+  group->io = nullptr;
+  group->inbox = 0;
+  group->idle = 0;
+  group->idleWait = nullptr;
+  group->index = -3;
+  group->custom = nullptr;
+  group->enqueueFn = nullptr;
+  group->enqueueContext = nullptr;
+  group->foreignFor = nullptr;
+  group->nextMember = 0;
+  group->pool = nullptr;
+  int started = 0;
+  for (int i = 0; i < threads; i++) {
+    auto* e = static_cast<Executor*>(vertex_pal_alloc(sizeof(Executor), 16));
+    if (e == nullptr)
+      break;
+    initExecutor(e, 1000 + i);
+    e->pool = group;
+    if (e->io == nullptr || !vertex_pal_thread_start(workerMain, e))
+      break;
+    members[started++] = e;
+  }
+  if (started == 0)
+    fatal("a thread pool could not start a thread");
+  group->members = members;
+  group->memberCount = started;
+  return reinterpret_cast<u64>(group);
+}
+
+// vertex_task_enqueue_on hands a job to an executor of the runtime's by
+// its word: a thread pool's enqueue.
+void vertex_task_enqueue_on(u64 executor, u64 job) {
+  auto* e = reinterpret_cast<Executor*>(executor);
+  auto* t = reinterpret_cast<Task*>(job);
+  deliver(e, t);
 }
 
 // vertex_task_run_job is ExecutorJob.runSynchronously(on:): the task the

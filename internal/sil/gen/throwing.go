@@ -651,7 +651,9 @@ func (g *gen) tryOn(e *ast.CallExpr) (optional, trap bool) {
 // has to catch it: its error edge is never taken, and traps if it is.
 func (g *gen) throwingCall(e *ast.CallExpr, sig *types.Signature) bool {
 	optional, trap := g.tryOn(e)
-	g.tryBang = trap
+	// A trap the caller already asked for stands: MainActor.run calls its
+	// body with one where the body cannot throw. tryApply clears it.
+	g.tryBang = g.tryBang || trap
 	if sig != nil && sig.Rethrows && !optional && !g.argumentThrows(e) {
 		g.tryBang = true
 	}

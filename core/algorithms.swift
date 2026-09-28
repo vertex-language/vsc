@@ -3517,6 +3517,9 @@ func withTaskExecutorPreference<T>(_ taskExecutor: (any TaskExecutor)?,
 func _vertexExecutorToken(_ executor: (any TaskExecutor)?) -> UInt64 {
     guard let executor = executor else { return 0 }
     if executor is _GlobalConcurrentExecutor<Int> { return 0 }
+    // The runtime's own executors are named directly: a job never leaves
+    // the runtime for their enqueue.
+    if let native = executor as? any _NativeTaskExecutor { return native._nativeExecutor }
     return _vertexTaskExecutorProxy(executor, { job in executor.enqueue(ExecutorJob(_task: job)) })
 }
 
@@ -3542,6 +3545,19 @@ func _vertexAdoptInheritedPreference() async {
 // calls to hand the executor a job.
 @_silgen_name("vertex_task_executor_proxy")
 func _vertexTaskExecutorProxy(_ executor: AnyObject, _ enqueue: @escaping (UInt64) -> Void) -> UInt64
+
+// A thread pool of the runtime's own, of so many threads apart from the
+// workers: sync.ThreadPoolExecutor's.
+@_silgen_name("vertex_task_thread_pool")
+func _vertexTaskThreadPool(_ threads: Int32) -> UInt64
+
+// Hands a job to one of the runtime's executors by its word.
+@_silgen_name("vertex_task_enqueue_on")
+func _vertexTaskEnqueueOn(_ executor: UInt64, _ job: UInt64)
+
+// How many workers the pool has: one per core but the main thread's.
+@_silgen_name("vertex_task_workers")
+func _vertexTaskWorkers() -> Int32
 
 @_silgen_name("vertex_task_run_job")
 func _vertexTaskRunJob(_ job: UInt64)

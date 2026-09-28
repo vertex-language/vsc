@@ -339,21 +339,36 @@ func (g *gen) coreMainActor(t types.Type, member string) (string, bool) {
 // await). `assumeIsolated { }` is the body called here, after the
 // runtime has checked that here is the main thread.
 func (g *gen) mainActorCall(e *ast.CallExpr, symbol string, sig *types.Signature) *sil.Value {
-	if e.Args == nil || len(e.Args.Args) != 1 {
+	if e.Args == nil || len(e.Args.Args) == 0 {
 		g.refuse(e, "a member of MainActor without its argument")
 		return nil
 	}
-	body := e.Args.Args[0].X
+	// The body is the last argument: run's resultType: comes before it.
+	body := e.Args.Args[len(e.Args.Args)-1].X
 	if _, isClosure := g.typeOf(body).Underlying().(*types.Signature); !isClosure {
 		return g.taskCall(e, symbol, sig, nil)
 	}
 	if symbol == stdlib.TaskAssumeMain {
 		g.runtimeResult(symbol, nil, lowerType(types.Typ[types.Void]))
 	}
-	if v := g.applyValue(&ast.CallExpr{Span: e.Span, Fun: body}, body); v == nil {
+	// run rethrows: a body that cannot throw -- whatever type it took
+	// from the parameter -- makes a call nothing has to catch, as
+	// throwingCall has it for any rethrows function.
+	if symbol != stdlib.TaskAssumeMain {
+		if _, trap := g.tryOn(e); trap || !g.argumentThrows(e) {
+			g.tryBang = true
+		}
+	}
+	// run is what its body gives back (Swift's run<T>); assumeIsolated
+	// is nothing.
+	v := g.applyValue(&ast.CallExpr{Span: e.Span, Fun: body}, body)
+	if v == nil {
 		return nil
 	}
-	return g.void()
+	if symbol == stdlib.TaskAssumeMain {
+		return g.void()
+	}
+	return v
 }
 
 // Where a hop goes, as the runtime numbers them.
@@ -409,16 +424,44 @@ func (g *gen) there() int64 {
 	return hopHome
 }
 
-// prologueHop starts an async function's body where it runs. A
-// nonisolated one that never suspends is left where its caller was:
-// nothing in it can tell, and the hop would give a function that needed
-// no frame one. The proposal calls this the one optimization on Swift's
-// rule that is safe to take first.
+// prologueHop starts an async function's body where it runs: Swift's
+// rule (SE-0338), that code isolated to no actor runs on the task's own
+// executor -- its home, or the executor it prefers -- and not on whatever
+// actor called it.
+//
+// A nonisolated one that never suspends and is quick -- no loop, no call
+// -- is left where its caller was: nothing in it can tell, and the hop
+// would give a function that needed no frame one. One that loops or calls
+// can tell by how long it takes: a decode that never awaits, called from
+// the main actor, would hold the main thread for all of it. It hops.
 func (g *gen) prologueHop(body []ast.Stmt) {
-	if !g.isolated() && !analyzer.Awaits(body) {
+	if !g.isolated() && !analyzer.Awaits(body) && quickBody(body) {
 		return
 	}
 	g.ensure(g.there())
+}
+
+// quickBody reports whether a body runs in a bounded, short time: it has
+// no loop and calls nothing (a closure or function declared inside it is
+// not its code).
+func quickBody(body []ast.Stmt) bool {
+	quick := true
+	for _, s := range body {
+		ast.Inspect(s, func(n ast.Node) bool {
+			if !quick {
+				return false
+			}
+			switch n.(type) {
+			case *ast.ClosureExpr, *ast.FuncDecl:
+				return false
+			case *ast.ForInStmt, *ast.WhileStmt, *ast.RepeatWhileStmt, *ast.CallExpr:
+				quick = false
+				return false
+			}
+			return true
+		})
+	}
+	return quick
 }
 
 // await lowers `await x`: x, and then the hop back to where this

@@ -457,7 +457,9 @@ enum MainActor {
     @_silgen_name("vertex_task_hop")
     static func hop(_ to: UInt64) async
 
-    static func run(_ body: @MainActor () async -> Void) async
+    // Swift's: the body's value, whatever it is, and what it throws.
+    // Its body may await here, which Swift's doesn't take.
+    static func run<T>(resultType: T.Type = T.self, body: @MainActor () async throws -> T) async rethrows -> T
     static func assumeIsolated(_ body: @MainActor () -> Void)
 }
 
@@ -483,6 +485,13 @@ protocol Executor: AnyObject {
 // actor on (SE-0417).
 protocol TaskExecutor: Executor {
     func asUnownedTaskExecutor() -> UnownedTaskExecutor
+}
+
+// A task executor that is the runtime's own -- sync.ThreadPoolExecutor's
+// threads -- which a preference names directly, without going through
+// its enqueue: _nativeExecutor is the runtime's word for it.
+protocol _NativeTaskExecutor: AnyObject {
+    var _nativeExecutor: UInt64 { get }
 }
 
 // The names Swift gives C's types, which an interface imported from a C

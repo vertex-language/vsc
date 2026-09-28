@@ -98,6 +98,7 @@ VERTEX_CORE_PROTOCOL(AsyncSequence, "$ss13AsyncSequenceMp")
 VERTEX_CORE_PROTOCOL(AsyncIteratorProtocol, "$ss21AsyncIteratorProtocolMp")
 VERTEX_CORE_PROTOCOL(Executor, "$ss8ExecutorMp")
 VERTEX_CORE_PROTOCOL(TaskExecutor, "$ss12TaskExecutorMp")
+VERTEX_CORE_PROTOCOL(NativeTaskExecutor, "$ss19_NativeTaskExecutorMp")
 #undef VERTEX_CORE_PROTOCOL
 
 #else
