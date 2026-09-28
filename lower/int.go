@@ -102,6 +102,20 @@ func (c *fn) int32Builtin(name, verb string, r repr, args []ir.Value) ([]ir.Valu
 	ns := c.b.I32
 	signed := verb[0] == 's' || verb == "ashr" || (len(verb) > 4 && verb[:4] == "cmp_" && verb[4] == 's')
 
+	// A narrow integer's register holds its bits and whatever the last
+	// operation left above them (see convert), so an operation that reads
+	// the high bits -- a comparison, a division, a right shift, an
+	// overflow check -- first extends both operands from the width, by its
+	// own signedness. And, or, xor and shl only read the low bits.
+	if r.narrow() {
+		switch verb {
+		case "and", "or", "xor", "shl":
+		default:
+			a = c.narrow(a, r.width, signed)
+			b = c.narrow(b, r.width, signed)
+		}
+	}
+
 	// checked clamps narrow integer arithmetic to the declared width and detects overflow.
 	checked := func(raw ir.I32, wide func() ir.I1) []ir.Value {
 		if !r.narrow() {

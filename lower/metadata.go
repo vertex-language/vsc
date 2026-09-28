@@ -1683,6 +1683,9 @@ func (l *lowerer) classMetadataFor(className string) (*ir.Global, bool) {
 	if _, isClass := info.Layout.Underlying().(*types.Class); !isClass {
 		return nil, false
 	}
+	if info.Imported {
+		return nil, false
+	}
 	if l.meta == nil {
 		l.meta = map[string]*ir.Global{}
 	}
@@ -1729,7 +1732,9 @@ func (l *lowerer) classMetadataFor(className string) (*ir.Global, bool) {
 	var super ir.Init = ir.Lit(ir.Int(0))
 	if cl, ok := info.Layout.Underlying().(*types.Class); ok && cl.Superclass != nil {
 		if sc, ok := cl.Superclass.Underlying().(*types.Class); ok {
-			if sg, ok := l.classMetadataFor(sc.Name); ok {
+			if sinfo, ok := l.module.MetadataFor(sc.Name); ok && sinfo.Imported {
+				super = ir.RelocInit(l.metadataRecord(sinfo.Mangled + "Mf")).Plus(ir.Int(stdlib.MetadataOffset))
+			} else if sg, ok := l.classMetadataFor(sc.Name); ok {
 				super = ir.RelocInit(sg).Plus(ir.Int(stdlib.MetadataOffset))
 			}
 		}

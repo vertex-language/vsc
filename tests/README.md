@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`325` in the order the
+A ladder: one small thing per file, numbered `001`–`327` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 

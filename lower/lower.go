@@ -769,14 +769,19 @@ func (l *lowerer) vtables(m *sil.Module) error {
 				rows = append(rows, ir.RelocInit(l.asyncRecordOf(e.Impl)))
 				continue
 			}
-			impl, ok := l.callee[l.sym(e.Impl)]
+			impl, ok := l.callee[e.Impl]
+			if !ok {
+				impl, ok = l.callee[l.sym(e.Impl)]
+			}
 			if !ok {
 				f, ok := l.defs[e.Impl]
-				if !ok {
-					return &Error{Err: ErrUnsupported, Func: t.Class,
-						What: "no function named " + e.Impl + " for slot " + e.Member}
+				if ok {
+					impl = f
 				}
-				impl = f
+			}
+			if impl == nil {
+				impl = l.out.ImportFunc(l.sym(e.Impl), ir.NewSig())
+				l.callee[e.Impl] = impl
 			}
 			rows = append(rows, ir.RelocInit(impl))
 			members = append(members, e.Member)
@@ -932,14 +937,19 @@ func (l *lowerer) witnessTables(m *sil.Module) error {
 				rows = append(rows, ir.RelocInit(l.asyncRecordOf(e.Impl)))
 				continue
 			}
-			impl, ok := l.callee[l.sym(e.Impl)]
+			impl, ok := l.callee[e.Impl]
+			if !ok {
+				impl, ok = l.callee[l.sym(e.Impl)]
+			}
 			if !ok {
 				f, ok := l.defs[e.Impl]
-				if !ok {
-					return &Error{Err: ErrUnsupported, Func: t.Type,
-						What: "no function named " + e.Impl + " for " + e.Member}
+				if ok {
+					impl = f
 				}
-				impl = f
+			}
+			if impl == nil {
+				impl = l.out.ImportFunc(l.sym(e.Impl), ir.NewSig())
+				l.callee[e.Impl] = impl
 			}
 			rows = append(rows, ir.RelocInit(impl))
 		}
@@ -1097,10 +1107,17 @@ func (l *lowerer) classDestroyer(t *sil.VTable) *ir.Func {
 			vt = t
 		}
 		if vt != nil && vt.Deinit != "" {
-			if callee, ok := l.callee[l.sym(vt.Deinit)]; ok {
+			if callee, ok := l.callee[vt.Deinit]; ok {
+				deinits = append(deinits, callee)
+			} else if callee, ok := l.callee[l.sym(vt.Deinit)]; ok {
 				deinits = append(deinits, callee)
 			} else if def, ok := l.defs[vt.Deinit]; ok {
 				deinits = append(deinits, def)
+			} else {
+				sig := ir.NewSig().Param(ir.TypePtr)
+				callee := l.out.ImportFunc(l.sym(vt.Deinit), sig)
+				l.callee[vt.Deinit] = callee
+				deinits = append(deinits, callee)
 			}
 		}
 		if c.Superclass == nil {

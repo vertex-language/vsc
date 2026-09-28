@@ -481,9 +481,10 @@ static void park(Task* t, AsyncContext* ctx) {
 
 // wakeReady makes runnable every task whose descriptor is ready, waiting
 // up to timeout nanoseconds for one to be, or not at all for 0, or until
-// one is for -1.
-static void wakeReady(Executor* e, i64 timeout) {
+// one is for -1. It answers how many it made runnable.
+static int wakeReady(Executor* e, i64 timeout) {
   void* ready[64];
+  int woken = 0;
   int n = vertex_pal_io_wait(e->io, timeout, ready, 64);
   for (int i = 0; i < n; i++) {
     // A null token is a wake from another executor: its inbox is drained
@@ -502,7 +503,9 @@ static void wakeReady(Executor* e, i64 timeout) {
     t->arg[0] = 1;
     makeRunnable(e, t);
     e->waitingOnIO--;
+    woken++;
   }
+  return woken;
 }
 
 static void wakeSleepers(Executor* e) {
@@ -827,10 +830,23 @@ void vertex_task_join_at(AsyncContext* ctx, HeapObject* handle) {
 }
 
 // hopTarget is the executor a hop names: 0 the main executor, 1 the
-// pool -- this worker where this is one, else a worker -- and 2 the
-// task's home.
+// pool -- this worker where this is one, else a worker -- 2 the task's
+// home, and 3 the pool as the task's new home.
 static Executor* hopTarget(Executor* e, Task* current, u64 where) {
   switch (where) {
+  case 3:
+    // A structured child with no preference: isolated to no actor, it
+    // belongs on the pool, as Swift's does, and not on the executor that
+    // started it. Its nonisolated code runs at home, so the pool becomes
+    // home: a worker, this one where this is one.
+    if (current->preferred != nullptr)
+      return current->preferred;
+    startPool();
+    if (!(e->index > 0 && e->custom == nullptr && e->foreignFor == nullptr && e->pool == nullptr))
+      current->home = poolExecutor();
+    else
+      current->home = e;
+    return current->home;
   case 1:
     // Code isolated to no actor runs where the task prefers, where it
     // prefers somewhere: SE-0417's task executor preference.
@@ -1121,6 +1137,15 @@ static void rest(Executor* e) {
     return;
   }
   if (e->idleWait != nullptr) {
+    // Registrations are queued, and reach the kernel only with a wait of
+    // the executor's own (see vertex_pal_io_register). The host watches
+    // the queue's descriptor instead, which is readable only for what the
+    // kernel has been told of: so what is queued goes in first, without
+    // waiting, and whatever that finds ready runs before any host wait.
+    if (e->io != nullptr && wakeReady(e, 0) > 0) {
+      __builtin_atomic_store(&e->idle, 0u);
+      return;
+    }
     // The host's own wait, for as long as the executor has nothing to
     // do. It returns when something happened to it, or when a
     // descriptor the executor watches became ready, or at the deadline;

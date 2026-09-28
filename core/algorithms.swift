@@ -3533,10 +3533,17 @@ func _vertexAdoptPreference(_ executor: (any TaskExecutor)?) async {
 }
 
 // A structured child -- async let, a task group's -- takes up the
-// preference of the task that started it.
+// preference of the task that started it. Without one it runs on the
+// pool, as Swift's does: a child is isolated to no actor, so a group a
+// main-actor task starts spreads over the workers rather than queueing on
+// the main thread behind the window. What in it is isolated to an actor
+// hops there itself.
 func _vertexAdoptInheritedPreference() async {
     let token = _vertexTaskPreferenceInherited()
-    if token == 0 { return }
+    if token == 0 {
+        await MainActor.hop(3)
+        return
+    }
     _ = _vertexTaskPreferenceSwap(token)
     await MainActor.hop(2)
 }
