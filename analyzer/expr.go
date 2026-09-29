@@ -2104,6 +2104,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		c.currAsync = (e.Sig != nil && e.Sig.Async.IsValid()) || awaitsIn(e.Stmts)
 		c.inAwait = false
 		defer func() { c.currFuncRet, c.currAsync, c.inAwait = prevRet, prevAsync, prevAwait }()
+		// A closure's local functions and types are declared up front,
+		// as a function body's are, so a statement can use one.
+		c.declareBlock(declsOf(e.Stmts), closureScope)
 		// A closure runs where it is made -- on the main thread inside
 		// @MainActor code, as Swift's closures inherit their context's
 		// isolation -- or where its attribute or the function type it is
