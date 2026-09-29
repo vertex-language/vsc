@@ -194,6 +194,9 @@ struct Executor {
   // context the run gives the thread for as long as the task runs, and
   // the proxy it runs for.
   struct Executor* foreignFor;
+  // Whether initExecutor has run. Not io: a platform with no readiness
+  // queue has a null one on an executor that is ready all the same.
+  bool ready;
 };
 
 inline constexpr int pollEvery = 64;
@@ -568,6 +571,15 @@ static void initExecutor(Executor* e, int index) {
   e->memberCount = 0;
   e->nextMember = 0;
   e->pool = nullptr;
+  e->ready = true;
+}
+
+// mainReady is the main executor, made ready the first time anything
+// asks for it: an async main, a host's wait, or the loop that runs it.
+static Executor* mainReady() {
+  if (!mainExecutor.ready)
+    initExecutor(&mainExecutor, 0);
+  return &mainExecutor;
 }
 
 static void runExecutor(Executor* e);
@@ -1022,7 +1034,7 @@ void vertex_task_wait_fd_at(AsyncContext* ctx, i32 fd, i32 events, i64 timeout) 
 // the host, or when vertex_task_io_descriptor becomes readable, which is
 // what a socket or pipe some task waits on becoming ready looks like.
 void vertex_task_set_idle_wait(void (*wait)(i64 timeoutNanos)) {
-  mainExecutor.idleWait = wait;
+  mainReady()->idleWait = wait;
 }
 
 // vertex_task_io_descriptor is a descriptor that is readable whenever a
@@ -1030,9 +1042,7 @@ void vertex_task_set_idle_wait(void (*wait)(i64 timeoutNanos)) {
 // has been handed to it from a worker, for a host wait to watch; -1 where
 // the platform has none.
 i32 vertex_task_io_descriptor(void) {
-  if (mainExecutor.io == nullptr)
-    initExecutor(&mainExecutor, 0);
-  return vertex_pal_io_descriptor(mainExecutor.io);
+  return vertex_pal_io_descriptor(mainReady()->io);
 }
 
 namespace vertex {
@@ -1434,9 +1444,7 @@ u64 vertex_task_preference_inherited(void) {
 // until one is due, ready, or handed over by a worker. It returns when the
 // main task has finished, or when no task is left anywhere.
 void vertex_task_run(void) {
-  Executor* e = &mainExecutor;
-  if (e->io == nullptr)
-    initExecutor(e, 0);
+  Executor* e = mainReady();
   vertex_pal_thread_set(e);
   startPool();
   bool mainDone = false;
@@ -1465,9 +1473,7 @@ void vertex_runtime_warm(void) {
 
 // vertex_async_main runs an async `main` as the first task.
 void vertex_async_main(const AsyncFunctionPointer* fp, void* self) {
-  if (mainExecutor.io == nullptr)
-    initExecutor(&mainExecutor, 0);
-  vertex_pal_thread_set(&mainExecutor);
+  vertex_pal_thread_set(mainReady());
   mainTask = spawn(&mainExecutor, fp, self);
   deliver(&mainExecutor, mainTask);
   vertex_task_run();
@@ -1479,9 +1485,7 @@ void vertex_async_main(const AsyncFunctionPointer* fp, void* self) {
 // The status arrives at vertex_task_done in the first argument register,
 // which is where an async function's single-word result goes.
 i32 vertex_async_main_status(const AsyncFunctionPointer* fp, void* self) {
-  if (mainExecutor.io == nullptr)
-    initExecutor(&mainExecutor, 0);
-  vertex_pal_thread_set(&mainExecutor);
+  vertex_pal_thread_set(mainReady());
   mainTask = spawn(&mainExecutor, fp, self);
   deliver(&mainExecutor, mainTask);
   vertex_task_run();

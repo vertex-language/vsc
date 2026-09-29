@@ -11,6 +11,7 @@ import (
 	amd64lower "github.com/vertex-language/ir/lower/amd64"
 	arm64lower "github.com/vertex-language/ir/lower/arm64"
 
+	amd64elf "github.com/vertex-language/amd64/obj/elf"
 	amd64pe "github.com/vertex-language/amd64/obj/pe"
 	arm64elf "github.com/vertex-language/arm64/obj/elf"
 	arm64macho "github.com/vertex-language/arm64/obj/macho"
@@ -44,6 +45,8 @@ func Object(m *ir.Module, opts Options) ([]byte, error) {
 		return amd64PE(m, opts)
 	case "aarch64/android":
 		return aarch64ELF(m)
+	case "x86_64/linux":
+		return amd64ELF(m)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrTarget, m.Use())
 }
@@ -93,6 +96,20 @@ func aarch64ELF(m *ir.Module) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// amd64ELF lowers for x86-64 under SysV, as Linux has it, and writes an
+// ELF relocatable object. Libcalls are unprefixed.
+func amd64ELF(m *ir.Module) ([]byte, error) {
+	o, err := amd64lower.Lower(m, amd64lower.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := amd64elf.Write(&buf, o); err != nil {
+		return nil, fmt.Errorf("build: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // amd64PE lowers for x86-64 and writes a COFF object file.
 func amd64PE(m *ir.Module, opts Options) ([]byte, error) {
 	o, err := amd64lower.Lower(m, amd64lower.Options{})
@@ -113,6 +130,8 @@ func Host() (ir.Target, bool) {
 		return ir.AArch64MacOS, true
 	case runtime.GOARCH == "amd64" && runtime.GOOS == "windows":
 		return ir.X86_64Windows, true
+	case runtime.GOARCH == "amd64" && runtime.GOOS == "linux":
+		return ir.X86_64Linux, true
 	}
 	return ir.Target{}, false
 }

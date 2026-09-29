@@ -41,7 +41,7 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 		callee: make(map[string]ir.Callee),
 		defs:   make(map[string]*ir.Func),
 	}
-	l.ms = l.out.Layout().ABI == "ms"
+	l.retWords = returnWords(l.out.Layout().ABI)
 	l.kernels = opts.Kernels
 	l.device = opts.Device
 	l.deviceKernels = opts.DeviceKernels
@@ -221,8 +221,10 @@ type lowerer struct {
 	bridgeRelease ir.Callee
 
 	runtimeFns map[string]ir.Callee
-	ms         bool
-	accessors  map[string]ir.Callee
+	// retWords is how many words the target's convention returns in
+	// registers. See returnWords.
+	retWords  int
+	accessors map[string]ir.Callee
 
 	retain  ir.Callee
 	release ir.Callee
@@ -1091,16 +1093,31 @@ func (l *lowerer) metadataAccessor(sym string) ir.Callee {
 	return fn
 }
 
-// splitResult reports whether a multi-register result must be returned via sret pointer under MS x64 ABI.
-func (l *lowerer) splitResult(t sil.Type) (int64, bool) {
-	if !l.ms {
-		return 0, false
+// returnWords is how many words a convention returns in registers: one
+// under Microsoft's, which returns RAX alone; two under SysV's, RAX and RDX;
+// and four under AAPCS64, X0 to X3, which is also what Swift's own
+// convention returns. A result of more words than that comes back through
+// storage the caller sets aside. See splitResult.
+func returnWords(abi string) int {
+	switch abi {
+	case "ms":
+		return 1
+	case "sysv":
+		return 2
 	}
+	return 4
+}
+
+// splitResult reports whether a result of several words is more than the
+// convention returns in registers, and so comes back through an sret
+// pointer, and how many bytes the caller sets aside for it. A result wide
+// enough to be indirect anyway is not this; see indirect.
+func (l *lowerer) splitResult(t sil.Type) (int64, bool) {
 	if _, wide := indirect(t); wide {
 		return 0, false
 	}
 	n, ok := directWords(t)
-	if !ok || n < 2 {
+	if !ok || n <= l.retWords {
 		return 0, false
 	}
 	return int64(n) * 8, true

@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -32,38 +31,58 @@ import (
 // given it unchanged.
 
 // outcome is how a process ended.
+//
+// crash is how the operating system says a process was stopped rather
+// than exited -- a signal on Unix, an exception code on Windows -- and is
+// empty for one that exited; see crashOf in corpus_unix_test.go and
+// corpus_windows_test.go. A trap is one of these whichever the host.
 type outcome struct {
 	status   int
-	signal   syscall.Signal
-	signaled bool
+	crash    string
 	timedOut bool
 	stdout   string
 }
+
+func (o outcome) crashed() bool { return o.crash != "" }
 
 func (o outcome) String() string {
 	switch {
 	case o.timedOut:
 		return "timed out after 10s"
-	case o.signaled:
-		return "killed by " + o.signal.String() + " (signal " + strconv.Itoa(int(o.signal)) + ")"
+	case o.crashed():
+		return o.crash
 	}
 	return "exit " + strconv.Itoa(o.status)
 }
 
+// oracleDefects is where swiftc on a host is demonstrably wrong, by
+// GOOS and rung, with why. A rung here is still built and run by both
+// compilers and must still end the same way; only its output is not held
+// to the oracle's, and the test says so rather than passing quietly.
+//
+// An entry needs a measurement that the oracle is wrong, not that vsc
+// disagrees with it: a disagreement is a bug in vsc by definition.
+var oracleDefects = map[string]string{
+	// swiftc lowers Float.addingProduct to fmaf, which it takes from the
+	// UCRT DLL, and that fmaf is not fused: fmaf(0.2, 0.3, 0.1) is
+	// 0.159999996 from ucrtbase.dll and 0.160000011 -- the product added
+	// and rounded once -- from the static libucrt.lib vsc links, and from
+	// swiftc on macOS. There is no static Swift runtime on Windows to
+	// build the oracle against the other CRT with.
+	"windows/283-adding-product": "the UCRT DLL's fmaf is not fused",
+}
+
+// The corpus runs wherever vsc has a backend for the machine it is on
+// and swiftc is there to answer: the oracle is swiftc built for the same
+// host, so a rung asks the same question on every platform.
 func TestCorpus(t *testing.T) {
-	if runtime.GOARCH != "arm64" || runtime.GOOS != "darwin" {
-		t.Skip("not on Apple Silicon; skipping the compile-and-run corpus")
-	}
-	if _, err := exec.LookPath("clang"); err != nil {
-		t.Skip("no clang on PATH")
+	target, ok := build.Host()
+	if !ok {
+		t.Skip("no backend for this machine")
 	}
 	swiftc, err := exec.LookPath("swiftc")
 	if err != nil {
 		t.Skip("no swiftc on PATH; there is no oracle to compare against")
-	}
-	target, ok := build.Host()
-	if !ok {
-		t.Skip("no backend for this machine")
 	}
 
 	files, err := filepath.Glob("../tests/*.swift")
@@ -73,20 +92,24 @@ func TestCorpus(t *testing.T) {
 	sort.Strings(files)
 
 	for _, file := range files {
-		t.Run(strings.TrimSuffix(filepath.Base(file), ".swift"), func(t *testing.T) {
+		name := strings.TrimSuffix(filepath.Base(file), ".swift")
+		t.Run(name, func(t *testing.T) {
 			src, err := os.ReadFile(file)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := runSwiftc(t, swiftc, src)
+			want := runSwiftc(t, swiftc, target, src)
 			got := runVsc(t, target, src)
 			if got.String() != want.String() {
 				t.Errorf("vsc's build ended with %s; swiftc's with %s", got, want)
 			}
+			if why, wrong := oracleDefects[runtime.GOOS+"/"+name]; wrong {
+				t.Skipf("output not compared: swiftc on %s is wrong here -- %s", runtime.GOOS, why)
+			}
 			// A program killed by a trap may lose what it buffered, and
 			// the two runtimes buffer differently, so output is compared
 			// where both ran to the end.
-			if !got.signaled && !want.signaled && got.stdout != want.stdout {
+			if !got.crashed() && !want.crashed() && got.stdout != want.stdout {
 				t.Errorf("output differs from swiftc's\n--- vsc ---\n%s\n--- swiftc ---\n%s", clip(got.stdout), clip(want.stdout))
 			}
 		})
@@ -112,37 +135,29 @@ func runVsc(t *testing.T, target ir.Target, src []byte) outcome {
 	if err != nil {
 		t.Fatalf("vsc: %v", err)
 	}
-	dir := t.TempDir()
-	objPath := filepath.Join(dir, "main.o")
-	if err := os.WriteFile(objPath, obj, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// The runtime alongside it: a program that makes a class calls the
-	// allocator, and the allocator is not in the program's own object.
-	rt, err := build.Runtime(target)
+	// Linked by vsc's own linker, as `vsc build` links it: the runtime
+	// comes along with the program, and no system toolchain is asked.
+	exe, err := build.Executable([]build.Input{{Name: "main.o", Data: obj}},
+		build.LinkOptions{Target: target})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("link: %v", err)
 	}
-	rtPath := filepath.Join(dir, "vertex_runtime.o")
-	if err := os.WriteFile(rtPath, rt.Data, 0o644); err != nil {
+	bin := vsc.ImageName(target, filepath.Join(t.TempDir(), "main"))
+	if err := os.WriteFile(bin, exe, 0o755); err != nil {
 		t.Fatal(err)
-	}
-	bin := filepath.Join(dir, "main")
-	if out, err := exec.Command("clang", "-o", bin, objPath, rtPath).CombinedOutput(); err != nil {
-		t.Fatalf("link: %v\n%s", err, out)
 	}
 	return run(t, bin)
 }
 
 // runSwiftc compiles the same program with the real compiler.
-func runSwiftc(t *testing.T, swiftc string, src []byte) outcome {
+func runSwiftc(t *testing.T, swiftc string, target ir.Target, src []byte) outcome {
 	t.Helper()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "main.swift")
 	if err := os.WriteFile(srcPath, src, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(dir, "oracle")
+	bin := vsc.ImageName(target, filepath.Join(dir, "oracle"))
 	// The module is main, as vsc's is: a type's qualified name has it.
 	cmd := exec.Command(swiftc, "-module-name", "main", "-o", bin, srcPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -173,9 +188,8 @@ func run(t *testing.T, bin string) outcome {
 			t.Fatalf("run %s: %v", bin, err)
 		}
 	}
-	ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
-	if ok && ws.Signaled() {
-		return outcome{signal: ws.Signal(), signaled: true, stdout: stdout.String()}
+	if crash, ok := crashOf(cmd.ProcessState); ok {
+		return outcome{crash: crash, stdout: stdout.String()}
 	}
 	return outcome{status: cmd.ProcessState.ExitCode(), stdout: stdout.String()}
 }

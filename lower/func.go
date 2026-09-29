@@ -180,15 +180,25 @@ func (c *fn) storageWalk(yield func(k storageKind, v *sil.Value, size, align int
 				}
 				continue
 			}
-			// A call that may fail and whose value is too wide for
-			// registers hands the value to its normal edge through
-			// storage set aside here, keyed by that edge's argument.
+			// A call that may fail and whose value comes back through
+			// memory -- too wide for registers, or several registers on
+			// a convention that returns one (see splitResult) -- hands
+			// the value to its normal edge through storage set aside
+			// here, keyed by that edge's argument.
 			if in.Op() == sil.TryApply {
 				for _, k := range in.Aux().Cases {
 					if k.Member != "normal" || len(k.Dest.Args()) != 1 {
 						continue
 					}
-					if err := wide(k.Dest.Args()[0]); err != nil {
+					a := k.Dest.Args()[0]
+					if n, split := c.l.splitResult(a.Type()); split && !seen[a] {
+						seen[a] = true
+						if err := yield(storageWide, a, n, storageAlign(a.Type())); err != nil {
+							return err
+						}
+						continue
+					}
+					if err := wide(a); err != nil {
 						return err
 					}
 				}

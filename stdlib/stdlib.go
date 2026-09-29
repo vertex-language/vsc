@@ -367,7 +367,7 @@ const taskEnterARM64 = "\n" +
 // asyncEntries are the runtime's functions that are entered the way an
 // async function is -- the context in X22 and arguments from X0 -- and
 // how many arguments each takes besides the context. Each needs a thunk;
-// see asyncThunk.
+// see asyncThunkARM64 and asyncThunkX64.
 //
 // All but the last are suspensions a program calls. vertex_task_done is
 // the other kind: nothing calls it, it is what a task's root context
@@ -401,9 +401,9 @@ func Suspends(symbol string) bool {
 	return false
 }
 
-// asyncThunk is the assembly for one of them: its arguments up one, the
-// context into the first, and on to the C behind it.
-func asyncThunk(prefix, name string, args int) string {
+// asyncThunkARM64 is the assembly for one of them: its arguments up one,
+// the context into the first, and on to the C behind it.
+func asyncThunkARM64(prefix, name string, args int) string {
 	label := prefix + name
 	out := "\t.text\n\t.globl " + label + "\n\t.p2align 2\n" + label + ":\n"
 	// Downwards, so that moving X2 into X3 cannot overwrite an argument
@@ -418,9 +418,6 @@ func asyncThunk(prefix, name string, args int) string {
 
 func asmNum(n int) string { return string(rune('0' + n)) }
 
-// TaskAsm is the runtime's assembly for a target, as a module-scope block
-// for the runtime's own object to carry, so that whatever links the
-// runtime has it.
 // GPUAsm is the gpu runtime unit's assembly: vertex_gpu_switch, which
 // moves the CPU device from one fiber's stack to another's (see
 // runtime/gpu/gpu.cpp). Where there is none, the unit runs a group with
@@ -482,10 +479,24 @@ const gpuSwitchARM64 = `
 	ret
 `
 
+// TaskAsm is the runtime's assembly for a target, as a module-scope block
+// for the runtime's own object to carry, so that whatever links the
+// runtime has it.
 func TaskAsm(target string) (string, bool) {
-	if !strings.HasPrefix(target, "arm64-") && !strings.HasPrefix(target, "aarch64-") {
-		return "", false
+	switch {
+	case strings.HasPrefix(target, "arm64-") || strings.HasPrefix(target, "aarch64-"):
+		return taskAsmARM64(target), true
+	case target == "x86_64-windows":
+		return taskAsmX64Windows(), true
+	case target == "x86_64-linux":
+		return taskAsmX64SysV(), true
 	}
+	return "", false
+}
+
+// taskAsmARM64 is TaskAsm for AArch64, under AAPCS64 with Swift's
+// registers laid over it.
+func taskAsmARM64(target string) string {
 	prefix := ""
 	if strings.HasSuffix(target, "-macos") {
 		prefix = "_"
@@ -499,15 +510,19 @@ func TaskAsm(target string) (string, bool) {
 	static2 := prefix + "vertex_witness_call_static2"
 	out += "\t.globl " + static2 + "\n\t.p2align 2\n" + static2 + ":" + witnessCallStatic2ARM64
 	for _, p := range asyncEntries {
-		out += asyncThunk(prefix, p.name, p.args)
+		out += asyncThunkARM64(prefix, p.name, p.args)
 	}
 	if strings.HasSuffix(target, "-android") {
-		// A zero record, so that every image has a vertex_proto for the
-		// linker to bracket: see runtime/platform/android.h.
-		out += "\t.section vertex_proto,\"aw\"\n\t.p2align 2\n\t.word 0\n\t.text\n"
+		out += elfConformanceZero
 	}
-	return out, true
+	return out
 }
+
+// elfConformanceZero is a zero record in vertex_proto, so that every ELF
+// image has the section for the linker to bracket with __start_vertex_proto
+// and __stop_vertex_proto -- which it defines only for a section that
+// exists. A zero record is skipped. See runtime/platform/linux_kernel.h.
+const elfConformanceZero = "\t.section vertex_proto,\"aw\"\n\t.p2align 2\n\t.long 0\n\t.text\n"
 
 // RuntimeUnit is the file of Runtime to compile for a target, named the
 // way the family names targets: arch-os.
@@ -524,6 +539,8 @@ func RuntimeUnit(target string) (string, bool) {
 		return "windows.cpp", true
 	case strings.HasSuffix(target, "-android"):
 		return "android.cpp", true
+	case strings.HasSuffix(target, "-linux"):
+		return "linux.cpp", true
 	}
 	return "", false
 }

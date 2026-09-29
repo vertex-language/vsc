@@ -3,6 +3,7 @@ package lower
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -2188,7 +2189,23 @@ func (c *fn) copyAddr(in *sil.Inst) error {
 	if !ok {
 		return c.fail(ErrType, in.Op(), "a value with no size")
 	}
-	c.b.MemCpy(dst, src, c.b.I64.Const(size))
+	// One existential into another of fewer protocols -- `any P` into
+	// `Any`, `any P & Q` into `any Q` -- is the value and its metadata,
+	// which are laid out the same in both, and of the source's tables the
+	// ones the destination names, in its order. The source's size would
+	// write its remaining tables past the end of a destination that has
+	// no room for them.
+	if tables, erase, err := c.existentialErasure(in); err != nil {
+		return err
+	} else if erase {
+		c.b.MemCpy(dst, src, c.b.I64.Const(existentialWitness))
+		for i, from := range tables {
+			table := c.b.Ptr.Load(c.fieldAddr(src, existentialWitness+int64(from)*8))
+			c.b.Ptr.Store(table, c.fieldAddr(dst, existentialWitness+int64(i)*8))
+		}
+	} else {
+		c.b.MemCpy(dst, src, c.b.I64.Const(size))
+	}
 	// An existential copied is a second owner of what it holds: the box a
 	// wide value is in is retained, and an inline value is copied through
 	// its witness, which counts whatever it holds.
@@ -2225,6 +2242,45 @@ func (c *fn) copyAddr(in *sil.Inst) error {
 		c.b = done
 	}
 	return nil
+}
+
+// existentialErasure reports whether a copy_addr is from one existential
+// into another that names different protocols, and for each of the
+// destination's protocols, which of the source's tables is its.
+//
+// Both are the opaque layout -- a three-word buffer, the metadata, then a
+// table per protocol -- which a class-bound existential is not; a copy
+// between two of those, or between two of one type, is not an erasure.
+// A destination protocol the source has no table for would need the
+// table found some other way, and is refused rather than left unfilled.
+func (c *fn) existentialErasure(in *sil.Inst) ([]int, bool, error) {
+	from, to := in.Args()[0].Type().Object(), in.Args()[1].Type().Object()
+	fromBytes, fromEx := existentialBytes(from)
+	toBytes, toEx := existentialBytes(to)
+	if !fromEx || !toEx {
+		return nil, false, nil
+	}
+	fromProtos, ok1 := protocolsOf(from)
+	toProtos, ok2 := protocolsOf(to)
+	if !ok1 || !ok2 || slices.Equal(fromProtos, toProtos) {
+		return nil, false, nil
+	}
+	opaque := func(bytes int64, protos []string) bool {
+		return bytes == existentialWitness+int64(len(protos))*8
+	}
+	if !opaque(fromBytes, fromProtos) || !opaque(toBytes, toProtos) {
+		return nil, false, nil
+	}
+	tables := make([]int, len(toProtos))
+	for i, name := range toProtos {
+		at := slices.Index(fromProtos, name)
+		if at < 0 {
+			return nil, false, c.fail(ErrUnsupported, in.Op(),
+				"converting "+from.String()+" to "+to.String()+" needs a table for "+name+" the source does not carry")
+		}
+		tables[i] = at
+	}
+	return tables, true, nil
 }
 
 // addressOf is where a value lives, whether it arrived in a register
@@ -3103,15 +3159,20 @@ func (c *fn) tryApply(in *sil.Inst) error {
 		}
 		through, throughContext = code, context
 	}
-	// A value too wide for registers comes back through storage set
-	// aside for it, whose address goes first, as it does for an apply.
+	// A value that comes back through memory -- too wide for registers,
+	// or several registers on a convention that returns one -- comes back
+	// through storage set aside for it, whose address goes first, as it
+	// does for an apply. See outResult.
 	var out ir.Ptr
 	var outArg *sil.Value
 	for _, k := range in.Aux().Cases {
 		if k.Member != "normal" || len(k.Dest.Args()) != 1 {
 			continue
 		}
-		if _, wide := indirect(k.Dest.Args()[0].Type()); wide {
+		a := k.Dest.Args()[0]
+		_, wide := indirect(a.Type())
+		_, split := c.l.splitResult(a.Type())
+		if wide || split {
 			slot, ok := c.wide[k.Dest.Args()[0]]
 			if !ok {
 				return c.fail(ErrIR, in.Op(), "no slot reserved for a wide result")

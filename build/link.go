@@ -96,7 +96,9 @@ func Executable(objs []Input, opts LinkOptions) ([]byte, error) {
 	case "x86_64/windows":
 		return amd64PEExe(objs, opts)
 	case "aarch64/android":
-		return aarch64AndroidELF(objs, opts)
+		return elfExe(android, objs, opts)
+	case "x86_64/linux":
+		return elfExe(linux, objs, opts)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrTarget, opts.Target.Use())
 }

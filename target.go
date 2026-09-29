@@ -21,6 +21,7 @@ type target struct {
 var targets = []target{
 	{name: "aarch64-android", ir: ir.AArch64Android, prefix: ""},
 	{name: "aarch64-macos", ir: ir.AArch64MacOS, prefix: "_"},
+	{name: "x86_64-linux", ir: ir.X86_64Linux, prefix: ""},
 	{name: "x86_64-windows", ir: ir.X86_64Windows, prefix: "", suffix: ".exe"},
 }
 
@@ -51,6 +52,8 @@ func HostName() string {
 		return "aarch64-macos"
 	case runtime.GOARCH == "amd64" && runtime.GOOS == "windows":
 		return "x86_64-windows"
+	case runtime.GOARCH == "amd64" && runtime.GOOS == "linux":
+		return "x86_64-linux"
 	}
 	return ""
 }

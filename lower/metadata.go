@@ -460,7 +460,7 @@ func (l *lowerer) metadataAccessorFor(name string, record *ir.Global) {
 	// The state word is left off where the convention returns one
 	// register. Nothing this compiler emits reads it; a Swift library
 	// calling the accessor would, and on Windows there is none.
-	if l.ms {
+	if l.retWords < 2 {
 		f.Signature().Ret(ir.TypePtr)
 		b.Return(meta)
 		return
@@ -521,10 +521,21 @@ const ConformanceSection = "__TEXT,__vertex_proto,regular,no_dead_strip"
 // __stop_vertex_proto, which is how the runtime finds it.
 const ELFConformanceSection = "vertex_proto"
 
+// COFFConformanceSection is ConformanceSection on Windows: the middle of a
+// grouped section. The linker orders the contributions to .vproto by what
+// follows the $, so the runtime's markers in .vproto$A and .vproto$C
+// bracket every record from every object, which is how the runtime finds
+// them -- the arrangement Swift's own .sw5prt$A/$B/$C is. See
+// stdlib/runtime/platform/windows.h.
+const COFFConformanceSection = ".vproto$B"
+
 // conformanceSection is the section records go in for the module's target.
 func (l *lowerer) conformanceSection() string {
-	if strings.HasSuffix(l.out.Use(), "/android") || strings.HasSuffix(l.out.Use(), "/linux") {
+	switch use := l.out.Use(); {
+	case strings.HasSuffix(use, "/android") || strings.HasSuffix(use, "/linux"):
 		return ELFConformanceSection
+	case strings.HasSuffix(use, "/windows"):
+		return COFFConformanceSection
 	}
 	return ConformanceSection
 }

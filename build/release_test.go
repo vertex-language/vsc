@@ -2,10 +2,7 @@ package build_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"syscall"
 	"testing"
 
 	vsc "github.com/vertex-language/vsc"
@@ -17,8 +14,8 @@ import (
 // leaked its String and its Array would hold hundreds of megabytes by the
 // end of this loop; one that releases them stays within a few.
 func TestObjectsReleaseWhatTheyOwn(t *testing.T) {
-	if _, ok := build.Host(); !ok || runtime.GOOS != "darwin" {
-		t.Skip("peak memory is read the way macOS reports it")
+	if _, ok := build.Host(); !ok {
+		t.Skip("no backend for this machine")
 	}
 	const program = `
 struct Wide { var first: String; var second: String; var n: Int }
@@ -59,8 +56,8 @@ func main() -> Int32 {
 // storage returns the storage it grew out of. Leaking either holds
 // hundreds of megabytes by the end of this loop.
 func TestCollectionVariablesReleaseWhatTheyHold(t *testing.T) {
-	if _, ok := build.Host(); !ok || runtime.GOOS != "darwin" {
-		t.Skip("peak memory is read the way macOS reports it")
+	if _, ok := build.Host(); !ok {
+		t.Skip("no backend for this machine")
 	}
 	const program = `
 func main() -> Int32 {
@@ -117,19 +114,13 @@ func peakResident(t *testing.T, program string) int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "program")
+	path := vsc.ImageName(target, filepath.Join(t.TempDir(), "program"))
 	if err := os.WriteFile(path, exe, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(path)
-	_ = cmd.Run()
-	if code := cmd.ProcessState.ExitCode(); code != 42 {
+	peak, code := runMeasured(t, path)
+	if code != 42 {
 		t.Fatalf("exit status %d, want 42", code)
 	}
-	usage, ok := cmd.ProcessState.SysUsage().(*syscall.Rusage)
-	if !ok {
-		t.Skip("no resource usage for the child")
-	}
-	// ru_maxrss is bytes on macOS.
-	return usage.Maxrss
+	return peak
 }

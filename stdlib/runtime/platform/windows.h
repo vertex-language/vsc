@@ -20,12 +20,24 @@ void* vertex_pal_alloc(vertex::usize size, vertex::usize) { return malloc(size);
 void  vertex_pal_free(void* p, vertex::usize, vertex::usize) { free(p); }
 void  vertex_pal_copy(void* dest, const void* src, vertex::usize count) { memcpy(dest, src, count); }
 void  vertex_pal_fill(void* dest, vertex::u8 byte, vertex::usize count) { memset(dest, byte, count); }
-// No conformance records are listed on Windows yet: a conformance is
-// not found at run time there, and a value is described by reflection.
-vertex::u32 vertex_pal_image_count(void) { return 0; }
-const vertex::i32* vertex_pal_conformance_records(vertex::u32, vertex::usize* bytes) {
+// Conformance records are in the image's .vproto section, between the two
+// markers the runtime's own object puts at either end of it: the linker
+// sorts .vproto$A, every module's .vproto$B and .vproto$C in that order
+// (see stdlib.TaskAsm). The start marker is itself a zero record, and a
+// zero record is skipped. A DLL and the program that loads it each find
+// their own.
+extern const vertex::i32 vertex_proto_start[];
+extern const vertex::i32 vertex_proto_stop[];
+
+vertex::u32 vertex_pal_image_count(void) { return 1; }
+
+const vertex::i32* vertex_pal_conformance_records(vertex::u32 image, vertex::usize* bytes) {
   *bytes = 0;
-  return nullptr;
+  if (image != 0)
+    return nullptr;
+  *bytes = static_cast<vertex::usize>(reinterpret_cast<const char*>(vertex_proto_stop) -
+                                      reinterpret_cast<const char*>(vertex_proto_start));
+  return vertex_proto_start;
 }
 
 void  vertex_pal_abort(void) { abort(); }

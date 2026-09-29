@@ -114,7 +114,9 @@ func DefaultLibraries(target string, hosted bool) []string {
 	if !hosted || !IsWindows(target) {
 		return nil
 	}
-	return []string{"libucrt", "libvcruntime", "libcmt", "kernel32"}
+	// ws2_32 is Winsock, which the runtime's task executor waits on sockets
+	// through: WSAPoll. See stdlib/runtime/platform/windows.h.
+	return []string{"libucrt", "libvcruntime", "libcmt", "kernel32", "ws2_32"}
 }
 
 // LibraryNames returns the file name variants tried for a given library name on target.
