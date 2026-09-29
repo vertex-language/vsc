@@ -12,6 +12,11 @@ func lowerType(t types.Type) sil.Type {
 	if t == nil {
 		return sil.Object(types.Typ[types.Void])
 	}
+	// A value whose type is written as a bare protocol -- `-> Error` --
+	// is the existential, as `any Error` is.
+	if p, ok := t.(*types.Protocol); ok {
+		return sil.Object(&types.Existential{Protocols: []*types.Protocol{p}})
+	}
 	return sil.Object(t)
 }
 
