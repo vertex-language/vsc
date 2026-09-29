@@ -92,8 +92,11 @@ func Lookup(path string) (Module, bool) {
 	return Module{}, false
 }
 
-// subdir is the part of an import path below the repository, or "" when
-// the path is the whole of it.
+// Subdir is the part of an import path below the repository, or "" when
+// the path is the whole of it: tcp in net/tcp, cmd/tool in
+// github.com/you/tool/cmd/tool.
+func (m Module) Subdir() string { return m.subdir() }
+
 func (m Module) subdir() string {
 	if m.Stdlib {
 		_, sub, _ := StdlibSlug(m.Path)

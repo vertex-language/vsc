@@ -516,3 +516,104 @@ func main() -> int32 { return int32(calc.raw()) }
 		t.Errorf("a C++ export of a mixed folder was callable from another package (exit %d):\n%s", code, stderr)
 	}
 }
+
+// TestInstall: a library checkout installs every program in its cmd/, each
+// named for its folder and runnable; a name alone installs one; the
+// library itself is not a program.
+func TestInstall(t *testing.T) {
+	hosted(t)
+	root := filepath.Join(t.TempDir(), "tools")
+	writeTree(t, root, map[string]string{
+		"vs.mod":   "module github.com/you/tools\n",
+		"tools.vs": "package tools\n\npublic func Answer() -> int32 { return 42 }\n",
+		"cmd/answer/main.vs": `package main
+
+import "github.com/you/tools"
+
+func main() -> int32 { return tools.Answer() }
+`,
+		"cmd/seven/main.vs": "func main() -> int32 { return 7 }\n",
+	})
+	bin := filepath.Join(t.TempDir(), "bin")
+	t.Setenv("VERTEXBIN", bin)
+	t.Chdir(root)
+	code, _, stderr := run(t, "install", "-offline")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	for name, want := range map[string]int{"answer": 42, "seven": 7} {
+		cmd := exec.Command(filepath.Join(bin, name))
+		_ = cmd.Run()
+		if cmd.ProcessState == nil {
+			t.Fatalf("%s was not installed:\n%s", name, stderr)
+		}
+		if got := cmd.ProcessState.ExitCode(); got != want {
+			t.Errorf("%s exit status = %d, want %d", name, got, want)
+		}
+	}
+
+	os.RemoveAll(bin)
+	if code, _, stderr = run(t, "install", "-offline", "seven"); code != 0 {
+		t.Fatalf("install seven: exit = %d; stderr:\n%s", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(bin, "answer")); err == nil {
+		t.Error("install seven installed answer too")
+	}
+
+	os.RemoveAll(filepath.Join(root, "cmd"))
+	code, _, stderr = run(t, "install", "-offline")
+	if code == 0 || !strings.Contains(stderr, "a library") {
+		t.Errorf("a library installed (exit %d):\n%s", code, stderr)
+	}
+}
+
+// TestDoc: vsc doc writes the package's public declarations with their
+// comments, as Markdown by default and HTML for an .html output.
+func TestDoc(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "shapes")
+	writeTree(t, dir, map[string]string{
+		"shapes.vs": `// Package shapes measures shapes.
+package shapes
+
+/// A circle, by its radius.
+public struct Circle {
+    public let Radius: float64
+
+    /// The area inside it.
+    public func Area() -> float64 { return 3.14159 * Radius * Radius }
+
+    func secret() {}
+}
+
+func hidden() {}
+`,
+	})
+	code, stdout, stderr := run(t, "doc", dir)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr:\n%s", code, stderr)
+	}
+	for _, want := range []string{"# package shapes", "Package shapes measures shapes.",
+		"public struct Circle\n", "A circle, by its radius.", "public func Area() -> float64\n", "The area inside it."} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("missing %q in:\n%s", want, stdout)
+		}
+	}
+	for _, not := range []string{"secret", "hidden", "3.14159"} {
+		if strings.Contains(stdout, not) {
+			t.Errorf("%q is not public, or is a body, and was written:\n%s", not, stdout)
+		}
+	}
+
+	out := filepath.Join(t.TempDir(), "shapes.html")
+	if code, _, stderr := run(t, "doc", "-o", out, dir); code != 0 {
+		t.Fatalf("html: exit = %d; stderr:\n%s", code, stderr)
+	}
+	page, _ := os.ReadFile(out)
+	if !strings.HasPrefix(string(page), "<!doctype html>") || !strings.Contains(string(page), `id="struct-Circle"`) {
+		t.Errorf("not an HTML page of the package:\n%s", page)
+	}
+
+	if code, stdout, _ := run(t, "doc", "-all", dir); code != 0 || !strings.Contains(stdout, "func secret()") {
+		t.Errorf("-all left out an internal declaration (exit %d):\n%s", code, stdout)
+	}
+}

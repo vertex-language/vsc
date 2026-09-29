@@ -20,7 +20,9 @@ Usage:
 
     vsc build  [flags] [files...]  compile and link; with --emit, stop earlier
     vsc run    [flags] [files...]  build to a temporary path and run it
+    vsc install [flags] [programs...]  build programs into the bin directory
     vsc check  [flags] [files...]  parse and typecheck; print diagnostics
+    vsc doc    [flags] [package]   write a package's documentation (md or html)
     vsc ast    [flags] [file]      parse and dump the syntax tree
     vsc tokens [flags] [file]      dump the token stream
     vsc env    [flags]             print the resolved target and SDK
@@ -52,6 +54,31 @@ Flags for build and run:
     -freestanding   link no platform libraries
     --package-path d  build the package at d (default: this directory, when it has
                       a Package.swift); "vsc run [product]" runs one of its programs
+
+Installing programs:
+
+    vsc install                 every program in this checkout's cmd/
+    vsc install stopwatch       this checkout's cmd/stopwatch
+    vsc install ./tools/gen     the program in a folder
+    vsc install github.com/you/tool/cmd/tool@v1.2
+                                fetched, built, and installed
+
+A program lands in VERTEXBIN, or ~/.vertex/bin, named for its folder;
+one built with -target for another machine lands in a folder of the
+target's name there. A folder with no .vs files of its own but a cmd/
+folder stands for every program in cmd/.
+
+Documenting packages:
+
+    vsc doc                     this folder's package, as Markdown
+    vsc doc -o time.html time   the time package, as an HTML page
+    -format md|html  what to write (default: -o's extension, else md)
+    -o file          where to write it (default: standard output)
+    -all             every declaration, not only public and open ones
+
+A declaration's documentation is the /// (or //) comment above it; the
+package's is the comment above its package clause, which begins
+"Package name".
 
 Imported packages:
 
@@ -110,6 +137,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return cmdTokens(rest, stdout, stderr)
 	case "__compile-package":
 		return cmdCompilePackage(rest, stderr)
+	case "install":
+		return cmdInstall(rest, stdout, stderr)
+	case "doc":
+		return cmdDoc(rest, stdout, stderr)
 	case "env":
 		return cmdEnv(rest, stdout, stderr)
 	case "help", "-h", "--help", "-help":
