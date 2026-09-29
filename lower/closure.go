@@ -443,6 +443,39 @@ func (l *lowerer) forwarder(name string, body *sil.Func, sig *types.Signature, c
 			return nil, err
 		}
 	}
+	// An async value's arguments past the registers came in its
+	// context, at the end of a frame of the body's size: the forwarder's
+	// record gives the body's. See asyncargs.go and forwarderRecord.
+	var asyncCtx ir.Ptr
+	asyncSize := l.asyncSizes[name]
+	if sig.Async {
+		fullIn, err := l.fullFuncSig(sig)
+		if err != nil {
+			return nil, err
+		}
+		keep := l.asyncKeep(fullIn.Params())
+		ctxAt, r := -1, 0
+		for i, p := range fullIn.Params() {
+			if !keep[i] {
+				continue
+			}
+			for _, a := range p.Attrs {
+				if a.IsSwiftAsync() {
+					ctxAt = r
+				}
+			}
+			r++
+		}
+		if ctxAt >= 0 && ctxAt < len(params) {
+			asyncCtx, _ = params[ctxAt].(ir.Ptr)
+		}
+		if params, err = asyncParams(f.Entry(), fullIn, keep, params, ctxAt, asyncSize); err != nil {
+			return nil, err
+		}
+		if bodySig, err = l.fullSignature(name, body.Type()); err != nil {
+			return nil, err
+		}
+	}
 	if len(params) == 0 {
 		return nil, fmt.Errorf("a function value with no context parameter")
 	}
@@ -503,7 +536,12 @@ func (l *lowerer) forwarder(name string, body *sil.Func, sig *types.Signature, c
 	// the one it passes on -- the forwarder is not a frame in the chain,
 	// it is the step that reads the captures out of the closure's.
 	if sig.Async {
-		b.TailCall(callee, args...)
+		keep := l.asyncKeep(bodySig.Params())
+		regs, err := storeOverflow(b, keep, args, asyncCtx, b.I64.Const(asyncSize))
+		if err != nil {
+			return nil, err
+		}
+		b.TailCall(callee, regs...)
 		return f, nil
 	}
 	got := b.Call(callee, args...)

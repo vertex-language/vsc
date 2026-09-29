@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`327` in the order the
+A ladder: one small thing per file, numbered `001`–`367` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -50,6 +50,7 @@ around it.
 | 270 | closures whose parameter is a tuple of mixed registers, `(Int, Double)`: called, and mapped, filtered and reduced over an array of them |
 | 271 | a generic class's instance as `AnyObject`, stored, tested with `is` and cast back with `as?` |
 | 272 | pointers made writable with `init(mutating:)`, typed and raw |
+| 331–367 | gaps `vsc_TODO.md` recorded, one rung each: generic initializers, in place `dict[k, default:]` appends and element stores, extension methods on existentials, synthesized `Comparable`, implicit class `init()`, `nonmutating set` through a `let`, type parameters of one name, `Task(priority:)`, `async let` under an executor preference, temporary and global lifetimes, optional ternaries, local functions in a `switch` case, label overloads, mutually recursive local functions, thrown structs and payload enums, unsigned conversions and shifts, `Substring.utf8`, tuple patterns over payload enums, inherited members from a subclass, escaping closures in closures, `ObjectIdentifier`, `String.removeFirst`/`removeLast`, nested empty dictionary literals, an overload chosen by function type, generic method overrides, a type nested in an extension, stored properties through a class-constrained `T`, `AnyObject?` downcasts |
 
 ## Rules
 

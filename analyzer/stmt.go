@@ -230,6 +230,10 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 					}
 				}
 				caseInits = append(caseInits, c.branch(func() {
+					// Its local functions and types are declared up front,
+					// as a block's are, so a statement of the case can use
+					// one declared in it.
+					c.declareBlock(declsOf(cs.Stmts), caseScope)
 					for _, st := range cs.Stmts {
 						c.checkStmt(st, caseScope)
 					}
@@ -883,7 +887,13 @@ func (c *checker) checkMember(mem ast.Node, typeScope *Scope, self types.Type) {
 		if m.Sig != nil {
 			c.currFuncName = c.declName("init", m.Sig.Params, false)
 		}
-		c.checkBodyWithParams(m, m.Sig, m.Body, typeScope, result)
+		// Its own generic parameters, if it has any, are in scope in its
+		// body as in its signature.
+		scope := typeScope
+		if generic := c.initScopes[m]; generic != nil && m.Generics != nil {
+			scope = generic
+		}
+		c.checkBodyWithParams(m, m.Sig, m.Body, scope, result)
 		c.inInit, c.currFuncName = prevInit, prevName
 
 	case *ast.DeinitDecl:
@@ -1555,6 +1565,12 @@ func (c *checker) bodyThrown(body *ast.CodeBlock) types.Type {
 // starts, `let a = Task { await work(1) }`, in place, and reports whether
 // it did. Each later read of a is the task's value, awaited.
 func (c *checker) rewriteAsyncLet(d *ast.VarDecl) bool {
+	// A body checked twice -- a closure whose type is inferred from it,
+	// as withTaskExecutorPreference's is -- meets the declaration already
+	// rewritten, without the modifier that said what it was.
+	if c.asyncLetDecls[d] {
+		return true
+	}
 	at := -1
 	for i, m := range d.Mods {
 		if m != nil && m.Name != nil && m.Name.Text(c.file) == "async" {
@@ -1565,6 +1581,10 @@ func (c *checker) rewriteAsyncLet(d *ast.VarDecl) bool {
 		return false
 	}
 	d.Mods = append(d.Mods[:at:at], d.Mods[at+1:]...)
+	if c.asyncLetDecls == nil {
+		c.asyncLetDecls = map[*ast.VarDecl]bool{}
+	}
+	c.asyncLetDecls[d] = true
 	if c.asyncLets == nil {
 		c.asyncLets = map[*VarSymbol]bool{}
 		c.asyncLetReads = map[*ast.IdentExpr]bool{}
@@ -1579,8 +1599,16 @@ func (c *checker) rewriteAsyncLet(d *ast.VarDecl) bool {
 		if _, awaited := x.(*ast.AwaitExpr); !awaited {
 			body = &ast.AwaitExpr{Span: span, Await: x.Pos(), X: x}
 		}
+		// A child task, as Swift's async let is: it takes up the executor
+		// preference of the task it is written in before anything else,
+		// as a task group's child does (see TaskGroup.addTask).
+		adopt := &ast.CallExpr{Span: span,
+			Fun: &ast.IdentExpr{Span: span, Name: &ast.Ident{Span: span, Synth: "_vertexAdoptInheritedPreference"}}}
 		cl := &ast.ClosureExpr{Span: span, Lbrace: x.Pos(), Rbrace: x.End(),
-			Stmts: []ast.Stmt{&ast.ExprStmt{Span: span, X: body}}}
+			Stmts: []ast.Stmt{
+				&ast.ExprStmt{Span: span, X: &ast.AwaitExpr{Span: span, Await: x.Pos(), X: adopt}},
+				&ast.ReturnStmt{Span: span, Return: x.Pos(), X: body},
+			}}
 		task := &ast.IdentExpr{Span: span, Name: &ast.Ident{Span: span, Synth: "Task"}}
 		b.Value = &ast.CallExpr{Span: span, Fun: task,
 			Args:     &ast.CallArgs{Span: span, Args: []*ast.CallArg{{Span: span, X: cl}}},
@@ -1655,6 +1683,15 @@ func (c *checker) shareCaseBindings(pat ast.Pattern, subjectType types.Type, cas
 		c.info.Defs[p.Name] = first
 		return true
 	})
+	// And every name the first binds is bound here too.
+	for _, sym := range caseScope.Symbols() {
+		if _, isVar := sym.(*VarSymbol); !isVar {
+			continue
+		}
+		if own.LookupLocal(sym.Name()) == nil {
+			c.errorf(pat.Pos(), "'%s' must be bound in every pattern", sym.Name())
+		}
+	}
 }
 
 // declareBlock declares what a block of statements declares, visible

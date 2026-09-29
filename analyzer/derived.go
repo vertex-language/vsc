@@ -64,6 +64,7 @@ func (c *checker) deriveConformances(files []*ast.File, scope *Scope) *ast.File 
 	equatable, _ := c.coreProtocol("Equatable")
 	hashable, _ := c.coreProtocol("Hashable")
 	caseIterable, _ := c.coreProtocol("CaseIterable")
+	comparable, _ := c.coreProtocol("Comparable")
 	if equatable == nil || hashable == nil {
 		return nil
 	}
@@ -120,6 +121,12 @@ func (c *checker) deriveConformances(files []*ast.File, scope *Scope) *ast.File 
 		if isHashable && !c.hasHash(t.typ) {
 			c.deriveHashable(&body, t)
 		}
+		// An enum of cases alone, with no raw values, that is Comparable
+		// orders its cases as they are declared (SE-0266).
+		if comparable != nil && t.isEnum && !t.payload && len(t.cases) > 0 && !hasRawType(t.typ) &&
+			c.conformsTo(t.typ, comparable) && !c.hasLess(t.typ, scope) {
+			c.deriveComparable(&body, t)
+		}
 		if caseIterable != nil && t.isEnum && !t.payload && c.conformsTo(t.typ, caseIterable) && !c.hasStatic(t.typ, "allCases") {
 			c.deriveCaseIterable(&body, t)
 		}
@@ -161,6 +168,21 @@ func (c *checker) derivables(d ast.Decl, outer string, found []*derivable) []*de
 		name, body, mods, generics = x.Name, x.Body, x.Mods, x.Generics
 	case *ast.EnumDecl:
 		name, body, mods, generics, isEnum = x.Name, x.Body, x.Mods, x.Generics, true
+	case *ast.ExtensionDecl:
+		// A type declared inside an extension is the extended type's, and
+		// derives as one declared in its body does.
+		if x.Body != nil && x.Type != nil {
+			path := join(outer, string(c.file.Slice(x.Type.Pos(), x.Type.End())))
+			for _, m := range x.Body.Members {
+				if md, ok := m.(ast.Decl); ok {
+					switch md.(type) {
+					case *ast.StructDecl, *ast.EnumDecl, *ast.ClassDecl:
+						found = c.derivables(md, path, found)
+					}
+				}
+			}
+		}
+		return found
 	case *ast.ClassDecl:
 		// A class derives nothing, but a type nested in one may.
 		if x.Name != nil && x.Body != nil {
@@ -312,6 +334,48 @@ func (c *checker) hasEquals(t types.Type, scope *Scope) bool {
 		}
 	}
 	if fn, ok := scope.LookupLocal("==").(*FuncSymbol); ok {
+		for _, o := range fn.Overloads() {
+			sig := o.Signature()
+			if sig != nil && len(sig.Params) == 2 && types.Identical(sig.Params[0].Type, t) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// deriveComparable writes the `<` of an enum of cases alone: a case is less
+// than those declared after it.
+func (c *checker) deriveComparable(body *strings.Builder, t *derivable) {
+	access := accessOf(t)
+	self := selfOf(t)
+	fmt.Fprintf(body, "    %sstatic func < (a: %s, b: %s) -> Bool {\n", access, self, self)
+	fmt.Fprintf(body, "        return %s.%s(a) < %s.%s(b)\n    }\n", self, DerivedEnumOrder, self, DerivedEnumOrder)
+	fmt.Fprintf(body, "    static func %s(_ x: %s) -> Int {\n        switch x {\n", DerivedEnumOrder, self)
+	for i, k := range t.cases {
+		fmt.Fprintf(body, "        case .%s: return %d\n", k.name, i)
+	}
+	body.WriteString("        }\n    }\n")
+}
+
+// DerivedEnumOrder is the name of the function that says where a case of an
+// enum with a derived `<` is declared among its cases.
+const DerivedEnumOrder = "__derived_enum_order"
+
+// hasRawType reports whether an enum has raw values.
+func hasRawType(t types.Type) bool {
+	en, ok := t.Underlying().(*types.Enum)
+	return ok && en.RawType != nil
+}
+
+// hasLess reports whether t has a `<` of its own, as hasEquals does `==`.
+func (c *checker) hasLess(t types.Type, scope *Scope) bool {
+	for _, m := range methodsOf(t) {
+		if m.IsStatic && m.Sig != nil && m.Name == "<" && len(m.Sig.Params) == 2 && types.Identical(m.Sig.Params[0].Type, t) {
+			return true
+		}
+	}
+	if fn, ok := scope.LookupLocal("<").(*FuncSymbol); ok {
 		for _, o := range fn.Overloads() {
 			sig := o.Signature()
 			if sig != nil && len(sig.Params) == 2 && types.Identical(sig.Params[0].Type, t) {

@@ -261,11 +261,18 @@ public final class _Launch {
     var wy = 0
     var wz = 0
 
+    /// _held is the memory of every buffer the launch was given, kept
+    /// while the launch is: an argument that is a temporary --
+    /// `k.Launch(try await d.Upload(xs), ...)` -- ends with the call that
+    /// passed it, before _run, and the launch has only its handle.
+    var _held: [_Memory] = []
+
     public init(_kernel: UnsafeRawPointer) {
         _h = _launchBegin(_kernel)
     }
 
     public func _buffer<T>(_ b: Buffer<T>) -> _Launch {
+        _held.append(b._memory)
         _launchBuffer(_h, b._memory._h, b._offset * MemoryLayout<T>.stride)
         _launchI64(_h, b.count)
         return self

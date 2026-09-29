@@ -171,7 +171,13 @@ func (g *gen) scriptVarDecl(d *ast.VarDecl) {
 		if !ok || !v.script || v.binding != b {
 			one := *d
 			one.Bindings = []*ast.PatternBinding{b}
+			// Still a global to Swift, which never destroys one: an
+			// existential kept as the top-level code's own is not
+			// destroyed when that code ends either (existentialDecl).
+			prev := g.scriptGlobal
+			g.scriptGlobal = true
 			g.varDecl(&one)
+			g.scriptGlobal = prev
 			continue
 		}
 		g.push()

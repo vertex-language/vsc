@@ -468,7 +468,13 @@ func (c *fn) openBlock(b *sil.Block) error {
 		c.blocks[b] = out
 		// Unpack incoming composite parameters at the top of the entry block.
 		c.b = out
-		params := c.out.Params()
+		// For an async function whose arguments do not all fit in
+		// registers, the rest are read out of its context here and stand
+		// in the list where the signature has them. See asyncargs.go.
+		params, err := c.l.entryParams(c.src, c.out, out)
+		if err != nil {
+			return c.fail(ErrUnsupported, sil.Op(""), err.Error())
+		}
 		i := 0
 		// Caller-provided indirect return storage (sret) first, then
 		// the context an async function is handed: the frame it keeps
@@ -476,13 +482,13 @@ func (c *fn) openBlock(b *sil.Block) error {
 		// it returns through. That is the order the signature declares
 		// them in, and swiftc's. See lowerer.signature.
 		if c.returnsIndirectly() && len(params) > i {
-			if p, ok := ir.Wrap(params[i]).(ir.Ptr); ok {
+			if p, ok := params[i].(ir.Ptr); ok {
 				c.sret, c.hasSRet = p, true
 				i++
 			}
 		}
 		if c.async && len(params) > i {
-			if p, ok := ir.Wrap(params[i]).(ir.Ptr); ok {
+			if p, ok := params[i].(ir.Ptr); ok {
 				c.ctx = p
 				i++
 			}
@@ -496,7 +502,7 @@ func (c *fn) openBlock(b *sil.Block) error {
 				if i >= len(params) {
 					return c.fail(ErrUnsupported, sil.Op(""), "more entry arguments than parameters")
 				}
-				p, ok := ir.Wrap(params[i]).(ir.Ptr)
+				p, ok := params[i].(ir.Ptr)
 				if !ok {
 					return c.fail(ErrType, sil.Op(""), "a wide argument that is not a pointer")
 				}
@@ -512,7 +518,7 @@ func (c *fn) openBlock(b *sil.Block) error {
 				}
 				parts := make([]ir.Value, 0, len(rs))
 				for range rs {
-					parts = append(parts, ir.Wrap(params[i]))
+					parts = append(parts, params[i])
 					i++
 				}
 				if len(parts) == 1 {
@@ -527,7 +533,7 @@ func (c *fn) openBlock(b *sil.Block) error {
 				if i >= len(params) {
 					return c.fail(ErrUnsupported, sil.Op(""), "more entry arguments than parameters")
 				}
-				c.values[a] = ir.Wrap(params[i])
+				c.values[a] = params[i]
 				i++
 				continue
 			}
@@ -536,7 +542,7 @@ func (c *fn) openBlock(b *sil.Block) error {
 			}
 			regs := make([]ir.Value, 0, n)
 			for _, p := range params[i : i+n] {
-				regs = append(regs, ir.Wrap(p))
+				regs = append(regs, p)
 			}
 			i += n
 			if err := c.spreadInto(a, regs); err != nil {

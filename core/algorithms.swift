@@ -122,22 +122,81 @@ extension Array {
         return out
     }
 
-    // The elements in the order areInIncreasingOrder puts them: an
-    // insertion sort, stable as Swift's sort is.
+    // The elements in the order areInIncreasingOrder puts them, stable as
+    // Swift's sort is: a merge sort, whose runs of 16 are first put in
+    // order by insertion, and whose passes merge pairs of runs from one
+    // array into the other and back, n log n comparisons in all.
     func sorted(by areInIncreasingOrder: (Element, Element) -> Bool) -> [Element] {
-        var out = self
-        var i = 1
-        while i < out.count {
-            let key = out[i]
-            var j = i - 1
-            while j >= 0 && areInIncreasingOrder(key, out[j]) {
-                out[j + 1] = out[j]
-                j -= 1
+        let n = count
+        if n < 2 { return self }
+        var a = self
+        let run = 16
+        var start = 0
+        while start < n {
+            let end = start + run < n ? start + run : n
+            var i = start + 1
+            while i < end {
+                let key = a[i]
+                var j = i - 1
+                while j >= start && areInIncreasingOrder(key, a[j]) {
+                    a[j + 1] = a[j]
+                    j -= 1
+                }
+                a[j + 1] = key
+                i += 1
             }
-            out[j + 1] = key
-            i += 1
+            start = end
         }
-        return out
+        if n <= run { return a }
+        var b = a
+        var inA = true
+        var width = run
+        while width < n {
+            if inA {
+                a._mergePass(into: &b, width: width, by: areInIncreasingOrder)
+            } else {
+                b._mergePass(into: &a, width: width, by: areInIncreasingOrder)
+            }
+            inA = !inA
+            width *= 2
+        }
+        return inA ? a : b
+    }
+
+    // One pass of sorted(by:): each pair of adjacent runs of width here,
+    // merged into the same place in dst. Of two equal elements the left
+    // run's goes first, which is what keeps the sort stable.
+    func _mergePass(into dst: inout [Element], width: Int, by areInIncreasingOrder: (Element, Element) -> Bool) {
+        let n = count
+        var lo = 0
+        while lo < n {
+            let mid = lo + width < n ? lo + width : n
+            let hi = lo + 2 * width < n ? lo + 2 * width : n
+            var l = lo
+            var r = mid
+            var k = lo
+            while l < mid && r < hi {
+                if areInIncreasingOrder(self[r], self[l]) {
+                    dst[k] = self[r]
+                    r += 1
+                } else {
+                    dst[k] = self[l]
+                    l += 1
+                }
+                k += 1
+            }
+            while l < mid {
+                dst[k] = self[l]
+                l += 1
+                k += 1
+            }
+            while r < hi {
+                dst[k] = self[r]
+                r += 1
+                k += 1
+            }
+            lo = hi
+        }
     }
 
     // Sorts in place; see sorted(by:).
@@ -1263,6 +1322,34 @@ extension String {
         return Substring(_base: self, _start: 0, _end: suffix(k)._start)
     }
 
+    // Takes the first Character away and answers it.
+    @discardableResult
+    mutating func removeFirst() -> Character {
+        guard let c = first else { fatalError("Can't remove first element from an empty collection") }
+        self = dropFirst()._string
+        return c
+    }
+
+    // Takes the first k Characters away.
+    mutating func removeFirst(_ k: Int) {
+        if k < 0 || k > count { fatalError("Can't remove more items from a collection than it contains") }
+        self = dropFirst(k)._string
+    }
+
+    // Takes the last Character away and answers it.
+    @discardableResult
+    mutating func removeLast() -> Character {
+        guard let c = last else { fatalError("Can't remove last element from an empty collection") }
+        self = dropLast()._string
+        return c
+    }
+
+    // Takes the last k Characters away.
+    mutating func removeLast(_ k: Int) {
+        if k < 0 || k > count { fatalError("Can't remove more items from a collection than it contains") }
+        self = dropLast(k)._string
+    }
+
     // The Characters, one after another.
     init(_ characters: [Character]) {
         var out = ""
@@ -1498,6 +1585,10 @@ extension String {
 extension Substring {
     // The Characters, as a String of their own.
     var _string: String { return _stringSlice(_base, _start, _end) }
+
+    // The bytes of the Characters, as a String's utf8 is them: an array
+    // here, as there.
+    var utf8: [UInt8] { return _string.utf8 }
 
     var startIndex: _StringIndex { return _StringIndex(_offset: _start) }
     var endIndex: _StringIndex { return _StringIndex(_offset: _end) }
@@ -2342,10 +2433,20 @@ extension UInt64 {
 
 // init?(exactly:) is the same value, or nil where the type has no such
 // value: out of range, or a Double with a fraction or no number at all.
+//
+// From any integer: its value is read as an Int64 where its type is
+// signed and a UInt64 where not, which holds every integer's exactly, and
+// is then held to this type's range.
 
 extension Int {
-    init?(exactly x: Int) {
-        self = Int(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            self = Int(Int64(x))
+        } else {
+            let v = UInt64(x)
+            if v > UInt64(Int.max) { return nil }
+            self = Int(v)
+        }
     }
     init?(exactly x: Double) {
         if !(x >= Double(Int.min) && x < -Double(Int.min)) { return nil }
@@ -2356,9 +2457,16 @@ extension Int {
 }
 
 extension Int8 {
-    init?(exactly x: Int) {
-        if x < Int(Int8.min) || x > Int(Int8.max) { return nil }
-        self = Int8(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            if v < Int64(Int8.min) || v > Int64(Int8.max) { return nil }
+            self = Int8(v)
+        } else {
+            let v = UInt64(x)
+            if v > UInt64(Int8.max) { return nil }
+            self = Int8(v)
+        }
     }
     init?(exactly x: Double) {
         if !(x >= Double(Int8.min) && x < -Double(Int8.min)) { return nil }
@@ -2369,9 +2477,16 @@ extension Int8 {
 }
 
 extension Int16 {
-    init?(exactly x: Int) {
-        if x < Int(Int16.min) || x > Int(Int16.max) { return nil }
-        self = Int16(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            if v < Int64(Int16.min) || v > Int64(Int16.max) { return nil }
+            self = Int16(v)
+        } else {
+            let v = UInt64(x)
+            if v > UInt64(Int16.max) { return nil }
+            self = Int16(v)
+        }
     }
     init?(exactly x: Double) {
         if !(x >= Double(Int16.min) && x < -Double(Int16.min)) { return nil }
@@ -2382,9 +2497,16 @@ extension Int16 {
 }
 
 extension Int32 {
-    init?(exactly x: Int) {
-        if x < Int(Int32.min) || x > Int(Int32.max) { return nil }
-        self = Int32(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            if v < Int64(Int32.min) || v > Int64(Int32.max) { return nil }
+            self = Int32(v)
+        } else {
+            let v = UInt64(x)
+            if v > UInt64(Int32.max) { return nil }
+            self = Int32(v)
+        }
     }
     init?(exactly x: Double) {
         if !(x >= Double(Int32.min) && x < -Double(Int32.min)) { return nil }
@@ -2395,8 +2517,14 @@ extension Int32 {
 }
 
 extension Int64 {
-    init?(exactly x: Int) {
-        self = Int64(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            self = Int64(Int64(x))
+        } else {
+            let v = UInt64(x)
+            if v > UInt64(Int64.max) { return nil }
+            self = Int64(v)
+        }
     }
     init?(exactly x: Double) {
         if !(x >= Double(Int64.min) && x < -Double(Int64.min)) { return nil }
@@ -2407,9 +2535,14 @@ extension Int64 {
 }
 
 extension UInt {
-    init?(exactly x: Int) {
-        if x < 0 { return nil }
-        self = UInt(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            if v < 0 || UInt64(v) > UInt64(UInt.max) { return nil }
+            self = UInt(v)
+        } else {
+            self = UInt(UInt64(x))
+        }
     }
     init?(exactly x: Double) {
         if !(x >= 0 && x < Double(UInt.max) + 1) { return nil }
@@ -2420,9 +2553,16 @@ extension UInt {
 }
 
 extension UInt8 {
-    init?(exactly x: Int) {
-        if x < Int(UInt8.min) || x > Int(UInt8.max) { return nil }
-        self = UInt8(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            if v < 0 || UInt64(v) > UInt64(UInt8.max) { return nil }
+            self = UInt8(v)
+        } else {
+            let v = UInt64(x)
+            if v > UInt64(UInt8.max) { return nil }
+            self = UInt8(v)
+        }
     }
     init?(exactly x: Double) {
         if !(x >= 0 && x < Double(UInt8.max) + 1) { return nil }
@@ -2433,9 +2573,16 @@ extension UInt8 {
 }
 
 extension UInt16 {
-    init?(exactly x: Int) {
-        if x < Int(UInt16.min) || x > Int(UInt16.max) { return nil }
-        self = UInt16(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            if v < 0 || UInt64(v) > UInt64(UInt16.max) { return nil }
+            self = UInt16(v)
+        } else {
+            let v = UInt64(x)
+            if v > UInt64(UInt16.max) { return nil }
+            self = UInt16(v)
+        }
     }
     init?(exactly x: Double) {
         if !(x >= 0 && x < Double(UInt16.max) + 1) { return nil }
@@ -2446,9 +2593,16 @@ extension UInt16 {
 }
 
 extension UInt32 {
-    init?(exactly x: Int) {
-        if x < Int(UInt32.min) || x > Int(UInt32.max) { return nil }
-        self = UInt32(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            if v < 0 || UInt64(v) > UInt64(UInt32.max) { return nil }
+            self = UInt32(v)
+        } else {
+            let v = UInt64(x)
+            if v > UInt64(UInt32.max) { return nil }
+            self = UInt32(v)
+        }
     }
     init?(exactly x: Double) {
         if !(x >= 0 && x < Double(UInt32.max) + 1) { return nil }
@@ -2459,15 +2613,56 @@ extension UInt32 {
 }
 
 extension UInt64 {
-    init?(exactly x: Int) {
-        if x < 0 { return nil }
-        self = UInt64(x)
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            if v < 0 || UInt64(v) > UInt64(UInt64.max) { return nil }
+            self = UInt64(v)
+        } else {
+            self = UInt64(UInt64(x))
+        }
     }
     init?(exactly x: Double) {
         if !(x >= 0 && x < Double(UInt64.max) + 1) { return nil }
         let v = UInt64(x)
         if Double(v) != x { return nil }
         self = v
+    }
+}
+
+extension Double {
+    // The integer's value where this type holds it exactly: every integer
+    // up to 2^53 in magnitude, and past that those whose low bits are zero.
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            let d = Double(v)
+            if !(d >= -9223372036854775808.0 && d < 9223372036854775808.0) || Int64(d) != v { return nil }
+            self = d
+        } else {
+            let v = UInt64(x)
+            let d = Double(v)
+            if !(d < 18446744073709551616.0) || UInt64(d) != v { return nil }
+            self = d
+        }
+    }
+}
+
+extension Float {
+    // The integer's value where this type holds it exactly: every integer
+    // up to 2^24 in magnitude, and past that those whose low bits are zero.
+    init?<S: BinaryInteger>(exactly x: S) {
+        if S.isSigned {
+            let v = Int64(x)
+            let d = Float(v)
+            if !(d >= -9223372036854775808.0 && d < 9223372036854775808.0) || Int64(d) != v { return nil }
+            self = d
+        } else {
+            let v = UInt64(x)
+            let d = Float(v)
+            if !(d < 18446744073709551616.0) || UInt64(d) != v { return nil }
+            self = d
+        }
     }
 }
 
@@ -3577,6 +3772,42 @@ func _vertexTaskPreferenceSwap(_ proxy: UInt64) -> UInt64
 
 @_silgen_name("vertex_task_preference_inherited")
 func _vertexTaskPreferenceInherited() -> UInt64
+
+// See ObjectIdentifier in core.swift.
+extension ObjectIdentifier {
+    init(_ x: AnyObject) { _value = _objectAddress(x) }
+    static func == (a: ObjectIdentifier, b: ObjectIdentifier) -> Bool { a._value == b._value }
+    static func < (a: ObjectIdentifier, b: ObjectIdentifier) -> Bool { a._value < b._value }
+    func hash(into hasher: inout Hasher) { hasher.combine(_value) }
+    var description: String { "ObjectIdentifier(0x" + String(_value, radix: 16) + ")" }
+    var debugDescription: String { description }
+}
+
+extension UInt {
+    // The address an ObjectIdentifier is.
+    init(bitPattern id: ObjectIdentifier) { self = id._value }
+}
+
+extension Int {
+    init(bitPattern id: ObjectIdentifier) { self = Int(bitPattern: id._value) }
+}
+
+// See TaskPriority in core.swift.
+extension TaskPriority {
+    init(rawValue: UInt8) { self.rawValue = rawValue }
+    static var high: TaskPriority { TaskPriority(rawValue: 25) }
+    static var medium: TaskPriority { TaskPriority(rawValue: 21) }
+    static var low: TaskPriority { TaskPriority(rawValue: 17) }
+    static var userInitiated: TaskPriority { TaskPriority(rawValue: 25) }
+    static var utility: TaskPriority { TaskPriority(rawValue: 17) }
+    static var background: TaskPriority { TaskPriority(rawValue: 9) }
+    static func == (a: TaskPriority, b: TaskPriority) -> Bool { a.rawValue == b.rawValue }
+    static func < (a: TaskPriority, b: TaskPriority) -> Bool { a.rawValue < b.rawValue }
+}
+
+// Where `Task(priority: p) { … }` reads p: see the checker's
+// rewriteTaskPriority.
+func _vertexTaskPriority(_ p: TaskPriority?) {}
 
 extension Task {
     // Whether the task this runs in has been cancelled.

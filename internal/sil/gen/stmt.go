@@ -5,6 +5,7 @@ import (
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/core"
 	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/stdlib"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 )
@@ -290,6 +291,25 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 			}
 		}
 	}
+	// Named alone in an extension lowered for an existential: the same.
+	if id, ok := e.X.(*ast.IdentExpr); ok {
+		written := g.implicitExistentialWrite(id, func() *sil.Value {
+			cur, rhs := g.expr(e.X), g.expr(e.Y)
+			if cur == nil || rhs == nil {
+				return nil
+			}
+			t := g.typeOf(e.X)
+			v := g.operate(e, op, t, t, cur, rhs)
+			if v == nil {
+				g.unsupported(e)
+				return nil
+			}
+			return g.consume(v)
+		})
+		if written {
+			return
+		}
+	}
 	// Through a subscript a type declares: read by its getter, written
 	// by its setter.
 	if sub, ok := e.X.(*ast.SubscriptExpr); ok {
@@ -396,6 +416,10 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 		if g.existentialPropertyWrite(mem, func() *sil.Value { return g.rvalue(e.Y) }) {
 			return
 		}
+	}
+	// The same, named alone in an extension lowered for an existential.
+	if id, ok := e.X.(*ast.IdentExpr); ok && g.implicitExistentialWrite(id, func() *sil.Value { return g.rvalue(e.Y) }) {
+		return
 	}
 	// `(a, b) = (b, a)`: the whole value first, then each part to its
 	// own destination.
@@ -705,6 +729,13 @@ func (g *gen) dictionaryValueAddr(e *ast.SubscriptExpr) *sil.Value {
 	if len(e.Args) != 1 && !g.defaultSubscript(e) {
 		return nil
 	}
+	// `d[k, default: v]` is always a value, so it is written in place,
+	// as Swift's _modify has it: a copy taken out and set back would
+	// share its storage with the dictionary's while it was changed, and
+	// every append would copy all of it.
+	if g.defaultSubscript(e) && core.RuntimeHashable(d.Key) {
+		return g.dictionaryDefaultAddr(e, d)
+	}
 	set, ok := core.DictionarySet(d)
 	if !ok {
 		g.refuse(e, "a dictionary whose key type '"+d.Key.String()+"' the runtime does not hash yet")
@@ -934,6 +965,10 @@ func (g *gen) existentialDecl(b *ast.PatternBinding, sym analyzer.Symbol, name s
 	if b.Value == nil {
 		return
 	}
+	// A top-level binding of main.swift, which Swift makes a global and
+	// never destroys (see scriptVarDecl).
+	global := g.scriptGlobal
+	g.scriptGlobal = false
 	from := g.typeOf(b.Value)
 	// One existential from another: what is inside is copied through its
 	// value witness, or its box shared.
@@ -943,14 +978,16 @@ func (g *gen) existentialDecl(b *ast.PatternBinding, sym analyzer.Symbol, name s
 			return
 		}
 		g.intoExistential(src, slot)
-		g.destroyAddrLater(slot)
+		if !global {
+			g.destroyAddrLater(slot)
+		}
 		return
 	}
 	v := g.rvalue(b.Value)
 	if v == nil {
 		return
 	}
-	if g.initExistential(b.Value, slot, v, from, ex) {
+	if g.initExistential(b.Value, slot, v, from, ex) && !global {
 		g.destroyAddrLater(slot)
 	}
 }
@@ -2999,4 +3036,49 @@ func (g *gen) computedAddr(n *ast.MemberExpr) *sil.Value {
 		g.blk.DeallocStack(slot)
 	})
 	return slot
+}
+
+// dictionaryDefaultAddr is where `d[k, default: v]`'s value is, for
+// writing through: the dictionary made the variable's alone, and an entry
+// holding v made where k has none.
+func (g *gen) dictionaryDefaultAddr(e *ast.SubscriptExpr, d *types.Dictionary) *sil.Value {
+	base := g.lvalue(e.X)
+	if base == nil {
+		return nil
+	}
+	key := g.rvalue(e.Args[0].X)
+	fallback := g.rvalue(e.Args[1].X)
+	keyMeta, ok := g.stdlibMetadata(e, d.Key)
+	if !ok {
+		return nil
+	}
+	valueMeta, ok := g.stdlibMetadata(e, d.Value)
+	if key == nil || fallback == nil || !ok {
+		return nil
+	}
+	kt, vt := lowerType(d.Key), lowerType(d.Value)
+	keySlot := g.blk.AllocStack(kt)
+	g.blk.Store(key, keySlot, storeQualifier(kt))
+	g.forget(key)
+	valueSlot := g.blk.AllocStack(vt)
+	g.blk.Store(fallback, valueSlot, storeQualifier(vt))
+	g.forget(fallback)
+	raw := rawPointerType()
+	access := g.blk.BeginAccess(base, "modify", "unknown")
+	p := g.runtimeResult(stdlib.DictionaryValueForWrite, []sil.Param{
+		{Type: raw, Convention: sil.ParamUnowned},
+		{Type: raw, Convention: sil.ParamUnowned},
+		{Type: raw, Convention: sil.ParamUnowned},
+		{Type: raw, Convention: sil.ParamUnowned},
+		{Type: raw, Convention: sil.ParamUnowned},
+	}, raw, g.blk.AddressToPointer(access, raw), g.blk.AddressToPointer(keySlot, raw),
+		g.blk.AddressToPointer(valueSlot, raw), keyMeta, valueMeta)
+	g.blk.EndAccess(access)
+	// The fallback is the table's now, or gone; the key was borrowed.
+	g.blk.DeallocStack(valueSlot)
+	if !kt.Trivial() {
+		g.blk.DestroyValue(g.blk.Load(keySlot, loadQualifierTake(kt)))
+	}
+	g.blk.DeallocStack(keySlot)
+	return g.blk.PointerToAddress(p, vt.Address())
 }

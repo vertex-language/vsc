@@ -744,6 +744,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 			return &types.Metatype{Instance: instance}
 		}
+		// An overloaded function named as a value is the overload the
+		// function type wanted there takes: `[("abs", magnitude)]` as a
+		// [(String, (Double) -> Double)] is the Double one.
+		if fn, ok := sym.(*FuncSymbol); ok {
+			if chosen := overloadOfType(fn, expected); chosen != nil {
+				c.info.Uses[e.Name] = chosen
+				return chosen.Type()
+			}
+		}
 		return sym.Type()
 
 	case *ast.SequenceExpr:
@@ -800,8 +809,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 						}
 					}
 				} else {
-					c.errorf(id.Name.Pos(), "cannot find '%s' in scope", name)
-					lhs = types.Typ[types.Invalid]
+					// A member of self named alone -- a protocol's
+					// requirement, in its extension -- is found as reading
+					// it finds it, which says so where nothing is.
+					lhs = c.checkExpr(id, nil, scope)
 				}
 				c.info.Types[id] = lhs
 			} else if mem, ok := e.X.(*ast.MemberExpr); ok {
@@ -1154,6 +1165,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	case *ast.CallExpr:
 		// Task(executorPreference: e) { … } is a Task whose operation takes
 		// e up first; see rewriteExecutorPreference.
+		c.rewriteTaskPriority(e, scope)
 		c.rewriteExecutorPreference(e, scope)
 		// A key path given where a function goes -- `xs.map(\.name)` --
 		// is the closure `{ $0.name }`, and is checked and lowered as one.
@@ -1528,8 +1540,25 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 						c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
 						return initResult(inst, sig)
 					}
+					// One generic over its argument -- init?<S:
+					// BinaryInteger>(exactly:) -- takes what its parameter's
+					// constraints admit, a literal among them.
+					if sig := c.pickGenericInitializer(bm.Inits, args); sig != nil {
+						c.info.Inits[e] = sig
+						c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+						return initResult(inst, sig)
+					}
 				}
 				if t, handled := c.basicInit(e, b, inst, args, scope); handled {
+					return t
+				}
+			}
+			// A type parameter is made by an initializer one of its
+			// protocols requires: `T(exactly: op)` where T: Numeric, an
+			// optional where the requirement is failable. Which body runs
+			// is the specialization's to say.
+			if tp, ok := inst.(*types.TypeParam); ok {
+				if t, found := c.requirementInit(e, tp, args, scope); found {
 					return t
 				}
 			}
@@ -1846,8 +1875,13 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			return t
 		}
 		var keyType, valType types.Type
-		if dictT, ok := expected.(*types.Dictionary); ok {
-			keyType, valType = dictT.Key, dictT.Value
+		// Where an optional one is wanted -- `tables[k] = [:]`, whose
+		// value is the dictionary's Value? -- the literal is the
+		// dictionary inside.
+		if ctx := unwrappedContext(expected); ctx != nil {
+			if dictT, ok := ctx.Underlying().(*types.Dictionary); ok {
+				keyType, valType = dictT.Key, dictT.Value
+			}
 		}
 		for _, item := range e.Items {
 			kt := c.checkExpr(item.Key, keyType, scope)
@@ -4076,4 +4110,87 @@ func constraintProtocols(tp *types.TypeParam) []*types.Protocol {
 		}
 	}
 	return out
+}
+
+// requirementInit checks a call making a type parameter with an
+// initializer one of its protocols requires, Self being the parameter. It
+// reports false where no requirement takes the call's labels.
+func (c *checker) requirementInit(e *ast.CallExpr, tp *types.TypeParam, args []*ast.CallArg, scope *Scope) (types.Type, bool) {
+	for _, p := range allProtocols(constraintProtocols(tp)) {
+		for _, sig := range p.Inits {
+			if sig == nil || !c.labelsFit(sig, args) {
+				continue
+			}
+			spec := sig
+			if p.Self != nil {
+				if s, ok := types.Substitute(sig, map[*types.TypeParam]types.Type{p.Self: tp}).(*types.Signature); ok {
+					spec = s
+				}
+			}
+			c.checkCallArguments(e, spec, args, scope)
+			if sig.Failable {
+				return &types.Optional{Wrapped: tp}, true
+			}
+			return tp, true
+		}
+	}
+	return nil, false
+}
+
+// pickGenericInitializer is the initializer with type parameters of its
+// own whose labels are the call's, where there is exactly one.
+func (c *checker) pickGenericInitializer(inits []*types.Signature, args []*ast.CallArg) *types.Signature {
+	var found *types.Signature
+	for _, sig := range inits {
+		if sig == nil || len(sig.TypeParams) == 0 || !c.labelsFit(sig, args) {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = sig
+	}
+	return found
+}
+
+// overloadOfType is the overload of fn whose parameters and result are
+// the function type wanted's, where fn has several and one is; nil
+// otherwise.
+func overloadOfType(fn *FuncSymbol, expected types.Type) *FuncSymbol {
+	overloads := fn.Overloads()
+	if len(overloads) < 2 || expected == nil {
+		return nil
+	}
+	want, ok := unwrappedContext(expected).Underlying().(*types.Signature)
+	if !ok {
+		return nil
+	}
+	for _, o := range overloads {
+		sig := o.Signature()
+		if sig == nil || len(sig.TypeParams) > 0 || len(sig.Params) != len(want.Params) {
+			continue
+		}
+		// A type parameter in what is wanted -- map's `(Element) -> T` --
+		// takes whatever this overload has there.
+		fits := func(wanted, have types.Type) bool {
+			if types.Identical(wanted, have) {
+				return true
+			}
+			return mentionsTypeParam(wanted) && types.Unify(wanted, have, map[*types.TypeParam]types.Type{})
+		}
+		same := sig.Async == want.Async && (sig.Throws == want.Throws || !sig.Throws)
+		for i, p := range sig.Params {
+			if !fits(want.Params[i].Type, p.Type) {
+				same = false
+				break
+			}
+		}
+		if same && want.Results != nil && sig.Results != nil && !fits(want.Results, sig.Results) {
+			same = false
+		}
+		if same {
+			return o
+		}
+	}
+	return nil
 }

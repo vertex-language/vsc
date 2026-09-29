@@ -575,17 +575,30 @@ func (g *gen) implicitComputed(e *ast.IdentExpr) (*sil.Value, bool) {
 		return nil, false
 	}
 	name := g.text(e.Name)
-	for _, f := range g.computedOf(g.recv) {
-		if f == nil || f.Name != name {
-			continue
-		}
-		if lazyInPlace(g.recv, f) {
-			if g.self != nil && g.self.addr != nil {
-				return g.lazyGetterCall(e, g.recv, f, g.self.addr), true
+	// The receiver's own, or -- in a subclass -- one a superclass
+	// declares, called as that class's, as `self.name` is (computedProperty).
+	owner, f := g.recv, (*types.Field)(nil)
+	for t := g.recv; t != nil && f == nil; {
+		for _, cand := range g.computedOf(t) {
+			if cand != nil && cand.Name == name {
+				owner, f = t, cand
+				break
 			}
-			return g.getterOn(e, g.recv, f, &ast.SelfExpr{Span: ast.Span{Lo: e.Pos(), Hi: e.Pos()}}), true
 		}
-		return g.getterCall(e, g.recv, f, func() *sil.Value {
+		cl, ok := t.Underlying().(*types.Class)
+		if !ok || cl.Superclass == nil {
+			break
+		}
+		t = cl.Superclass
+	}
+	if f != nil {
+		if lazyInPlace(owner, f) {
+			if g.self != nil && g.self.addr != nil {
+				return g.lazyGetterCall(e, owner, f, g.self.addr), true
+			}
+			return g.getterOn(e, owner, f, &ast.SelfExpr{Span: ast.Span{Lo: e.Pos(), Hi: e.Pos()}}), true
+		}
+		return g.getterCall(e, owner, f, func() *sil.Value {
 			// Storage where the receiver is one -- an initializer's,
 			// or a mutating method's inout self -- and the value
 			// otherwise. Either way it is borrowed for the call.

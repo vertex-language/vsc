@@ -51,6 +51,49 @@ func (c *checker) rewriteExecutorPreference(e *ast.CallExpr, scope *Scope) bool 
 	return true
 }
 
+// rewriteTaskPriority makes `Task(priority: p) { body }` and
+// `Task.detached(priority: p) { body }` the Task without the argument, whose
+// operation reads p first:
+//
+//	Task { _vertexTaskPriority(p); body }
+//
+// The runtime runs every task alike, so the priority is read and nothing
+// more: it is a hint in Swift as well. It reports whether it rewrote the
+// call.
+func (c *checker) rewriteTaskPriority(e *ast.CallExpr, scope *Scope) bool {
+	if e.Args == nil || len(e.Args.Args) < 2 || !c.namesCoreTask(e.Fun, scope) {
+		return false
+	}
+	at := -1
+	for i, a := range e.Args.Args {
+		if a.Label != nil && a.Label.Text(c.file) == "priority" {
+			at = i
+		}
+	}
+	if at < 0 {
+		return false
+	}
+	last := e.Args.Args[len(e.Args.Args)-1]
+	cl, ok := unparen(last.X).(*ast.ClosureExpr)
+	if !ok || at == len(e.Args.Args)-1 {
+		return false
+	}
+	p := e.Args.Args[at].X
+	span := ast.Span{Lo: p.Pos(), Hi: p.End()}
+	read := &ast.CallExpr{Span: span,
+		Fun:  &ast.IdentExpr{Span: span, Name: &ast.Ident{Span: span, Synth: "_vertexTaskPriority"}},
+		Args: &ast.CallArgs{Span: span, Args: []*ast.CallArg{{Span: span, X: p}}}}
+	stmts := cl.Stmts
+	if len(stmts) == 1 {
+		if es, isExpr := stmts[0].(*ast.ExprStmt); isExpr {
+			stmts = []ast.Stmt{&ast.ReturnStmt{Span: es.Span, Return: es.Pos(), X: es.X}}
+		}
+	}
+	cl.Stmts = append([]ast.Stmt{&ast.ExprStmt{Span: span, X: read}}, stmts...)
+	e.Args.Args = append(e.Args.Args[:at:at], e.Args.Args[at+1:]...)
+	return true
+}
+
 // namesCoreTask reports whether fun is `Task` or `Task.detached`, and
 // Task the core's.
 func (c *checker) namesCoreTask(fun ast.Expr, scope *Scope) bool {

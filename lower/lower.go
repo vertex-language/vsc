@@ -35,6 +35,7 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 	}
 	l := &lowerer{
 		out:    ir.NewModule(m.Name(), target),
+		target: target,
 		module: m,
 		prefix: opts.SymbolPrefix,
 		callee: make(map[string]ir.Callee),
@@ -66,6 +67,20 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 	for _, f := range m.Funcs() {
 		if err := l.declare(f); err != nil {
 			return nil, err
+		}
+	}
+	// A context holds, at its end, the arguments that did not fit in
+	// registers. See asyncargs.go.
+	for _, f := range m.Funcs() {
+		p := l.plans[f.Name()]
+		if p == nil {
+			continue
+		}
+		if n, err := l.asyncOverflow(f); err != nil {
+			return nil, err
+		} else if n > 0 {
+			p.size += overflowBytes(n)
+			l.asyncSizes[f.Name()] = p.size
 		}
 	}
 	// The record beside each async function this module defines, so
@@ -140,6 +155,8 @@ func (l *lowerer) weakenCoreRecords() {
 
 // lowerer maintains translation state across a lowered module.
 type lowerer struct {
+	// target is what the module is lowered for.
+	target ir.Target
 	emptyTable  *ir.Global               // emptyWitnessTable's, once made
 	closures    map[string]closureParts  // capturing closures' forwarders, by body
 	releasers   map[string]*ir.Func      // a stack context's last release, by body; nil for none
@@ -299,6 +316,20 @@ func (l *lowerer) declare(f *sil.Func) error {
 // releases the value, and by this point the retains and releases are
 // already written down as instructions.
 func (l *lowerer) signature(name string, t *sil.FuncType) (*ir.Sig, error) {
+	full, err := l.fullSignature(name, t)
+	if err != nil || !t.Async {
+		return full, err
+	}
+	// An async function's arguments past the registers travel in its
+	// context, not in its signature. See asyncargs.go.
+	reduced, _ := l.reduceAsync(full)
+	return reduced, nil
+}
+
+// fullSignature is signature with every argument in it, those an async
+// function takes through its context among them: the list both ends of
+// a call decide from what travels where.
+func (l *lowerer) fullSignature(name string, t *sil.FuncType) (*ir.Sig, error) {
 	sig := ir.NewSig()
 	async := t.Async
 	// A result too wide for registers is not returned at all: the
@@ -582,6 +613,16 @@ func (l *lowerer) funcTypeOf(sig *types.Signature) (*ir.Type, error) {
 // Swift type uses: its arguments, its context in the self register, its
 // results, and the error register for one that throws.
 func (l *lowerer) funcSig(sig *types.Signature) (*ir.Sig, error) {
+	full, err := l.fullFuncSig(sig)
+	if err != nil || !sig.Async {
+		return full, err
+	}
+	reduced, _ := l.reduceAsync(full)
+	return reduced, nil
+}
+
+// fullFuncSig is funcSig with every argument in it: see fullSignature.
+func (l *lowerer) fullFuncSig(sig *types.Signature) (*ir.Sig, error) {
 	s := ir.NewSig()
 	// A result too wide for registers is returned through storage the
 	// caller sets aside, whose address is the first parameter -- for an

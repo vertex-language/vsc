@@ -13,7 +13,9 @@ import (
 
 // initializer lowers one `init` declaration.
 func (g *gen) initializer(d *ast.InitDecl, recv types.Type) {
-	if d.Body == nil {
+	// One with type parameters of its own is lowered where it is called,
+	// for what the call makes them (ownGenericInit).
+	if d.Body == nil || d.Generics != nil {
 		return
 	}
 	switch {
@@ -102,6 +104,7 @@ func (g *gen) structInitBody(d *ast.InitDecl, recv types.Type, sig *types.Signat
 	mt := sil.ThinMetatype(recv)
 	f.Param(mt, sil.ParamUnowned)
 	f.Type().Convention = sil.Method
+	f.Type().Async = sig.Async
 	// An init? makes an optional: .some(self) where the body finishes,
 	// .none where it returns nil.
 	made := types.Type(recv)
@@ -250,6 +253,7 @@ func (g *gen) convenienceInit(d *ast.InitDecl, recv types.Type, sig *types.Signa
 	t := lowerType(recv)
 	f.Param(sil.ThinMetatype(recv), sil.ParamUnowned)
 	f.Type().Convention = sil.Method
+	f.Type().Async = sig.Async
 	f.SetResult(t, resultConvention(t))
 
 	g.initReturn = func() {
@@ -305,6 +309,7 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 	t := lowerType(recv)
 	self := f.Param(t, sil.ParamGuaranteed)
 	f.Type().Convention = sil.Method
+	f.Type().Async = sig.Async
 	f.SetResult(t, resultConvention(t))
 	g.blk.DebugValue(self, "self", "let")
 
@@ -418,6 +423,7 @@ func (g *gen) callSuperInit(at ast.Node, recv types.Type, sig *types.Signature, 
 		callee.Type().Params = append(callee.Type().Params,
 			sil.Param{Type: st, Convention: sil.ParamGuaranteed})
 		callee.Type().Convention = sil.Method
+		callee.Type().Async = sig.Async
 		callee.SetResult(st, resultConvention(st))
 		if out.Throws {
 			callee.SetThrows(errorBoxType())
@@ -495,6 +501,7 @@ func (g *gen) inheritedInitBody(recv types.Type, out, super *types.Signature, na
 	t := lowerType(recv)
 	self := f.Param(t, sil.ParamGuaranteed)
 	f.Type().Convention = sil.Method
+	f.Type().Async = out.Async
 	f.SetResult(t, resultConvention(t))
 	g.classFieldDefaults(recv, self)
 	g.defaultAncestors(recv, self)
@@ -515,6 +522,7 @@ func (g *gen) inheritedInitBody(recv types.Type, out, super *types.Signature, na
 		callee.Type().Params = append(callee.Type().Params,
 			sil.Param{Type: st, Convention: sil.ParamGuaranteed})
 		callee.Type().Convention = sil.Method
+		callee.Type().Async = super.Async
 		callee.SetResult(st, resultConvention(st))
 	}
 	made := g.blk.Apply(g.blk.FunctionRef(callee), st, append(args, g.blk.Upcast(self, st))...)
@@ -546,6 +554,7 @@ func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body s
 	}
 	f.Param(sil.ThinMetatype(recv), sil.ParamUnowned)
 	f.Type().Convention = sil.Method
+	f.Type().Async = sig.Async
 	f.SetResult(t, resultConvention(t))
 	if sig.Throws {
 		f.SetThrows(errorBoxType())
@@ -561,6 +570,7 @@ func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body s
 		callee.Type().Params = append(callee.Type().Params,
 			sil.Param{Type: t, Convention: sil.ParamGuaranteed})
 		callee.Type().Convention = sil.Method
+		callee.Type().Async = sig.Async
 		callee.SetResult(t, resultConvention(t))
 		if sig.Throws {
 			callee.SetThrows(errorBoxType())
@@ -720,6 +730,12 @@ func (g *gen) sameInitParams(sig *types.Signature, d *ast.InitDecl) bool {
 	if len(sig.Params) != len(params) {
 		return false
 	}
+	// A declaration with type parameters of its own is only a signature
+	// with them: init?<S>(exactly: S) is not init?(exactly: Double),
+	// though the type check below skips what names a parameter.
+	if (d.Generics != nil) != writtenTypeParams(sig) {
+		return false
+	}
 	// By label and name too: init(nanos:) and init(label:) take one
 	// parameter each, and counting them made both bodies one function.
 	// Read in the file the initializer was written in, which for a type
@@ -841,6 +857,21 @@ func (g *gen) emitCoreInit(recv types.Type, sig *types.Signature) {
 	if f := g.m.Lookup(name); f != nil && !f.IsDeclaration() {
 		return
 	}
+	if d := g.coreInitDecl(recv, sig); d != nil {
+		restore := g.apart()
+		g.file, g.specializing = core.Unit, true
+		g.initializer(d, recv)
+		restore()
+	}
+}
+
+// coreInitDecl is the declaration of an initializer of recv that an
+// extension in the core writes: Int's init?(exactly:), say.
+func (g *gen) coreInitDecl(recv types.Type, sig *types.Signature) *ast.InitDecl {
+	core := g.info.CoreAlgorithms
+	if core == nil {
+		return nil
+	}
 	for _, st := range core.Stmts {
 		decl, ok := st.(*ast.DeclStmt)
 		if !ok {
@@ -852,16 +883,12 @@ func (g *gen) emitCoreInit(recv types.Type, sig *types.Signature) {
 		}
 		for _, mem := range ext.Body.Members {
 			d, ok := mem.(*ast.InitDecl)
-			if !ok || !g.sameInitParams(sig, d) {
-				continue
+			if ok && g.sameInitParams(sig, d) {
+				return d
 			}
-			restore := g.apart()
-			g.file, g.specializing = core.Unit, true
-			g.initializer(d, recv)
-			restore()
-			return
 		}
 	}
+	return nil
 }
 
 // isBasicValue reports whether t is one of the core's value types that
@@ -906,6 +933,9 @@ func (g *gen) callClassInit(e *ast.CallExpr, t types.Type, cl *types.Class) *sil
 		g.refuse(e, "a call to an initializer whose arguments do not match one the class declares")
 		return nil
 	}
+	if v, generic := g.ownGenericInit(e, t, sig, args); generic {
+		return v
+	}
 	if v, generic := g.genericClassInit(e, t, sig, args); generic {
 		return v
 	}
@@ -926,6 +956,9 @@ func (g *gen) callInit(e *ast.CallExpr, t types.Type, st *types.Struct) *sil.Val
 	if sig == nil {
 		g.refuse(e, "a call to an initializer whose arguments do not match one it declares")
 		return nil
+	}
+	if v, generic := g.ownGenericInit(e, t, sig, args); generic {
+		return v
 	}
 	if v, generic := g.genericStructInit(e, t, sig, args); generic {
 		return v
@@ -1166,6 +1199,7 @@ func (g *gen) initRef(t types.Type, out *types.Signature, name string) *sil.Valu
 		callee.Type().Params = append(callee.Type().Params,
 			sil.Param{Type: self, Convention: sil.ParamUnowned})
 		callee.Type().Convention = sil.Method
+		callee.Type().Async = out.Async
 		callee.SetResult(lowerType(made), resultConvention(lowerType(made)))
 		if out.Throws {
 			callee.SetThrows(sil.Object(sil.BuiltinNativeObj))
@@ -1510,4 +1544,16 @@ func (g *gen) leaveCompleteInit() {
 	t := g.initDI.self.Type()
 	g.runtimeResult(stdlib.InitComplete, []sil.Param{{Type: t, Convention: sil.ParamGuaranteed}},
 		lowerType(types.Typ[types.Void]), g.initDI.self)
+}
+
+// writtenTypeParams reports whether a signature has type parameters its
+// declaration wrote, <S: BinaryInteger>, rather than only those a `some P`
+// parameter stands for.
+func writtenTypeParams(sig *types.Signature) bool {
+	for _, tp := range sig.TypeParams {
+		if !strings.HasPrefix(tp.Name, "some ") {
+			return true
+		}
+	}
+	return false
 }

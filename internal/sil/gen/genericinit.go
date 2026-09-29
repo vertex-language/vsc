@@ -19,11 +19,14 @@ import (
 func genericInitDecls(files []*ast.File, info *analyzer.Info) map[types.Type][]*ast.InitDecl {
 	out := map[types.Type][]*ast.InitDecl{}
 	add := func(t types.Type, body *ast.MemberBlock) {
-		if t == nil || body == nil || len(nominalTypeParams(t)) == 0 {
+		if t == nil || body == nil {
 			return
 		}
+		// A generic type's initializers, all of them; any type's that
+		// have type parameters of their own (see ownGenericInit).
+		generic := len(nominalTypeParams(t)) > 0
 		for _, mem := range body.Members {
-			if d, ok := mem.(*ast.InitDecl); ok {
+			if d, ok := mem.(*ast.InitDecl); ok && (generic || d.Generics != nil) {
 				out[t] = append(out[t], d)
 			}
 		}
@@ -369,4 +372,227 @@ func (g *gen) protocolExtInit(e *ast.CallExpr, t types.Type, pi analyzer.Protoco
 		args = e.Args.Args
 	}
 	return g.applyInitNamed(e, t, &out, args, name.String())
+}
+
+// ownGenericInit lowers a call to an initializer with type parameters of
+// its own -- `init<S: BinaryInteger>(from s: S)` -- for the arguments the
+// call gives them, as a generic function is lowered for its call (see
+// callGeneric): the body once per substitution, under a name that says
+// which, and the unspecialized declaration never. generic is false where
+// the initializer has none; a nil value with generic true means the call
+// was refused. The type's own parameters, for an instance of a generic
+// type, are substituted as genericStructInit and genericClassInit do.
+func (g *gen) ownGenericInit(e *ast.CallExpr, t types.Type, sig *types.Signature, args []*ast.CallArg) (*sil.Value, bool) {
+	if len(sig.TypeParams) == 0 {
+		return nil, false
+	}
+	spec, ok := g.info.Specializations[e]
+	if !ok || len(spec.Args) != len(spec.Params) || !sameParams(spec.Params, sig.TypeParams) {
+		// A call the checker saw only through a type parameter --
+		// `T(scaling: n)` in a generic function, which is this type's
+		// initializer only in a specialization of it -- has no arguments
+		// recorded for this initializer's parameters: they are read off
+		// the arguments' types, as the checker would have.
+		if spec, ok = g.inferInitArgs(sig, args); !ok {
+			g.refuse(e, "a generic initializer whose type arguments are not known")
+			return nil, true
+		}
+	}
+	base := t
+	var instArgs []types.Type
+	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+len(spec.Params))
+	for k, v := range g.subst {
+		subst[k] = v
+	}
+	if inst, isInst := t.(*types.GenericInstance); isInst {
+		base = inst.Base
+		params := nominalTypeParams(inst.Base)
+		if len(inst.Args) != len(params) {
+			g.refuse(e, "an initializer of a generic type whose type arguments are not known")
+			return nil, true
+		}
+		for i, p := range params {
+			subst[p] = inst.Args[i]
+		}
+		instArgs = inst.Args
+	}
+	var own []types.Type
+	for i, p := range spec.Params {
+		// An argument may name the parameters of what the call is in,
+		// which a specialization of that has in g.subst.
+		arg := types.Substitute(spec.Args[i], g.subst)
+		subst[p] = arg
+		own = append(own, arg)
+	}
+	var decl *ast.InitDecl
+	for _, d := range g.inits[base] {
+		if d.Generics != nil && g.sameInitParams(sig, d) {
+			decl = d
+			break
+		}
+	}
+	// Or one the core declares, for Int and the other core types.
+	fromCore := false
+	if decl == nil {
+		if d := g.coreInitDecl(base, sig); d != nil && d.Generics != nil {
+			decl, fromCore = d, true
+		}
+	}
+	if decl == nil {
+		g.refuse(e, "a generic initializer whose declaration this cannot find")
+		return nil, true
+	}
+	specialized, ok := types.Substitute(sig, subst).(*types.Signature)
+	if !ok {
+		g.refuse(e, "a generic initializer whose signature this cannot substitute")
+		return nil, true
+	}
+	flat := *specialized
+	flat.TypeParams = nil
+	named := flat
+	named.Results = base
+	symbol := g.initSymbol(base, &named)
+	if symbol == "" {
+		g.refuse(e, "a generic initializer this compiler cannot name")
+		return nil, true
+	}
+	name := specializedInitName(symbol, append(append([]types.Type(nil), instArgs...), own...))
+	out := flat
+	out.Results = t
+	if fromCore {
+		// Read in the core's file, as emitCoreInit reads a core body.
+		restore := g.apart()
+		g.file, g.specializing = g.info.CoreAlgorithms.Unit, true
+		g.emitStructInitSpecialization(decl, t, &out, name, subst)
+		restore()
+	} else if isClass(base) {
+		if !strings.HasSuffix(name, "fC") {
+			g.refuse(e, "a generic initializer of a class this compiler cannot name")
+			return nil, true
+		}
+		g.emitClassInitSpecialization(decl, t, &out, name, name[:len(name)-1]+"c", subst)
+	} else {
+		g.emitStructInitSpecialization(decl, t, &out, name, subst)
+	}
+	return g.applyInitNamed(e, t, &out, args, name), true
+}
+
+// sameParams reports whether two lists are the same type parameters.
+func sameParams(a, b []*types.TypeParam) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// inferInitArgs is what a call's arguments make a generic initializer's
+// own type parameters: each parameter's type unified with its argument's.
+func (g *gen) inferInitArgs(sig *types.Signature, args []*ast.CallArg) (analyzer.Specialization, bool) {
+	found := map[*types.TypeParam]types.Type{}
+	for i, p := range sig.Params {
+		if i >= len(args) || p == nil {
+			break
+		}
+		at := g.typeOf(args[i].X)
+		if at == nil {
+			continue
+		}
+		types.Unify(p.Type, types.Substitute(at, g.subst), found)
+	}
+	spec := analyzer.Specialization{Params: sig.TypeParams}
+	for _, tp := range sig.TypeParams {
+		a := found[tp]
+		if a == nil {
+			return analyzer.Specialization{}, false
+		}
+		spec.Args = append(spec.Args, a)
+	}
+	return spec, true
+}
+
+// requirementInit lowers a call that makes a type parameter -- `T(exactly:
+// op)` where T: Numeric -- in a specialization of the function it is in,
+// where T is a type with initializers of its own: the one of them the
+// call's arguments fit, which the checker, seeing only T, did not pick.
+func (g *gen) requirementInit(e *ast.CallExpr, t types.Type) (*sil.Value, bool) {
+	var args []*ast.CallArg
+	if e.Args != nil {
+		args = e.Args.Args
+	}
+	made := t
+	if o, ok := t.(*types.Optional); ok {
+		made = o.Wrapped
+	}
+	var inits []*types.Signature
+	switch u := made.Underlying().(type) {
+	case *types.Struct:
+		inits = u.Inits
+	case *types.Enum:
+		inits = u.Inits
+	case *types.Class:
+		inits = u.Inits
+	}
+	if b := g.info.Builtins[analyzer.BuiltinKey(made)]; b != nil {
+		inits = append(inits, b.Inits...)
+	}
+	sig := g.initFitting(inits, args)
+	if sig == nil {
+		return nil, false
+	}
+	if !sig.Failable {
+		made = t
+	}
+	if v, generic := g.ownGenericInit(e, made, sig, args); generic {
+		return v, true
+	}
+	out := *sig
+	out.Results = made
+	if isBasicValue(made) {
+		g.emitCoreInit(made, &out)
+	}
+	return g.applyInit(e, made, &out, args), true
+}
+
+// initFitting is the initializer whose labels are the call's and whose
+// parameters take the arguments' types -- a type parameter of its own
+// taking any.
+func (g *gen) initFitting(inits []*types.Signature, args []*ast.CallArg) *types.Signature {
+	for _, sig := range inits {
+		if sig == nil || len(sig.Params) != len(args) {
+			continue
+		}
+		fits := true
+		for i, p := range sig.Params {
+			label := ""
+			if args[i].Label != nil {
+				label = g.text(args[i].Label)
+			}
+			want := p.Label
+			if want == "_" {
+				want = ""
+			}
+			if label != want {
+				fits = false
+				break
+			}
+			at := g.typeOf(args[i].X)
+			if at == nil {
+				continue
+			}
+			at = types.Substitute(at, g.subst)
+			if !types.Unify(p.Type, at, map[*types.TypeParam]types.Type{}) {
+				fits = false
+				break
+			}
+		}
+		if fits {
+			return sig
+		}
+	}
+	return nil
 }

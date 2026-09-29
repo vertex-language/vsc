@@ -10,6 +10,10 @@ import (
 )
 
 type checker struct {
+	// initScopes hold each generic initializer's own type parameters,
+	// for its signature and its body. Not info.Scopes, which the body's
+	// check keys by the same declaration for the scope of its locals.
+	initScopes map[*ast.InitDecl]*Scope
 	// opStamp numbers operatorChoices' calls, and opFound is its
 	// scratch; see operatorChoices.
 	opStamp uint64
@@ -92,6 +96,8 @@ type checker struct {
 	// that read the Task itself. See rewriteAsyncLet.
 	asyncLets     map[*VarSymbol]bool
 	asyncLetReads map[*ast.IdentExpr]bool
+	// asyncLetDecls are the declarations rewriteAsyncLet has rewritten.
+	asyncLetDecls map[*ast.VarDecl]bool
 	// currIsolated is whether the code being checked runs on the main
 	// thread: a @MainActor function or type's member, a closure made
 	// there, or top-level code. See isolation.go.
@@ -267,6 +273,16 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 			c.file = f.Unit
 		}
 		c.resolveTypeMembers(declsOf(f.Stmts), pkgScope)
+	}
+
+	// Pass 3.4: Types declared inside extensions, as members of the type
+	// extended -- whose member scope pass 3 opened -- before the
+	// extensions' members are read, whose signatures may name them.
+	for _, f := range files {
+		if f.Unit != nil {
+			c.file = f.Unit
+		}
+		c.declareExtensionTypes(declsOf(f.Stmts), pkgScope)
 	}
 
 	// Pass 3.5: Extensions

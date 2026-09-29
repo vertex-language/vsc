@@ -440,6 +440,23 @@ struct Task {
     static func yield() async
 }
 
+// The identity of a class instance: its address, which no other instance
+// alive has. Its operations are in algorithms.swift.
+struct ObjectIdentifier: Hashable, Equatable, Comparable, CustomStringConvertible, CustomDebugStringConvertible {
+    let _value: UInt
+}
+
+@_silgen_name("vertex_object_address")
+func _objectAddress(_ x: AnyObject) -> UInt
+
+// How urgent a task is, as Swift names the levels. The runtime schedules
+// every task alike, so a priority is taken and kept to itself: it is a
+// hint in Swift too, and no program's answer depends on it. Its levels
+// and operators are in algorithms.swift.
+struct TaskPriority: Equatable, Comparable {
+    let rawValue: UInt8
+}
+
 @_silgen_name("vertex_task_is_cancelled")
 func _vertexTaskIsCancelled() -> Bool
 
@@ -651,6 +668,7 @@ protocol AdditiveArithmetic: Equatable {
 }
 
 protocol Numeric: AdditiveArithmetic, ExpressibleByIntegerLiteral {
+    init?<T: BinaryInteger>(exactly source: T)
     static func * (lhs: Self, rhs: Self) -> Self
     static func *= (lhs: inout Self, rhs: Self)
 }

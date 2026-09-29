@@ -879,6 +879,28 @@ void vertex_dictionary_set(HashTable** slot, const void* key, void* value,
   t->count++;
 }
 
+// vertex_dictionary_value_for_write is where the value for key is, for
+// writing through: `d[key, default: value].append(x)`, which Swift's
+// _modify of the subscript mutates in place. The table is made the
+// slot's alone first; where key has no entry, one is made holding the
+// fallback, which is taken, and where it has one, the fallback is
+// destroyed. The address is good until the table is next changed.
+void* vertex_dictionary_value_for_write(HashTable** slot, const void* key, void* fallback,
+                                        const Metadata* keyType, const Metadata* value) {
+  const ValueWitnessTable* vw = witnesses(value);
+  HashTable* t = uniqueTable(slot, keyType, value);
+  i64 at = 0;
+  if (find(t, key, &at) >= 0) {
+    vw->destroy(fallback, value);
+    return valueAt(t, at);
+  }
+  usedOf(t)[at] = 1;
+  witnesses(keyType)->initializeWithCopy(keyAt(t, at), const_cast<void*>(key), keyType);
+  vw->initializeWithTake(valueAt(t, at), fallback, value);
+  t->count++;
+  return valueAt(t, at);
+}
+
 // vertex_set_insert adds a copy of element where no equal one is there.
 void vertex_set_insert(HashTable** slot, const void* element, const Metadata* type) {
   if ((*slot)->buckets != 0) {

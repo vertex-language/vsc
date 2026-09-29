@@ -958,6 +958,12 @@ void* vertex_gpu_buffer_wrap(void* dev, void* ptr, i64 bytes) {
 void vertex_gpu_buffer_release(void* buf) {
   Buffer* b = static_cast<Buffer*>(buf);
   if (!b) return;
+  // A launch still pending may read or write this buffer: the one a
+  // temporary made for it -- `k.Launch(try await d.Upload(xs), ...)`,
+  // `k.Map(try await k.Map(xs))` -- ends as soon as the call returns,
+  // before anything has run it. Letting the memory go is touching it, so
+  // what was launched runs first, as for the host's view of it.
+  if (b->device != nullptr && syncDevice(b->device) != 0) vertex_pal_abort();
   if (b->metal) {
     objc::send<void>(b->metal, "release");
   } else if (b->wrapped) {

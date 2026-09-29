@@ -107,7 +107,10 @@ func (l *lowerer) definePrologue(f *sil.Func, p *asyncPlan, body *ir.Func) error
 		return &Error{Err: ErrUnsupported, Func: f.SourceName(), What: "no declaration to define"}
 	}
 	b := out.Entry()
-	params := out.Params()
+	params, err := l.entryParams(f, out, b)
+	if err != nil {
+		return &Error{Err: ErrUnsupported, Func: f.SourceName(), What: err.Error()}
+	}
 	if len(params) == 0 {
 		return &Error{Err: ErrUnsupported, Func: f.SourceName(), What: "an async function with no context"}
 	}
@@ -117,7 +120,7 @@ func (l *lowerer) definePrologue(f *sil.Func, p *asyncPlan, body *ir.Func) error
 	at := 0
 	var sret ir.Ptr
 	if p.hasSRet {
-		got, ok := ir.Wrap(params[at]).(ir.Ptr)
+		got, ok := params[at].(ir.Ptr)
 		if !ok {
 			return &Error{Err: ErrType, Func: f.SourceName(), What: "result storage that is not a pointer"}
 		}
@@ -127,7 +130,7 @@ func (l *lowerer) definePrologue(f *sil.Func, p *asyncPlan, body *ir.Func) error
 	if at >= len(params) {
 		return &Error{Err: ErrUnsupported, Func: f.SourceName(), What: "an async function with no context"}
 	}
-	ctx, ok := ir.Wrap(params[at]).(ir.Ptr)
+	ctx, ok := params[at].(ir.Ptr)
 	if !ok {
 		return &Error{Err: ErrType, Func: f.SourceName(), What: "a context that is not a pointer"}
 	}
@@ -146,7 +149,7 @@ func (l *lowerer) definePrologue(f *sil.Func, p *asyncPlan, body *ir.Func) error
 					What: "an argument this pass cannot find a register for"}
 			}
 			if slotted {
-				if err := storeWord(b, ir.Wrap(params[at]), b.Ptr.Add(ctx, b.I64.Const(off+int64(8*k)))); err != nil {
+				if err := storeWord(b, params[at], b.Ptr.Add(ctx, b.I64.Const(off+int64(8*k)))); err != nil {
 					return &Error{Err: ErrUnsupported, Func: f.SourceName(), What: err.Error()}
 				}
 			}
@@ -560,6 +563,12 @@ func (c *fn) emitSuspend(s *suspension, after *ir.Block) error {
 	// as a synchronous one is.
 	if !closureCtx.IsZero() {
 		call = append(call, closureCtx)
+	}
+	// What does not fit in registers goes at the end of the callee's
+	// context. See asyncargs.go.
+	call, err = c.overflowArgs(in, args[0], call, child, want)
+	if err != nil {
+		return err
 	}
 	if target != nil {
 		c.b.TailCall(target, call...)

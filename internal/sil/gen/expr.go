@@ -11,6 +11,7 @@ import (
 	"github.com/vertex-language/vsc/types"
 	"os"
 	"runtime/debug"
+	"sort"
 	"strconv"
 )
 
@@ -201,7 +202,16 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 		return g.closure(n)
 
 	case *ast.CallExpr:
-		return g.call(n)
+		// What the arguments made for the call ends once it returns, as
+		// Swift's argument scope has it: `print(f(C()))` ends the C
+		// before print runs. What the call answers lives on.
+		// What the arguments made for the call ends once it returns, as
+		// Swift's argument scope has it: `print(f(C()))` ends the C
+		// before print runs. What the call answers lives on.
+		g.pushArgs()
+		v := g.call(n)
+		g.endArgs(v)
+		return v
 
 	case *ast.ParenExpr:
 		return g.expr(n.X)
@@ -1056,11 +1066,21 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *sil.Value
 			t = o.Wrapped
 		}
 	}
+	// A type parameter made by an initializer its protocol requires,
+	// in a specialization where it is a type of its own.
+	if _, isParam := tn.Type().(*types.TypeParam); isParam && g.info.Inits[e] == nil {
+		if v, ok := g.requirementInit(e, t); ok {
+			return v
+		}
+	}
 	// An initializer an extension of Int or String declares.
 	if sig := g.info.Inits[e]; sig != nil && isBasicValue(t) {
 		var args []*ast.CallArg
 		if e.Args != nil {
 			args = e.Args.Args
+		}
+		if v, generic := g.ownGenericInit(e, t, sig, args); generic {
+			return v
 		}
 		out := *sig
 		out.Results = t
@@ -1103,6 +1123,9 @@ func (g *gen) construct(e *ast.CallExpr, tn *analyzer.TypeNameSymbol) *sil.Value
 			var args []*ast.CallArg
 			if e.Args != nil {
 				args = e.Args.Args
+			}
+			if v, generic := g.ownGenericInit(e, t, sig, args); generic {
+				return v
 			}
 			if v, generic := g.genericStructInit(e, t, sig, args); generic {
 				return v
@@ -1546,6 +1569,10 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *sil.Value {
 	}
 	// Static method call.
 	if ref.Method.IsStatic {
+		// On a type parameter constrained to a class, the checker found
+		// the method on that class; the specialization's type argument
+		// may be a subclass that overrides it: `T.kind()` with T a Str.
+		ref = g.overrideOn(ref, recv)
 		if v, ok := g.classMethodCall(e, mem, ref, recv); ok {
 			return v
 		}
@@ -1558,8 +1585,9 @@ func (g *gen) method(e *ast.CallExpr, mem *ast.MemberExpr) *sil.Value {
 		// existential as Self: what it calls of the protocol's own is
 		// dispatched through it. That is Swift's opened type only where
 		// nothing in the method's type is Self's.
-		if _, isEx := existentialOf(g.substituted(recv)); isEx &&
-			(mutatingRef(ref) || mentionsTypeParam(ref.Method.Sig)) {
+		// A mutating one changes the existential in place, through the
+		// requirements it calls: self is the existential's storage.
+		if _, isEx := existentialOf(g.substituted(recv)); isEx && mentionsTypeParam(ref.Method.Sig) {
 			g.refuse(e, "a method of "+p.Name+"'s extension called on an existential")
 			return nil
 		}
@@ -1646,6 +1674,12 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 	if spec, name, generic := g.genericMethod(e, ref); generic {
 		if name == "" {
 			return nil
+		}
+		// A class's method with type parameters of its own has no row,
+		// so an override is found by the instance's class: each class of
+		// the module that overrides it is tested for, deepest first.
+		if subs := g.genericOverrides(e, ref, spec); len(subs) > 0 {
+			return g.dispatchGeneric(e, spec, name, subs, receiver)
 		}
 		ref, symbol = spec, name
 	} else {
@@ -1736,6 +1770,25 @@ func (g *gen) superMethodCall(e *ast.CallExpr, ref *analyzer.MethodRef) *sil.Val
 			}
 			impl, symbol = spec, name
 		}
+	}
+	// One with type parameters of its own is its specialization for the
+	// call's arguments, as any call of it is.
+	if symbol == "" && len(impl.Method.Sig.TypeParams) > 0 {
+		spec, ok := g.info.Specializations[e]
+		if !ok || len(spec.Args) != len(impl.Method.Sig.TypeParams) {
+			g.refuse(e, "a super call of a generic method whose type arguments are not known")
+			return nil
+		}
+		var own []types.Type
+		for _, a := range spec.Args {
+			own = append(own, types.Substitute(a, g.subst))
+		}
+		sref, name, ok := g.specializeOwnGeneric(e, impl.Method, impl.Recv, spec.Params, own)
+		if !ok || name == "" {
+			g.refuse(e, "a super call of a generic method this compiler cannot specialize")
+			return nil
+		}
+		impl, symbol = sref, name
 	}
 	if symbol == "" {
 		symbol = g.methodSymbol(impl)
@@ -1955,7 +2008,33 @@ func (g *gen) implicitMethod(id *ast.IdentExpr) (*analyzer.MethodRef, bool) {
 			return &analyzer.MethodRef{Recv: g.recv, Method: m}, true
 		}
 	}
+	// In a subclass, one a superclass declares: `ordinarySet(k, v)` is
+	// `self.ordinarySet(k, v)`, called as the superclass's method, as the
+	// checker has it for the written-out form.
+	fn, _ := g.info.Uses[id.Name].(*analyzer.FuncSymbol)
+	for t := superclassOf(g.recv); t != nil; t = superclassOf(t) {
+		cl, ok := t.Underlying().(*types.Class)
+		if !ok {
+			break
+		}
+		for _, m := range cl.Methods {
+			if m != nil && m.Name == name && (fn == nil || m.Sig == fn.Signature()) {
+				return &analyzer.MethodRef{Recv: t, Method: m}, true
+			}
+		}
+	}
 	return nil, false
+}
+
+// superclassOf is a class's superclass, or nil.
+func superclassOf(t types.Type) types.Type {
+	if t == nil {
+		return nil
+	}
+	if cl, ok := t.Underlying().(*types.Class); ok {
+		return cl.Superclass
+	}
+	return nil
 }
 
 // methodSymbol returns the mangled symbol name for a method.
@@ -2149,6 +2228,19 @@ func (g *gen) binary(e *ast.BinaryExpr) *sil.Value {
 		}
 		if v, isArray := g.arrayEquality(e, g.text(e.Op)); isArray {
 			return v
+		}
+		// A shift of one integer by another of a different type -- `u >>
+		// n`, a UInt32 by an Int -- is BinaryInteger's generic shift: the
+		// count read as its own type (see shift).
+		if op := g.text(e.Op); isShift(op) && isIntegerType(g.typeOf(e.X)) && isIntegerType(g.typeOf(e.Y)) {
+			operand := g.typeOf(e.X)
+			lhs, rhs := g.expr(e.X), g.expr(e.Y)
+			if lhs == nil || rhs == nil {
+				return nil
+			}
+			if v := g.shift(e, op, operand, operand, lhs, rhs); v != nil {
+				return v
+			}
 		}
 		g.expr(e.X)
 		g.expr(e.Y)
@@ -2999,4 +3091,169 @@ func (g *gen) classDefault(owner types.Type, name string) (ast.Expr, map[*types.
 		return def, nil
 	}
 	return nil, nil
+}
+
+// isIntegerType reports whether t is one of the built-in integer types.
+func isIntegerType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	return ok && b.Info()&types.IsInteger != 0
+}
+
+// A genericOverride is a subclass's override of a method with type
+// parameters of its own, specialized for a call.
+type genericOverride struct {
+	class  types.Type
+	ref    *analyzer.MethodRef
+	symbol string
+}
+
+// genericOverrides are the overrides a call of a class's method with type
+// parameters of its own may reach -- those of the module's subclasses of
+// the class, each specialized as the call is -- deepest class first. None
+// for a final class, a method that throws or is async, or one another
+// module declares.
+func (g *gen) genericOverrides(e *ast.CallExpr, orig, spec *analyzer.MethodRef) []genericOverride {
+	cl, ok := spec.Recv.Underlying().(*types.Class)
+	if !ok || cl.Final || len(cl.TypeParams) > 0 || spec.Method.IsStatic || spec.Method.Sig.Throws || spec.Method.Sig.Async {
+		return nil
+	}
+	callSpec, ok := g.info.Specializations[e]
+	if !ok || len(callSpec.Args) != len(orig.Method.Sig.TypeParams) {
+		return nil
+	}
+	var own []types.Type
+	for _, a := range callSpec.Args {
+		if len(g.subst) > 0 {
+			a = types.Substitute(a, g.subst)
+		}
+		own = append(own, a)
+	}
+	depth := func(t types.Type) int {
+		n := 0
+		for x := t; x != nil; x = superclassOf(x) {
+			n++
+		}
+		return n
+	}
+	var out []genericOverride
+	seen := map[types.Type]bool{}
+	for _, sym := range g.info.Defs {
+		tn, ok := sym.(*analyzer.TypeNameSymbol)
+		if !ok || tn.Type() == nil || seen[tn.Type()] {
+			continue
+		}
+		seen[tn.Type()] = true
+		sub, ok := tn.Type().Underlying().(*types.Class)
+		if !ok || sub == cl || len(sub.TypeParams) > 0 {
+			continue
+		}
+		inherits := false
+		for x := sub.Superclass; x != nil; x = superclassOf(x) {
+			if x.Underlying() == types.Type(cl) {
+				inherits = true
+				break
+			}
+		}
+		if !inherits {
+			continue
+		}
+		for _, m := range sub.Methods {
+			if m == nil || m.Name != orig.Method.Name || m.IsStatic || !sameShape(m.Sig, orig.Method.Sig) {
+				continue
+			}
+			ref, symbol, ok := g.specializeOwnGeneric(e, m, tn.Type(), callSpec.Params, own)
+			if ok && symbol != "" {
+				out = append(out, genericOverride{class: tn.Type(), ref: ref, symbol: symbol})
+			}
+			break
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return depth(out[i].class) > depth(out[j].class) })
+	return out
+}
+
+// sameShape reports whether two generic signatures take their arguments
+// alike: as many type parameters, and the same labels.
+func sameShape(a, b *types.Signature) bool {
+	if a == nil || b == nil || len(a.TypeParams) != len(b.TypeParams) || len(a.Params) != len(b.Params) {
+		return false
+	}
+	for i := range a.Params {
+		if a.Params[i].Label != b.Params[i].Label {
+			return false
+		}
+	}
+	return true
+}
+
+// dispatchGeneric calls a class's method with type parameters of its own
+// on the instance's class: the receiver and arguments once, then the
+// deepest override the instance's class is, or the method itself.
+func (g *gen) dispatchGeneric(e *ast.CallExpr, spec *analyzer.MethodRef, symbol string, subs []genericOverride, receiver func() *sil.Value) *sil.Value {
+	self, args, ok := g.methodArgs(e, spec.Method.Sig, receiver)
+	if !ok {
+		return nil
+	}
+	result := lowerType(spec.Method.Sig.Results)
+	join := g.fn.Block()
+	own := sil.Owned
+	if result.Trivial() {
+		own = sil.None
+	}
+	out := join.Arg(result, own)
+	call := func(ref *analyzer.MethodRef, name string, recv *sil.Value) *sil.Value {
+		callee := g.m.Func(name).SetSourceName(ref.Method.Name)
+		if g.needsType(callee) {
+			g.declareMethod(callee, ref)
+		}
+		return g.blk.Apply(g.blk.FunctionRef(callee), result, append(append([]*sil.Value(nil), args...), recv)...)
+	}
+	for _, s := range subs {
+		slot, bit, ok := g.castValue(e, self, spec.Recv, s.class)
+		if !ok {
+			return nil
+		}
+		yes, no := g.fn.Block(), g.fn.Block()
+		g.blk.CondBr(bit, yes, nil, no, nil)
+		g.blk = yes
+		st := lowerType(s.class)
+		as := g.blk.Load(slot, loadQualifierTake(st))
+		g.blk.DeallocStack(slot)
+		v := call(s.ref, s.symbol, as)
+		g.blk.DestroyValue(as)
+		g.blk.Br(join, v)
+		g.blk = no
+		g.blk.DeallocStack(slot)
+	}
+	v := call(spec, symbol, self)
+	g.blk.Br(join, v)
+	g.blk = join
+	g.destroyLater(out)
+	return out
+}
+
+// overrideOn is the method a class method call reaches on recv (a class or
+// its metatype): the deepest override in recv's class chain of the one ref
+// names, which ref itself where recv declares no override of it.
+func (g *gen) overrideOn(ref *analyzer.MethodRef, recv types.Type) *analyzer.MethodRef {
+	if meta, ok := recv.(*types.Metatype); ok {
+		recv = meta.Instance
+	}
+	cl, ok := recv.Underlying().(*types.Class)
+	if !ok || ref.Recv == nil || types.Identical(ref.Recv, recv) || ref.Method.Sig == nil {
+		return ref
+	}
+	key := ref.Method.Name + ref.Method.Sig.String()
+	chain := classChain(cl)
+	for i := len(chain) - 1; i >= 0; i-- {
+		for _, m := range chain[i].Methods {
+			if m != nil && m.IsStatic == ref.Method.IsStatic && m.Sig != nil && m.Name+m.Sig.String() == key {
+				return &analyzer.MethodRef{Recv: chain[i], Method: m}
+			}
+		}
+	}
+	return ref
 }

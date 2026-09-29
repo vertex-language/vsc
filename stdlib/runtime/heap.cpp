@@ -82,6 +82,14 @@ extern "C" {
 // unwrapped, an overflow, a range out of order.
 [[noreturn]] void vertex_fatal(const char* message) { fatal(message); }
 
+// vertex_object_address is an instance's address, which is what tells it
+// from every other instance alive: ObjectIdentifier's value. The instance
+// comes as core passes an AnyObject, the address of an existential whose
+// first word is it.
+u64 vertex_object_address(HeapObject* const* object) {
+  return reinterpret_cast<u64>(*object);
+}
+
 // vertex_alloc makes an instance with room for size bytes of stored
 // properties after the header, holding one reference: the caller's.
 HeapObject* vertex_alloc(u64 size) {

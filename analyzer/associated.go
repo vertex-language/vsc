@@ -127,7 +127,7 @@ func (c *checker) resolveProtocol(d *ast.ProtocolDecl, scope *Scope) {
 			}
 
 		case *ast.InitDecl:
-			sig := c.buildFuncSig(m.Sig, inner)
+			sig := c.buildGenericInitSig(m, inner)
 			sig.Failable = m.Question.IsValid() || m.Exclaim.IsValid()
 			pr.Inits = append(pr.Inits, sig)
 

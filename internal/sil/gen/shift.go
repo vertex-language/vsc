@@ -35,13 +35,26 @@ func (g *gen) shift(at ast.Node, op string, operand, results types.Type, lhs, rh
 	}
 
 	s := &shifter{
-		g:        g,
-		word:     sil.Object(builtinNamed(machine)),
-		machine:  machine,
-		unsigned: unsigned,
-		width:    width,
-		value:    g.machine(lhs, operand),
-		count:    g.machine(rhs, operand),
+		g:             g,
+		word:          sil.Object(builtinNamed(machine)),
+		machine:       machine,
+		unsigned:      unsigned,
+		countUnsigned: unsigned,
+		width:         width,
+		value:         g.machine(lhs, operand),
+	}
+	// The count may be any integer, `u >> n` with n an Int: it is read as
+	// its own type, and brought into the operand's width by clamping it to
+	// [-width, width] first, which changes no shift's result -- anything
+	// further out is an over-shift either way.
+	if ct := rhs.Type().Formal(); ct != nil && !types.Identical(ct, operand) {
+		count, countUnsigned, ok := s.foreignCount(rhs, ct)
+		if !ok {
+			return nil
+		}
+		s.count, s.countUnsigned = count, countUnsigned
+	} else {
+		s.count = g.machine(rhs, operand)
 	}
 
 	var raw *sil.Value
@@ -67,9 +80,60 @@ type shifter struct {
 	word     sil.Type
 	machine  string
 	unsigned bool
-	width    int64
-	value    *sil.Value
-	count    *sil.Value
+	// countUnsigned is whether the count is read unsigned: the operand's
+	// type's signedness, or the count's own where it has another type.
+	countUnsigned bool
+	width         int64
+	value         *sil.Value
+	count         *sil.Value
+}
+
+// foreignCount is a count of another integer type in the operand's width:
+// clamped in its own type to [0, width] or [-width, width], then narrowed
+// or widened, with whether it is to be read unsigned.
+func (s *shifter) foreignCount(rhs *sil.Value, ct types.Type) (*sil.Value, bool, bool) {
+	g := s.g
+	cb, ok := ct.Underlying().(*types.Basic)
+	if !ok || cb.Info()&types.IsInteger == 0 {
+		return nil, false, false
+	}
+	_, cm, ok := core.Layout(ct)
+	if !ok {
+		return nil, false, false
+	}
+	cUnsigned := cb.Info()&types.IsUnsigned != 0
+	cword := sil.Object(builtinNamed(cm))
+	c := g.machine(rhs, ct)
+	bit := sil.Object(sil.BuiltinInt1)
+	clamp := func(rel string, bound int64) {
+		sign := "s"
+		if cUnsigned {
+			sign = "u"
+		}
+		k := g.blk.IntegerLiteral(cword, bound)
+		out := g.blk.Builtin("cmp_"+sign+rel+"_"+cm, bit, c, k)
+		join := g.fn.Block()
+		arg := join.Arg(cword, sil.None)
+		g.blk.CondBr(out, join, []*sil.Value{k}, join, []*sil.Value{c})
+		g.blk = join
+		c = arg
+	}
+	clamp("gt", s.width)
+	if !cUnsigned {
+		clamp("lt", -s.width)
+	}
+	cbits := types.Sizeof(ct, types.DefaultTarget64) * 8
+	if cm != s.machine {
+		verb := "truncOrBitCast"
+		if int64(cbits) < s.width {
+			verb = "sextOrBitCast"
+			if cUnsigned {
+				verb = "zextOrBitCast"
+			}
+		}
+		c = g.blk.Builtin(verb+"_"+cm+"_"+s.machine, s.word, c)
+	}
+	return c, cUnsigned, true
 }
 
 func (s *shifter) blk() *sil.Block          { return s.g.blk }
@@ -101,7 +165,7 @@ func (s *shifter) right(v, by *sil.Value) *sil.Value {
 // compare emits a comparison respecting the operand's signedness.
 func (s *shifter) compare(rel string, a, b *sil.Value) *sil.Value {
 	sign := "s"
-	if s.unsigned {
+	if s.countUnsigned {
 		sign = "u"
 	}
 	return s.blk().Builtin("cmp_"+sign+rel+"_"+s.machine,
@@ -140,7 +204,7 @@ func (s *shifter) masking(toLeft bool) *sil.Value {
 // smart lowers Swift smart shifts (<<, >>) handling over-shifts and negative counts.
 func (s *shifter) smart(toLeft bool) *sil.Value {
 	// Unsigned counts are non-negative, requiring only the over-shift check.
-	if s.unsigned {
+	if s.countUnsigned {
 		return s.oneTest(toLeft)
 	}
 

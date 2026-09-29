@@ -140,16 +140,11 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 				open = append(open, p)
 			}
 		}
-		return &Signature{
-			TypeParams: open,
-			Params:     params,
-			Results:    res,
-			Async:      tt.Async,
-			Throws:     tt.Throws,
-			Thrown:     thrown,
-			Rethrows:   tt.Rethrows,
-			Isolated:   tt.Isolated,
-		}
+		// Everything else the signature says -- failable, convenience,
+		// required, exported -- is the same after substitution.
+		out := *tt
+		out.TypeParams, out.Params, out.Results, out.Thrown = open, params, res, thrown
+		return &out
 
 	// A nominal type's own parts. Substituting one is what makes
 	// `Box<Int32>` a struct with an Int32 in it rather than a struct

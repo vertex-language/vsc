@@ -796,6 +796,34 @@ func isStatic(mods []*ast.Modifier) bool {
 	return false
 }
 
+// declareExtensionTypes declares the types an extension's body declares
+// -- `extension Compiler { struct Reference { … } }` -- inside the type it
+// extends, where the extension's members, and anything naming
+// Compiler.Reference, find them. Only a type this module declares has a
+// member scope to put them in.
+func (c *checker) declareExtensionTypes(decls []ast.Decl, scope *Scope) {
+	for _, d := range decls {
+		ext, ok := d.(*ast.ExtensionDecl)
+		if !ok || ext.Body == nil || len(memberDecls(ext.Body)) == 0 {
+			continue
+		}
+		quiet := len(c.info.Diagnostics)
+		extType := c.resolveType(ext.Type, scope)
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+		if extType == nil || isInvalid(extType) {
+			continue
+		}
+		if inst, isInst := extType.(*types.GenericInstance); isInst {
+			extType = inst.Base
+		}
+		typeScope := c.typeScope(extType)
+		if typeScope == nil {
+			continue
+		}
+		c.declareNested(ext.Body, typeScope, extType, typeParamsOf(extType))
+	}
+}
+
 // declareNested declares types inside a nominal type's body and reads their members.
 func (c *checker) declareNested(body *ast.MemberBlock, typeScope *Scope, outer types.Type, outerParams []*types.TypeParam) {
 	nested := memberDecls(body)
@@ -1147,7 +1175,7 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			if inits == nil {
 				continue
 			}
-			sig := c.buildFuncSig(m.Sig, typeScope)
+			sig := c.buildGenericInitSig(m, typeScope)
 			sig.Exported = exported(c.accessOf(m.Mods))
 			sig.Isolated = c.declIsolated(m.Attrs, m.Mods)
 			sig.Failable = m.Question.IsValid() || m.Exclaim.IsValid()
@@ -1341,6 +1369,29 @@ func (c *checker) buildGenericFuncSig(f *ast.FuncDecl, scope *Scope) *types.Sign
 	tps := c.declareGenericParams(f.Generics, genScope)
 	c.applyWhere(f.Where, genScope)
 	sig := c.buildFuncSig(f.Sig, genScope)
+	sig.TypeParams = append(tps, sig.TypeParams...)
+	return sig
+}
+
+// buildGenericInitSig reads an initializer's signature in a scope holding
+// its own generic parameters, as buildGenericFuncSig does a function's:
+// `init<S: BinaryInteger>(from s: S)`. Its body is checked in that scope
+// too (see checkMember).
+func (c *checker) buildGenericInitSig(d *ast.InitDecl, scope *Scope) *types.Signature {
+	if d.Generics == nil {
+		return c.buildFuncSig(d.Sig, scope)
+	}
+	genScope := c.initScopes[d]
+	if genScope == nil {
+		genScope = NewScope(scope, d.Pos(), d.End())
+		if c.initScopes == nil {
+			c.initScopes = map[*ast.InitDecl]*Scope{}
+		}
+		c.initScopes[d] = genScope
+	}
+	tps := c.declareGenericParams(d.Generics, genScope)
+	c.applyWhere(d.Where, genScope)
+	sig := c.buildFuncSig(d.Sig, genScope)
 	sig.TypeParams = append(tps, sig.TypeParams...)
 	return sig
 }

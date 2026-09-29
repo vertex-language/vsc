@@ -567,16 +567,8 @@ func (g *gen) ownGenericMethod(e *ast.CallExpr, ref *analyzer.MethodRef, base ty
 	if meta, ok := base.(*types.Metatype); ok {
 		base = meta.Instance
 	}
-	decl := g.genericMethodDecl(genericMethodKey{typ: base, name: ref.Method.Name}, ref.Method)
-	if decl == nil {
-		return nil, "", false
-	}
-	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+len(spec.Params))
-	for k, v := range g.subst {
-		subst[k] = v
-	}
 	var own []types.Type
-	for i, p := range spec.Params {
+	for i := range spec.Params {
 		if i >= len(spec.Args) || spec.Args[i] == nil {
 			g.refuse(e, "a call whose type arguments could not be inferred")
 			return nil, "", true
@@ -585,21 +577,46 @@ func (g *gen) ownGenericMethod(e *ast.CallExpr, ref *analyzer.MethodRef, base ty
 		if len(g.subst) > 0 {
 			arg = types.Substitute(arg, g.subst)
 		}
-		subst[p] = arg
 		own = append(own, arg)
 	}
-	sig, ok := types.Substitute(ref.Method.Sig, subst).(*types.Signature)
+	return g.specializeOwnGeneric(e, ref.Method, base, spec.Params, own)
+}
+
+// specializeOwnGeneric lowers a method with type parameters of its own,
+// declared on base, for the arguments given them -- params are the ones
+// the call's specialization names, which a subclass's override has in the
+// same places under names of its own -- and answers the reference to
+// call and its symbol.
+func (g *gen) specializeOwnGeneric(e *ast.CallExpr, m *types.Method, base types.Type, params []*types.TypeParam, own []types.Type) (*analyzer.MethodRef, string, bool) {
+	decl := g.genericMethodDecl(genericMethodKey{typ: base, name: m.Name}, m)
+	if decl == nil {
+		return nil, "", false
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+len(own))
+	for k, v := range g.subst {
+		subst[k] = v
+	}
+	for i, arg := range own {
+		if i < len(params) {
+			subst[params[i]] = arg
+		}
+		// The method's own parameters, where they are not the call's.
+		if i < len(m.Sig.TypeParams) {
+			subst[m.Sig.TypeParams[i]] = arg
+		}
+	}
+	sig, ok := types.Substitute(m.Sig, subst).(*types.Signature)
 	if !ok {
 		g.refuse(e, "a generic method whose signature this cannot substitute")
 		return nil, "", true
 	}
 	mangled, err := mangle.Function(mangle.Decl{
-		Module:    g.memberModule(base, ref.Method),
+		Module:    g.memberModule(base, m),
 		Context:   memberChain(base),
 		Extended:  extendedBuiltin(base),
-		Name:      ref.Method.Name,
+		Name:      m.Name,
 		Signature: sig,
-		Static:    ref.Method.IsStatic,
+		Static:    m.IsStatic,
 		ModuleOf:  g.moduleOfType,
 	})
 	if err != nil {
@@ -615,10 +632,10 @@ func (g *gen) ownGenericMethod(e *ast.CallExpr, ref *analyzer.MethodRef, base ty
 	}
 	name := b.String()
 	out := &analyzer.MethodRef{Recv: base, Method: &types.Method{
-		Name:       ref.Method.Name,
+		Name:       m.Name,
 		Sig:        sig,
-		IsStatic:   ref.Method.IsStatic,
-		IsMutating: ref.Method.IsMutating,
+		IsStatic:   m.IsStatic,
+		IsMutating: m.IsMutating,
 	}}
 	g.emitMethodSpecialization(decl, base, name, subst)
 	return out, name, true

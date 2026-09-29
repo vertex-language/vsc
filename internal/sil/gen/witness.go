@@ -475,7 +475,28 @@ func (g *gen) existentialPropertyWrite(mem *ast.MemberExpr, v func() *sil.Value)
 	if !ok || mem.Name == nil {
 		return false
 	}
-	name := g.text(mem.Name)
+	return g.existentialWrite(mem, ex, g.text(mem.Name), g.typeOf(mem), func() *sil.Value { return g.lvalue(mem.X) }, v)
+}
+
+// implicitExistentialWrite is `count = v` in a protocol extension's body
+// lowered with the existential as Self -- a mutating method called on an
+// existential -- where count is a settable requirement: self's setter
+// row, on self's own storage.
+func (g *gen) implicitExistentialWrite(id *ast.IdentExpr, v func() *sil.Value) bool {
+	if id.Name == nil || g.recv == nil || g.self == nil || g.self.addr == nil {
+		return false
+	}
+	ex, ok := existentialOf(g.recv)
+	if !ok {
+		return false
+	}
+	return g.existentialWrite(id, ex, g.text(id.Name), g.typeOf(id), func() *sil.Value { return g.self.addr }, v)
+}
+
+// existentialWrite writes a settable requirement through an existential,
+// the one held at the address addr gives.
+func (g *gen) existentialWrite(at ast.Node, ex *types.Existential, name string, held types.Type,
+	addrOf func() *sil.Value, v func() *sil.Value) bool {
 	var req *types.Requirement
 	for _, p := range ex.Protocols {
 		for _, r := range allRequirements(p) {
@@ -491,19 +512,19 @@ func (g *gen) existentialPropertyWrite(mem *ast.MemberExpr, v func() *sil.Value)
 	if !ok {
 		return false
 	}
-	if _, ok := g.layoutOrder(mem, p); !ok {
+	if _, ok := g.layoutOrder(at, p); !ok {
 		return true
 	}
-	addr := g.lvalue(mem.X)
+	addr := addrOf()
 	if addr == nil {
-		g.refuse(mem, "an assignment through an existential that is not storage")
+		g.refuse(at, "an assignment through an existential that is not storage")
 		return true
 	}
 	value := v()
 	if value == nil {
 		return true
 	}
-	value = g.optionalFor(mem, value, g.typeOf(mem), req.Type)
+	value = g.optionalFor(at, value, held, req.Type)
 	vt := lowerType(req.Type)
 	ft := &sil.FuncType{Convention: sil.ConvWitness}
 	ft.Params = append(ft.Params, sil.Param{Type: vt, Convention: ownedConvention(vt)},

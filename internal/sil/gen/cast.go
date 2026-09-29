@@ -224,7 +224,9 @@ func (g *gen) castValue(at ast.Node, v *sil.Value, from, to types.Type) (*sil.Va
 		g.blk.AddressToPointer(out, raw), g.blk.AddressToPointer(src, raw), fromMeta, toMeta)
 	if temp != nil {
 		if lt := lowerType(from); !lt.Trivial() {
-			g.blk.DestroyAddr(temp)
+			// The copy made to hold it, let go by value: storage of a
+			// value, not an existential's, is destroyed by taking it out.
+			g.blk.DestroyValue(g.blk.Load(temp, loadQualifierTake(lt)))
 		}
 		g.blk.DeallocStack(temp)
 	}

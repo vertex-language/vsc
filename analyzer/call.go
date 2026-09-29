@@ -348,15 +348,60 @@ func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) b
 			return len(cl.Sig.Params.Params) == len(want.Params)
 		}
 	}
+	return c.literalFits(arg.X, p.Type)
+}
+
+// literalFits reports whether a literal written with no type of its own
+// can be one of t: an integer literal any number, a float literal a
+// floating-point one, and an array or dictionary literal a collection
+// whose elements its own fit -- `[1, 2, 3]` a [UInt8].
+func (c *checker) literalFits(e ast.Expr, t types.Type) bool {
+	if o, ok := t.(*types.Optional); ok {
+		t = o.Wrapped
+	}
+	switch x := unparen(e).(type) {
+	case *ast.ArrayLit:
+		arr, ok := t.Underlying().(*types.Array)
+		if !ok {
+			return false
+		}
+		for _, item := range x.Items {
+			if !c.literalFits(item, arr.Elem) && !c.fitsAlone(item, arr.Elem) {
+				return false
+			}
+		}
+		return true
+	case *ast.DictLit:
+		d, ok := t.Underlying().(*types.Dictionary)
+		if !ok {
+			return false
+		}
+		for _, item := range x.Items {
+			if !c.literalFits(item.Key, d.Key) && !c.fitsAlone(item.Key, d.Key) {
+				return false
+			}
+			if !c.literalFits(item.Value, d.Value) && !c.fitsAlone(item.Value, d.Value) {
+				return false
+			}
+		}
+		return true
+	}
 	// Untyped numeric literal arguments fit any numeric parameter -- an
 	// integer literal any number, a float literal a floating-point one.
-	if !c.isLiteralTree(arg.X) || !isNumericType(p.Type) {
+	if !c.isLiteralTree(e) || !isNumericType(t) {
 		return false
 	}
-	if hasFloatLiteral(arg.X) {
-		return isFloatingType(p.Type)
+	if hasFloatLiteral(e) {
+		return isFloatingType(t)
 	}
 	return true
+}
+
+// fitsAlone reports whether an element of a collection literal, typed as
+// the checker last found it, is assignable to t.
+func (c *checker) fitsAlone(e ast.Expr, t types.Type) bool {
+	got := c.info.Types[unparen(e)]
+	return got != nil && !isInvalid(got) && c.assignableTo(got, t)
 }
 
 // hasFloatLiteral reports whether a literal tree has a float literal in it.

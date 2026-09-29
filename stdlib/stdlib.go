@@ -156,6 +156,9 @@ const (
 	ArrayAppendContents  = "vertex_array_append_contents"
 	ArrayAssign          = "vertex_array_assign"
 	ArrayElementForWrite = "vertex_array_element_for_write"
+	// DictionaryValueForWrite is `d[key, default: value]` as a place to
+	// write through: Dictionary's _modify with a default.
+	DictionaryValueForWrite = "vertex_dictionary_value_for_write"
 	ArrayInsert          = "vertex_array_insert"
 	ArrayRemoveAt        = "vertex_array_remove_at"
 	ArrayRemoveLast      = "vertex_array_remove_last"

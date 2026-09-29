@@ -123,6 +123,20 @@ func (c *checker) findOwnMethod(t types.Type, name string) (types.Type, *types.M
 				return found, &types.Method{Name: m.Name, Sig: sig, IsStatic: m.IsStatic, IsMutating: m.IsMutating}
 			}
 		}
+		// Or its superclass constraint's.
+		for _, con := range tp.Constraints {
+			if isClassConstraint(con) {
+				if onType {
+					if found, m := c.findMethod(&types.Metatype{Instance: con}, name); m != nil {
+						return found, m
+					}
+					continue
+				}
+				if found, m := c.findMethod(con, name); m != nil {
+					return found, m
+				}
+			}
+		}
 		return nil, nil
 	}
 	// Method requirement on a dependent member type constraint.
@@ -301,6 +315,21 @@ func (c *checker) lookupOwnMember(t types.Type, name string) types.Type {
 		for _, con := range tp.Constraints {
 			if member := c.requirementType(con, name); member != nil {
 				return throughParam(con, tp, member)
+			}
+		}
+		// A superclass it is constrained to -- `T: Cell` -- gives it that
+		// class's members, stored properties among them.
+		for _, con := range tp.Constraints {
+			if isClassConstraint(con) {
+				if onType {
+					if member := c.lookupMember(&types.Metatype{Instance: con}, name); member != nil {
+						return member
+					}
+					continue
+				}
+				if member := c.lookupMember(con, name); member != nil {
+					return member
+				}
 			}
 		}
 		return nil
@@ -665,4 +694,14 @@ func existentialSame(ex *types.Existential, p types.Type, t types.Type) types.Ty
 		}
 		return ex.Same[d.Name]
 	})
+}
+
+// isClassConstraint reports whether a type parameter's constraint is a
+// class it must inherit from, rather than a protocol.
+func isClassConstraint(t types.Type) bool {
+	if gi, ok := t.(*types.GenericInstance); ok {
+		t = gi.Base
+	}
+	_, ok := t.Underlying().(*types.Class)
+	return ok
 }

@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/token"
@@ -434,11 +435,16 @@ func (g *gen) switchOnPatterns(s *ast.SwitchStmt, subject *sil.Value, t types.Ty
 		if cs.Kind == token.DEFAULT {
 			continue
 		}
-		for _, item := range cs.Items {
-			if len(cs.Items) > 1 && g.bindsNames(&ast.TuplePattern{Elems: []*ast.TuplePatternElem{{Pat: item.Pat}}}) {
-				g.refuse(item.Pat, "a case of several patterns that binds names")
+		// Several patterns that bind the same names meet at a block that
+		// takes them as its arguments: each pattern that matches hands it
+		// its own values for them, and the body reads the block's.
+		var shared *caseJoin
+		if len(cs.Items) > 1 && g.bindsNames(&ast.TuplePattern{Elems: []*ast.TuplePatternElem{{Pat: cs.Items[0].Pat}}}) {
+			if shared = g.newCaseJoin(cs.Items[0].Pat); shared == nil {
 				return false
 			}
+		}
+		for _, item := range cs.Items {
 			var missBlk *sil.Block
 			miss := func() *sil.Block {
 				if missBlk == nil {
@@ -468,6 +474,18 @@ func (g *gen) switchOnPatterns(s *ast.SwitchStmt, subject *sil.Value, t types.Ty
 				g.blk.CondBr(bit, holds, nil, m.fail(), nil)
 				g.blk = holds
 			}
+			if shared != nil {
+				if !shared.arrive(m) {
+					return false
+				}
+				if missBlk == nil {
+					// Nothing fails to match this one: the rest are never tried.
+					shared.finish(bodies[i])
+					return true
+				}
+				g.blk = missBlk
+				continue
+			}
 			// The body owns what the match took, from here on.
 			if len(m.owned) > 0 {
 				if g.armOwned == nil {
@@ -482,6 +500,9 @@ func (g *gen) switchOnPatterns(s *ast.SwitchStmt, subject *sil.Value, t types.Ty
 			}
 			g.blk = missBlk
 		}
+		if shared != nil {
+			shared.finish(bodies[i])
+		}
 	}
 	if defaultClause >= 0 {
 		g.blk.Br(bodies[defaultClause])
@@ -490,6 +511,102 @@ func (g *gen) switchOnPatterns(s *ast.SwitchStmt, subject *sil.Value, t types.Ty
 	// Exhaustive, as the checker holds it: no value gets this far.
 	g.blk.Unreachable()
 	return true
+}
+
+// A caseJoin is where the patterns of one case that bind names meet: a
+// block taking one argument per name, which the body reads and owns.
+type caseJoin struct {
+	g     *gen
+	syms  []analyzer.Symbol
+	types []sil.Type
+	block *sil.Block
+	body  *sil.Block
+}
+
+// newCaseJoin makes the join for a case whose first pattern is p, with an
+// argument for each name p binds under let. The body block is joined to
+// by finish; nil where a name is bound under var, which is refused.
+func (g *gen) newCaseJoin(p ast.Pattern) *caseJoin {
+	j := &caseJoin{g: g, block: g.fn.Block()}
+	ok := true
+	ast.Inspect(p, func(n ast.Node) bool {
+		if b, isBinding := n.(*ast.ValueBindingPattern); isBinding && b.Kind == token.VAR {
+			ok = false
+		}
+		id, isName := n.(*ast.IdentPattern)
+		if !isName || id.Name == nil {
+			return true
+		}
+		sym := g.info.Defs[id.Name]
+		if sym == nil {
+			ok = false
+			return false
+		}
+		for _, s := range j.syms {
+			if s == sym {
+				return true
+			}
+		}
+		t := lowerType(g.substituted(sym.Type()))
+		own := sil.Owned
+		if t.Trivial() {
+			own = sil.None
+		}
+		j.syms = append(j.syms, sym)
+		j.types = append(j.types, t)
+		j.block.Arg(t, own)
+		return true
+	})
+	if !ok {
+		g.refuse(p, "a case of several patterns that bind names under var")
+		return nil
+	}
+	return j
+}
+
+// arrive branches from a pattern that matched to the join, with copies of
+// what it bound; what the match took is let go here, the copies being
+// the body's.
+func (j *caseJoin) arrive(m *matcher) bool {
+	g := j.g
+	vals := make([]*sil.Value, len(j.syms))
+	for i, sym := range j.syms {
+		l := g.locals[sym]
+		if l == nil || l.value == nil {
+			g.refuse(nil, "a name a pattern of the case did not bind")
+			return false
+		}
+		v := l.value
+		if !j.types[i].Trivial() {
+			v = g.blk.CopyValue(v)
+		}
+		vals[i] = v
+	}
+	for k := len(m.owned) - 1; k >= 0; k-- {
+		g.blk.DestroyValue(m.owned[k])
+	}
+	g.blk.Br(j.block, vals...)
+	return true
+}
+
+// finish points the case's names at the join's arguments, gives the body
+// what they own, and goes on to it.
+func (j *caseJoin) finish(body *sil.Block) {
+	g := j.g
+	args := j.block.Args()
+	for i, sym := range j.syms {
+		g.locals[sym] = &local{value: args[i], typ: j.types[i]}
+		if !j.types[i].Trivial() {
+			if g.armOwned == nil {
+				g.armOwned = map[*sil.Block][]*sil.Value{}
+			}
+			g.armOwned[body] = append(g.armOwned[body], args[i])
+		}
+	}
+	prev := g.blk
+	g.blk = j.block
+	g.blk.Br(body)
+	g.blk = prev
 }
 
 // bindsVar reports whether a pattern binds a name under var.

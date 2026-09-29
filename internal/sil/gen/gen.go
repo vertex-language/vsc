@@ -286,6 +286,16 @@ func (g *gen) extension(d *ast.ExtensionDecl) {
 			g.function(m, recv)
 		case *ast.InitDecl:
 			g.initializer(m, recv)
+		// A type declared inside the extension is the extended type's, and
+		// its members are lowered as a nested type's are.
+		case *ast.StructDecl:
+			g.members(m.Name, m.Body)
+		case *ast.ClassDecl:
+			g.members(m.Name, m.Body)
+		case *ast.ActorDecl:
+			g.members(m.Name, m.Body)
+		case *ast.EnumDecl:
+			g.members(m.Name, m.Body)
 		}
 	}
 }
@@ -440,6 +450,9 @@ func linkageOf(a analyzer.Access) sil.Linkage {
 
 // A gen lowers one file.
 type gen struct {
+	// scriptGlobal is set while a top-level binding of main.swift that is
+	// not made a global is declared: Swift's would be one, never destroyed.
+	scriptGlobal bool
 	// inlinable is set while lowering another module's @inlinable
 	// function, whose body this module compiles but does not define:
 	// the function is public_external, available here to inline and to
@@ -838,6 +851,39 @@ type cleanup struct {
 }
 
 func (g *gen) push()       { g.scopes = append(g.scopes, &scope{}) }
+
+// pushArgs opens a call's argument scope: what evaluating the call makes
+// on the way -- its arguments' temporaries -- is registered here and ends
+// when the call is over (endArgs).
+func (g *gen) pushArgs() { g.scopes = append(g.scopes, &scope{}) }
+
+// endArgs closes a call's argument scope, keeping what v needs: its own
+// cleanups move out to the scopes that would have held them, so that the
+// call's value outlives the call, and the rest are emitted now.
+func (g *gen) endArgs(v *sil.Value) {
+	s := g.top()
+	var keep []cleanup
+	if v != nil {
+		rest := s.cleanups[:0]
+		for _, c := range s.cleanups {
+			if c.destroy == v || c.destroyAddr == v || c.endBorrow == v || c.endAccess == v {
+				keep = append(keep, c)
+				continue
+			}
+			rest = append(rest, c)
+		}
+		s.cleanups = rest
+	}
+	g.popReachable()
+	for _, c := range keep {
+		if c.endBorrow != nil || c.endAccess != nil {
+			g.top().cleanups = append(g.top().cleanups, c)
+			continue
+		}
+		l := g.lexical()
+		l.cleanups = append(l.cleanups, c)
+	}
+}
 func (g *gen) pushFormal() { g.scopes = append(g.scopes, &scope{formal: true}) }
 func (g *gen) top() *scope { return g.scopes[len(g.scopes)-1] }
 

@@ -309,7 +309,18 @@ func (g *gen) subscript(e *ast.SubscriptExpr) *sil.Value {
 	if base == nil || index == nil {
 		return nil
 	}
-	return g.elementAt(e, base, t, index, m)
+	v := g.elementAt(e, base, t, index, m)
+	// The copy of the array made to read it ends once the element is out:
+	// what was read is a value of its own, copied where it holds
+	// references. Held to the end of the statement instead, it would
+	// share the storage with the variable when the statement writes to
+	// it -- `a[i] ^= a[i - 1]` -- and the write would copy the whole
+	// array, every time. Swift borrows the array for the read.
+	if v != nil && base.Ownership() == sil.Owned && g.pendingDestroy(base) {
+		g.forget(base)
+		g.blk.DestroyValue(base)
+	}
+	return v
 }
 
 // elementAt lowers an element read for an already-lowered array and index.
