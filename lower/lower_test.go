@@ -87,13 +87,14 @@ import func @vertex_fatal(ptr) nounwind
 }
 
 // TestNarrowWidths is the one place a Swift type does not fit its
-// register. VIR has no i8, so an Int8 is held in an i32 that is always
-// sign-extended from its own width -- and the arithmetic has to put it
-// back there, which is also how the overflow is detected.
+// register. VIR has no i8, so an Int8 is held in an i32. The operands are
+// extended from their own width first -- a register may hold anything
+// above it -- and the sum is put back there, which is also how the
+// overflow is detected.
 func TestNarrowWidths(t *testing.T) {
 	got := body(vir(t, "testdata/narrow.swift"))
 	for _, want := range []string{
-		"i32.add %a0, %a1",
+		"i32.add %2, %5",
 		"i32.shl", "i32.sshr", // back into range
 		"i32.ne",                // and the fact that it moved is the overflow
 		"@vertex_fatal", "trap", // where it goes, saying so

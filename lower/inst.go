@@ -687,7 +687,12 @@ func (c *fn) classMethod(in *sil.Inst) error {
 	}
 	rows, ok := c.l.slots[classTableName(formal, cl)]
 	if !ok {
-		return c.fail(ErrUnsupported, in.Op(), cl.Name+" has no dispatch table")
+		// An imported class's table is in its own module: the call
+		// recorded its rows.
+		rows, ok = c.l.module.ImportedLayout(cl.Name)
+		if !ok {
+			return c.fail(ErrUnsupported, in.Op(), cl.Name+" has no dispatch table")
+		}
 	}
 	i := -1
 	for n, m := range rows {

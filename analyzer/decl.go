@@ -549,7 +549,7 @@ func (c *checker) declareTypes(decls []ast.Decl, scope *Scope) {
 
 		case *ast.ClassDecl:
 			name := d.Name.Text(c.file)
-			cl := &types.Class{Name: name, Pkg: c.importing}
+			cl := &types.Class{Name: name, Pkg: c.importing, Final: c.hasModifier(d.Mods, "final")}
 			sym := NewTypeName(name, cl, d.Name.Pos())
 			sym.SetDecl(d)
 			if old := scope.Insert(sym); old != nil {

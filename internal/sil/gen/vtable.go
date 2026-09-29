@@ -3,6 +3,7 @@ package gen
 import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/mangle"
 	"github.com/vertex-language/vsc/types"
 )
@@ -57,6 +58,35 @@ func (g *gen) vtables(files []*ast.File) {
 			}
 		}
 	}
+}
+
+// isPoly says calls on cl's members go through its table: it has
+// subclasses here, or it is imported, and its subclasses may be anywhere.
+func (g *gen) isPoly(cl *types.Class) bool {
+	d := cl.Declared()
+	if g.poly[d] {
+		return true
+	}
+	return d.Pkg != "" && !d.Final && len(d.TypeParams) == 0
+}
+
+// classMethod looks member up in self's table. An imported class's table
+// is in its own module, so its rows are recorded for the call to index.
+func (g *gen) classMethod(self *sil.Value, member string, t sil.Type) *sil.Value {
+	formal := self.Type().Formal()
+	if meta, ok := formal.(*types.Metatype); ok {
+		formal = meta.Instance
+	}
+	if cl, ok := formal.Underlying().(*types.Class); ok && cl.Pkg != "" && len(cl.TypeParams) == 0 {
+		if _, known := g.m.ImportedLayout(cl.Name); !known {
+			var rows []string
+			for _, s := range g.slots(formal) {
+				rows = append(rows, s.member)
+			}
+			g.m.ClassLayout(cl.Name, rows)
+		}
+	}
+	return g.blk.ClassMethod(self, member, t)
 }
 
 // A slot is one row of a dispatch table.

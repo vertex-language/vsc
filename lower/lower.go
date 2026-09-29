@@ -767,6 +767,7 @@ func (l *lowerer) vtables(m *sil.Module) error {
 			// table reads the row as that record (see suspensionTarget).
 			if _, async := l.asyncSizes[e.Impl]; async {
 				rows = append(rows, ir.RelocInit(l.asyncRecordOf(e.Impl)))
+				members = append(members, e.Member)
 				continue
 			}
 			impl, ok := l.callee[e.Impl]

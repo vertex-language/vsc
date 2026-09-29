@@ -465,11 +465,14 @@ type Class struct {
 	Methods      []*Method
 	Conformances []*Protocol
 	IsActor      bool
-	Assoc        map[string]Type // associated type mappings
-	In           Type            // enclosing type if nested
-	Computed     []*Field        // computed properties
-	Statics      []*Field        // static properties
-	Subscripts   []*Subscript
+	// Final is a `final class`: nothing inherits from it, so its members
+	// are called directly, from any module.
+	Final      bool
+	Assoc      map[string]Type // associated type mappings
+	In         Type            // enclosing type if nested
+	Computed   []*Field        // computed properties
+	Statics    []*Field        // static properties
+	Subscripts []*Subscript
 	// Origin is the declared class this one is an instance's substituted
 	// copy of -- Container for Container<Int>'s -- or nil for a declared one.
 	Origin *Class

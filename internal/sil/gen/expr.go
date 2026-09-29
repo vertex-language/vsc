@@ -1637,7 +1637,9 @@ func (g *gen) endReceiverTemp(v *sil.Value) {
 // methodCall emits a method call over the given receiver.
 func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func() *sil.Value) *sil.Value {
 	// Dynamic dispatch for polymorphic classes via vtable.
-	if cl, ok := receiverClass(ref.Recv); ok && g.poly[cl.Declared()] {
+	// A method with type parameters of its own has no row: it is
+	// specialized where it is called.
+	if cl, ok := receiverClass(ref.Recv); ok && g.isPoly(cl) && len(ref.Method.Sig.TypeParams) == 0 {
 		return g.dynamicCall(e, ref, cl, receiver)
 	}
 	var symbol string
@@ -1799,7 +1801,7 @@ func (g *gen) dynamicCall(e *ast.CallExpr, ref *analyzer.MethodRef, cl *types.Cl
 			}
 		}
 	}
-	method := g.blk.ClassMethod(self, member, methodType(ref, introType))
+	method := g.classMethod(self, member, methodType(ref, introType))
 
 	args = append(args, self)
 	if ref.Method.Sig.Throws {
@@ -1857,6 +1859,7 @@ func methodType(ref *analyzer.MethodRef, intro types.Type) sil.Type {
 	if sig.Throws {
 		ft.ErrorType = sil.Object(sil.BuiltinNativeObj)
 	}
+	ft.Async = sig.Async
 	return sil.Object(ft)
 }
 
@@ -2493,7 +2496,7 @@ func (g *gen) classMethodCall(e *ast.CallExpr, mem *ast.MemberExpr, ref *analyze
 		return nil, false
 	}
 	cl, ok := receiverClass(meta.Instance)
-	if !ok || !g.poly[cl.Declared()] {
+	if !ok || !g.isPoly(cl) {
 		return nil, false
 	}
 	var self *sil.Value
@@ -2527,7 +2530,8 @@ func (g *gen) classMethodCall(e *ast.CallExpr, mem *ast.MemberExpr, ref *analyze
 	if sig.Throws {
 		ft.ErrorType = sil.Object(sil.BuiltinNativeObj)
 	}
-	method := g.blk.ClassMethod(self, intro.Name+"."+ref.Method.Name, sil.Object(ft))
+	ft.Async = sig.Async
+	method := g.classMethod(self, intro.Name+"."+ref.Method.Name, sil.Object(ft))
 	args, ok := g.arguments(e, sig)
 	if !ok {
 		return nil, true

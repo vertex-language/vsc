@@ -1038,7 +1038,7 @@ func (g *gen) metatypeInit(e *ast.CallExpr, ref *ast.InitRefExpr) (*sil.Value, b
 	ft.Params = append(ft.Params, sil.Param{Type: sil.ThinMetatype(t), Convention: sil.ParamUnowned})
 	ft.Results = append(ft.Results, sil.Result{Type: ct, Convention: resultConvention(ct)})
 	intro := initIntroducer(cl, sig)
-	method := g.blk.ClassMethod(self, intro.Name+"."+initSlotKey(sig), sil.Object(ft))
+	method := g.classMethod(self, intro.Name+"."+initSlotKey(sig), sil.Object(ft))
 	vals, ok := g.arguments(e, &out)
 	if !ok {
 		return nil, true

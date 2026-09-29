@@ -26,6 +26,10 @@ type Module struct {
 	metadataOrder []string
 	// protocols are the descriptors of the protocols this module declares.
 	protocols []string
+	// layouts are the dispatch table rows of imported classes this
+	// module calls through: the class's own module has the table, and
+	// a call indexes it by these rows.
+	layouts map[string][]string
 }
 
 // NewModule starts an empty module at the given stage.
@@ -105,6 +109,20 @@ func (m *Module) VTableNamed(class string) *VTable {
 		}
 	}
 	return nil
+}
+
+// ClassLayout records the table rows of an imported class, by member.
+func (m *Module) ClassLayout(class string, members []string) {
+	if m.layouts == nil {
+		m.layouts = map[string][]string{}
+	}
+	m.layouts[class] = members
+}
+
+// ImportedLayout is the recorded table rows of an imported class.
+func (m *Module) ImportedLayout(class string) ([]string, bool) {
+	rows, ok := m.layouts[class]
+	return rows, ok
 }
 
 func (m *Module) VTable(class string) *VTable {

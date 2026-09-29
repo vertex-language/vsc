@@ -85,7 +85,7 @@ func (g *gen) getter(e *ast.MemberExpr, recv types.Type, f *types.Field) *sil.Va
 func (g *gen) getterCall(at ast.Node, recv types.Type, f *types.Field,
 	receiver func() *sil.Value) *sil.Value {
 
-	if cl, ok := receiverClass(recv); ok && g.poly[cl.Declared()] && f.LazyStorage == "" {
+	if cl, ok := receiverClass(recv); ok && g.isPoly(cl) && f.LazyStorage == "" {
 		return g.dynamicGetter(cl, f, receiver)
 	}
 	resultType := f.Type
@@ -743,7 +743,7 @@ func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, v
 // is what a compound assignment has: it read the property, applied
 // the operator, and has the answer in hand.
 func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Field, v *sil.Value) {
-	if cl, ok := receiverClass(recv); ok && g.poly[cl.Declared()] && f.LazyStorage == "" {
+	if cl, ok := receiverClass(recv); ok && g.isPoly(cl) && f.LazyStorage == "" {
 		g.dynamicSetter(mem, cl, f, v)
 		return
 	}
@@ -1145,7 +1145,7 @@ func (g *gen) dynamicGetter(cl *types.Class, f *types.Field, receiver func() *si
 	ft := &sil.FuncType{Convention: sil.Method}
 	ft.Params = append(ft.Params, sil.Param{Type: st, Convention: selfConvention(st)})
 	ft.Results = append(ft.Results, sil.Result{Type: t, Convention: resultConvention(t)})
-	method := g.blk.ClassMethod(self, intro.Name+"."+f.Name+"!getter", sil.Object(ft))
+	method := g.classMethod(self, intro.Name+"."+f.Name+"!getter", sil.Object(ft))
 	v := g.blk.Apply(method, t, self)
 	g.destroyLater(v)
 	return v
@@ -1164,7 +1164,7 @@ func (g *gen) dynamicSetter(mem *ast.MemberExpr, cl *types.Class, f *types.Field
 	conv := paramConvention(&types.Param{Type: f.Type}, t)
 	ft := &sil.FuncType{Convention: sil.Method}
 	ft.Params = append(ft.Params, sil.Param{Type: t, Convention: conv}, sil.Param{Type: st, Convention: selfConvention(st)})
-	method := g.blk.ClassMethod(self, intro.Name+"."+f.Name+"!setter", sil.Object(ft))
+	method := g.classMethod(self, intro.Name+"."+f.Name+"!setter", sil.Object(ft))
 	g.blk.Apply(method, sil.Object(types.Typ[types.Void]), v, self)
 	if !t.Trivial() && v.Ownership() == sil.Owned && conv == sil.ParamGuaranteed && !g.pendingDestroy(v) {
 		g.blk.DestroyValue(v)
