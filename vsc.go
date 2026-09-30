@@ -522,6 +522,48 @@ func (l *importer) read(name string, at *ast.ImportDecl, unit *token.File, via s
 	})
 }
 
+// moduleDeps are the names of the modules a package's files import, now
+// that each has been read: what the package's own names resolve against
+// before anything else loaded.
+func (l *importer) moduleDeps(files []*ast.File, units []*token.File, dir string) []string {
+	var out []string
+	for i, f := range files {
+		unit := f.Unit
+		if i < len(units) && units[i] != nil {
+			unit = units[i]
+		}
+		for _, stmt := range f.Stmts {
+			decl, ok := stmt.(*ast.DeclStmt)
+			if !ok {
+				continue
+			}
+			imp, ok := decl.D.(*ast.ImportDecl)
+			if !ok || unit == nil {
+				continue
+			}
+			for _, spec := range imp.Paths {
+				path, ok := importPathText(spec.Path, unit)
+				if !ok {
+					continue
+				}
+				d, err := l.folder(path, dir)
+				if err != nil {
+					continue
+				}
+				if name := l.names[d]; name != "" && !slices.Contains(out, name) {
+					out = append(out, name)
+				}
+			}
+			if len(imp.Path) > 0 {
+				if name := imp.Path[0].Text(unit); name != "" && !slices.Contains(out, name) {
+					out = append(out, name)
+				}
+			}
+		}
+	}
+	return out
+}
+
 // findInterface searches paths for a module interface (.vinterface, .swiftinterface, or .swiftmodule).
 func findInterface(name string, paths []string) (string, bool) {
 	for _, dir := range paths {
@@ -887,7 +929,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 			}
 		}
 	}
-	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units})
+	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units, Deps: l.moduleDeps(files, units, dir)})
 	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque,
 		Surface: surface(files, units)})
 	if l.onPackage != nil {

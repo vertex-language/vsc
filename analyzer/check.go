@@ -107,6 +107,8 @@ type checker struct {
 	markupCalls map[*ast.MarkupElement]ast.Expr
 	// directModules are the modules the program imports itself.
 	directModules map[string]bool
+	// moduleNamed is each loaded module's scope by its declared name.
+	moduleNamed map[string]*Scope
 	// currIsolated is whether the code being checked runs on the main
 	// thread: a @MainActor function or type's member, a closure made
 	// there, or top-level code. See isolation.go.
@@ -188,6 +190,10 @@ type Import struct {
 	// only a module it imports: a name two modules declare is the one a
 	// direct import's.
 	Direct bool
+	// Deps are the names of the modules this one imports. Its names
+	// resolve against theirs before anything else loaded: ui/kit's `Node`
+	// is ui/component's, whatever else the program imports.
+	Deps []string
 }
 
 // bound is the name this program looks the module up under.
@@ -462,10 +468,29 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 	defer func() { c.importing = "" }()
 	for _, imp := range imports {
 		c.importing = imp.Name
-		// Stage declarations into a module-specific scope before merging into shared scope.
-		staging := NewScope(scope, token.NoPos, token.NoPos)
+		// Stage declarations into a module-specific scope before merging
+		// into the shared scope. Between them, what the module itself
+		// imports: its names resolve there first.
+		parent := scope
+		if len(imp.Deps) > 0 {
+			parent = NewScope(scope, token.NoPos, token.NoPos)
+			for _, dep := range imp.Deps {
+				if m := c.moduleNamed[dep]; m != nil {
+					for _, sym := range m.Symbols() {
+						parent.Insert(sym)
+					}
+				}
+			}
+		}
+		staging := NewScope(parent, token.NoPos, token.NoPos)
 		if c.modules[imp.bound()] == nil {
 			c.modules[imp.bound()] = staging
+		}
+		if c.moduleNamed == nil {
+			c.moduleNamed = map[string]*Scope{}
+		}
+		if c.moduleNamed[imp.Name] == nil {
+			c.moduleNamed[imp.Name] = staging
 		}
 		for i, f := range imp.Files {
 			if i < len(imp.Units) {

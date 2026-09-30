@@ -400,3 +400,23 @@ public func both(_ x: a.Addr, _ y: b.Addr?) -> Int32 { return 0 }
 		}
 	}
 }
+
+// TestAPackagesNamesAreItsImports: an imported package's names resolve
+// against what it imports before anything else the program loads. lib
+// says `Node`, meaning its import a's; the program also imports b, which
+// declares a Node of its own, first.
+func TestAPackagesNamesAreItsImports(t *testing.T) {
+	root := t.TempDir()
+	writePackage(t, filepath.Join(root, "b"), "b", "public final class Node { public init() {} ; public var fromB = 2 }\n")
+	writePackage(t, filepath.Join(root, "a"), "a", "public final class Node { public init() {} ; public var fromA = 1 }\n")
+	writePackage(t, filepath.Join(root, "lib"), "lib", "import \"a\"\npublic func make() -> Node { return Node() }\n")
+	u, diags := compile(t, `
+import "b"
+import "lib"
+func main() -> Int32 { return Int32(lib.make().fromA) }
+`, vsc.Options{PackagePaths: []string{root}})
+	for _, d := range diags {
+		t.Errorf("compile: %v", d)
+	}
+	_ = u
+}
