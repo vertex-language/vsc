@@ -200,6 +200,46 @@ func TestFolderImport(t *testing.T) {
 	}
 }
 
+// TestAssignImportedGlobal writes another package's public globals: a
+// plain assignment, a compound one, and a closure stored into an
+// optional function-typed global, all qualified by the package name.
+func TestAssignImportedGlobal(t *testing.T) {
+	dir := t.TempDir()
+	pkg := filepath.Join(dir, "hooks")
+	if err := os.MkdirAll(pkg, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(pkg, "hooks.vs"), `package hooks
+
+public var Hook: ((int32) -> int32)? = nil
+public var Count: int32 = 0
+
+public func Run(_ v: int32) -> int32 {
+    if let h = Hook { return h(v) }
+    return -1
+}
+`)
+	main := filepath.Join(dir, "main.vs")
+	write(t, main, `import "./hooks"
+
+func main() -> int32 {
+    hooks.Count = 5
+    hooks.Count += 1
+    hooks.Hook = { v in v * 2 }
+    return hooks.Run(hooks.Count)
+}
+`)
+	src, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, diags := vsc.Compile([]vsc.Source{{Name: main, Text: src}},
+		vsc.Options{Module: "main", Target: ir.AArch64MacOS})
+	for _, d := range diags {
+		t.Errorf("%s", d)
+	}
+}
+
 // TestFolderImportNamedByFolder is the default the SwiftPM convention
 // argues for: with no package clause, the folder's own name is the
 // module's, which is a path's last segment.

@@ -243,10 +243,15 @@ extension Array {
         self = Array(dropFirst(k))
     }
 
-    // Takes the last k elements away.
+    // Takes the last k elements away, in place: O(k), as Swift's is, so
+    // a stack popped a few at a time stays linear.
     mutating func removeLast(_ k: Int) {
         if k < 0 || k > count { fatalError("Can't remove more items from a collection than it contains") }
-        self = Array(dropLast(k))
+        var i = 0
+        while i < k {
+            _ = removeLast()
+            i += 1
+        }
     }
 
     // Takes away every element shouldBeRemoved is true of.

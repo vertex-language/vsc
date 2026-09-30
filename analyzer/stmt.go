@@ -152,8 +152,18 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 		}
 
 	case *ast.ForInStmt:
+		// An annotated loop variable types the array literal it walks:
+		// `for c: UInt32 in [0x30, 0x31]` iterates a [UInt32].
+		var wantSeq types.Type
+		if tp, ok := s.Pat.(*ast.TypedPattern); ok && tp.Type != nil {
+			if _, isLit := unparen(s.Seq).(*ast.ArrayLit); isLit {
+				if et := c.resolveType(tp.Type, scope); et != nil && !isInvalid(et) {
+					wantSeq = &types.Array{Elem: et}
+				}
+			}
+		}
 		// Determine loop element type from sequence type.
-		seqType := c.checkExpr(s.Seq, nil, scope)
+		seqType := c.checkExpr(s.Seq, wantSeq, scope)
 		elemType := types.Type(types.Typ[types.Invalid])
 		bound, _, isRange := c.info.RangeOf(seqType)
 		switch seq := seqType.Underlying().(type) {

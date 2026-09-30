@@ -358,10 +358,37 @@ func (g *gen) importedVarRead(e ast.Node, sym analyzer.Symbol) (*sil.Value, bool
 		g.getters[sym] = &moduleGetter{name: v.Name(), symbol: name, typ: v.Type()}
 		return g.moduleGetterCall(sym)
 	}
+	addr, t, ok := g.importedVarAddr(e, sym)
+	if !ok {
+		return nil, false
+	}
+	access := g.blk.BeginAccess(addr, "read", "unknown")
+	val := g.blk.Load(access, loadQualifier(t))
+	g.blk.EndAccess(access)
+	return g.loaded(val, t), true
+}
+
+// importedVarAddr is the address of another module's stored variable,
+// from its addressor: what a read loads and a write stores to.
+func (g *gen) importedVarAddr(e ast.Node, sym analyzer.Symbol) (*sil.Value, sil.Type, bool) {
+	v, ok := sym.(*analyzer.VarSymbol)
+	if !ok || g.blk == nil || v.Computed() {
+		return nil, sil.Type{}, false
+	}
+	module, imported := g.info.Imported[sym]
+	if !imported || module == "" || module == "Swift" {
+		return nil, sil.Type{}, false
+	}
+	d := mangle.Decl{
+		Module:    module,
+		ModuleOf:  g.moduleOfType,
+		Name:      v.Name(),
+		Signature: &types.Signature{Results: v.Type()},
+	}
 	name, err := mangle.Addressor(d)
 	if err != nil {
 		g.refuse(e, "a module-level variable this compiler cannot name: "+err.Error())
-		return nil, false
+		return nil, sil.Type{}, false
 	}
 	t := lowerType(v.Type())
 	callee := g.m.Func(name).SetSourceName(v.Name())
@@ -370,9 +397,5 @@ func (g *gen) importedVarRead(e ast.Node, sym analyzer.Symbol) (*sil.Value, bool
 		callee.SetResult(rawPointerType(), sil.ResultUnowned)
 	}
 	p := g.blk.Apply(g.blk.FunctionRef(callee), rawPointerType())
-	addr := g.blk.PointerToAddress(p, t.Address())
-	access := g.blk.BeginAccess(addr, "read", "unknown")
-	val := g.blk.Load(access, loadQualifier(t))
-	g.blk.EndAccess(access)
-	return g.loaded(val, t), true
+	return g.blk.PointerToAddress(p, t.Address()), t, true
 }

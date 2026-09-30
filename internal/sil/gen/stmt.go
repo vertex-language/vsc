@@ -664,6 +664,19 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 		if n.Name == nil {
 			return nil
 		}
+		// A module-qualified variable -- `hooks.Count = 1` -- is written
+		// where its name alone would be: this module's storage, or the
+		// other module's through its addressor.
+		if id, ok := n.X.(*ast.IdentExpr); ok && id.Name != nil && g.info.Uses[id.Name] == nil {
+			if sym := g.info.Uses[n.Name]; sym != nil {
+				if addr, _, ok := g.moduleVarAddr(sym); ok {
+					return addr
+				}
+				if addr, _, ok := g.importedVarAddr(n, sym); ok {
+					return addr
+				}
+			}
+		}
 		// p.pointee writes through the pointer value.
 		if p, ok := g.isPointee(n); ok {
 			return g.pointeeAddrForWrite(n, p)

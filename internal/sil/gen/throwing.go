@@ -172,7 +172,13 @@ func (g *gen) tryApply(e *ast.CallExpr, callee *sil.Value, args []*sil.Value,
 			g.blk = join
 			return g.void()
 		}
-		opt := &types.Optional{Wrapped: result}
+		// try? on a call that answers T? answers T?, not T?? (SE-0230):
+		// the value goes on as it is, and a failure is its nil.
+		var opt types.Type = &types.Optional{Wrapped: result}
+		_, flat := result.Underlying().(*types.Optional)
+		if flat {
+			opt = result
+		}
 		normal := g.fn.Block()
 		failed := g.fn.Block()
 		join := g.fn.Block()
@@ -188,7 +194,10 @@ func (g *gen) tryApply(e *ast.CallExpr, callee *sil.Value, args []*sil.Value,
 		g.blk.TryApply(callee, normal, failed, args...)
 
 		g.blk = normal
-		some := g.blk.Enum(lowerType(opt), optionalSome, value)
+		some := value
+		if !flat {
+			some = g.blk.Enum(lowerType(opt), optionalSome, value)
+		}
 		g.blk.Br(join, some)
 
 		g.blk = failed

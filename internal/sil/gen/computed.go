@@ -963,6 +963,11 @@ func (g *gen) emitObservedSetter(recv types.Type, name string, t types.Type, b *
 // a computed one, whose storage does not exist, or a stored one with
 // observers, whose write is more than a store.
 func (g *gen) setterField(t types.Type, name string) (*types.Field, bool) {
+	// A package's global, `hooks.Count = 1`, has no receiver type: it is
+	// stored, as a global of this package is.
+	if t == nil {
+		return nil, false
+	}
 	if f, ok := g.computedField(t, name); ok {
 		return f, true
 	}

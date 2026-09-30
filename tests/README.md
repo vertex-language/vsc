@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`372` in the order the
+A ladder: one small thing per file, numbered `001`–`375` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -56,6 +56,9 @@ around it.
 | 370 | an if or switch expression whose value is an existential: each branch a different conforming type, as a result, an initializer and a closure's value |
 | 371 | a mutating call through a computed property written back when its statement ends, where an argument's getter is specialized mid-statement |
 | 372 | a computed property named alone in a method or initializer written through its setter, and an observed one through its observers, except inside its own |
+| 373 | `removeLast(k)` in place: a large array popped four at a time stays linear |
+| 374 | `try?` on a call that answers an optional, a tuple's or an `Int`'s: one level of optional, compared with nil and bound |
+| 375 | a `for`-`in` variable's annotation typing the array literal it walks: `for c: UInt32 in [0x30, 0x31]` |
 
 ## Rules
 
