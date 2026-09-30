@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`368` in the order the
+A ladder: one small thing per file, numbered `001`–`370` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -52,6 +52,8 @@ around it.
 | 272 | pointers made writable with `init(mutating:)`, typed and raw |
 | 331–367 | gaps `vsc_TODO.md` recorded, one rung each: generic initializers, in place `dict[k, default:]` appends and element stores, extension methods on existentials, synthesized `Comparable`, implicit class `init()`, `nonmutating set` through a `let`, type parameters of one name, `Task(priority:)`, `async let` under an executor preference, temporary and global lifetimes, optional ternaries, local functions in a `switch` case, label overloads, mutually recursive local functions, thrown structs and payload enums, unsigned conversions and shifts, `Substring.utf8`, tuple patterns over payload enums, inherited members from a subclass, escaping closures in closures, `ObjectIdentifier`, `String.removeFirst`/`removeLast`, nested empty dictionary literals, an overload chosen by function type, generic method overrides, a type nested in an extension, stored properties through a class-constrained `T`, `AnyObject?` downcasts |
 | 368 | one existential into another of fewer protocols: `any Q` and `any Error` into `Any`, `any P & Q` into `any Q` -- the value, its type and the tables the destination names, and no more |
+| 369 | a property wrapper on a local: storage of the wrapper's type, reads and writes through it, `$name`, captured and written by a closure, a generic class wrapper passed by its projection |
+| 370 | an if or switch expression whose value is an existential: each branch a different conforming type, as a result, an initializer and a closure's value |
 
 ## Rules
 

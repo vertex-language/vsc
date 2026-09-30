@@ -21,7 +21,7 @@ const (
 // file that is not a source: a header, a module map, a resource.
 func languageOf(path string) (Language, bool) {
 	switch filepath.Ext(path) {
-	case ".swift", ".vs":
+	case ".swift", ".vs", ".vsx":
 		return Swift, true
 	case ".cpp", ".cc", ".cxx", ".c++":
 		return CXX, true

@@ -144,7 +144,7 @@ func (c *checker) readingSourcePackage() bool {
 	if c.importing == "" || c.importing == "Swift" || c.importing == "gpu" || c.file == nil {
 		return false
 	}
-	return strings.HasSuffix(c.file.Name(), ".vs")
+	return strings.HasSuffix(c.file.Name(), ".vs") || strings.HasSuffix(c.file.Name(), ".vsx")
 }
 
 // hideImportedMethod records a method of an imported source package that
@@ -182,7 +182,7 @@ func (c *checker) hideImported(imp Import, sym Symbol, unitOf map[ast.Decl]*toke
 	for _, s := range syms {
 		d := s.Decl()
 		unit := unitOf[d]
-		if d == nil || unit == nil || !strings.HasSuffix(unit.Name(), ".vs") {
+		if d == nil || unit == nil || !(strings.HasSuffix(unit.Name(), ".vs") || strings.HasSuffix(unit.Name(), ".vsx")) {
 			continue
 		}
 		c.file = unit

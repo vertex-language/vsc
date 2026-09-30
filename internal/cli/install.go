@@ -237,7 +237,7 @@ func onPath(dir string) bool {
 // packageClause is the name the package clause of dir's files gives, ""
 // where none has one: a program's folder says main, or nothing at all.
 func packageClause(dir string) string {
-	files, _ := filepath.Glob(filepath.Join(dir, "*"+vsc.SourceExtension))
+	files := vsc.SourceFiles(dir)
 	for _, name := range files {
 		text, err := os.ReadFile(name)
 		if err != nil {

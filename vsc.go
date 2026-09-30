@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -223,6 +224,16 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 		u.Positions = append(u.Positions, tf)
 		diags = append(diags, attribute(ds, tf)...)
 	}
+	// The program's folders' styles are a source of the program's.
+	styles, styleDiags := programStyles(u.Files, u.Positions, srcs, opts)
+	diags = append(diags, styleDiags...)
+	for _, src := range styles {
+		tf := token.NewFile(src.Name, src.Text)
+		file, ds := parser.ParseFile(tf, 0)
+		u.Files = append(u.Files, file)
+		u.Positions = append(u.Positions, tf)
+		diags = append(diags, attribute(ds, tf)...)
+	}
 	done()
 	if opts.Stop == Parsed || Errors(diags) {
 		return u, diags
@@ -355,13 +366,18 @@ var errNoTarget = errors.New("no target: lowering needs a machine to lower for")
 // loadImports resolves and loads all transitive module and package imports.
 func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []string,
 	packages PackageResolver, ifcfg ifconfig.Config, target ir.Target, summaries SummaryCache, onPackage func(Package)) ([]analyzer.Import, []Package, []Diagnostic) {
-	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, ifcfg: ifcfg, target: target, summaries: summaries, onPackage: onPackage}
+	l := &importer{paths: paths, pkgPaths: pkgPaths, packages: packages, seen: map[string]bool{}, direct: map[string]bool{}, ifcfg: ifcfg, target: target, summaries: summaries, onPackage: onPackage}
 	for i, f := range files {
 		unit := f.Unit
 		if i < len(units) && units[i] != nil {
 			unit = units[i]
 		}
 		l.readAll(f, unit, "")
+	}
+	// What the program imports itself, as against what only its imports
+	// do: where two modules declare one name, its own import's is meant.
+	for i := range l.out {
+		l.out[i].Direct = l.direct[l.out[i].Name] || (l.out[i].As != "" && l.direct[l.out[i].As])
 	}
 	return l.out, l.pkgs, l.diags
 }
@@ -379,6 +395,9 @@ type importer struct {
 	fetched  map[string]string
 	fetchErr map[string]error
 	seen     map[string]bool
+	// direct is the modules the program's own files import, by the name
+	// they are bound to.
+	direct map[string]bool
 	// names is each folder's package name, as its package declaration
 	// gives it, once the folder has been read.
 	names map[string]string
@@ -688,6 +707,25 @@ func packageNameOf(files []*ast.File, units []*token.File) string {
 // SourceExtension is the file extension for Vertex source files (.vs).
 const SourceExtension = ".vs"
 
+// MarkupExtension is the file extension for Vertex with markup (.vsx),
+// which is package source beside .vs files. See proposed_vsx.md.
+const MarkupExtension = ".vsx"
+
+// IsSourceFile reports whether a file name is Vertex source: .vs or .vsx.
+func IsSourceFile(name string) bool {
+	ext := filepath.Ext(name)
+	return ext == SourceExtension || ext == MarkupExtension
+}
+
+// SourceFiles is dir's Vertex source files, .vs and .vsx, sorted.
+func SourceFiles(dir string) []string {
+	vs, _ := filepath.Glob(filepath.Join(dir, "*"+SourceExtension))
+	vsx, _ := filepath.Glob(filepath.Join(dir, "*"+MarkupExtension))
+	all := append(vs, vsx...)
+	sort.Strings(all)
+	return all
+}
+
 // readFolder loads a package from a directory of source files.
 func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *token.File, via string) (dir string) {
 	severity := token.Error
@@ -724,6 +762,9 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		as := name
 		if spec.Alias != nil {
 			as = spec.Alias.Text(unit)
+		}
+		if via == "" {
+			l.direct[as] = true
 		}
 		if l.seen[as] {
 			return dir
@@ -791,10 +832,23 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	if spec.Alias != nil {
 		as = spec.Alias.Text(unit)
 	}
+	if via == "" {
+		l.direct[as] = true
+	}
 	if l.seen[as] {
 		return dir
 	}
 	l.seen[as] = true
+
+	// The folder's .vss files are its stylesheet, carried by a source
+	// generated from them (see vsc/vss).
+	if len(folder.Styles) > 0 {
+		gen, ds := styleSource(dir, packageNameOf(files, units), importPaths(files, units), l.folder)
+		l.diags = append(l.diags, ds...)
+		if gen != nil && !add(parseSource(*gen, l.ifcfg)) {
+			return ""
+		}
+	}
 
 	// The folder's C++ module is more of the package: its exports are
 	// declarations the package's Vertex sees, and its API where the folder

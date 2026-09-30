@@ -133,10 +133,9 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 	return doFilesBuild(bf, mode, names, target, stdout, stderr)
 }
 
-// hasVertex reports whether dir holds .vs files.
+// hasVertex reports whether dir holds .vs or .vsx files.
 func hasVertex(dir string) bool {
-	found, _ := filepath.Glob(filepath.Join(dir, "*"+vsc.SourceExtension))
-	return len(found) > 0
+	return len(vsc.SourceFiles(dir)) > 0
 }
 
 // doFilesBuild compiles the named files as one program or module, with what

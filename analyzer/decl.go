@@ -2261,11 +2261,20 @@ type wrappedProperty struct {
 // wrapperAttr is the attribute among attrs naming a property wrapper, or nil.
 func (c *checker) wrapperAttr(attrs []*ast.Attr, scope *Scope) *ast.Attr {
 	for _, a := range attrs {
-		id, ok := a.Name.(*ast.IdentType)
-		if !ok || id.Name == nil {
-			continue
+		var tn *TypeNameSymbol
+		switch n := a.Name.(type) {
+		case *ast.IdentType:
+			if n.Name != nil {
+				tn = scope.LookupType(n.Name.Text(c.file))
+			}
+		case *ast.MemberType:
+			// `@reactive.State`: a wrapper named through its module.
+			if mod, ok := n.X.(*ast.IdentType); ok && mod.Name != nil && n.Name != nil {
+				if m := c.modules[mod.Name.Text(c.file)]; m != nil {
+					tn = m.LookupType(n.Name.Text(c.file))
+				}
+			}
 		}
-		tn := scope.LookupType(id.Name.Text(c.file))
 		if tn != nil && c.info.Wrappers[tn.Type()] {
 			return a
 		}
@@ -2278,7 +2287,17 @@ func (c *checker) wrapperAttr(attrs []*ast.Attr, scope *Scope) *ast.Attr {
 // the attribute's own arguments -- `Clamped(wrappedValue: 5, 0...10)` --
 // or nil where there is neither.
 func (c *checker) wrapperInit(attr *ast.Attr, b *ast.PatternBinding) *ast.CallExpr {
-	id := attr.Name.(*ast.IdentType)
+	var fun ast.Expr
+	switch n := attr.Name.(type) {
+	case *ast.IdentType:
+		fun = &ast.IdentExpr{Span: n.Span, Name: n.Name, Args: n.Args}
+	case *ast.MemberType:
+		mod := n.X.(*ast.IdentType)
+		fun = &ast.MemberExpr{Span: n.Span, X: &ast.IdentExpr{Span: mod.Span, Name: mod.Name},
+			Dot: n.Dot, Name: n.Name, Args: n.Args}
+	default:
+		return nil
+	}
 	var args []*ast.CallArg
 	if b.Value != nil {
 		at := ast.Span{Lo: b.Value.Pos(), Hi: b.Value.End()}
@@ -2291,8 +2310,7 @@ func (c *checker) wrapperInit(attr *ast.Attr, b *ast.PatternBinding) *ast.CallEx
 	if b.Value == nil && !attr.Lparen.IsValid() {
 		return nil
 	}
-	return &ast.CallExpr{Span: attr.Span,
-		Fun:  &ast.IdentExpr{Span: id.Span, Name: id.Name, Args: id.Args},
+	return &ast.CallExpr{Span: attr.Span, Fun: fun,
 		Args: &ast.CallArgs{Span: attr.Span, Lparen: attr.Lparen, Args: args, Rparen: attr.Rparen}}
 }
 

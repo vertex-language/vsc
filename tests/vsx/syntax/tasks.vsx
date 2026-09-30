@@ -1,0 +1,76 @@
+// tasks.vsx
+package main
+
+import "ui/app"
+import "reactive"
+
+struct Todo: Equatable, Identifiable {
+    let ID: int
+    var Title: string
+    var Done: bool
+}
+
+@Observable @MainActor
+final class Store {
+    var Todos: [Todo] = []
+    var Filter: Filter = .all
+    var nextID = 1
+
+    var Visible: [Todo] {
+        switch Filter {
+        case .all:    return Todos
+        case .active: return Todos.filter { !$0.Done }
+        case .done:   return Todos.filter { $0.Done }
+        }
+    }
+
+    func Add(_ title: string) {
+        Todos.append(Todo(ID: nextID, Title: title, Done: false))
+        nextID += 1
+    }
+}
+
+enum Filter: CaseIterable { case all, active, done }
+
+func TodoItem(todo: Readable<Todo>, onToggle: (int) -> void) -> Node {
+    return (
+        <li class="item" class:done={todo.Done}>
+            <input type="checkbox" checked={todo.Done} onChange={onToggle(todo.ID)} />
+            <span>{todo.Title}</span>
+        </li>
+    )
+}
+
+func App(store: Store) -> Node {
+    @State var draft = ""
+
+    return (
+        <main class="app">
+            <form onSubmit={e in
+                e.PreventDefault()
+                if !draft.isEmpty {
+                    store.Add(draft)
+                    draft = ""
+                }
+            }>
+                <input placeholder="What needs doing?" value={$draft} autofocus />
+            </form>
+
+            <nav>
+                <For each={Filter.allCases}>
+                    {f in <button class:on={store.Filter == f} onClick={store.Filter = f}>{f}</button>}
+                </For>
+            </nav>
+
+            {if store.Visible.isEmpty {
+                <p class="empty">Nothing here.</p>
+            } else {
+                <ul>
+                    <For each={store.Visible} key={t in t.ID}>
+                        {t in <TodoItem todo={t} onToggle={store.Toggle} />}
+                    </For>
+                </ul>
+            }}
+        </main>
+    )
+}

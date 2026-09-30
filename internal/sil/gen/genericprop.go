@@ -152,13 +152,25 @@ func (g *gen) genericAccessor(at ast.Node, recv types.Type, f *types.Field, sett
 	}
 	var body *ast.CodeBlock
 	var set *ast.Accessor
+	// The accessors are found by their keywords' text, which is in the
+	// file that declares them: another module's, for an imported type.
+	callerFile := g.file
+	if file := g.fileOf(decl.binding); file != nil {
+		g.file = file
+	}
 	if setter {
-		if set = g.setterAccessor(decl.binding); set == nil {
-			g.refuse(at, "an assignment to a computed property with no setter")
-			return "", nil, true
-		}
+		set = g.setterAccessor(decl.binding)
 	} else {
 		body = g.getterBody(decl.binding)
+	}
+	g.file = callerFile
+	if setter && set == nil {
+		g.refuse(at, "an assignment to a computed property with no setter")
+		return "", nil, true
+	}
+	if !setter && body == nil {
+		g.refuse(at, "a computed property of a generic type whose getter this cannot find")
+		return "", nil, true
 	}
 	if g.specialized == nil {
 		g.specialized = map[string]bool{}

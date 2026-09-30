@@ -1,0 +1,21 @@
+// Elements, attributes, text and code children, lowered to the
+// check-form calls and rendered by the prelude.
+package main
+
+func main() -> int32 {
+    let name = "vsx"
+    let n = 3
+    let page = (
+        <main class="app" id="top">
+            <h1>Hello, {name}!</h1>
+            <p hidden={false} title="count">{n} items</p>
+            <input type="checkbox" checked disabled={n > 5} />
+            <ul>
+                {[1, 2, 3].map { i in <li>{i}</li> }}
+            </ul>
+            <p>a &lt; b &amp;&amp; c</p>
+        </main>
+    )
+    print(page.Html())
+    return 0
+}

@@ -18,6 +18,9 @@ type Folder struct {
 	// Native are the .cpp and .mm files built for the platform, in name
 	// order: the package's C++ module, which vcx compiles.
 	Native []string
+	// Styles are the .vss files, in name order: the package's stylesheet
+	// (see vsc/vss).
+	Styles []string
 }
 
 // ReadFolder lists the sources of the package in dir that a target builds:
@@ -38,10 +41,12 @@ func ReadFolder(dir, platform, arch string) (*Folder, error) {
 		}
 		path := filepath.Join(dir, name)
 		switch strings.ToLower(filepath.Ext(name)) {
-		case ".vs":
+		case ".vs", ".vsx":
 			if ForTarget(path, platform, arch) {
 				f.Vertex = append(f.Vertex, path)
 			}
+		case ".vss":
+			f.Styles = append(f.Styles, path)
 		case ".cpp", ".cc", ".cxx", ".cppm", ".mm":
 			if ForTarget(path, platform, arch) {
 				f.Native = append(f.Native, path)
@@ -54,11 +59,12 @@ func ReadFolder(dir, platform, arch string) (*Folder, error) {
 	}
 	sort.Strings(f.Vertex)
 	sort.Strings(f.Native)
+	sort.Strings(f.Styles)
 	return f, nil
 }
 
 // Empty reports whether the folder has no sources for the target.
-func (f *Folder) Empty() bool { return len(f.Vertex) == 0 && len(f.Native) == 0 }
+func (f *Folder) Empty() bool { return len(f.Vertex) == 0 && len(f.Native) == 0 && len(f.Styles) == 0 }
 
 // sourceArchs are the architecture suffixes a file name may end in, by the
 // names Go gives them, and the target architecture each is.

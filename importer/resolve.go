@@ -70,7 +70,7 @@ func hasSource(dir string) error {
 	}
 	for _, e := range entries {
 		switch filepath.Ext(e.Name()) {
-		case ".vs", ".cpp", ".cppm", ".mm":
+		case ".vs", ".vsx", ".vss", ".cpp", ".cppm", ".mm":
 			return nil
 		}
 	}

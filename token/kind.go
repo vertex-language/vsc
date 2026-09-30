@@ -162,6 +162,26 @@ const (
 	POUND_FILELITERAL    // #fileLiteral
 	POUND_IMAGELITERAL   // #imageLiteral
 	pound_end
+
+	// Markup, scanned only in a .vsx file (scanner.ScanMarkup). A `<`
+	// where a prefix operator would stand -- not bound on the left,
+	// bound on the right by a name or `>` -- opens a tag:
+	//
+	//	<b class="x">Hi {n}</b>  →  MARKUP_OPEN MARKUP_NAME MARKUP_NAME
+	//	    ASSIGN MARKUP_STRING MARKUP_END MARKUP_TEXT LBRACE IDENT
+	//	    RBRACE MARKUP_CLOSE_OPEN MARKUP_NAME MARKUP_END
+	//
+	// Braces inside markup are ordinary LBRACE and RBRACE around
+	// ordinary tokens.
+	markup_beg
+	MARKUP_OPEN       // < opening a tag, or a fragment's <>
+	MARKUP_CLOSE_OPEN // </ opening a closing tag
+	MARKUP_END        // > ending a tag
+	MARKUP_SELF_CLOSE // /> ending a tag that has no children
+	MARKUP_NAME       // a tag or attribute name: div, app.Window, class:done, data-p, style:--kit-accent
+	MARKUP_STRING     // an attribute value, quotes included; no escapes, as in JSX
+	MARKUP_TEXT       // text between tags, as written
+	markup_end
 )
 
 var names = [...]string{
@@ -280,6 +300,14 @@ var names = [...]string{
 	POUND_COLORLITERAL:   "#colorLiteral",
 	POUND_FILELITERAL:    "#fileLiteral",
 	POUND_IMAGELITERAL:   "#imageLiteral",
+
+	MARKUP_OPEN:       "<",
+	MARKUP_CLOSE_OPEN: "</",
+	MARKUP_END:        ">",
+	MARKUP_SELF_CLOSE: "/>",
+	MARKUP_NAME:       "MARKUP_NAME",
+	MARKUP_STRING:     "MARKUP_STRING",
+	MARKUP_TEXT:       "MARKUP_TEXT",
 }
 
 // String returns the keyword or punctuator spelling, or the class
@@ -387,3 +415,4 @@ func (k Kind) IsPunct() bool    { return punct_beg < k && k < punct_end }
 func (k Kind) IsOperator() bool { return oper_beg < k && k < oper_end }
 func (k Kind) IsKeyword() bool  { return keyword_beg < k && k < keyword_end }
 func (k Kind) IsPound() bool    { return pound_beg < k && k < pound_end }
+func (k Kind) IsMarkup() bool   { return markup_beg < k && k < markup_end }

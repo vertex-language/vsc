@@ -35,6 +35,11 @@ func ParseFile(f *token.File, mode Mode) (*ast.File, []token.Diagnostic) {
 	if mode&ParseComments != 0 {
 		sm = scanner.ScanComments
 	}
+	// The extension picks the grammar: markup is scanned in a .vsx file
+	// and nowhere else, as JSX is in .tsx and not in .ts.
+	if IsMarkupFile(f.Name()) {
+		sm |= scanner.ScanMarkup
+	}
 	toks, diags := scanner.Scan(f, sm)
 
 	p := &parser{f: f, mode: mode, diags: diags}
@@ -461,4 +466,10 @@ func (p *parser) tooDeep() bool {
 		p.next()
 	}
 	return true
+}
+
+// IsMarkupFile reports whether a source file is a .vsx file: Vertex with
+// markup. Only a .vsx file is scanned for markup.
+func IsMarkupFile(name string) bool {
+	return len(name) > 4 && name[len(name)-4:] == ".vsx"
 }

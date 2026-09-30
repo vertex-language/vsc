@@ -16,6 +16,11 @@ func (c *checker) checkStmt(stmt ast.Stmt, scope *Scope) {
 
 	switch s := stmt.(type) {
 	case *ast.DeclStmt:
+		// A wrapped local, `@State var count = 0`, is its storage and
+		// names that read through it.
+		if d, ok := s.D.(*ast.VarDecl); ok && c.rewriteWrappedLocal(d, scope) {
+			break
+		}
 		c.checkDecl(s.D, scope)
 
 	case *ast.LabeledStmt:

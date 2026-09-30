@@ -14,6 +14,9 @@ const (
 	// ScanComments keeps COMMENT tokens in the stream; without it
 	// they are trivia, still reachable via token.File.Between.
 	ScanComments Mode = 1 << iota
+	// ScanMarkup scans markup where a .vsx file may hold it. The file's
+	// extension decides, never its contents: see markup.go.
+	ScanMarkup
 )
 
 // Scan tokenizes f and returns tokens and sorted diagnostics.
@@ -28,12 +31,17 @@ func Scan(f *token.File, mode Mode) ([]token.Token, []token.Diagnostic) {
 			s.scanStringBody(st)
 			continue
 		}
+		if s.inMarkup() {
+			s.scanMarkup()
+			continue
+		}
 		s.skipTrivia()
 		if s.off >= len(s.src) {
 			break
 		}
 		s.scanToken()
 	}
+	s.unterminatedMarkup()
 	for len(s.strs) > 0 {
 		st := s.str()
 		s.report(token.Error, st.open, s.off, "unterminated string literal")
@@ -59,6 +67,8 @@ type scanner struct {
 
 	// strs is the stack of open string literals, innermost last.
 	strs []strLit
+	// frames is the stack of open markup, innermost last; see markup.go.
+	frames []markupFrame
 }
 
 // strLit is one open string literal.
@@ -181,6 +191,9 @@ func (s *scanner) scanToken() {
 	case c == '#':
 		s.scanPound()
 
+	case c == '<' && s.opensMarkup():
+		s.openMarkup()
+
 	case c == '"':
 		s.openString(s.off, 0)
 
@@ -261,8 +274,10 @@ func (s *scanner) scanPunct() {
 		k = token.RSQUARE
 	case '{':
 		k = token.LBRACE
+		s.markupBrace(true)
 	case '}':
 		k = token.RBRACE
+		s.markupBrace(false)
 	case ',':
 		k = token.COMMA
 	case ':':

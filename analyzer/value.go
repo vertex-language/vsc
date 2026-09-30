@@ -91,6 +91,11 @@ func (c *checker) stringValue(e *ast.StringLit) Value {
 			interpolated = true
 			continue
 		}
+		if text.Synthesized {
+			c.info.Values[text] = Value{Kind: StringValue, Str: text.Synth}
+			whole.WriteString(text.Synth)
+			continue
+		}
 		raw := string(c.file.Slice(text.Lo, text.Hi))
 
 		// Multiline indentation stripping.

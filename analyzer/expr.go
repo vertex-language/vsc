@@ -464,6 +464,8 @@ func adopts(want, untyped types.Type) bool {
 
 func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) types.Type {
 	switch e := expr.(type) {
+	case *ast.MarkupElement:
+		return c.checkMarkup(e, expected, scope)
 	case *ast.BasicLit:
 		c.valueOf(e)
 		switch e.Kind {
@@ -712,6 +714,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			return t
 		}
 		if v, ok := sym.(*VarSymbol); ok {
+			if w := c.wrappedLocals[v]; w != nil {
+				return c.wrappedLocalRead(e, w, expected, scope)
+			}
+		}
+		if v, ok := sym.(*VarSymbol); ok {
 			if !v.IsInitialized() {
 				c.errorf(e.Name.Pos(), "'%s' used before being initialized", name)
 			}
@@ -786,7 +793,17 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if id, ok := e.X.(*ast.IdentExpr); ok {
 				name := id.Name.Text(c.file)
 				sym := c.lookupValue(scope, name)
-				if sym != nil {
+				wrapped := (*wrappedLocal)(nil)
+				if v, ok := sym.(*VarSymbol); ok {
+					wrapped = c.wrappedLocals[v]
+				}
+				if wrapped != nil {
+					// A wrapped local is written through its storage.
+					if sym.(*VarSymbol).IsConst() {
+						c.errorf(e.Op.Pos(), "cannot assign to value: '%s' is a get-only property", name)
+					}
+					lhs = c.wrappedLocalRead(id, wrapped, nil, scope)
+				} else if sym != nil {
 					c.info.Uses[id.Name] = sym
 					lhs = sym.Type()
 					if v, ok := sym.(*VarSymbol); ok {
@@ -2150,6 +2167,19 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		c.currIsolated = c.currIsolated || c.hasAttr(e.Attrs, mainActorAttr) || (expSig != nil && expSig.Isolated)
 		defer func() { c.currIsolated = prevIsolated }()
 
+		// A closure whose one statement is an if or a switch, each branch
+		// one expression, and whose result is known and not Void, gives
+		// that statement's value (SE-0380): it is the expression it is.
+		if len(e.Stmts) == 1 && retType != nil && !isInvalid(retType) &&
+			!types.Identical(retType, types.Typ[types.Void]) && !c.mentionsOpenParam(retType, scope) {
+			switch st := e.Stmts[0].(type) {
+			case *ast.IfStmt, *ast.SwitchStmt:
+				if _, ok := BranchValues(st); ok {
+					at := ast.Span{Lo: st.Pos(), Hi: st.End()}
+					e.Stmts[0] = &ast.ExprStmt{Span: at, X: &ast.StmtExpr{Span: at, Stmt: st}}
+				}
+			}
+		}
 		_, oneExpr := func() (*ast.ExprStmt, bool) {
 			if len(e.Stmts) != 1 {
 				return nil, false

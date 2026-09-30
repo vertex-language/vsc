@@ -229,6 +229,11 @@ func (p *parser) atOwnership(word string) bool {
 func (p *parser) parsePostfixExpr(fl exprFlags) ast.Expr {
 	lo := p.pos()
 	x := p.parsePrimaryExpr(fl)
+	// Markup takes no suffixes: a `{` after `</b>` is never a trailing
+	// closure, and `<b/>.x` means nothing.
+	if _, markup := x.(*ast.MarkupElement); markup {
+		return x
+	}
 	return p.parsePostfixSuffixes(x, lo, fl)
 }
 
@@ -530,6 +535,9 @@ func (p *parser) parsePrimaryExpr(fl exprFlags) ast.Expr {
 		p.next()
 		return &ast.SelfExpr{Span: p.span(lo)}
 
+	case k == token.MARKUP_OPEN:
+		return p.parseMarkup()
+
 	// `Self` and `Any` in expression position.
 	case k == token.SELF_TYPE, k == token.ANY:
 		slo := p.pos()
@@ -685,7 +693,7 @@ func (p *parser) exprStartAt(n int) bool {
 		token.LPAREN, token.LSQUARE, token.LBRACE,
 		token.PERIOD, token.PERIOD_PREFIX, token.BACKSLASH, token.AMP_PREFIX,
 		token.TRY, token.IS, token.AT, token.POUND, token.REPEAT,
-		token.OPER_PREFIX, token.IF, token.SWITCH:
+		token.OPER_PREFIX, token.IF, token.SWITCH, token.MARKUP_OPEN:
 		return true
 	}
 	return p.peek(n).IsPound()

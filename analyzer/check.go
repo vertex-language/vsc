@@ -98,6 +98,15 @@ type checker struct {
 	asyncLetReads map[*ast.IdentExpr]bool
 	// asyncLetDecls are the declarations rewriteAsyncLet has rewritten.
 	asyncLetDecls map[*ast.VarDecl]bool
+	// wrappedLocals are the names a wrapped local declares, and
+	// wrappedLocalDecls the declarations rewriteWrappedLocal has rewritten.
+	wrappedLocals     map[*VarSymbol]*wrappedLocal
+	wrappedLocalDecls map[*ast.VarDecl]*wrappedLocalDecl
+	// markupCalls are the calls each markup element was rewritten to;
+	// see markup.go.
+	markupCalls map[*ast.MarkupElement]ast.Expr
+	// directModules are the modules the program imports itself.
+	directModules map[string]bool
 	// currIsolated is whether the code being checked runs on the main
 	// thread: a @MainActor function or type's member, a closure made
 	// there, or top-level code. See isolation.go.
@@ -175,6 +184,10 @@ type Import struct {
 	As    string // local alias if renamed upon import, or empty
 	Files []*ast.File
 	Units []*token.File
+	// Direct is whether the program's own files import the module, not
+	// only a module it imports: a name two modules declare is the one a
+	// direct import's.
+	Direct bool
 }
 
 // bound is the name this program looks the module up under.
@@ -686,7 +699,21 @@ func (c *checker) recordModule(imp Import, staging, scope *Scope) {
 				}
 			}
 		}
-		scope.Insert(sym)
+		if existing := scope.Insert(sym); existing != nil && imp.Direct {
+			// `Node` from ui/component, which the program imports, over
+			// `Node` from web/html, which only ui/component does.
+			if _, isType := sym.(*TypeNameSymbol); isType {
+				if from, ok := c.info.Imported[existing]; ok && !c.directModules[from] && from != imp.Name {
+					scope.elems[sym.Name()] = sym
+				}
+			}
+		}
+		if imp.Direct {
+			if c.directModules == nil {
+				c.directModules = map[string]bool{}
+			}
+			c.directModules[imp.Name] = true
+		}
 		if tn, ok := sym.(*TypeNameSymbol); ok && tn.Type() != nil {
 			if _, already := c.info.ImportedTypes[tn.Type()]; !already {
 				c.info.ImportedTypes[tn.Type()] = imp.Name

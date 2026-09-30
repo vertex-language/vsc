@@ -516,7 +516,7 @@ func folderFiles(dir string) []string {
 	for _, e := range entries {
 		// The folder's Vertex is no input to its C++: an edit to a .vs
 		// file must not rebind and rebuild the module.
-		if !e.IsDir() && filepath.Ext(e.Name()) != ".vs" {
+		if ext := filepath.Ext(e.Name()); !e.IsDir() && ext != ".vs" && ext != ".vsx" && ext != ".vss" {
 			files = append(files, filepath.Join(dir, e.Name()))
 		}
 	}

@@ -39,6 +39,11 @@ type StringLit struct {
 // StringText is one undecoded run of a string literal's own text.
 type StringText struct {
 	Span
+	// Synthesized marks text the compiler wrote rather than read --
+	// markup's text, its whitespace folded as JSX folds it -- which is
+	// Synth, already decoded, and not the source under Span.
+	Synthesized bool
+	Synth       string
 }
 
 // Interpolation is \( Expression ) or \( [Label:] Expression, ... ) inside a string literal.

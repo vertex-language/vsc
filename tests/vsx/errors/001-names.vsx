@@ -1,0 +1,18 @@
+// Markup's names are checked: elements and attributes against the HTML
+// standard, components' props as the calls they are.
+package main
+
+func TodoItem(title: string, onToggle: (int) -> void) -> Node {
+    return <li>{title}</li>
+}
+
+func main() -> int32 {
+    let a = <dvi>x</dvi>                          // want "unknown element <dvi>; did you mean <div>?"
+    let b = <a hreff="/">home</a>                 // want "<a> has no attribute 'hreff'; did you mean 'href'?"
+    let c = <button onClik={print(1)}>go</button> // want "<button> has no event 'onClik'; did you mean 'onClick'?"
+    let d = <TodoItem titel="x" onToggle={_ in} /> // want "has no parameter 'titel'"
+    let e = <p key={1}>x</p>                      // want "'key' is not an attribute; keys belong to <For>"
+    let f = <button onClick="go()">x</button>     // want "'onClick' is a handler: write it in braces"
+    let g = <TodoItem title="x" onToggle={_ in} {...[:]} /> // want "a spread of attributes applies to an HTML element"
+    return 0
+}
