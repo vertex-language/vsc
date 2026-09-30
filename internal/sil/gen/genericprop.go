@@ -215,7 +215,13 @@ func (g *gen) aside() func() {
 	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.subst,
 		g.throws, g.catches, g.tryBang, g.tryCall}
 	prevFile := g.file
+	// What the outer statement is to write back when it ends is its own:
+	// a statement of the specialization emitted here must not flush it
+	// into the specialization's body.
+	writebacks := g.writebacks
+	g.writebacks = nil
 	return func() {
+		g.writebacks = writebacks
 		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
 		g.scopes, g.locals = outer.scopes, outer.locals
 		g.loops, g.pending = outer.loops, outer.pending

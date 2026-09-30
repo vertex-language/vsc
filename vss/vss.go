@@ -188,6 +188,16 @@ func Emit(pkg string, files []*File) string {
 				global = append(global, item.text)
 			case item.at == "" && documentLevel(item.prelude):
 				document = append(document, item.text)
+			case item.at == "media" || item.at == "supports":
+				// A condition's rules split as the sheet's do: those on
+				// the document stay out of the scope, under the condition.
+				doc, sc := splitConditional(item)
+				if doc != "" {
+					document = append(document, doc)
+				}
+				if sc != "" {
+					scoped = append(scoped, sc)
+				}
 			default:
 				scoped = append(scoped, item.text)
 			}
@@ -496,4 +506,33 @@ func quote(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// splitConditional is an @media or @supports block as two: its rules on
+// the document, and the rest, each under the same condition; "" for a
+// side with none.
+func splitConditional(it item) (string, string) {
+	open := strings.IndexByte(it.text, '{')
+	close := strings.LastIndexByte(it.text, '}')
+	if open < 0 || close <= open {
+		return "", it.text
+	}
+	var doc, rest []string
+	for _, inner := range topLevel(it.text[open+1 : close]) {
+		if inner.at == "" && documentLevel(inner.prelude) {
+			doc = append(doc, inner.text)
+		} else {
+			rest = append(rest, inner.text)
+		}
+	}
+	if len(doc) == 0 {
+		return "", it.text
+	}
+	wrap := func(rules []string) string {
+		if len(rules) == 0 {
+			return ""
+		}
+		return it.prelude + " {\n" + strings.Join(rules, "\n") + "\n}"
+	}
+	return wrap(doc), wrap(rest)
 }

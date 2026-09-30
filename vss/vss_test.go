@@ -109,3 +109,12 @@ func TestRegistered(t *testing.T) {
 		t.Errorf("registered: %v", got)
 	}
 }
+
+func TestEmitConditionalDocumentRules(t *testing.T) {
+	f, _ := parse(t, "package main\n@media (prefers-color-scheme: dark) { body { color: white } .card { color: gray } }\n")
+	css := Emit("main", []*File{f})
+	want := "@layer main {\n@media (prefers-color-scheme: dark) {\nbody { color: white }\n}\n@scope ([data-p=\"main\"]) to ([data-p]:not([data-p=\"main\"])) {\n@media (prefers-color-scheme: dark) {\n.card { color: gray }\n}\n}\n}\n"
+	if css != want {
+		t.Errorf("got:\n%s\nwant:\n%s", css, want)
+	}
+}

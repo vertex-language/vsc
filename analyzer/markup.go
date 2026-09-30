@@ -111,7 +111,7 @@ func (c *checker) lowerComponent(e *ast.MarkupElement, name string, scope *Scope
 				x = mkString(v.Value(c.file), span(v))
 			case *ast.MarkupCode:
 				arity, known := params.fn(label)
-				x = c.codeArg(v, arity, known)
+				x = c.codeArg(v, arity, known, scope)
 			}
 			if x == nil {
 				continue
@@ -164,7 +164,11 @@ func (c *checker) lowerComponent(e *ast.MarkupElement, name string, scope *Scope
 			return nil
 		}
 	}
-	return mkCallArgs(fun, at, args)
+	// Run once, untracked: a change to what its body read does not run
+	// the component again; its own live parts follow what they read.
+	call := mkCallArgs(fun, at, args)
+	once := &ast.ClosureExpr{Span: at, Lbrace: at.Lo, Rbrace: at.Hi, Stmts: []ast.Stmt{&ast.ExprStmt{Span: at, X: call}}}
+	return mkCall(mkPath(at, "component", "Component"), at, once)
 }
 
 // nameExpr is a component's name as an expression: `Card`, `app.Window`.
@@ -335,6 +339,16 @@ func (c *checker) lowerIntrinsic(e *ast.MarkupElement, tag string, scope *Scope)
 				if kind == "Style" && strings.HasPrefix(prop, "--") && !c.knownToken(prop, a.Name.Pos()+token.Pos(len("style:"))) {
 					continue
 				}
+				// `class:on={on}` follows on: the braces are live.
+				if code, ok := a.Value.(*ast.MarkupCode); ok {
+					if f, live := c.liveCode(code); live {
+						attrs = append(attrs, attr(a, "Live"+kind, mkString(prop, span(a.Name)), f))
+						continue
+					} else if f != nil {
+						attrs = append(attrs, attr(a, kind, mkString(prop, span(a.Name)), f))
+					}
+					continue
+				}
 				v := c.attrValue(a)
 				if v == nil {
 					continue
@@ -361,7 +375,7 @@ func (c *checker) lowerIntrinsic(e *ast.MarkupElement, tag string, scope *Scope)
 				}
 				s := span(a.Name)
 				typ := &ast.PostfixSelfExpr{Span: s, X: mkPath(s, "dom", ev.typ), Dot: s.Lo, Self: s.Lo}
-				attrs = append(attrs, attr(a, "On", mkString(ev.event, s), typ, c.codeArg(code, 1, true)))
+				attrs = append(attrs, attr(a, "On", mkString(ev.event, s), typ, c.codeArg(code, 1, true, scope)))
 			default:
 				if !htmlAttributeKnown(tag, name) {
 					msg := "<" + tag + "> has no attribute '" + name + "'"
@@ -377,8 +391,11 @@ func (c *checker) lowerIntrinsic(e *ast.MarkupElement, tag string, scope *Scope)
 				case *ast.MarkupString:
 					attrs = append(attrs, attr(a, "Static", nameLit, mkString(v.Value(c.file), span(v))))
 				case *ast.MarkupCode:
-					if x := c.codeArg(v, -1, true); x != nil {
-						attrs = append(attrs, attr(a, "Value", nameLit, x))
+					// `title={x}` follows x: the braces are live.
+					if f, live := c.liveCode(v); live {
+						attrs = append(attrs, attr(a, "Live", nameLit, f))
+					} else if f != nil {
+						attrs = append(attrs, attr(a, "Value", nameLit, f))
 					}
 				}
 			}
@@ -466,7 +483,7 @@ func (c *checker) attrValue(a *ast.MarkupAttribute) ast.Expr {
 	case *ast.MarkupString:
 		return mkString(v.Value(c.file), span(v))
 	case *ast.MarkupCode:
-		return c.codeArg(v, -1, true)
+		return c.codeArg(v, -1, true, nil)
 	}
 	return nil
 }
@@ -479,11 +496,13 @@ func (c *checker) attrValue(a *ast.MarkupAttribute) ast.Expr {
 // hold only a reference to one, `{store.Toggle}`. For a value, they hold
 // an expression, or statements whose value is the closure's result:
 // `{if a { <x/> } else { <y/> }}`.
-func (c *checker) codeArg(code *ast.MarkupCode, arity int, known bool) ast.Expr {
+func (c *checker) codeArg(code *ast.MarkupCode, arity int, known bool, scope *Scope) ast.Expr {
 	body := code.Body
 	single := singleExpr(body)
 	if arity >= 0 {
-		if body.Sig == nil && single != nil && isReference(single) {
+		// `{store.Toggle}`: a function, given as it is. `{items}` where a
+		// `() -> [T]` is wanted is a value, which the braces make live.
+		if body.Sig == nil && single != nil && isReference(single) && c.namesFunction(single, scope) {
 			return single
 		}
 		if body.Sig == nil && arity > 0 {
@@ -545,6 +564,58 @@ func completeIf(st *ast.IfStmt) {
 		Stmts: []ast.Stmt{&ast.ExprStmt{Span: at, X: empty}}}
 }
 
+// liveCode is what `{…}` in an HTML element's attribute or among its
+// children gives: a closure the runtime runs as a binding (live), or, for
+// a literal, the value itself. The closure is the braces' own: `{count}`
+// is `{ count }`, and `{if a { <x/> } else { <y/> }}` the if expression.
+func (c *checker) liveCode(code *ast.MarkupCode) (ast.Expr, bool) {
+	body := code.Body
+	if body.Sig != nil {
+		c.errorf(code.Pos(), "a closure is given where a value is wanted")
+		return nil, false
+	}
+	if len(body.Stmts) == 0 {
+		c.errorf(code.Pos(), "empty braces give no value")
+		return nil, false
+	}
+	if single := singleExpr(body); single != nil {
+		if isLiteral(single) {
+			return single, false
+		}
+		return body, true
+	}
+	if len(body.Stmts) == 1 {
+		switch st := body.Stmts[0].(type) {
+		case *ast.IfStmt:
+			completeIf(st)
+			body.Stmts[0] = &ast.ExprStmt{Span: span(st), X: &ast.StmtExpr{Span: span(st), Stmt: st}}
+			return body, true
+		case *ast.SwitchStmt:
+			body.Stmts[0] = &ast.ExprStmt{Span: span(st), X: &ast.StmtExpr{Span: span(st), Stmt: st}}
+			return body, true
+		}
+	}
+	// Statements whose value is the closure's result, run once.
+	return mkCall(body, span(code)), false
+}
+
+// isLiteral reports whether x is a literal that reads nothing: a number,
+// a Boolean, or a string with no interpolation.
+func isLiteral(x ast.Expr) bool {
+	switch x := x.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.StringLit:
+		for _, seg := range x.Segments {
+			if _, text := seg.(*ast.StringText); !text {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // markupChildren are an element's children as values: text folded as JSX
 // folds it, `{…}` as the value it holds, and elements as they are.
 // Comments and empty braces are nothing.
@@ -564,8 +635,11 @@ func (c *checker) markupChildren(kids []ast.MarkupChild) []ast.Expr {
 				c.errorf(k.Pos(), "a function as a child is passed to a component, and alone")
 				continue
 			}
-			if x := c.codeArg(k, -1, true); x != nil {
-				out = append(out, x)
+			// `{count}` is a live region; `{"text"}` is text.
+			if f, live := c.liveCode(k); live {
+				out = append(out, mkCall(mkPath(span(k), "component", "Live"), span(k), f))
+			} else if f != nil {
+				out = append(out, f)
 			}
 		case *ast.MarkupElement:
 			out = append(out, k)
@@ -603,6 +677,46 @@ func singleExpr(b *ast.ClosureExpr) ast.Expr {
 		return s.X
 	}
 	return nil
+}
+
+// namesFunction reports whether a name, or a member of one, is a function
+// -- a method, a function, a closure held in a variable -- rather than a
+// value of another type.
+func (c *checker) namesFunction(x ast.Expr, scope *Scope) bool {
+	if scope == nil {
+		return true
+	}
+	switch x := x.(type) {
+	case *ast.IdentExpr:
+		switch sym := c.lookupValue(scope, x.Name.Text(c.file)).(type) {
+		case *FuncSymbol:
+			return true
+		case *VarSymbol:
+			_, fn := sym.Type().Underlying().(*types.Signature)
+			return fn
+		case nil:
+			// self's member, named alone: a method where the type has one.
+			if c.currType != nil {
+				if _, m := c.findMethod(c.currType, x.Name.Text(c.file)); m != nil {
+					return true
+				}
+			}
+			return false
+		}
+		return false
+	case *ast.MemberExpr:
+		base := c.checkExpr(x.X, nil, scope)
+		if base == nil || isInvalid(base) || x.Name == nil {
+			return true
+		}
+		name := x.Name.Text(c.file)
+		if _, m := c.findMethod(base, name); m != nil {
+			return true
+		}
+		_, fn := c.lookupMember(base, name).(*types.Signature)
+		return fn
+	}
+	return false
 }
 
 // isReference reports whether x names a function rather than calling or

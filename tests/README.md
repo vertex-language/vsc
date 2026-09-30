@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`370` in the order the
+A ladder: one small thing per file, numbered `001`–`371` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -54,6 +54,7 @@ around it.
 | 368 | one existential into another of fewer protocols: `any Q` and `any Error` into `Any`, `any P & Q` into `any Q` -- the value, its type and the tables the destination names, and no more |
 | 369 | a property wrapper on a local: storage of the wrapper's type, reads and writes through it, `$name`, captured and written by a closure, a generic class wrapper passed by its projection |
 | 370 | an if or switch expression whose value is an existential: each branch a different conforming type, as a result, an initializer and a closure's value |
+| 371 | a mutating call through a computed property written back when its statement ends, where an argument's getter is specialized mid-statement |
 
 ## Rules
 

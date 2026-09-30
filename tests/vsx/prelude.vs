@@ -164,6 +164,9 @@ enum component {
                 }))
             })
         }
+        static func Live<V>(_ name: string, _ f: () -> V) -> Attribute { return Value(name, f()) }
+        static func LiveClass(_ name: string, _ f: () -> bool) -> Attribute { return Class(name, f()) }
+        static func LiveStyle<V>(_ property: string, _ f: () -> V) -> Attribute { return Style(property, f()) }
         static func Class(_ name: string, _ on: bool) -> Attribute {
             return Attribute(apply: { n in if on { n.Classes.append(name) } })
         }
@@ -187,6 +190,10 @@ enum component {
         for c in children { n.Children += c.Nodes() }
         return n
     }
+
+    // The emit form's live parts, taken at once: this prelude renders once.
+    static func Live<V: Renderable>(_ f: () -> V) -> Node { return Fragment([f()]) }
+    static func Component<T>(_ f: () -> T) -> T { return f() }
 
     static func Fragment(_ children: [any Renderable]) -> Node {
         let n = Node()
