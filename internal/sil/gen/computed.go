@@ -911,6 +911,8 @@ func (g *gen) emitObservedSetter(recv types.Type, name string, t types.Type, b *
 	f.Type().Convention = sil.Method
 
 	member := memberName(recv, name)
+	// The property named alone in its own observers is its storage.
+	g.observing = name
 	addr := func() *sil.Value {
 		if isClass(recv) {
 			return g.blk.RefElementAddr(selfValue, member, vt)
@@ -954,6 +956,7 @@ func (g *gen) emitObservedSetter(recv types.Type, name string, t types.Type, b *
 	}
 	g.pop()
 	g.fn, g.blk, g.recv, g.self = nil, nil, nil, nil
+	g.observing = ""
 }
 
 // setterField is the property a write goes through a setter for:

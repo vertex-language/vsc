@@ -275,6 +275,7 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		if f.Unit != nil {
 			c.file = f.Unit
 		}
+		c.lowerObservables(declsOf(f.Stmts))
 		c.declarePrecedenceAndOperators(declsOf(f.Stmts))
 	}
 
@@ -499,6 +500,7 @@ func (c *checker) loadImports(imports []Import, scope *Scope) {
 				c.file = f.Unit
 			}
 			decls := declsOf(f.Stmts)
+			c.lowerObservables(decls)
 			c.declarePrecedenceAndOperators(decls)
 			c.declareTypes(decls, staging)
 		}

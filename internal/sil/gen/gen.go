@@ -450,6 +450,10 @@ func linkageOf(a analyzer.Access) sil.Linkage {
 
 // A gen lowers one file.
 type gen struct {
+	// observing is the property whose willSet or didSet is being
+	// lowered: named alone there, it is written in place.
+	observing string
+
 	// scriptGlobal is set while a top-level binding of main.swift that is
 	// not made a global is declared: Swift's would be one, never destroyed.
 	scriptGlobal bool

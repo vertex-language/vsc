@@ -214,6 +214,10 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 	if g.chainedDestination(e, func() { g.compoundAssign(e, op) }) {
 		return
 	}
+	if mem := g.implicitSetterMember(e.X); mem != nil {
+		g.compoundAssign(&ast.BinaryExpr{Span: e.Span, X: mem, Op: e.Op, Y: e.Y}, op)
+		return
+	}
 	// An `op=` a program declares -- `static func += (a: inout Vec, b:
 	// Vec)` -- is called with the destination's address.
 	ref := g.info.OperatorMethods[e]
@@ -394,6 +398,33 @@ func (g *gen) compoundAssign(e *ast.BinaryExpr, op string) {
 	g.blk.EndAccess(access)
 }
 
+// implicitSetterMember is `self.name` for a name written alone that is
+// a computed property of the receiver with a setter -- `Count = 0` in a
+// method, or in an @Observable class's init -- which is written through
+// its setter as the member is; nil for anything else.
+func (g *gen) implicitSetterMember(x ast.Expr) *ast.MemberExpr {
+	id, ok := x.(*ast.IdentExpr)
+	if !ok || id.Name == nil || g.recv == nil {
+		return nil
+	}
+	sym := g.info.Uses[id.Name]
+	if sym == nil || g.locals[sym] != nil {
+		return nil
+	}
+	// An observed stored property is written through its setter too,
+	// but in its own observers, where it is written in place.
+	name := g.text(id.Name)
+	if f, viaSetter := g.setterField(g.recv, name); !viaSetter || (f.HasObservers && g.observing == name) {
+		return nil
+	}
+	at := ast.Span{Lo: id.Pos(), Hi: id.Pos()}
+	self := &ast.SelfExpr{Span: at}
+	g.info.Types[self] = g.recv
+	mem := &ast.MemberExpr{Span: id.Span, X: self, Dot: id.Pos(), Name: id.Name}
+	g.info.Types[mem] = g.info.Types[id]
+	return mem
+}
+
 // assign lowers a store to a variable.
 func (g *gen) assign(e *ast.BinaryExpr) {
 	g.noteInitAssign(e.X)
@@ -404,6 +435,10 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 		return
 	}
 	if g.chainedDestination(e, func() { g.assign(e) }) {
+		return
+	}
+	if mem := g.implicitSetterMember(e.X); mem != nil {
+		g.assign(&ast.BinaryExpr{Span: e.Span, X: mem, Op: e.Op, Y: e.Y})
 		return
 	}
 	if mem, ok := e.X.(*ast.MemberExpr); ok && mem.Name != nil {
@@ -609,7 +644,10 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 			}
 		}
 		// In a method, bare names may resolve to receiver properties,
-		// or to static ones.
+		// or to static ones. A computed one is written as `self.name`.
+		if mem := g.implicitSetterMember(n); mem != nil {
+			return g.lvalue(mem)
+		}
 		if addr := g.implicitStaticAddr(n); addr != nil {
 			return addr
 		}

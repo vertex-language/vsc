@@ -287,7 +287,13 @@ func (c *checker) componentParams(fun ast.Expr, scope *Scope) componentParams {
 		}
 	}
 	if sig, ok := c.checkExpr(fun, nil, scope).(*types.Signature); ok {
-		return componentParams{sig}
+		// A method reached through a value (`<Theme.Provider>`) has a
+		// function type, without its labels: the lowered call checks them.
+		for _, p := range sig.Params {
+			if p.Label != "" || (p.Name != "" && !strings.HasPrefix(p.Name, "$")) {
+				return componentParams{sig}
+			}
+		}
 	}
 	return nil
 }
