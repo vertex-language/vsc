@@ -2268,7 +2268,7 @@ func (c *checker) wrapperAttr(attrs []*ast.Attr, scope *Scope) *ast.Attr {
 				tn = scope.LookupType(n.Name.Text(c.file))
 			}
 		case *ast.MemberType:
-			// `@reactive.State`: a wrapper named through its module.
+			// `@state.State`: a wrapper named through its module.
 			if mod, ok := n.X.(*ast.IdentType); ok && mod.Name != nil && n.Name != nil {
 				if m := c.modules[mod.Name.Text(c.file)]; m != nil {
 					tn = m.LookupType(n.Name.Text(c.file))

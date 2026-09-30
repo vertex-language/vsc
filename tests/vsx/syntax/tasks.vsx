@@ -2,7 +2,7 @@
 package main
 
 import "ui/app"
-import "reactive"
+import "ui/state"
 
 struct Todo: Equatable, Identifiable {
     let ID: int
