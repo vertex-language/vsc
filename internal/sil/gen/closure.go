@@ -47,6 +47,10 @@ func (g *gen) closureValue(f *sil.Func, sig *types.Signature, caps []closureCapt
 		// captures, which the context it makes owns.
 		args := make([]*sil.Value, 0, len(caps))
 		for _, c := range caps {
+			if c.copied {
+				args = append(args, g.copyIntoBox(c.loc))
+				continue
+			}
 			if c.boxed() {
 				// The box itself, so the closure and this scope see one
 				// variable.
@@ -72,12 +76,28 @@ func (g *gen) closureValue(f *sil.Func, sig *types.Signature, caps []closureCapt
 	return v
 }
 
+// copyIntoBox is a box holding a copy of the value in memory at l.addr,
+// owned by whoever it is given to: how a closure captures a value that
+// lives only in memory, as swiftc does an address-only let.
+func (g *gen) copyIntoBox(l *local) *sil.Value {
+	box := g.blk.AllocBox(l.typ, "")
+	borrow := g.blk.BeginBorrow(box)
+	addr := g.blk.ProjectBox(borrow, 0, l.typ)
+	g.blk.CopyAddr(l.addr, addr, "init")
+	g.blk.EndBorrow(borrow)
+	return box
+}
+
 // A closureCapture is a value a closure uses from the scope it is written in,
 // or a variable, whose box it shares.
 type closureCapture struct {
 	sym  analyzer.Symbol
 	loc  *local
 	self bool // the receiver, which follows every other capture
+	// copied is a value held in memory -- an existential let, parameter or
+	// catch binding -- which has no register form to capture: the closure
+	// is given a box holding a copy of it, made where the closure is.
+	copied bool
 }
 
 // captureList evaluates what a closure's capture list binds, here where
@@ -242,13 +262,17 @@ func (g *gen) closureCaptures(e ast.Node) ([]closureCapture, string) {
 					value := l.value != nil && l.addr == nil && l.box == nil && !l.mem
 					variable := l.box != nil && l.addr != nil && !l.mem
 					inout := l.inout && (closureCapture{loc: l}).byAddress()
-					if !value && !variable && !inout {
+					// A let in memory -- an existential -- is copied in;
+					// a var there would have to be shared, which needs a
+					// box from its declaration on.
+					copied := l.mem && l.addr != nil && l.box == nil && l.value == nil && !l.inout && !isVar(sym)
+					if !value && !variable && !inout && !copied {
 						refused = g.text(x.Name)
 						return false
 					}
 					if !seen[sym] {
 						seen[sym] = true
-						caps = append(caps, closureCapture{sym: sym, loc: l})
+						caps = append(caps, closureCapture{sym: sym, loc: l, copied: copied})
 					}
 					return true
 				}
@@ -363,6 +387,14 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 	// calls itself to hand on (below).
 	var selfCapture *local
 	for _, c := range caps {
+		if c.copied {
+			// The copy's box: storage of the closure's own, used where
+			// it is, as the value it was copied from was.
+			box := f.Param(sil.Box(c.loc.typ.Formal()), sil.ParamGuaranteed)
+			addr := g.blk.ProjectBox(box, 0, c.loc.typ)
+			g.locals[c.sym] = &local{addr: addr, typ: c.loc.typ, mem: true}
+			continue
+		}
 		if c.boxed() {
 			box := f.Param(c.loc.box.Type(), sil.ParamGuaranteed)
 			addr := g.blk.ProjectBox(box, 0, c.loc.typ)
@@ -736,4 +768,11 @@ func (g *gen) autoclosure(e ast.Expr, sig *types.Signature) *sil.Value {
 		return nil
 	}
 	return g.closureValue(f, sig, caps)
+}
+
+// isVar reports whether sym is a variable that may be assigned after it
+// is bound, rather than a let or a parameter.
+func isVar(sym analyzer.Symbol) bool {
+	v, ok := sym.(*analyzer.VarSymbol)
+	return ok && !v.IsConst()
 }

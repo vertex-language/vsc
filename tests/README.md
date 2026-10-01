@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`375` in the order the
+A ladder: one small thing per file, numbered `001`–`376` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -59,6 +59,7 @@ around it.
 | 373 | `removeLast(k)` in place: a large array popped four at a time stays linear |
 | 374 | `try?` on a call that answers an optional, a tuple's or an `Int`'s: one level of optional, compared with nil and bound |
 | 375 | a `for`-`in` variable's annotation typing the array literal it walks: `for c: UInt32 in [0x30, 0x31]` |
+| 376 | a closure capturing an existential held in memory -- a parameter, a let, a catch block's `error`, `any AnyObject`-bound, `Any` -- copied into a box in its context: not escaping, escaping and freed, nested, throwing |
 
 ## Rules
 

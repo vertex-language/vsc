@@ -221,6 +221,14 @@ static Executor* executorHere() {
   return e != nullptr ? e : &mainExecutor;
 }
 
+// threadExecutor is the executor whose loop this thread runs, or null on
+// a thread that runs none: one a C library or a package made (vm's vCPU
+// threads), which executorHere answers the main executor for. Only an
+// executor's own thread may touch its run list.
+static Executor* threadExecutor() {
+  return static_cast<Executor*>(vertex_pal_thread_get());
+}
+
 // currentTask is the task running on this thread, or null off any task.
 static Task* currentTask() { return executorHere()->current; }
 
@@ -262,7 +270,7 @@ static void deliver(Executor* e, Task* t) {
     t->owner = member;
     e = member;
   }
-  if (e == executorHere()) {
+  if (e == threadExecutor()) {
     makeRunnable(e, t);
     return;
   }
@@ -386,7 +394,9 @@ static Task* spawn(Executor* e, const AsyncFunctionPointer* fp, void* self) {
   t->target = nullptr;
   t->home = e;
   t->preferred = nullptr;
-  Task* parent = executorHere()->current;
+  // A thread that runs no executor has no task to inherit from.
+  Executor* here = threadExecutor();
+  Task* parent = here != nullptr ? here->current : nullptr;
   t->inheritedPreferred = parent != nullptr ? parent->preferred : nullptr;
   t->sleepOnArrival = false;
   __builtin_atomic_add(&liveTasks, 1ll);
