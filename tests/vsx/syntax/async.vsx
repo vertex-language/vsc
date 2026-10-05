@@ -1,0 +1,39 @@
+package main
+
+func Profile(id: Readable<int>) -> Node {
+    let user = Resource { await api.User(id.Value) }
+    return (
+        <section>
+            {switch user.State {
+            case .loading:          <Spinner />
+            case .ready(let u):     <UserCard user={u} />
+            case .failed(let e):    <ErrorNote error={e} retry={user.Reload()} />
+            }}
+        </section>
+    )
+}
+
+func Chart(series: [float32]) -> Node {
+    return <Canvas class="chart" draw={ctx in
+        for (i, v) in series.enumerated() {
+            ctx.FillRect(.init(float32(i) * 6, 100 - v, 4, v), color: .accent)
+        }
+    } />
+}
+
+func Parts(attrs: [string: string], p: Readable<float64>) -> Node {
+    return (
+        <>
+            <div {...attrs} style:width={w} style:--progress={p} data-p="main" />
+            {/* a comment */}
+            <Card header={<h2>Hi</h2>}>body</Card>
+        </>
+    )
+}
+
+func Generic() -> bool {
+    let xs = [3, 1, 2].sorted(by: <)
+    return xs.count < 4 && Array<int>().isEmpty
+}
+
+func |> <T, U>(value: T, transform: (T) -> U) -> U { transform(value) }

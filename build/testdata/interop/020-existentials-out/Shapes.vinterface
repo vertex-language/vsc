@@ -1,0 +1,11 @@
+// swift-interface-format-version: 1.0
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Shapes
+import Swift
+public protocol Measured {
+  func measure() -> Swift.Int32
+  func scaled(_ k: Swift.Int32) -> Swift.Int32
+}
+public func measureIt(_ m: any Shapes.Measured) -> Swift.Int32
+public func scaleIt(_ m: any Shapes.Measured, _ k: Swift.Int32) -> Swift.Int32
+public func twice(_ m: any Shapes.Measured) -> Swift.Int32
+public func sum(_ a: any Shapes.Measured, _ b: any Shapes.Measured) -> Swift.Int32

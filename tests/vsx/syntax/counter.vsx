@@ -1,0 +1,17 @@
+// counter.vsx
+package main
+
+import "ui/app"
+
+func Counter(start: int = 0) -> Node {
+    @State var count = start
+    return <button onClick={count += 1}>Clicked {count} times</button>
+}
+
+func main() async -> int32 {
+    return await app.Run {
+        <app.Window title="Counter" size={.init(360, 480)}>
+            <Counter start={5} />
+        </app.Window>
+    }
+}

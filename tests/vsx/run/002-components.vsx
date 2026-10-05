@@ -1,0 +1,46 @@
+// Components are functions: attributes are labeled arguments, children
+// are a `children:` closure making a fragment, a lone `{t in …}` is a function child, and a
+// dotted name is a namespaced function.
+package main
+
+func Card(title: string, wide: bool = false, children: Children) -> Node {
+    return (
+        <section class="card" class:wide={wide}>
+            <h2>{title}</h2>
+            {children()}
+        </section>
+    )
+}
+
+func List<T>(each: [T], children: (T) -> Node) -> Node {
+    return <ul>{each.map { children($0) }}</ul>
+}
+
+func Badge(label: string) -> Node { return <b>{label}</b> }
+
+enum kit {
+    static func Button(label: string, onPress: () -> void) -> Node {
+        return <button onClick={onPress()}>{label}</button>
+    }
+}
+
+func main() -> int32 {
+    var pressed = 0
+    let names = ["ann", "bo"]
+    let page = (
+        <>
+            <Card title="Team" wide>
+                <p>Members:</p>
+                <List each={names}>
+                    {n in <li><Badge label={n} /></li>}
+                </List>
+            </Card>
+            <kit.Button label="Go" onPress={pressed += 1} />
+        </>
+    )
+    print(page.Html())
+    _ = page.Fire("click")
+    _ = page.Fire("click")
+    print(pressed)
+    return 0
+}

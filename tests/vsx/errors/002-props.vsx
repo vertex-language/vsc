@@ -1,0 +1,23 @@
+// A component's props are checked as its parameters, in markup's terms.
+package main
+
+final class Store { func Toggle(_ id: int) {} }
+
+func TodoItem(title: string, onToggle: (int) -> void) -> Node {
+    return <li>{title}</li>
+}
+
+func Card(title: string, children: Children) -> Node {
+    return <section>{title}{children()}</section>
+}
+
+func main() -> int32 {
+    let a = <TodoItem titel="x" onToggle={_ in} /> // want "'TodoItem' has no parameter 'titel'; did you mean 'title'?"
+    let b = <TodoItem title={3} onToggle={_ in} /> // want "cannot convert value of type 'Int' to expected argument type 'String'"
+    let c = <TodoItem onToggle={_ in} />           // want "<TodoItem> needs 'title'"
+    let d = <Card title="t" />                     // want "<Card> needs children"
+    let e = <TodoItem title="x" onToggle={_ in} style:color="red" /> // want "'style:color' is not a parameter name"
+    let store = Store()
+    let h = <TodoItem title="x" onToggle={store.Toogle} /> // want "value of type 'Store' has no member 'Toogle'"
+    return 0
+}

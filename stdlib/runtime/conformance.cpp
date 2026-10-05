@@ -1,0 +1,261 @@
+// Conformances found at run time: which witness table, if any, says that
+// a type conforms to a protocol, asked of the type's metadata.
+//
+// Every conformance a module declares is listed in its image's
+// conformance records (see vsc/lower's ConformanceSection): a relative
+// pointer to the conformance's descriptor, which points at the protocol's
+// descriptor, the type's, and the table. Swift keeps the same in
+// __swift5_proto and asks it the same question; this is that, under a
+// name of Vertex's own.
+#include "vertex/abi.h"
+#include "vertex/platform.h"
+
+namespace vertex {
+
+// A protocol's descriptor: Swift's layout, of which only the address is
+// read here. The standard library's are defined below, under the names
+// swiftc gives them, since conformances to them point at those names.
+struct ProtocolDescriptor {
+  u32 flags;
+  i32 parent;
+  i32 name;
+  u32 numRequirementsInSignature;
+  u32 numRequirements;
+  i32 associatedTypeNames;
+};
+
+// A conformance's descriptor, as vsc/lower writes it.
+struct ConformanceDescriptor {
+  i32 protocol;   // relative; the low bit says it is to a pointer to it
+  i32 type;       // relative, to the type's descriptor
+  i32 table;      // relative, to the witness table
+  u32 flags;
+};
+
+}  // namespace vertex
+
+// A symbol named in assembly is the object file's name for it, which
+// Mach-O gives C's leading underscore and ELF and COFF do not.
+#ifdef __APPLE__
+#define VERTEX_ASM_NAME(name) "_" name
+#else
+#define VERTEX_ASM_NAME(name) name
+#endif
+
+extern "C" {
+// AnyObject asks nothing of a class, so what a conformance to it records
+// is only that the class conforms: every class does. Swift has no such
+// descriptor -- AnyObject is not a protocol there -- so this one is ours
+// whichever runtime is linked.
+extern const vertex::ProtocolDescriptor vertex_protocol_AnyObject __asm(VERTEX_ASM_NAME("$ss9AnyObjectMp"));
+const vertex::ProtocolDescriptor vertex_protocol_AnyObject = {3, 0, 0, 0, 0, 0};
+
+// Kind 3 is a protocol. Linked with Swift's runtime, libswiftCore defines
+// these under the same names, and those are the ones.
+#ifndef VERTEX_WITH_SWIFT_RUNTIME
+extern const vertex::ProtocolDescriptor vertex_protocol_Error __asm(VERTEX_ASM_NAME("$ss5ErrorMp"));
+const vertex::ProtocolDescriptor vertex_protocol_Error = {3, 0, 0, 0, 0, 0};
+extern const vertex::ProtocolDescriptor vertex_protocol_Equatable __asm(VERTEX_ASM_NAME("$sSQMp"));
+const vertex::ProtocolDescriptor vertex_protocol_Equatable = {3, 0, 0, 0, 0, 0};
+extern const vertex::ProtocolDescriptor vertex_protocol_Comparable __asm(VERTEX_ASM_NAME("$sSLMp"));
+const vertex::ProtocolDescriptor vertex_protocol_Comparable = {3, 0, 0, 0, 0, 0};
+extern const vertex::ProtocolDescriptor vertex_protocol_Hashable __asm(VERTEX_ASM_NAME("$sSHMp"));
+const vertex::ProtocolDescriptor vertex_protocol_Hashable = {3, 0, 0, 0, 0, 0};
+extern const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible
+    __asm(VERTEX_ASM_NAME("$ss23CustomStringConvertibleMp"));
+const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible = {3, 0, 0, 0, 0, 0};
+extern const vertex::ProtocolDescriptor vertex_protocol_CustomDebugStringConvertible
+    __asm(VERTEX_ASM_NAME("$ss28CustomDebugStringConvertibleMp"));
+const vertex::ProtocolDescriptor vertex_protocol_CustomDebugStringConvertible = {3, 0, 0, 0, 0, 0};
+extern const vertex::ProtocolDescriptor vertex_protocol_Sequence __asm(VERTEX_ASM_NAME("$sSTMp"));
+const vertex::ProtocolDescriptor vertex_protocol_Sequence = {3, 0, 0, 0, 0, 0};
+extern const vertex::ProtocolDescriptor vertex_protocol_IteratorProtocol __asm(VERTEX_ASM_NAME("$sStMp"));
+const vertex::ProtocolDescriptor vertex_protocol_IteratorProtocol = {3, 0, 0, 0, 0, 0};
+
+// The other protocols core declares. Nothing reads them here; a
+// conformance to one (a Character made from a literal, an enum that is
+// CaseIterable) names it, so each protocol core.swift declares is here.
+#define VERTEX_CORE_PROTOCOL(id, sym) \
+  extern const vertex::ProtocolDescriptor vertex_protocol_##id __asm(VERTEX_ASM_NAME(sym)); \
+  const vertex::ProtocolDescriptor vertex_protocol_##id = {3, 0, 0, 0, 0, 0};
+VERTEX_CORE_PROTOCOL(ExpressibleByIntegerLiteral, "$ss27ExpressibleByIntegerLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByFloatLiteral, "$ss25ExpressibleByFloatLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByBooleanLiteral, "$ss27ExpressibleByBooleanLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByNilLiteral, "$ss23ExpressibleByNilLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByUnicodeScalarLiteral, "$ss33ExpressibleByUnicodeScalarLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByExtendedGraphemeClusterLiteral,
+                     "$ss43ExpressibleByExtendedGraphemeClusterLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByStringLiteral, "$ss26ExpressibleByStringLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByArrayLiteral, "$ss25ExpressibleByArrayLiteralMp")
+VERTEX_CORE_PROTOCOL(ExpressibleByDictionaryLiteral, "$ss30ExpressibleByDictionaryLiteralMp")
+VERTEX_CORE_PROTOCOL(CaseIterable, "$ss12CaseIterableMp")
+VERTEX_CORE_PROTOCOL(Identifiable, "$ss12IdentifiableMp")
+VERTEX_CORE_PROTOCOL(OptionSet, "$ss9OptionSetMp")
+VERTEX_CORE_PROTOCOL(Collection, "$sSlMp")
+VERTEX_CORE_PROTOCOL(BidirectionalCollection, "$ss23BidirectionalCollectionMp")
+VERTEX_CORE_PROTOCOL(RandomAccessCollection, "$ss22RandomAccessCollectionMp")
+VERTEX_CORE_PROTOCOL(AsyncSequence, "$ss13AsyncSequenceMp")
+VERTEX_CORE_PROTOCOL(AsyncIteratorProtocol, "$ss21AsyncIteratorProtocolMp")
+VERTEX_CORE_PROTOCOL(Executor, "$ss8ExecutorMp")
+VERTEX_CORE_PROTOCOL(TaskExecutor, "$ss12TaskExecutorMp")
+VERTEX_CORE_PROTOCOL(NativeTaskExecutor, "$ss19_NativeTaskExecutorMp")
+#undef VERTEX_CORE_PROTOCOL
+
+#else
+extern const vertex::ProtocolDescriptor vertex_protocol_Error __asm(VERTEX_ASM_NAME("$ss5ErrorMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_Equatable __asm(VERTEX_ASM_NAME("$sSQMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_Comparable __asm(VERTEX_ASM_NAME("$sSLMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_Hashable __asm(VERTEX_ASM_NAME("$sSHMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_CustomStringConvertible
+    __asm(VERTEX_ASM_NAME("$ss23CustomStringConvertibleMp"));
+extern const vertex::ProtocolDescriptor vertex_protocol_CustomDebugStringConvertible
+    __asm(VERTEX_ASM_NAME("$ss28CustomDebugStringConvertibleMp"));
+#endif
+
+// Calls a witness whose only argument is the conformer, by address, in the
+// self register: a property's getter. What it answers comes back in the
+// first two registers. Assembly, since nothing C++ loads x20; see
+// stdlib.TaskAsm.
+vertex::String vertex_witness_call(void (*fn)(), const void* self, const vertex::Metadata* type,
+                                   const void* const* table);
+
+// Calls a witness taking one argument besides the conformer: hash(into:),
+// which is handed the hasher's address.
+void vertex_witness_call1(void (*fn)(), const void* self, void* arg, const vertex::Metadata* type,
+                          const void* const* table);
+
+// Calls a static operator's witness: both operands by address, and the
+// conformer's type in the self register. Its Bool comes back in w0.
+bool vertex_witness_call_static2(void (*fn)(), const void* a, const void* b, const vertex::Metadata* type,
+                                 const void* const* table);
+}
+
+namespace vertex {
+
+// relativeTo is where a relative field points, reading through the
+// pointer it names where its low bit says the target is indirect.
+inline const void* relativeTo(const i32* field, bool mayBeIndirect) {
+  i32 v = *field;
+  if (v == 0)
+    return nullptr;
+  bool indirect = mayBeIndirect && (v & 1);
+  if (indirect)
+    v &= ~1;
+  const void* at = static_cast<const char*>(static_cast<const void*>(field)) + v;
+  if (indirect)
+    return *static_cast<const void* const*>(at);
+  return at;
+}
+
+// The images' record lists, gathered once. An image loaded afterwards is
+// not looked in.
+struct RecordList {
+  const i32* at;
+  usize count;
+};
+
+inline constexpr u32 maxRecordLists = 32;
+
+struct Records {
+  RecordList lists[maxRecordLists];
+  u32 count;
+  bool ready;
+};
+
+inline Records& records() {
+  static Records r = {};
+  if (!r.ready) {
+    u32 images = vertex_pal_image_count();
+    for (u32 i = 0; i < images && r.count < maxRecordLists; i++) {
+      usize bytes = 0;
+      const i32* at = vertex_pal_conformance_records(i, &bytes);
+      if (at != nullptr && bytes >= sizeof(i32))
+        r.lists[r.count++] = RecordList{at, bytes / sizeof(i32)};
+    }
+    r.ready = true;
+  }
+  return r;
+}
+
+// typeDescriptorOf is the nominal descriptor a type's metadata points at,
+// for the kinds that have one.
+inline const void* typeDescriptorOf(const Metadata* type) {
+  switch (type->kind) {
+  case kindStruct:
+  case kindEnum:
+  case kindClass:
+    return reinterpret_cast<const StructMetadata*>(type)->description;
+  }
+  return nullptr;
+}
+
+// A small cache of answers, misses included, keyed by type and protocol.
+// Tasks run on several threads, so the cache is under a spinlock: an
+// entry is three words, and a reader must not see one thread's type
+// beside another's table.
+struct CachedConformance {
+  const Metadata* type;
+  const void* protocol;
+  const void* const* table;
+};
+
+inline constexpr usize conformanceCacheSize = 64;
+
+static u32 conformanceLock;
+
+inline void lockConformances() {
+  while (__builtin_atomic_cas(&conformanceLock, 0u, 1u) != 0u) {
+  }
+}
+
+inline void unlockConformances() { __builtin_atomic_store(&conformanceLock, 0u); }
+
+inline CachedConformance& cachedConformance(const Metadata* type, const void* protocol) {
+  static CachedConformance cache[conformanceCacheSize] = {};
+  usize h = (reinterpret_cast<usize>(type) >> 3) ^ (reinterpret_cast<usize>(protocol) >> 5);
+  return cache[h % conformanceCacheSize];
+}
+
+// warmConformances gathers the images' records before any worker thread
+// exists, so that the once-only gathering is never raced.
+inline void warmConformances() { records(); }
+
+}  // namespace vertex
+
+extern "C" {
+
+// vertex_conformance is the witness table by which type conforms to the
+// protocol with this descriptor, or null where it does not.
+const void* const* vertex_conformance(const vertex::Metadata* type, const void* protocol) {
+  using namespace vertex;
+  if (type == nullptr || protocol == nullptr)
+    return nullptr;
+  const void* want = typeDescriptorOf(type);
+  if (want == nullptr)
+    return nullptr;
+  lockConformances();
+  CachedConformance& c = cachedConformance(type, protocol);
+  if (c.type == type && c.protocol == protocol) {
+    const void* const* table = c.table;
+    unlockConformances();
+    return table;
+  }
+  unlockConformances();
+  const void* const* found = nullptr;
+  Records& r = records();
+  for (u32 l = 0; l < r.count && found == nullptr; l++) {
+    for (usize i = 0; i < r.lists[l].count; i++) {
+      auto* d = static_cast<const ConformanceDescriptor*>(relativeTo(r.lists[l].at + i, false));
+      if (d == nullptr || relativeTo(&d->protocol, true) != protocol || relativeTo(&d->type, false) != want)
+        continue;
+      found = static_cast<const void* const*>(relativeTo(&d->table, false));
+      break;
+    }
+  }
+  lockConformances();
+  c = CachedConformance{type, protocol, found};
+  unlockConformances();
+  return found;
+}
+
+}

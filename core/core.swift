@@ -1,0 +1,1215 @@
+// The built-in module.
+//
+// What every program can see without importing anything: the
+// operators on the primitive types, declared here rather than known
+// to the compiler, because an operator in Swift is a function and a
+// call to one should resolve the way every other call does.
+//
+// The declarations have no bodies. Their implementations are machine
+// instructions — `+` on Int is an add — and core.go says which, the
+// way Swift's own `+` is a @_transparent wrapper around
+// Builtin.sadd_with_overflow. A body would be a lie about where the
+// work happens.
+//
+// The precedence groups these operators belong to are built into the
+// analyzer today rather than declared here; see core.go.
+
+// ---- arithmetic ----
+
+// Int is written first in every group on purpose: an untyped
+// literal is assignable to all of them, and overload resolution
+// takes the first candidate that fits, so `1 + 2` is an Int.
+
+func + (lhs: Int, rhs: Int) -> Int
+func - (lhs: Int, rhs: Int) -> Int
+func * (lhs: Int, rhs: Int) -> Int
+func / (lhs: Int, rhs: Int) -> Int
+func % (lhs: Int, rhs: Int) -> Int
+
+func + (lhs: Int8, rhs: Int8) -> Int8
+func - (lhs: Int8, rhs: Int8) -> Int8
+func * (lhs: Int8, rhs: Int8) -> Int8
+func / (lhs: Int8, rhs: Int8) -> Int8
+func % (lhs: Int8, rhs: Int8) -> Int8
+
+func + (lhs: Int16, rhs: Int16) -> Int16
+func - (lhs: Int16, rhs: Int16) -> Int16
+func * (lhs: Int16, rhs: Int16) -> Int16
+func / (lhs: Int16, rhs: Int16) -> Int16
+func % (lhs: Int16, rhs: Int16) -> Int16
+
+func + (lhs: Int32, rhs: Int32) -> Int32
+func - (lhs: Int32, rhs: Int32) -> Int32
+func * (lhs: Int32, rhs: Int32) -> Int32
+func / (lhs: Int32, rhs: Int32) -> Int32
+func % (lhs: Int32, rhs: Int32) -> Int32
+
+func + (lhs: Int64, rhs: Int64) -> Int64
+func - (lhs: Int64, rhs: Int64) -> Int64
+func * (lhs: Int64, rhs: Int64) -> Int64
+func / (lhs: Int64, rhs: Int64) -> Int64
+func % (lhs: Int64, rhs: Int64) -> Int64
+
+func + (lhs: UInt, rhs: UInt) -> UInt
+func - (lhs: UInt, rhs: UInt) -> UInt
+func * (lhs: UInt, rhs: UInt) -> UInt
+func / (lhs: UInt, rhs: UInt) -> UInt
+func % (lhs: UInt, rhs: UInt) -> UInt
+
+func + (lhs: UInt8, rhs: UInt8) -> UInt8
+func - (lhs: UInt8, rhs: UInt8) -> UInt8
+func * (lhs: UInt8, rhs: UInt8) -> UInt8
+func / (lhs: UInt8, rhs: UInt8) -> UInt8
+func % (lhs: UInt8, rhs: UInt8) -> UInt8
+
+func + (lhs: UInt16, rhs: UInt16) -> UInt16
+func - (lhs: UInt16, rhs: UInt16) -> UInt16
+func * (lhs: UInt16, rhs: UInt16) -> UInt16
+func / (lhs: UInt16, rhs: UInt16) -> UInt16
+func % (lhs: UInt16, rhs: UInt16) -> UInt16
+
+func + (lhs: UInt32, rhs: UInt32) -> UInt32
+func - (lhs: UInt32, rhs: UInt32) -> UInt32
+func * (lhs: UInt32, rhs: UInt32) -> UInt32
+func / (lhs: UInt32, rhs: UInt32) -> UInt32
+func % (lhs: UInt32, rhs: UInt32) -> UInt32
+
+func + (lhs: UInt64, rhs: UInt64) -> UInt64
+func - (lhs: UInt64, rhs: UInt64) -> UInt64
+func * (lhs: UInt64, rhs: UInt64) -> UInt64
+func / (lhs: UInt64, rhs: UInt64) -> UInt64
+func % (lhs: UInt64, rhs: UInt64) -> UInt64
+
+func + (lhs: Float, rhs: Float) -> Float
+func - (lhs: Float, rhs: Float) -> Float
+func * (lhs: Float, rhs: Float) -> Float
+func / (lhs: Float, rhs: Float) -> Float
+
+func + (lhs: Double, rhs: Double) -> Double
+func - (lhs: Double, rhs: Double) -> Double
+func * (lhs: Double, rhs: Double) -> Double
+func / (lhs: Double, rhs: Double) -> Double
+
+// The half floats' own arithmetic: one VIR instruction each, f16.add and
+// bf16.add, on a target that has it, and computed in f32 and rounded once
+// on one that does not (ir.Module.LegalizeHalf) -- the same bits either way.
+func + (lhs: Float16, rhs: Float16) -> Float16
+func - (lhs: Float16, rhs: Float16) -> Float16
+func * (lhs: Float16, rhs: Float16) -> Float16
+func / (lhs: Float16, rhs: Float16) -> Float16
+func + (lhs: BFloat16, rhs: BFloat16) -> BFloat16
+func - (lhs: BFloat16, rhs: BFloat16) -> BFloat16
+func * (lhs: BFloat16, rhs: BFloat16) -> BFloat16
+func / (lhs: BFloat16, rhs: BFloat16) -> BFloat16
+
+// Concatenation is the one `+` that allocates.
+func + (lhs: String, rhs: String) -> String
+
+// ---- comparison ----
+
+// Every ordering on every primitive, rather than the handful that
+// happened to be needed. An operator missing here is not a
+// diagnostic about the program -- it reads as `cannot lower this
+// expression`, which is the compiler's own gap wearing the
+// language's clothes.
+
+func == (lhs: Int, rhs: Int) -> Bool
+func != (lhs: Int, rhs: Int) -> Bool
+func < (lhs: Int, rhs: Int) -> Bool
+func <= (lhs: Int, rhs: Int) -> Bool
+func > (lhs: Int, rhs: Int) -> Bool
+func >= (lhs: Int, rhs: Int) -> Bool
+
+func == (lhs: Int8, rhs: Int8) -> Bool
+func != (lhs: Int8, rhs: Int8) -> Bool
+func < (lhs: Int8, rhs: Int8) -> Bool
+func <= (lhs: Int8, rhs: Int8) -> Bool
+func > (lhs: Int8, rhs: Int8) -> Bool
+func >= (lhs: Int8, rhs: Int8) -> Bool
+
+func == (lhs: Int16, rhs: Int16) -> Bool
+func != (lhs: Int16, rhs: Int16) -> Bool
+func < (lhs: Int16, rhs: Int16) -> Bool
+func <= (lhs: Int16, rhs: Int16) -> Bool
+func > (lhs: Int16, rhs: Int16) -> Bool
+func >= (lhs: Int16, rhs: Int16) -> Bool
+
+func == (lhs: Int32, rhs: Int32) -> Bool
+func != (lhs: Int32, rhs: Int32) -> Bool
+func < (lhs: Int32, rhs: Int32) -> Bool
+func <= (lhs: Int32, rhs: Int32) -> Bool
+func > (lhs: Int32, rhs: Int32) -> Bool
+func >= (lhs: Int32, rhs: Int32) -> Bool
+
+func == (lhs: Int64, rhs: Int64) -> Bool
+func != (lhs: Int64, rhs: Int64) -> Bool
+func < (lhs: Int64, rhs: Int64) -> Bool
+func <= (lhs: Int64, rhs: Int64) -> Bool
+func > (lhs: Int64, rhs: Int64) -> Bool
+func >= (lhs: Int64, rhs: Int64) -> Bool
+
+func == (lhs: UInt, rhs: UInt) -> Bool
+func != (lhs: UInt, rhs: UInt) -> Bool
+func < (lhs: UInt, rhs: UInt) -> Bool
+func <= (lhs: UInt, rhs: UInt) -> Bool
+func > (lhs: UInt, rhs: UInt) -> Bool
+func >= (lhs: UInt, rhs: UInt) -> Bool
+
+func == (lhs: UInt8, rhs: UInt8) -> Bool
+func != (lhs: UInt8, rhs: UInt8) -> Bool
+func < (lhs: UInt8, rhs: UInt8) -> Bool
+func <= (lhs: UInt8, rhs: UInt8) -> Bool
+func > (lhs: UInt8, rhs: UInt8) -> Bool
+func >= (lhs: UInt8, rhs: UInt8) -> Bool
+
+func == (lhs: UInt16, rhs: UInt16) -> Bool
+func != (lhs: UInt16, rhs: UInt16) -> Bool
+func < (lhs: UInt16, rhs: UInt16) -> Bool
+func <= (lhs: UInt16, rhs: UInt16) -> Bool
+func > (lhs: UInt16, rhs: UInt16) -> Bool
+func >= (lhs: UInt16, rhs: UInt16) -> Bool
+
+func == (lhs: UInt32, rhs: UInt32) -> Bool
+func != (lhs: UInt32, rhs: UInt32) -> Bool
+func < (lhs: UInt32, rhs: UInt32) -> Bool
+func <= (lhs: UInt32, rhs: UInt32) -> Bool
+func > (lhs: UInt32, rhs: UInt32) -> Bool
+func >= (lhs: UInt32, rhs: UInt32) -> Bool
+
+func == (lhs: UInt64, rhs: UInt64) -> Bool
+func != (lhs: UInt64, rhs: UInt64) -> Bool
+func < (lhs: UInt64, rhs: UInt64) -> Bool
+func <= (lhs: UInt64, rhs: UInt64) -> Bool
+func > (lhs: UInt64, rhs: UInt64) -> Bool
+func >= (lhs: UInt64, rhs: UInt64) -> Bool
+
+func == (lhs: Float, rhs: Float) -> Bool
+func != (lhs: Float, rhs: Float) -> Bool
+func < (lhs: Float, rhs: Float) -> Bool
+func <= (lhs: Float, rhs: Float) -> Bool
+func > (lhs: Float, rhs: Float) -> Bool
+func >= (lhs: Float, rhs: Float) -> Bool
+
+func == (lhs: Float16, rhs: Float16) -> Bool
+func != (lhs: Float16, rhs: Float16) -> Bool
+func < (lhs: Float16, rhs: Float16) -> Bool
+func <= (lhs: Float16, rhs: Float16) -> Bool
+func > (lhs: Float16, rhs: Float16) -> Bool
+func >= (lhs: Float16, rhs: Float16) -> Bool
+func == (lhs: BFloat16, rhs: BFloat16) -> Bool
+func != (lhs: BFloat16, rhs: BFloat16) -> Bool
+func < (lhs: BFloat16, rhs: BFloat16) -> Bool
+func <= (lhs: BFloat16, rhs: BFloat16) -> Bool
+func > (lhs: BFloat16, rhs: BFloat16) -> Bool
+func >= (lhs: BFloat16, rhs: BFloat16) -> Bool
+
+func == (lhs: Double, rhs: Double) -> Bool
+func != (lhs: Double, rhs: Double) -> Bool
+func < (lhs: Double, rhs: Double) -> Bool
+func <= (lhs: Double, rhs: Double) -> Bool
+func > (lhs: Double, rhs: Double) -> Bool
+func >= (lhs: Double, rhs: Double) -> Bool
+
+func == (lhs: Bool, rhs: Bool) -> Bool
+func != (lhs: Bool, rhs: Bool) -> Bool
+
+func == (lhs: String, rhs: String) -> Bool
+func != (lhs: String, rhs: String) -> Bool
+func < (lhs: String, rhs: String) -> Bool
+
+// ---- bitwise ----
+
+// Swift declares these once on FixedWidthInteger and lets the
+// generic system find them. There is no generic system reaching this
+// far yet, so they are written out per type, which is the same set of
+// functions said the long way.
+
+func & (lhs: Int, rhs: Int) -> Int
+func | (lhs: Int, rhs: Int) -> Int
+func ^ (lhs: Int, rhs: Int) -> Int
+func << (lhs: Int, rhs: Int) -> Int
+func >> (lhs: Int, rhs: Int) -> Int
+
+func & (lhs: Int8, rhs: Int8) -> Int8
+func | (lhs: Int8, rhs: Int8) -> Int8
+func ^ (lhs: Int8, rhs: Int8) -> Int8
+func << (lhs: Int8, rhs: Int8) -> Int8
+func >> (lhs: Int8, rhs: Int8) -> Int8
+
+func & (lhs: Int16, rhs: Int16) -> Int16
+func | (lhs: Int16, rhs: Int16) -> Int16
+func ^ (lhs: Int16, rhs: Int16) -> Int16
+func << (lhs: Int16, rhs: Int16) -> Int16
+func >> (lhs: Int16, rhs: Int16) -> Int16
+
+func & (lhs: Int32, rhs: Int32) -> Int32
+func | (lhs: Int32, rhs: Int32) -> Int32
+func ^ (lhs: Int32, rhs: Int32) -> Int32
+func << (lhs: Int32, rhs: Int32) -> Int32
+func >> (lhs: Int32, rhs: Int32) -> Int32
+
+func & (lhs: Int64, rhs: Int64) -> Int64
+func | (lhs: Int64, rhs: Int64) -> Int64
+func ^ (lhs: Int64, rhs: Int64) -> Int64
+func << (lhs: Int64, rhs: Int64) -> Int64
+func >> (lhs: Int64, rhs: Int64) -> Int64
+
+func & (lhs: UInt, rhs: UInt) -> UInt
+func | (lhs: UInt, rhs: UInt) -> UInt
+func ^ (lhs: UInt, rhs: UInt) -> UInt
+func << (lhs: UInt, rhs: UInt) -> UInt
+func >> (lhs: UInt, rhs: UInt) -> UInt
+
+func & (lhs: UInt8, rhs: UInt8) -> UInt8
+func | (lhs: UInt8, rhs: UInt8) -> UInt8
+func ^ (lhs: UInt8, rhs: UInt8) -> UInt8
+func << (lhs: UInt8, rhs: UInt8) -> UInt8
+func >> (lhs: UInt8, rhs: UInt8) -> UInt8
+
+func & (lhs: UInt16, rhs: UInt16) -> UInt16
+func | (lhs: UInt16, rhs: UInt16) -> UInt16
+func ^ (lhs: UInt16, rhs: UInt16) -> UInt16
+func << (lhs: UInt16, rhs: UInt16) -> UInt16
+func >> (lhs: UInt16, rhs: UInt16) -> UInt16
+
+func & (lhs: UInt32, rhs: UInt32) -> UInt32
+func | (lhs: UInt32, rhs: UInt32) -> UInt32
+func ^ (lhs: UInt32, rhs: UInt32) -> UInt32
+func << (lhs: UInt32, rhs: UInt32) -> UInt32
+func >> (lhs: UInt32, rhs: UInt32) -> UInt32
+
+func & (lhs: UInt64, rhs: UInt64) -> UInt64
+func | (lhs: UInt64, rhs: UInt64) -> UInt64
+func ^ (lhs: UInt64, rhs: UInt64) -> UInt64
+func << (lhs: UInt64, rhs: UInt64) -> UInt64
+func >> (lhs: UInt64, rhs: UInt64) -> UInt64
+
+// ---- overflow ----
+
+// The masking operators. `&+` is `+` with the overflow dropped
+// rather than trapped on, and `&<<` is a shift whose count is taken
+// modulo the width. Same set, said the long way, for the same
+// reason the bitwise operators above are.
+
+func &+ (lhs: Int, rhs: Int) -> Int
+func &- (lhs: Int, rhs: Int) -> Int
+func &* (lhs: Int, rhs: Int) -> Int
+func &<< (lhs: Int, rhs: Int) -> Int
+func &>> (lhs: Int, rhs: Int) -> Int
+
+func &+ (lhs: Int8, rhs: Int8) -> Int8
+func &- (lhs: Int8, rhs: Int8) -> Int8
+func &* (lhs: Int8, rhs: Int8) -> Int8
+func &<< (lhs: Int8, rhs: Int8) -> Int8
+func &>> (lhs: Int8, rhs: Int8) -> Int8
+
+func &+ (lhs: Int16, rhs: Int16) -> Int16
+func &- (lhs: Int16, rhs: Int16) -> Int16
+func &* (lhs: Int16, rhs: Int16) -> Int16
+func &<< (lhs: Int16, rhs: Int16) -> Int16
+func &>> (lhs: Int16, rhs: Int16) -> Int16
+
+func &+ (lhs: Int32, rhs: Int32) -> Int32
+func &- (lhs: Int32, rhs: Int32) -> Int32
+func &* (lhs: Int32, rhs: Int32) -> Int32
+func &<< (lhs: Int32, rhs: Int32) -> Int32
+func &>> (lhs: Int32, rhs: Int32) -> Int32
+
+func &+ (lhs: Int64, rhs: Int64) -> Int64
+func &- (lhs: Int64, rhs: Int64) -> Int64
+func &* (lhs: Int64, rhs: Int64) -> Int64
+func &<< (lhs: Int64, rhs: Int64) -> Int64
+func &>> (lhs: Int64, rhs: Int64) -> Int64
+
+func &+ (lhs: UInt, rhs: UInt) -> UInt
+func &- (lhs: UInt, rhs: UInt) -> UInt
+func &* (lhs: UInt, rhs: UInt) -> UInt
+func &<< (lhs: UInt, rhs: UInt) -> UInt
+func &>> (lhs: UInt, rhs: UInt) -> UInt
+
+func &+ (lhs: UInt8, rhs: UInt8) -> UInt8
+func &- (lhs: UInt8, rhs: UInt8) -> UInt8
+func &* (lhs: UInt8, rhs: UInt8) -> UInt8
+func &<< (lhs: UInt8, rhs: UInt8) -> UInt8
+func &>> (lhs: UInt8, rhs: UInt8) -> UInt8
+
+func &+ (lhs: UInt16, rhs: UInt16) -> UInt16
+func &- (lhs: UInt16, rhs: UInt16) -> UInt16
+func &* (lhs: UInt16, rhs: UInt16) -> UInt16
+func &<< (lhs: UInt16, rhs: UInt16) -> UInt16
+func &>> (lhs: UInt16, rhs: UInt16) -> UInt16
+
+func &+ (lhs: UInt32, rhs: UInt32) -> UInt32
+func &- (lhs: UInt32, rhs: UInt32) -> UInt32
+func &* (lhs: UInt32, rhs: UInt32) -> UInt32
+func &<< (lhs: UInt32, rhs: UInt32) -> UInt32
+func &>> (lhs: UInt32, rhs: UInt32) -> UInt32
+
+func &+ (lhs: UInt64, rhs: UInt64) -> UInt64
+func &- (lhs: UInt64, rhs: UInt64) -> UInt64
+func &* (lhs: UInt64, rhs: UInt64) -> UInt64
+func &<< (lhs: UInt64, rhs: UInt64) -> UInt64
+func &>> (lhs: UInt64, rhs: UInt64) -> UInt64
+// ---- prefix ----
+
+prefix func ~ (operand: Int) -> Int
+prefix func ~ (operand: Int8) -> Int8
+prefix func ~ (operand: Int16) -> Int16
+prefix func ~ (operand: Int32) -> Int32
+prefix func ~ (operand: Int64) -> Int64
+prefix func ~ (operand: UInt) -> UInt
+prefix func ~ (operand: UInt8) -> UInt8
+prefix func ~ (operand: UInt16) -> UInt16
+prefix func ~ (operand: UInt32) -> UInt32
+prefix func ~ (operand: UInt64) -> UInt64
+// ---- logical ----
+
+func && (lhs: Bool, rhs: Bool) -> Bool
+func || (lhs: Bool, rhs: Bool) -> Bool
+
+// ---- prefix ----
+
+prefix func - (operand: Int) -> Int
+prefix func - (operand: Int32) -> Int32
+prefix func - (operand: Int64) -> Int64
+prefix func - (operand: Float) -> Float
+prefix func - (operand: Double) -> Double
+prefix func - (operand: Float16) -> Float16
+prefix func - (operand: BFloat16) -> BFloat16
+
+prefix func + (operand: Int) -> Int
+prefix func + (operand: Double) -> Double
+
+prefix func ! (operand: Bool) -> Bool
+
+// ---- output ----
+
+// The one function every program writes first.
+//
+// Its body is in the runtime rather than in an instruction, so unlike
+// everything above it this is a call: `print("hi")` reaches
+// vertex_print, which is the symbol this declaration names. The
+// variadic list becomes an array of
+// `Any`, each element carrying the metadata that says what is in it,
+// and the two defaults are evaluated at the call the way Swift
+// evaluates any default.
+// The program's arguments, its own path first. The property is the
+// runtime's; see core.LowerStaticMember.
+enum CommandLine {}
+
+// The size, stride and alignment of T, read as MemoryLayout<T>.size: the
+// lowering answers them once T is known, so the enum has no members.
+enum MemoryLayout<T> {}
+
+// readLine: a line of standard input, or nil where there is none left.
+@_silgen_name("vertex_read_line")
+func readLine(strippingNewline: Bool = true) -> String?
+
+@_silgen_name("vertex_print")
+func print(_ items: Any..., separator: String = " ", terminator: String = "\n")
+
+// ---- concurrency ----
+
+// A task: a function running on a stack of its own, which the runtime's
+// executor switches to, and away from wherever it waits. `Task { ... }`
+// starts one, which runs when the task that started it next waits. See
+// stdlib/runtime/task.cpp.
+//
+// A Task value is a counted handle to its task, which `value` waits on:
+// the task's operation returns nothing, so its value is that it finished.
+final class TaskHandle {}
+
+struct Task {
+    let handle: TaskHandle
+    // Where the operation's result is kept, for value to read: no bytes,
+    // for an operation returning nothing.
+    let result: TaskHandle
+
+    @_silgen_name("vertex_task_start")
+    init(operation: @escaping () async -> Void)
+
+    // A task started on the worker pool whatever started it, as Swift's
+    // Task.detached is; `Task { }` starts where it is made.
+    @_silgen_name("vertex_task_start_detached")
+    static func detached(operation: @escaping () async -> Void) -> Task
+
+    @_silgen_name("vertex_task_sleep")
+    static func sleep(nanoseconds duration: UInt64) async throws
+
+    @_silgen_name("vertex_task_yield")
+    static func yield() async
+}
+
+// The identity of a class instance: its address, which no other instance
+// alive has. Its operations are in algorithms.swift.
+struct ObjectIdentifier: Hashable, Equatable, Comparable, CustomStringConvertible, CustomDebugStringConvertible {
+    let _value: UInt
+}
+
+@_silgen_name("vertex_object_address")
+func _objectAddress(_ x: AnyObject) -> UInt
+
+// How urgent a task is, as Swift names the levels. The runtime schedules
+// every task alike, so a priority is taken and kept to itself: it is a
+// hint in Swift too, and no program's answer depends on it. Its levels
+// and operators are in algorithms.swift.
+struct TaskPriority: Equatable, Comparable {
+    let rawValue: UInt8
+}
+
+@_silgen_name("vertex_task_is_cancelled")
+func _vertexTaskIsCancelled() -> Bool
+
+@_silgen_name("vertex_task_cancel")
+func _vertexTaskCancel(_ handle: TaskHandle)
+
+// The main actor: Thread 0, which hosts the window system and runs what
+// is marked @MainActor. `await MainActor.run { … }` runs the closure there
+// and comes back; `MainActor.assumeIsolated { … }` runs it here, where the
+// caller knows it is already there (see also the @MainActor attribute).
+//
+// The hops are the runtime's: 0 is the main executor, 1 the pool, 2 the
+// executor the task calls home.
+enum MainActor {
+    @_silgen_name("vertex_task_hop")
+    static func hop(_ to: UInt64) async
+
+    // Swift's: the body's value, whatever it is, and what it throws.
+    // Its body may await here, which Swift's doesn't take.
+    static func run<T>(resultType: T.Type = T.self, body: @MainActor () async throws -> T) async rethrows -> T
+    static func assumeIsolated(_ body: @MainActor () -> Void)
+}
+
+// A reference to a task executor that doesn't keep it alive: its proxy
+// in the runtime.
+struct UnownedTaskExecutor {
+    let _proxy: UInt64
+}
+
+// A piece of a task to run, from where the task last suspended to where
+// it next does: the task, as the runtime knows it.
+struct ExecutorJob {
+    let _task: UInt64
+}
+
+// Something that runs jobs (SE-0392). The rest of the executors' API is
+// algorithms.swift's.
+protocol Executor: AnyObject {
+    func enqueue(_ job: consuming ExecutorJob)
+}
+
+// An executor a task may prefer to run its code that is isolated to no
+// actor on (SE-0417).
+protocol TaskExecutor: Executor {
+    func asUnownedTaskExecutor() -> UnownedTaskExecutor
+}
+
+// A task executor that is the runtime's own -- sync.ThreadPoolExecutor's
+// threads -- which a preference names directly, without going through
+// its enqueue: _nativeExecutor is the runtime's word for it.
+protocol _NativeTaskExecutor: AnyObject {
+    var _nativeExecutor: UInt64 { get }
+}
+
+// The names Swift gives C's types, which an interface imported from a C
+// header writes: `char` is CChar, whose signedness is the platform's and
+// is signed on every target this compiler builds for.
+public typealias CChar = Int8
+public typealias CSignedChar = Int8
+public typealias CUnsignedChar = UInt8
+public typealias CShort = Int16
+public typealias CUnsignedShort = UInt16
+public typealias CInt = Int32
+public typealias CUnsignedInt = UInt32
+public typealias CLongLong = Int64
+public typealias CUnsignedLongLong = UInt64
+public typealias CFloat = Float
+public typealias CDouble = Double
+public typealias CBool = Bool
+
+// A value that hands out elements one at a time, until it has none.
+protocol IteratorProtocol<Element> {
+    associatedtype Element
+    mutating func next() -> Element?
+}
+
+// Something whose elements can be gone through in order. What it hands
+// out is its Element; a type that is its own iterator names it by its
+// next().
+//
+// makeIterator() makes the iterator; a type that is its own iterator --
+// declares next() -- has one made for it, as Swift's Sequence gives it
+// one, and its Element is what next() answers.
+protocol Sequence<Element> {
+    associatedtype Element
+    associatedtype Iterator: IteratorProtocol where Iterator.Element == Element
+    func makeIterator() -> Iterator
+}
+
+// A sequence whose elements are at positions, which can be gone through
+// any number of times and read at any position: startIndex up to, not
+// including, endIndex, each after the one before.
+protocol Collection<Element>: Sequence {
+    associatedtype Index: Comparable
+    var startIndex: Index { get }
+    var endIndex: Index { get }
+    subscript(position: Index) -> Element { get }
+    func index(after i: Index) -> Index
+}
+
+// A collection that can be gone through backwards too.
+protocol BidirectionalCollection<Element>: Collection {
+    func index(before i: Index) -> Index
+}
+
+// A collection whose positions are reached in one step, whatever the
+// distance.
+protocol RandomAccessCollection<Element>: BidirectionalCollection {}
+
+// An iterator whose next() may wait: what `for await` asks for each
+// element, until it answers nil.
+protocol AsyncIteratorProtocol {
+    associatedtype Element
+    mutating func next() async throws -> Element?
+}
+
+// Something whose elements arrive over time, gone through with
+// `for await`: makeAsyncIterator() makes the iterator that waits for them.
+protocol AsyncSequence {
+    associatedtype Element
+    associatedtype AsyncIterator: AsyncIteratorProtocol
+    func makeAsyncIterator() -> AsyncIterator
+}
+
+// A type whose values can be told equal or not. A struct or enum that
+// says it is one and writes no `==` of its own has one made for it, from
+// its stored properties or its cases; `!=` comes with `==`.
+protocol Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool
+}
+
+// A type whose values are in an order. `>`, `<=` and `>=` come with `<`.
+protocol Comparable: Equatable {
+    static func < (lhs: Self, rhs: Self) -> Bool
+}
+
+// What a hash is made from: SipHash-1-3's state under the process's seed,
+// as Swift's Hasher is. A value is fed in with combine and the hash comes
+// out of finalize. Each of the three is the runtime's; see
+// stdlib/runtime/collections.cpp.
+struct Hasher {
+    var v0: UInt64
+    var v1: UInt64
+    var v2: UInt64
+    var v3: UInt64
+    var tail: UInt64
+    var length: UInt64
+
+    init()
+    mutating func combine<H: Hashable>(_ value: H)
+    func finalize() -> Int
+}
+
+// A type whose values can be hashed, to be a Set's element or a
+// Dictionary's key. Values that are == hash alike. A struct that says it is
+// Hashable and writes no hash(into:) has one made for it, from its stored
+// properties; an enum of cases alone, from its case.
+protocol Hashable: Equatable {
+    func hash(into hasher: inout Hasher)
+}
+
+// UTF-8, as the encoding String(decoding:as:) is told to read. Swift's
+// Unicode.UTF8; nothing is made of it but its type.
+enum UTF8 {}
+
+// A type that says what it is as text: what interpolation and print show.
+protocol CustomStringConvertible {
+    var description: String { get }
+}
+
+// A type that says what it is as text for debugging: what print shows of
+// it inside a collection, and debugPrint.
+protocol CustomDebugStringConvertible {
+    var debugDescription: String { get }
+}
+
+// Types that may be written as a literal. Each asks for an initializer,
+// init(integerLiteral:), init(stringLiteral:) and so on, taking the
+// literal as one of the core's types; the compiler calls it where such a
+// literal is written for the type. Swift says what the literal is taken
+// as with an associated type; here it is whatever the initializer takes.
+// A type whose values can all be listed: an enum of cases alone that
+// says so has allCases made for it, its cases in the order declared.
+protocol CaseIterable {
+    static var allCases: [Self] { get }
+}
+
+protocol ExpressibleByIntegerLiteral {}
+
+// A type whose values say which one they are by an id that stays the
+// same while what else they hold changes.
+protocol Identifiable {
+    associatedtype ID: Hashable
+    var id: ID { get }
+}
+
+// The numbers' protocols. Every integer and floating-point type is
+// AdditiveArithmetic and Numeric; the integers are BinaryInteger and
+// FixedWidthInteger, and the signed ones SignedInteger; Float and Double
+// are FloatingPoint and BinaryFloatingPoint. Code written over them is
+// specialized for the type it is used with, where each requirement is
+// that type's own operator or member.
+protocol AdditiveArithmetic: Equatable {
+    static func + (lhs: Self, rhs: Self) -> Self
+    static func - (lhs: Self, rhs: Self) -> Self
+    static func += (lhs: inout Self, rhs: Self)
+    static func -= (lhs: inout Self, rhs: Self)
+    static var zero: Self { get }
+}
+
+protocol Numeric: AdditiveArithmetic, ExpressibleByIntegerLiteral {
+    init?<T: BinaryInteger>(exactly source: T)
+    static func * (lhs: Self, rhs: Self) -> Self
+    static func *= (lhs: inout Self, rhs: Self)
+}
+
+protocol SignedNumeric: Numeric {
+    static prefix func - (operand: Self) -> Self
+}
+
+protocol BinaryInteger: Numeric, Hashable, Comparable, CustomStringConvertible {
+    static func / (lhs: Self, rhs: Self) -> Self
+    static func % (lhs: Self, rhs: Self) -> Self
+    static func /= (lhs: inout Self, rhs: Self)
+    static func %= (lhs: inout Self, rhs: Self)
+    static func & (lhs: Self, rhs: Self) -> Self
+    static func | (lhs: Self, rhs: Self) -> Self
+    static func ^ (lhs: Self, rhs: Self) -> Self
+    static var isSigned: Bool { get }
+    init(_ source: Int)
+}
+
+protocol FixedWidthInteger: BinaryInteger {
+    static var bitWidth: Int { get }
+    static var max: Self { get }
+    static var min: Self { get }
+}
+
+protocol SignedInteger: BinaryInteger, SignedNumeric {}
+
+// A set of flags kept in the bits of one integer, its rawValue: each flag
+// a bit, a set of them the bits or'd together. OptionSet's extension in
+// algorithms.swift gives it the set operations.
+protocol OptionSet: Equatable, ExpressibleByArrayLiteral {
+    associatedtype RawValue: FixedWidthInteger
+    var rawValue: RawValue { get }
+    init(rawValue: RawValue)
+}
+protocol UnsignedInteger: BinaryInteger {}
+
+// How rounded(_:) rounds.
+enum FloatingPointRoundingRule {
+    case toNearestOrAwayFromZero, toNearestOrEven, up, down, towardZero, awayFromZero
+}
+
+protocol FloatingPoint: SignedNumeric, Comparable, Hashable, CustomStringConvertible {
+    static func / (lhs: Self, rhs: Self) -> Self
+    static func /= (lhs: inout Self, rhs: Self)
+    static var nan: Self { get }
+    static var infinity: Self { get }
+    static var pi: Self { get }
+    var isNaN: Bool { get }
+    var isInfinite: Bool { get }
+    var isFinite: Bool { get }
+    var isZero: Bool { get }
+    var nextUp: Self { get }
+    func squareRoot() -> Self
+    func addingProduct(_ lhs: Self, _ rhs: Self) -> Self
+    func rounded(_ rule: FloatingPointRoundingRule) -> Self
+    init(_ value: Int)
+}
+
+protocol BinaryFloatingPoint: FloatingPoint, ExpressibleByFloatLiteral {}
+protocol ExpressibleByFloatLiteral {}
+protocol ExpressibleByBooleanLiteral {}
+protocol ExpressibleByNilLiteral {}
+protocol ExpressibleByUnicodeScalarLiteral {}
+protocol ExpressibleByExtendedGraphemeClusterLiteral: ExpressibleByUnicodeScalarLiteral {}
+protocol ExpressibleByStringLiteral: ExpressibleByExtendedGraphemeClusterLiteral {}
+protocol ExpressibleByArrayLiteral {}
+protocol ExpressibleByDictionaryLiteral {}
+
+// One extended grapheme cluster: what a String is a collection of, and
+// what a string literal of one is where a Character is wanted. It is the
+// String of that one cluster, as Swift's Character is; algorithms.swift
+// gives it its members.
+struct Character {
+    let _string: String
+}
+
+// A path from a Root to one of its values -- `\Person.address.city` --
+// which reads the value, and writes it where every step of the path can
+// be written. It is the pair of functions the path is.
+struct KeyPath<Root, Value> {
+    let _get: (Root) -> Value
+    let _set: ((inout Root, Value) -> Void)?
+}
+
+// Float16 and BFloat16 are built in, as Float is: universe types whose
+// machine type is Builtin.FPIEEE16 and Builtin.BFloat16. What they are
+// printed as is the runtime's: the shortest digits that read back as the
+// same half.
+@_silgen_name("vertex_float16_description")
+func _float16Description(_ bits: UInt32) -> String
+@_silgen_name("vertex_bfloat16_description")
+func _bfloat16Description(_ bits: UInt32) -> String
+
+// A value or the error that stood in for it.
+enum Result<Success, Failure: Error> {
+    case success(Success)
+    case failure(Failure)
+}
+
+// A view of bytes somewhere in memory: where they start, if anywhere,
+// and how many there are.
+struct UnsafeRawBufferPointer {
+    let baseAddress: UnsafeRawPointer?
+    let count: Int
+}
+
+// Some of an array's elements, in place: those from startIndex up to
+// endIndex, which count from the start of the array they are in.
+struct ArraySlice<Element> {
+    let base: [Element]
+    let startIndex: Int
+    let endIndex: Int
+}
+
+// The values from lowerBound up to, but not including, upperBound: what
+// `a..<b` makes. algorithms.swift gives it its members.
+struct Range<Bound: Comparable> {
+    let lowerBound: Bound
+    let upperBound: Bound
+}
+
+// The values from lowerBound up to and including upperBound: what
+// `a...b` makes.
+struct ClosedRange<Bound: Comparable> {
+    let lowerBound: Bound
+    let upperBound: Bound
+}
+
+// The values short of upperBound: what `..<b` makes.
+struct PartialRangeUpTo<Bound: Comparable> {
+    let upperBound: Bound
+}
+
+// The values up to and including upperBound: what `...b` makes.
+struct PartialRangeThrough<Bound: Comparable> {
+    let upperBound: Bound
+}
+
+// The values from lowerBound on: what `a...` makes.
+struct PartialRangeFrom<Bound: Comparable> {
+    let lowerBound: Bound
+}
+
+// What for-in over a range of integers walks, when it is walked as a
+// Sequence: Array(1...10), a range handed to something generic.
+struct _IntRangeIterator {
+    var _at: Int
+    let _end: Int
+}
+
+// What for-in over an ArraySlice walks: its base's elements from _at up
+// to _end.
+struct _ArraySliceIterator<Element> {
+    let _base: [Element]
+    var _at: Int
+    let _end: Int
+}
+
+// Elements somewhere in memory, to read: where they start, if anywhere,
+// and how many there are.
+struct UnsafeBufferPointer<Element> {
+    let baseAddress: UnsafePointer<Element>?
+    let count: Int
+}
+
+// Elements somewhere in memory that may be written: where they start, if
+// anywhere, and how many there are.
+struct UnsafeMutableBufferPointer<Element> {
+    let baseAddress: UnsafeMutablePointer<Element>?
+    let count: Int
+}
+
+// Bytes somewhere in memory that may be written: where they start, if
+// anywhere, and how many there are.
+struct UnsafeMutableRawBufferPointer {
+    let baseAddress: UnsafeMutableRawPointer?
+    let count: Int
+}
+
+// ---- Instructions ----
+
+// Functions that are one machine instruction each, named by @_builtin as
+// SIL names it (the operand's type is added: int_ctpop_Int64). The
+// algorithms build Int's and Double's members out of these, as Swift's
+// standard library builds them out of Builtin.int_ctpop_Int64.
+
+@_builtin("int_ctpop")
+func _popcount(_ x: Int) -> Int
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: Int) -> Int
+@_builtin("int_cttz")
+func _trailingZeros(_ x: Int) -> Int
+@_builtin("int_bswap")
+func _byteSwapped(_ x: Int) -> Int
+@_builtin("int_ctpop")
+func _popcount(_ x: Int8) -> Int8
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: Int8) -> Int8
+@_builtin("int_cttz")
+func _trailingZeros(_ x: Int8) -> Int8
+@_builtin("int_bswap")
+func _byteSwapped(_ x: Int8) -> Int8
+@_builtin("int_ctpop")
+func _popcount(_ x: Int16) -> Int16
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: Int16) -> Int16
+@_builtin("int_cttz")
+func _trailingZeros(_ x: Int16) -> Int16
+@_builtin("int_bswap")
+func _byteSwapped(_ x: Int16) -> Int16
+@_builtin("int_ctpop")
+func _popcount(_ x: Int32) -> Int32
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: Int32) -> Int32
+@_builtin("int_cttz")
+func _trailingZeros(_ x: Int32) -> Int32
+@_builtin("int_bswap")
+func _byteSwapped(_ x: Int32) -> Int32
+@_builtin("int_ctpop")
+func _popcount(_ x: Int64) -> Int64
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: Int64) -> Int64
+@_builtin("int_cttz")
+func _trailingZeros(_ x: Int64) -> Int64
+@_builtin("int_bswap")
+func _byteSwapped(_ x: Int64) -> Int64
+@_builtin("int_ctpop")
+func _popcount(_ x: UInt) -> UInt
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: UInt) -> UInt
+@_builtin("int_cttz")
+func _trailingZeros(_ x: UInt) -> UInt
+@_builtin("int_bswap")
+func _byteSwapped(_ x: UInt) -> UInt
+@_builtin("int_ctpop")
+func _popcount(_ x: UInt8) -> UInt8
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: UInt8) -> UInt8
+@_builtin("int_cttz")
+func _trailingZeros(_ x: UInt8) -> UInt8
+@_builtin("int_bswap")
+func _byteSwapped(_ x: UInt8) -> UInt8
+@_builtin("int_ctpop")
+func _popcount(_ x: UInt16) -> UInt16
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: UInt16) -> UInt16
+@_builtin("int_cttz")
+func _trailingZeros(_ x: UInt16) -> UInt16
+@_builtin("int_bswap")
+func _byteSwapped(_ x: UInt16) -> UInt16
+@_builtin("int_ctpop")
+func _popcount(_ x: UInt32) -> UInt32
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: UInt32) -> UInt32
+@_builtin("int_cttz")
+func _trailingZeros(_ x: UInt32) -> UInt32
+@_builtin("int_bswap")
+func _byteSwapped(_ x: UInt32) -> UInt32
+@_builtin("int_ctpop")
+func _popcount(_ x: UInt64) -> UInt64
+@_builtin("int_ctlz")
+func _leadingZeros(_ x: UInt64) -> UInt64
+@_builtin("int_cttz")
+func _trailingZeros(_ x: UInt64) -> UInt64
+@_builtin("int_bswap")
+func _byteSwapped(_ x: UInt64) -> UInt64
+@_builtin("int_sqrt")
+func _sqrt(_ x: Double) -> Double
+@_builtin("int_floor")
+func _floor(_ x: Double) -> Double
+@_builtin("int_ceil")
+func _ceil(_ x: Double) -> Double
+@_builtin("int_trunc")
+func _trunc(_ x: Double) -> Double
+@_builtin("int_rint")
+func _rint(_ x: Double) -> Double
+@_builtin("int_fabs")
+func _fabs(_ x: Double) -> Double
+@_builtin("int_copysign")
+func _copysign(_ x: Double, _ y: Double) -> Double
+@_builtin("int_fma")
+func _fma(_ a: Double, _ b: Double, _ c: Double) -> Double
+@_builtin("int_sqrt")
+func _sqrt(_ x: Float) -> Float
+@_builtin("int_floor")
+func _floor(_ x: Float) -> Float
+@_builtin("int_ceil")
+func _ceil(_ x: Float) -> Float
+@_builtin("int_trunc")
+func _trunc(_ x: Float) -> Float
+@_builtin("int_rint")
+func _rint(_ x: Float) -> Float
+@_builtin("int_fabs")
+func _fabs(_ x: Float) -> Float
+@_builtin("int_copysign")
+func _copysign(_ x: Float, _ y: Float) -> Float
+@_builtin("int_fma")
+func _fma(_ a: Float, _ b: Float, _ c: Float) -> Float
+@_builtin("bitcast")
+func _bits(_ x: Double) -> UInt64
+@_builtin("bitcast")
+func _double(_ bits: UInt64) -> Double
+@_builtin("bitcast")
+func _bits(_ x: Float) -> UInt32
+@_builtin("bitcast")
+func _float(_ bits: UInt32) -> Float
+@_builtin("int_sqrt")
+func _sqrt(_ x: Float16) -> Float16
+@_builtin("int_floor")
+func _floor(_ x: Float16) -> Float16
+@_builtin("int_ceil")
+func _ceil(_ x: Float16) -> Float16
+@_builtin("int_trunc")
+func _trunc(_ x: Float16) -> Float16
+@_builtin("int_rint")
+func _rint(_ x: Float16) -> Float16
+@_builtin("int_fabs")
+func _fabs(_ x: Float16) -> Float16
+@_builtin("int_copysign")
+func _copysign(_ x: Float16, _ y: Float16) -> Float16
+@_builtin("int_fma")
+func _fma(_ a: Float16, _ b: Float16, _ c: Float16) -> Float16
+@_builtin("bitcast")
+func _bits(_ x: Float16) -> UInt16
+@_builtin("int_sqrt")
+func _sqrt(_ x: BFloat16) -> BFloat16
+@_builtin("int_floor")
+func _floor(_ x: BFloat16) -> BFloat16
+@_builtin("int_ceil")
+func _ceil(_ x: BFloat16) -> BFloat16
+@_builtin("int_trunc")
+func _trunc(_ x: BFloat16) -> BFloat16
+@_builtin("int_rint")
+func _rint(_ x: BFloat16) -> BFloat16
+@_builtin("int_fabs")
+func _fabs(_ x: BFloat16) -> BFloat16
+@_builtin("int_copysign")
+func _copysign(_ x: BFloat16, _ y: BFloat16) -> BFloat16
+@_builtin("int_fma")
+func _fma(_ a: BFloat16, _ b: BFloat16, _ c: BFloat16) -> BFloat16
+@_builtin("bitcast")
+func _bits(_ x: BFloat16) -> UInt16
+@_builtin("bitcast")
+func _float16(_ bits: UInt16) -> Float16
+@_builtin("bitcast")
+func _bfloat16(_ bits: UInt16) -> BFloat16
+prefix func - (operand: Int8) -> Int8
+prefix func - (operand: Int16) -> Int16
+@_builtin("sadd_with_overflow")
+func _addingReportingOverflow(_ a: Int, _ b: Int) -> (Int, Bool)
+@_builtin("ssub_with_overflow")
+func _subtractingReportingOverflow(_ a: Int, _ b: Int) -> (Int, Bool)
+@_builtin("smul_with_overflow")
+func _multipliedReportingOverflow(_ a: Int, _ b: Int) -> (Int, Bool)
+@_builtin("sadd_with_overflow")
+func _addingReportingOverflow(_ a: Int8, _ b: Int8) -> (Int8, Bool)
+@_builtin("ssub_with_overflow")
+func _subtractingReportingOverflow(_ a: Int8, _ b: Int8) -> (Int8, Bool)
+@_builtin("smul_with_overflow")
+func _multipliedReportingOverflow(_ a: Int8, _ b: Int8) -> (Int8, Bool)
+@_builtin("sadd_with_overflow")
+func _addingReportingOverflow(_ a: Int16, _ b: Int16) -> (Int16, Bool)
+@_builtin("ssub_with_overflow")
+func _subtractingReportingOverflow(_ a: Int16, _ b: Int16) -> (Int16, Bool)
+@_builtin("smul_with_overflow")
+func _multipliedReportingOverflow(_ a: Int16, _ b: Int16) -> (Int16, Bool)
+@_builtin("sadd_with_overflow")
+func _addingReportingOverflow(_ a: Int32, _ b: Int32) -> (Int32, Bool)
+@_builtin("ssub_with_overflow")
+func _subtractingReportingOverflow(_ a: Int32, _ b: Int32) -> (Int32, Bool)
+@_builtin("smul_with_overflow")
+func _multipliedReportingOverflow(_ a: Int32, _ b: Int32) -> (Int32, Bool)
+@_builtin("sadd_with_overflow")
+func _addingReportingOverflow(_ a: Int64, _ b: Int64) -> (Int64, Bool)
+@_builtin("ssub_with_overflow")
+func _subtractingReportingOverflow(_ a: Int64, _ b: Int64) -> (Int64, Bool)
+@_builtin("smul_with_overflow")
+func _multipliedReportingOverflow(_ a: Int64, _ b: Int64) -> (Int64, Bool)
+@_builtin("uadd_with_overflow")
+func _addingReportingOverflow(_ a: UInt, _ b: UInt) -> (UInt, Bool)
+@_builtin("usub_with_overflow")
+func _subtractingReportingOverflow(_ a: UInt, _ b: UInt) -> (UInt, Bool)
+@_builtin("umul_with_overflow")
+func _multipliedReportingOverflow(_ a: UInt, _ b: UInt) -> (UInt, Bool)
+@_builtin("uadd_with_overflow")
+func _addingReportingOverflow(_ a: UInt8, _ b: UInt8) -> (UInt8, Bool)
+@_builtin("usub_with_overflow")
+func _subtractingReportingOverflow(_ a: UInt8, _ b: UInt8) -> (UInt8, Bool)
+@_builtin("umul_with_overflow")
+func _multipliedReportingOverflow(_ a: UInt8, _ b: UInt8) -> (UInt8, Bool)
+@_builtin("uadd_with_overflow")
+func _addingReportingOverflow(_ a: UInt16, _ b: UInt16) -> (UInt16, Bool)
+@_builtin("usub_with_overflow")
+func _subtractingReportingOverflow(_ a: UInt16, _ b: UInt16) -> (UInt16, Bool)
+@_builtin("umul_with_overflow")
+func _multipliedReportingOverflow(_ a: UInt16, _ b: UInt16) -> (UInt16, Bool)
+@_builtin("uadd_with_overflow")
+func _addingReportingOverflow(_ a: UInt32, _ b: UInt32) -> (UInt32, Bool)
+@_builtin("usub_with_overflow")
+func _subtractingReportingOverflow(_ a: UInt32, _ b: UInt32) -> (UInt32, Bool)
+@_builtin("umul_with_overflow")
+func _multipliedReportingOverflow(_ a: UInt32, _ b: UInt32) -> (UInt32, Bool)
+@_builtin("uadd_with_overflow")
+func _addingReportingOverflow(_ a: UInt64, _ b: UInt64) -> (UInt64, Bool)
+@_builtin("usub_with_overflow")
+func _subtractingReportingOverflow(_ a: UInt64, _ b: UInt64) -> (UInt64, Bool)
+@_builtin("umul_with_overflow")
+func _multipliedReportingOverflow(_ a: UInt64, _ b: UInt64) -> (UInt64, Bool)
+@_builtin("int_smulhi")
+func _multipliedHigh(_ a: Int, _ b: Int) -> Int
+@_builtin("int_smulhi")
+func _multipliedHigh(_ a: Int64, _ b: Int64) -> Int64
+@_builtin("int_umulhi")
+func _multipliedHigh(_ a: UInt, _ b: UInt) -> UInt
+@_builtin("int_umulhi")
+func _multipliedHigh(_ a: UInt64, _ b: UInt64) -> UInt64
+@_builtin("cmp_eq")
+func _same(_ a: Any.Type, _ b: Any.Type) -> Bool
+@_silgen_name("vertex_fatal_error")
+func _fatalErrorMessage(_ message: String) -> Never
+
+// Whether object is the only strong reference to its instance: what copy
+// on write asks before it writes. The runtime reads the count in place,
+// and ignores the metadata a generic call hands it after the reference.
+// Swift constrains T to AnyObject; a conformance to that carries a table
+// this compiler does not name yet, so T is left unconstrained.
+@_silgen_name("vertex_is_uniquely_referenced")
+func isKnownUniquelyReferenced<T>(_ object: inout T) -> Bool
+
+// ---- String, as Characters ----
+
+// Where the Character at byte offset at of s ends, and where the one that
+// ends at at starts: the extended grapheme cluster boundaries the runtime
+// finds. algorithms.swift walks a String by Characters with them.
+@_silgen_name("vertex_string_character_end")
+func _characterEnd(_ s: String, _ at: Int) -> Int
+@_silgen_name("vertex_string_character_start")
+func _characterStart(_ s: String, _ at: Int) -> Int
+// The String of s's bytes from up to to.
+@_silgen_name("vertex_string_slice")
+func _stringSlice(_ s: String, _ from: Int, _ to: Int) -> String
+// How many bytes s's UTF-8 is.
+@_silgen_name("vertex_string_utf8_count")
+func _utf8Count(_ s: String) -> Int
+// s with each scalar's full case mapping in its place.
+@_silgen_name("vertex_string_uppercased")
+func _uppercased(_ s: String) -> String
+@_silgen_name("vertex_string_lowercased")
+func _lowercased(_ s: String) -> String
+
+// The scalar at byte offset at of s, in the low 21 bits, and the offset
+// after it, above them.
+@_silgen_name("vertex_string_scalar")
+func _scalarAt(_ s: String, _ at: Int) -> Int
+// The String of one scalar.
+@_silgen_name("vertex_scalar_string")
+func _scalarString(_ value: UInt32) -> String
+// A scalar's properties: flags, general category and numeric type, a
+// byte each; and its value where it is a whole number, or -1.
+@_silgen_name("vertex_scalar_properties")
+func _scalarProperties(_ value: UInt32) -> UInt32
+@_silgen_name("vertex_scalar_whole_number")
+func _scalarWholeNumber(_ value: UInt32) -> Int
+
+// Swift's namespace for Unicode's types: `Unicode.Scalar`.
+enum Unicode {}
+
+// A Unicode scalar value: what a Character is made of. `Unicode.Scalar`
+// names it too.
+struct UnicodeScalar {
+    let value: UInt32
+}
+
+// A String's scalars, and its UTF-16 code units: its unicodeScalars and
+// utf16. `String.UnicodeScalarView` and `String.UTF16View` name them.
+struct _UnicodeScalarView {
+    var _string: String
+}
+
+struct _UTF16View {
+    let _string: String
+}
+
+// What for-in over a String's unicodeScalars walks, from byte _at on.
+struct _UnicodeScalarIterator {
+    let _string: String
+    var _at: Int
+}
+
+// A position in a String: the offset of a Character's first byte in the
+// String's UTF-8. `String.Index` names it.
+struct _StringIndex {
+    let _offset: Int
+}
+
+// A position in a Set: the bucket a member is in, or Int.max past the
+// last, as Swift's Set.Index is a bucket. `Set<T>.Index` names it.
+struct _SetIndex {
+    let _bucket: Int
+}
+
+// Some of a String's Characters, in place: those from byte _start up to
+// _end of the String they are in, whose indices are theirs.
+struct Substring {
+    let _base: String
+    let _start: Int
+    let _end: Int
+}
+
+// What for-in over a String walks: its Characters, in order, from byte
+// _at up to _end.
+struct _StringIterator {
+    let _string: String
+    var _at: Int
+    let _end: Int
+}
+
+// ---- Memory a program manages itself ----
+
+// Bytes nothing owns, aligned to at least alignment, and their return:
+// what allocate(capacity:) and deallocate() of the pointers are made of.
+@_silgen_name("vertex_raw_allocate")
+func _rawAllocate(_ byteCount: Int, _ alignment: Int) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_raw_deallocate")
+func _rawDeallocate(_ p: UnsafeMutableRawPointer)
+// The bytes at from, to to, where the two may overlap.
+@_silgen_name("vertex_raw_move")
+func _rawMove(_ to: UnsafeMutableRawPointer, _ from: UnsafeRawPointer, _ byteCount: Int)
+// The address of the variable passed in: what withUnsafeMutablePointer
+// hands its body. Swift's Builtin.addressof.
+@_builtin("addressof")
+func _addressOf<T>(_ x: inout T) -> UnsafeMutableRawPointer
+
+// What SIL does to the memory a typed pointer points at, as Swift's
+// Builtin.initialize, Builtin.destroy and Builtin.take do: put a value in
+// memory holding none, end the value it holds, move the value out.
+@_builtin("initialize")
+func _initialize<T>(_ p: UnsafeMutablePointer<T>, _ value: T)
+@_builtin("deinitialize")
+func _deinitialize<T>(_ p: UnsafeMutablePointer<T>)
+@_builtin("take")
+func _take<T>(_ p: UnsafeMutablePointer<T>) -> T

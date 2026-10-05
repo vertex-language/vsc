@@ -1,0 +1,23 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.3.1 effective-5.10 (swiftlang-6.3.1.1.2 clang-2100.0.123.102)
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Shapes2
+// swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.3.1
+import Swift
+import _Concurrency
+import _StringProcessing
+import _SwiftConcurrencyShims
+public enum Shape {
+  case dot
+  case line(Swift.Int32)
+  case box(Swift.Int32, Swift.Int32)
+}
+public enum Reading {
+  case none
+  case one(Swift.Int64)
+}
+public func area(_ s: Shapes2.Shape) -> Swift.Int32
+public func makeLine(_ n: Swift.Int32) -> Shapes2.Shape
+public func makeBox(_ w: Swift.Int32, _ h: Swift.Int32) -> Shapes2.Shape
+public func reading(_ n: Swift.Int64) -> Shapes2.Reading
+public func valueOf(_ r: Shapes2.Reading) -> Swift.Int64
+public func after(_ s: Shapes2.Shape, _ n: Swift.Int32) -> Swift.Int32

@@ -1,0 +1,30 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.3.1 effective-5.10 (swiftlang-6.3.1.1.2 clang-2100.0.123.102)
+// swift-module-flags: -target arm64-apple-macosx26.0 -enable-objc-interop -module-name Geometry2
+// swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.3.1
+import Swift
+import _Concurrency
+import _StringProcessing
+import _SwiftConcurrencyShims
+public struct Vec {
+  public var x: Swift.Int32
+  public var y: Swift.Int32
+  public init(x: Swift.Int32, y: Swift.Int32)
+  public var magnitude: Swift.Int32 {
+    get
+  }
+  @_hasInitialValue public static let unit: Swift.Int32
+  public static func zero() -> Geometry2.Vec
+  public static func of(_ n: Swift.Int32) -> Geometry2.Vec
+}
+public struct Mixed {
+  public var a: Swift.Int32
+  public var half: Swift.Int32 {
+    get
+  }
+  public var b: Swift.Int32
+  public init(a: Swift.Int32, b: Swift.Int32)
+}
+public func plus(_ a: Geometry2.Vec, _ b: Geometry2.Vec) -> Geometry2.Vec
+public func lengthOf(_ v: Geometry2.Vec) -> Swift.Int32
+public func spread(_ m: Geometry2.Mixed) -> Swift.Int32

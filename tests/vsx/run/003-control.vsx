@@ -1,0 +1,38 @@
+// `if` and `switch` in braces are expressions whose branches are markup;
+// class:, style: and spreads are single bindings.
+package main
+
+enum Load { case loading, ready(string), failed(int) }
+
+func Status(_ s: Load) -> Node {
+    return (
+        <p>
+            {switch s {
+            case .loading:       <i>…</i>
+            case .ready(let v):  <b>{v}</b>
+            case .failed(let c): <em>error {c}</em>
+            }}
+        </p>
+    )
+}
+
+func main() -> int32 {
+    for s in [Load.loading, .ready("ok"), .failed(404)] {
+        print(Status(s).Html())
+    }
+    let empty = [string]()
+    let done = true
+    let extra = ["data-a": "1", "aria-label": "x"]
+    let v = (
+        <div class="row" class:done={done} class:off={!done} style:width={"\(40)px"} style:--kit-accent="red" {...extra}>
+            {if empty.isEmpty {
+                <p class="empty">Nothing here.</p>
+            } else {
+                <ul>{empty.map { <li>{$0}</li> }}</ul>
+            }}
+            {done ? "yes" : nil}
+        </div>
+    )
+    print(v.Html())
+    return 0
+}

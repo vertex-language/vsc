@@ -1,0 +1,77 @@
+// The RFC's tasks app (§4), with a plain class for the store until
+// @Observable exists: add, toggle and filter, driven by events.
+package main
+
+struct Todo {
+    let ID: int
+    var Title: string
+    var Done: bool
+}
+
+enum Filter { case all, active, done }
+
+final class Store {
+    var Todos: [Todo] = []
+    var Filter: Filter = .all
+    var nextID = 1
+
+    var Visible: [Todo] {
+        switch Filter {
+        case .all:    return Todos
+        case .active: return Todos.filter { !$0.Done }
+        case .done:   return Todos.filter { $0.Done }
+        }
+    }
+
+    func Add(_ title: string) {
+        Todos.append(Todo(ID: nextID, Title: title, Done: false))
+        nextID += 1
+    }
+
+    func Toggle(_ id: int) {
+        for i in 0..<Todos.count where Todos[i].ID == id { Todos[i].Done = !Todos[i].Done }
+    }
+}
+
+func TodoItem(todo: Todo, onToggle: (int) -> void) -> Node {
+    return (
+        <li class="item" class:done={todo.Done}>
+            <input type="checkbox" checked={todo.Done} onChange={onToggle(todo.ID)} />
+            <span>{todo.Title}</span>
+        </li>
+    )
+}
+
+func App(store: Store, draft: string) -> Node {
+    return (
+        <main class="app">
+            <form onSubmit={e in
+                e.PreventDefault()
+                if !draft.isEmpty { store.Add(draft) }
+            }>
+                <input placeholder="What needs doing?" value={draft} autofocus />
+            </form>
+            {if store.Visible.isEmpty {
+                <p class="empty">Nothing here.</p>
+            } else {
+                <ul>
+                    <For each={store.Visible} key={t in t.ID}>
+                        {t in <TodoItem todo={t} onToggle={store.Toggle} />}
+                    </For>
+                </ul>
+            }}
+        </main>
+    )
+}
+
+func main() -> int32 {
+    let store = Store()
+    print(App(store: store, draft: "").Html())
+    _ = App(store: store, draft: "buy milk").Fire("submit")
+    _ = App(store: store, draft: "walk").Fire("submit")
+    print(App(store: store, draft: "").Html())
+    _ = App(store: store, draft: "").Fire("change")
+    store.Filter = .done
+    print(App(store: store, draft: "").Html())
+    return 0
+}

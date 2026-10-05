@@ -1,0 +1,49 @@
+// Handlers: `{…}` in a function-typed attribute is the closure, taking
+// the event it may ignore; `{e in …}` names it; a reference is passed as
+// it is; state a handler writes is the component's own.
+package main
+
+final class Store {
+    var Todos: [string] = []
+    var Last = ""
+    func Add(_ t: string) { Todos.append(t) }
+    func Clear(_ e: dom.MouseEvent) { Todos = [] }
+}
+
+func Form(store: Store) -> Node {
+    @State var draft = "milk"
+    @State var submits = 0
+    return (
+        <form onSubmit={e in
+            e.PreventDefault()
+            submits += 1
+            if !draft.isEmpty {
+                store.Add(draft)
+                draft = ""
+            }
+            store.Last = e.Type + (e.DefaultPrevented ? " (prevented)" : "")
+        }>
+            <input value={draft} onInput={_ in draft = "eggs"} />
+            <button type="reset" onClick={store.Clear}>clear</button>
+        </form>
+    )
+}
+
+func main() -> int32 {
+    let store = Store()
+    let form = Form(store: store)
+    _ = form.Fire("submit")
+    _ = form.Fire("input")
+    _ = form.Fire("submit")
+    _ = form.Fire("submit")
+    print(store.Todos, store.Last)
+    _ = form.Fire("click")
+    print(store.Todos)
+    return 0
+}
+
+@propertyWrapper
+struct State<T> {
+    var wrappedValue: T
+    init(wrappedValue: T) { self.wrappedValue = wrappedValue }
+}
