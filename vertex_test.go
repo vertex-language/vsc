@@ -311,6 +311,24 @@ func TestPackagesOfOneNameAreTwoModules(t *testing.T) {
 	}
 }
 
+// A class declared in one file of a package, with defaults for its stored
+// properties, and constructed in another: the defaults are read in the
+// file that declares them.
+func TestClassDefaultsReadInTheirFile(t *testing.T) {
+	// The class is far into its file, so that its positions are past the
+	// end of the other one.
+	pad := strings.Repeat("// padding to push the declaration past the other file's end\n", 40)
+	a := "package box\n\n" + pad + "final class Scratch {\n    var buf: [int32]? = nil\n    var count = 3\n}\n"
+	b := "package box\n\npublic func count() -> int32 { return int32(Scratch().count) }\n"
+	_, diags := vsc.Compile([]vsc.Source{{Name: "a.vs", Text: []byte(a)}, {Name: "b.vs", Text: []byte(b)}}, vsc.Options{
+		Module: "box",
+		Target: ir.AArch64MacOS,
+	})
+	for _, d := range diags {
+		t.Errorf("%s", d)
+	}
+}
+
 func write(t *testing.T, path, text string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(text), 0o666); err != nil {

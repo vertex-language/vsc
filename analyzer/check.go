@@ -182,10 +182,13 @@ func Check(files []*ast.File) (*Info, []token.Diagnostic) {
 
 // An Import represents another module's public interface AST files.
 type Import struct {
-	Name  string // module's declared name
-	As    string // local alias if renamed upon import, or empty
-	Files []*ast.File
-	Units []*token.File
+	Name string // module's declared name
+	As   string // local alias if renamed upon import, or empty
+	// Aliases are more names the module is bound to: what other importers
+	// called the one package.
+	Aliases []string
+	Files   []*ast.File
+	Units   []*token.File
 	// Direct is whether the program's own files import the module, not
 	// only a module it imports: a name two modules declare is the one a
 	// direct import's.
@@ -714,6 +717,9 @@ func (c *checker) declareImportedVars(decls []ast.Decl, scope *Scope) {
 func (c *checker) recordModule(imp Import, staging, scope *Scope) {
 	own := NewScope(nil, token.NoPos, token.NoPos)
 	c.modules[imp.bound()] = own
+	for _, a := range imp.Aliases {
+		c.modules[a] = own
+	}
 	if _, ok := c.info.ModuleBound[imp.Name]; !ok {
 		c.info.ModuleBound[imp.Name] = imp.bound()
 	}

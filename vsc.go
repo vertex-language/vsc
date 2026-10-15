@@ -404,6 +404,11 @@ type importer struct {
 	// modules is each folder's module name: what its symbols are mangled
 	// under (moduleNameOf), once the folder has been read.
 	modules map[string]string
+	// loading is the folders being read or read, and loadedAt where each
+	// read one's Import is in out: a package is loaded once, by its
+	// folder, whatever names its importers bind it to.
+	loading  map[string]bool
+	loadedAt map[string]int
 	// ahead is folders being read and parsed before the walk reaches
 	// them, by directory.
 	ahead map[string]*prefetch
@@ -811,7 +816,11 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		if via == "" {
 			l.direct[as] = true
 		}
-		if l.seen[as] {
+		if i, loaded := l.loadedAt[dir]; loaded {
+			l.bind(i, as)
+			return dir
+		}
+		if l.loading[dir] {
 			return dir
 		}
 	}
@@ -880,10 +889,14 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	if via == "" {
 		l.direct[as] = true
 	}
-	if l.seen[as] {
+	if l.loading[dir] {
 		return dir
 	}
-	l.seen[as] = true
+	if l.loading == nil {
+		l.loading = map[string]bool{}
+		l.loadedAt = map[string]int{}
+	}
+	l.loading[dir] = true
 
 	// The folder's .vss files are its stylesheet, carried by a source
 	// generated from them (see vsc/vss).
@@ -938,6 +951,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	}
 	l.modules[dir] = module
 	l.out = append(l.out, analyzer.Import{Name: module, As: as, Files: files, Units: units, Deps: l.moduleDeps(files, units, dir)})
+	l.loadedAt[dir] = len(l.out) - 1
 	l.pkgs = append(l.pkgs, Package{Name: module, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque,
 		Surface: surface(files, units)})
 	if l.onPackage != nil {
@@ -1131,7 +1145,7 @@ func (l *importer) prefetchImports(f *ast.File, unit *token.File) {
 			if err != nil || l.ahead[dir] != nil {
 				continue
 			}
-			if name, known := l.names[dir]; known && spec.Alias == nil && l.seen[name] {
+			if _, loaded := l.loadedAt[dir]; loaded {
 				continue
 			}
 			l.readAhead(dir)
@@ -1157,6 +1171,16 @@ func parseSource(src Source, cfg ifconfig.Config) readFile {
 	}
 	ifconfig.Resolve(parsed, cfg)
 	return readFile{src: src, unit: tf, parsed: parsed}
+}
+
+// bind binds the package whose Import is out[i] under the name as too: an
+// importer's alias, or its package name where another importer aliased it.
+func (l *importer) bind(i int, as string) {
+	imp := &l.out[i]
+	if imp.As == as || slices.Contains(imp.Aliases, as) {
+		return
+	}
+	imp.Aliases = append(imp.Aliases, as)
 }
 
 // moduleNameOf is the module a package imported by path compiles as: the

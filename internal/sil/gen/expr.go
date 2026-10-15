@@ -1303,7 +1303,14 @@ func (g *gen) makeClass(e *ast.CallExpr, tn *analyzer.TypeNameSymbol, cl *types.
 			if subst != nil {
 				g.subst = subst
 			}
+			// It is read in the file that declares the class, which need
+			// not be the one constructing it.
+			prevFile := g.file
+			if f := g.fileOf(init); f != nil {
+				g.file = f
+			}
 			v = g.rvalue(init)
+			g.file = prevFile
 			g.subst = prev
 			if v != nil {
 				v = g.optionalFor(init, v, g.typeOf(init), held.field.Type)
@@ -1370,9 +1377,18 @@ func storedChain(t types.Type) []heldField {
 // classDefaults returns initial values of a class's stored properties mapped by name.
 func (g *gen) classDefaults(t types.Type) map[string]ast.Expr {
 	out := map[string]ast.Expr{}
-	body := classBody(g.classDecl(t))
+	decl := g.classDecl(t)
+	body := classBody(decl)
 	if body == nil {
 		return out
+	}
+	// The names are the declaring file's to read, which need not be the
+	// file being lowered: a class constructed in one file of a package and
+	// declared in another.
+	if f := g.fileOf(decl); f != nil && f != g.file {
+		prev := g.file
+		g.file = f
+		defer func() { g.file = prev }()
 	}
 	for _, mem := range body.Members {
 		vd, ok := mem.(*ast.VarDecl)
@@ -1401,9 +1417,15 @@ func (g *gen) implicitlyNil(owner types.Type, f *types.Field) bool {
 	if f.LazyOf != "" {
 		return true
 	}
-	body := classBody(g.classDecl(owner))
+	decl := g.classDecl(owner)
+	body := classBody(decl)
 	if body == nil {
 		return false
+	}
+	if f := g.fileOf(decl); f != nil && f != g.file {
+		prev := g.file
+		g.file = f
+		defer func() { g.file = prev }()
 	}
 	for _, mem := range body.Members {
 		vd, ok := mem.(*ast.VarDecl)
