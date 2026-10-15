@@ -113,6 +113,13 @@ struct Pipeline {
   Pipeline* next;
 };
 
+// How many command buffers a device keeps committed and not waited for.
+constexpr int kCommitted = 16;
+// The most launches a command buffer takes before it is committed.
+constexpr i64 kFlushMost = 64;
+// How many timestamps VERTEX_GPU_PROFILE=3 takes between syncs.
+constexpr int kKernelSamples = 4096;
+
 struct Device {
   Kind kind;
   void* metal;  // id<MTLDevice>
@@ -126,6 +133,13 @@ struct Device {
   // asking for a buffer's memory runs them and waits (syncDevice).
   void* pendingBuffer;   // id<MTLCommandBuffer>
   void* pendingEncoder;  // id<MTLComputeCommandEncoder>
+  i64 pendingLaunches;   // encoded into pendingBuffer
+  i64 flushAt;           // launches the open buffer takes before it is committed
+  // Command buffers committed but not yet waited for, oldest first: every
+  // few launches the open one is committed, so the device runs a chain
+  // while the host encodes the rest of it (see runMetal).
+  void* committed[kCommitted];
+  int committedCount;
   Lock pendingLock;
   // Render passes not yet run: one open command buffer, retained, that
   // passes encode into; renderFlush commits it.
@@ -676,35 +690,81 @@ Pipeline* pipelineFor(Device* d, const vertex_gpu_kernel* k) {
   return made;
 }
 
-// syncDevice runs what has been encoded on d and waits for it: what the
-// host reads from a buffer, or writes to one, is then what the launches
-// before made of it. 0 when they ran; 7 when one failed.
-i32 syncDevice(Device* d) {
-  if (!d || d->kind != KindMetal) return 0;
-  d->pendingLock.lock();
+// The environment's say over launches, read once: VERTEX_GPU_PROFILE,
+// VERTEX_GPU_SYNC, VERTEX_GPU_DEBUG, and VERTEX_GPU_FLUSH -- how many
+// launches the first command buffer after a sync takes before it is
+// committed (each after takes twice as many as the one before, up to
+// kFlushMost).
+struct Settings {
+  bool read;
+  char profile;  // '1', '2' or 0
+  bool sync;
+  bool debug;
+  i64 flushEvery;
+};
+Settings settings;
+
+const Settings& env() {
+  if (!settings.read) {
+    const char* p = vertex_pal_getenv("VERTEX_GPU_PROFILE");
+    settings.profile = p ? p[0] : 0;
+    settings.debug = vertex_pal_getenv("VERTEX_GPU_DEBUG") != nullptr;
+    settings.sync = vertex_pal_getenv("VERTEX_GPU_SYNC") != nullptr || settings.debug;
+    settings.flushEvery = 4;
+    if (const char* f = vertex_pal_getenv("VERTEX_GPU_FLUSH")) {
+      i64 n = 0;
+      for (; *f >= '0' && *f <= '9'; f++) n = n * 10 + (*f - '0');
+      if (n > 0) settings.flushEvery = n;
+    }
+    settings.read = true;
+  }
+  return settings;
+}
+
+// commitPendingLocked commits d's open command buffer, if it has one,
+// without waiting, and adds it to those committed. pendingLock is held.
+void commitPendingLocked(Device* d) {
   objc::id cb = d->pendingBuffer;
+  if (!cb) return;
   objc::id enc = d->pendingEncoder;
   d->pendingBuffer = nullptr;
   d->pendingEncoder = nullptr;
-  d->pendingLock.unlock();
-  if (!cb) return 0;
-  void* pool = objc::poolPush();
-  objc::send<void>(enc, "endEncoding");
-  objc::send<void>(cb, "commit");
-  objc::send<void>(cb, "waitUntilCompleted");
-  i64 status = static_cast<i64>(objc::send<u64>(cb, "status"));
-  i32 result = 0;
-  if (status == 5) {  // MTLCommandBufferStatusError
-    objc::report("a launch failed", objc::send<objc::id>(cb, "error"));
-    result = 7;
+  d->pendingLaunches = 0;
+  if (enc) {
+    objc::send<void>(enc, "endEncoding");
+    objc::send<void>(enc, "release");
   }
-  // VERTEX_GPU_PROFILE=2: each command buffer's device time, as
-  // "gpu-profile commit <microseconds>": what the host waited for.
-  const char* profile = vertex_pal_getenv("VERTEX_GPU_PROFILE");
-  if (profile && profile[0] == '2') {
-    double start = objc::send<double>(cb, "GPUStartTime");
-    double end = objc::send<double>(cb, "GPUEndTime");
-    i64 us = static_cast<i64>((end - start) * 1e6);
+  objc::send<void>(cb, "commit");
+  d->committed[d->committedCount++] = cb;
+}
+
+// waitCommitted waits for command buffers committed to one queue, oldest
+// first -- they run in order, so waiting for the last is waiting for all
+// -- and releases them. 0 when they ran; 7 when one failed.
+i32 waitCommitted(objc::id* cbs, int n) {
+  if (n == 0) return 0;
+  objc::send<void>(cbs[n - 1], "waitUntilCompleted");
+  i32 result = 0;
+  i64 us = 0;
+  for (int i = 0; i < n; i++) {
+    objc::id cb = cbs[i];
+    // A buffer before the last may still be completing its handlers.
+    if (i < n - 1) objc::send<void>(cb, "waitUntilCompleted");
+    i64 status = static_cast<i64>(objc::send<u64>(cb, "status"));
+    if (status == 5 && result == 0) {  // MTLCommandBufferStatusError
+      objc::report("a launch failed", objc::send<objc::id>(cb, "error"));
+      result = 7;
+    }
+    if (env().profile == '2') {
+      double start = objc::send<double>(cb, "GPUStartTime");
+      double end = objc::send<double>(cb, "GPUEndTime");
+      us += static_cast<i64>((end - start) * 1e6);
+    }
+    objc::send<void>(cb, "release");
+  }
+  // VERTEX_GPU_PROFILE=2: the device time of the command buffers a sync
+  // waited for, as "gpu-profile commit <microseconds>".
+  if (env().profile == '2') {
     char buf[32];
     char digits[24];
     int n = 0;
@@ -717,8 +777,108 @@ i32 syncDevice(Device* d) {
     say("gpu-profile commit ");
     say(buf);
   }
-  objc::send<void>(enc, "release");
-  objc::send<void>(cb, "release");
+  return result;
+}
+
+// VERTEX_GPU_PROFILE=3: each launch in an encoder of its own whose start
+// and end the device timestamps into a counter sample buffer, so each
+// kernel's device time is measured where it runs -- in the model's chain,
+// at the clocks the chain runs at. At each sync, every launch's time is
+// said as "gpu-kernel <kernel> <work-items> <nanoseconds>".
+struct KernelTimes {
+  objc::id samples;  // id<MTLCounterSampleBuffer>, two samples a launch
+  i64 used;
+  bool tried;
+  const char* names[kKernelSamples / 2];
+  i64 grids[kKernelSamples / 2];  // each launch's work-items
+};
+KernelTimes kernelTimes;
+
+struct Range {
+  u64 location, length;
+};
+
+objc::id kernelSamples(Device* d) {
+  if (kernelTimes.tried) return kernelTimes.samples;
+  kernelTimes.tried = true;
+  if (!objc::send<bool>(d->metal, "supportsCounterSampling:", static_cast<u64>(0))) {  // at stage boundaries
+    say("gpu: this device cannot timestamp an encoder's start and end\n");
+    return nullptr;
+  }
+  objc::id sets = objc::send<objc::id>(d->metal, "counterSets");
+  objc::id timestamps = nullptr;
+  u64 n = sets ? objc::send<u64>(sets, "count") : 0;
+  for (u64 i = 0; i < n; i++) {
+    objc::id set = objc::send<objc::id>(sets, "objectAtIndex:", i);
+    const char* name = objc::send<const char*>(objc::send<objc::id>(set, "name"), "UTF8String");
+    if (name && name[0] == 't' && name[1] == 'i' && name[2] == 'm' && name[3] == 'e') timestamps = set;
+  }
+  if (!timestamps) {
+    say("gpu: no timestamp counter set\n");
+    return nullptr;
+  }
+  objc::id desc = objc::send<objc::id>(objc::send<objc::id>(objc::getClass("MTLCounterSampleBufferDescriptor"), "alloc"), "init");
+  objc::send<void>(desc, "setCounterSet:", timestamps);
+  objc::send<void>(desc, "setStorageMode:", static_cast<u64>(0));
+  objc::send<void>(desc, "setSampleCount:", static_cast<u64>(kKernelSamples));
+  objc::id error = nullptr;
+  kernelTimes.samples = objc::send<objc::id>(d->metal, "newCounterSampleBufferWithDescriptor:error:", desc, &error);
+  if (!kernelTimes.samples) objc::report("newCounterSampleBufferWithDescriptor", error);
+  return kernelTimes.samples;
+}
+
+// sayKernelTimes says the times of the launches sampled since the last
+// call, all of which have run, and starts the buffer over.
+void sayKernelTimes() {
+  if (!kernelTimes.samples || kernelTimes.used == 0) return;
+  Range r = {0, static_cast<u64>(kernelTimes.used)};
+  objc::id data = objc::send<objc::id>(kernelTimes.samples, "resolveCounterRange:", r);
+  const u64* ts = data ? static_cast<const u64*>(objc::send<const void*>(data, "bytes")) : nullptr;
+  for (i64 e = 0; ts && e < kernelTimes.used / 2; e++) {
+    u64 a = ts[2 * e], b = ts[2 * e + 1];
+    if (a == ~0ull || b == ~0ull || b < a) continue;
+    // "gpu-kernel <kernel> <work-items> <nanoseconds>"
+    char buf[64];
+    int at = 0;
+    u64 vals[2] = {static_cast<u64>(kernelTimes.grids[e]), b - a};
+    for (int f = 0; f < 2; f++) {
+      char digits[24];
+      int n = 0;
+      u64 v = vals[f];
+      do { digits[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v > 0);
+      buf[at++] = ' ';
+      while (n > 0) buf[at++] = digits[--n];
+    }
+    buf[at++] = '\n';
+    buf[at] = 0;
+    say("gpu-kernel ");
+    say(kernelTimes.names[e]);
+    say(buf);
+  }
+  kernelTimes.used = 0;
+}
+
+// syncDevice runs what has been encoded on d and waits for it, and for
+// what was committed before: what the host reads from a buffer, or
+// writes to one, is then what the launches before made of it. 0 when
+// they ran; 7 when one failed.
+i32 syncDevice(Device* d) {
+  if (!d || d->kind != KindMetal) return 0;
+  objc::id cbs[kCommitted];
+  d->pendingLock.lock();
+  if (!d->pendingBuffer && d->committedCount == 0) {
+    d->pendingLock.unlock();
+    return 0;
+  }
+  void* pool = objc::poolPush();
+  commitPendingLocked(d);
+  d->flushAt = env().flushEvery;
+  int n = d->committedCount;
+  for (int i = 0; i < n; i++) cbs[i] = d->committed[i];
+  d->committedCount = 0;
+  d->pendingLock.unlock();
+  i32 result = waitCommitted(cbs, n);
+  if (env().profile == '3') sayKernelTimes();
   objc::poolPop(pool);
   return result;
 }
@@ -726,7 +886,7 @@ i32 syncDevice(Device* d) {
 i32 runMetal(Launch* l) {
   void* pool = objc::poolPush();
   Pipeline* p = pipelineFor(l->device, l->kernel);
-  if (vertex_pal_getenv("VERTEX_GPU_DEBUG")) say(p ? "gpu: pipeline made\n" : "gpu: no pipeline\n");
+  if (env().debug) say(p ? "gpu: pipeline made\n" : "gpu: no pipeline\n");
   if (!p) {
     objc::poolPop(pool);
     return 5;
@@ -745,12 +905,36 @@ i32 runMetal(Launch* l) {
   if (!d->pendingBuffer) {
     objc::id made = objc::send<objc::id>(d->queue, "commandBuffer");
     d->pendingBuffer = objc::send<objc::id>(made, "retain");
+  }
+  if (!d->pendingEncoder) {
     // A serial encoder: each dispatch runs after the one before, which is
     // what a model's chain of dependent launches needs. (A concurrent one
     // with a barrier before every dispatch was measured slower on such a
     // chain, though faster for independent ones.)
-    objc::id menc = objc::send<objc::id>(made, "computeCommandEncoder");
+    objc::id samples = env().profile == '3' ? kernelSamples(d) : nullptr;
+    objc::id menc = nullptr;
+    if (samples && kernelTimes.used + 2 <= kKernelSamples) {
+      objc::id desc = objc::send<objc::id>(objc::getClass("MTLComputePassDescriptor"), "computePassDescriptor");
+      objc::id att = objc::send<objc::id>(objc::send<objc::id>(desc, "sampleBufferAttachments"), "objectAtIndexedSubscript:", static_cast<u64>(0));
+      objc::send<void>(att, "setSampleBuffer:", samples);
+      objc::send<void>(att, "setStartOfEncoderSampleIndex:", static_cast<u64>(kernelTimes.used));
+      objc::send<void>(att, "setEndOfEncoderSampleIndex:", static_cast<u64>(kernelTimes.used + 1));
+      kernelTimes.names[kernelTimes.used / 2] = l->kernel->label ? l->kernel->label : l->kernel->name;
+      kernelTimes.grids[kernelTimes.used / 2] = l->grid[0] * l->grid[1] * l->grid[2];
+      kernelTimes.used += 2;
+      menc = objc::send<objc::id>(d->pendingBuffer, "computeCommandEncoderWithDescriptor:", desc);
+    } else {
+      menc = objc::send<objc::id>(d->pendingBuffer, "computeCommandEncoder");
+    }
     d->pendingEncoder = objc::send<objc::id>(menc, "retain");
+    if (env().profile == '3') {
+      // VERTEX_GPU_PROFILE=3: an encoder a launch, named for its kernel,
+      // in the command buffers launches go in anyway -- for Instruments'
+      // Metal System Trace to time each kernel where it runs.
+      objc::id name = objc::send<objc::id>(objc::getClass("NSString"), "stringWithUTF8String:",
+                                           l->kernel->label ? l->kernel->label : l->kernel->name);
+      objc::send<void>(menc, "setLabel:", name);
+    }
   }
   objc::id enc = d->pendingEncoder;
   objc::send<void>(enc, "setComputePipelineState:", p->state);
@@ -766,17 +950,50 @@ i32 runMetal(Launch* l) {
   objc::Size grid = {static_cast<u64>(l->grid[0]), static_cast<u64>(l->grid[1]), static_cast<u64>(l->grid[2])};
   objc::Size group = {static_cast<u64>(l->per[0]), static_cast<u64>(l->per[1]), static_cast<u64>(l->per[2])};
   objc::send<void>(enc, "dispatchThreads:threadsPerThreadgroup:", grid, group);
+  if (env().profile == '3') {
+    objc::send<void>(enc, "endEncoding");
+    objc::send<void>(enc, "release");
+    d->pendingEncoder = nullptr;
+  }
+  // Every few launches the open command buffer is committed, without a
+  // wait: the device starts on a chain while the host is still encoding
+  // the rest of it, rather than sitting idle until the host reads a
+  // result. Buffers on one queue run in order, so the chain keeps its.
+  // The first buffer after a sync is short, to start the device soon;
+  // each after is twice as long, since the device pauses between two
+  // buffers (some tens of microseconds on Apple's) and a decoded token
+  // is a hundred launches or so.
+  if (d->flushAt == 0) d->flushAt = env().flushEvery;
+  if (++d->pendingLaunches >= d->flushAt && env().profile != '1') {
+    d->flushAt = d->flushAt * 2 < kFlushMost ? d->flushAt * 2 : kFlushMost;
+    objc::id oldest = nullptr;
+    if (d->committedCount == kCommitted - 1) {
+      // Full but for the one a sync commits: wait for the oldest, which
+      // has most likely run by now -- not for all, which would leave the
+      // device idle while the host encodes the next few.
+      oldest = d->committed[0];
+      for (int i = 1; i < d->committedCount; i++) d->committed[i - 1] = d->committed[i];
+      d->committedCount--;
+    }
+    commitPendingLocked(d);
+    if (oldest) {
+      d->pendingLock.unlock();
+      i32 r = waitCommitted(&oldest, 1);
+      objc::poolPop(pool);
+      return r;
+    }
+  }
   d->pendingLock.unlock();
   i32 result = 0;
   // VERTEX_GPU_PROFILE=1: each launch alone in its command buffer, its
   // device time said: "gpu-profile <kernel> <microseconds>".
-  const char* profile = vertex_pal_getenv("VERTEX_GPU_PROFILE");
-  if (profile && profile[0] == '1') {
+  if (env().profile == '1') {
     d->pendingLock.lock();
     objc::id pcb = d->pendingBuffer;
     objc::id penc = d->pendingEncoder;
     d->pendingBuffer = nullptr;
     d->pendingEncoder = nullptr;
+    d->pendingLaunches = 0;
     d->pendingLock.unlock();
     objc::send<void>(penc, "endEncoding");
     objc::send<void>(pcb, "commit");
@@ -805,9 +1022,9 @@ i32 runMetal(Launch* l) {
   }
   // VERTEX_GPU_SYNC=1 waits after every launch, as launches once did: a
   // failure is then reported at the launch that caused it.
-  if (vertex_pal_getenv("VERTEX_GPU_SYNC") || vertex_pal_getenv("VERTEX_GPU_DEBUG")) {
+  if (env().sync) {
     result = syncDevice(d);
-    if (vertex_pal_getenv("VERTEX_GPU_DEBUG")) say(result == 0 ? "gpu: metal launch ran\n" : "gpu: metal launch failed\n");
+    if (env().debug) say(result == 0 ? "gpu: metal launch ran\n" : "gpu: metal launch failed\n");
   }
   objc::poolPop(pool);
   return result;

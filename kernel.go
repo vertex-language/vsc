@@ -126,8 +126,10 @@ func compileKernel(name string, k *sil.Func, m, gpuSIL *sil.Module) (*lower.Kern
 		})
 	}
 	// f16 and bf16 in f32 until the AIR lowering selects Metal's own half
-	// instructions (see ir.Module.LegalizeHalf).
-	vir.LegalizeHalf()
+	// instructions (see ir.Module.LegalizeHalf) -- but for widening an f16,
+	// which the GPU does in one instruction where the legalized form is a
+	// dozen: a quantized weight's scale is read that way in every block.
+	vir.LegalizeHalfNativeWiden()
 	if err := vir.Err(); err != nil {
 		return nil, []Diagnostic{kernelError(k, "cannot be lowered for a device: "+err.Error())}
 	}

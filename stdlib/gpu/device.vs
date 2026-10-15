@@ -58,39 +58,44 @@ package gpu
 
 // ---- where am I (§6.1) ----
 
+// _n is a device index as an int, zero-extended: an index is never
+// negative, and saying so lets the device compiler keep the arithmetic
+// on it -- and the addresses made from it -- 32 bits wide.
+func _n(_ v: int32) -> int { return int(uint32(bitPattern: v)) }
+
 /// Index is this work-item in the whole grid.
 public enum Index {
-    public static var x: int { return int(_workgroupIDX()) * int(_workgroupSizeX()) + int(_workitemIDX()) }
-    public static var y: int { return int(_workgroupIDY()) * int(_workgroupSizeY()) + int(_workitemIDY()) }
-    public static var z: int { return int(_workgroupIDZ()) * int(_workgroupSizeZ()) + int(_workitemIDZ()) }
+    public static var x: int { return _n(_workgroupIDX()) * _n(_workgroupSizeX()) + _n(_workitemIDX()) }
+    public static var y: int { return _n(_workgroupIDY()) * _n(_workgroupSizeY()) + _n(_workitemIDY()) }
+    public static var z: int { return _n(_workgroupIDZ()) * _n(_workgroupSizeZ()) + _n(_workitemIDZ()) }
 }
 
 /// LocalIndex is this work-item within its workgroup.
 public enum LocalIndex {
-    public static var x: int { return int(_workitemIDX()) }
-    public static var y: int { return int(_workitemIDY()) }
-    public static var z: int { return int(_workitemIDZ()) }
+    public static var x: int { return _n(_workitemIDX()) }
+    public static var y: int { return _n(_workitemIDY()) }
+    public static var z: int { return _n(_workitemIDZ()) }
 }
 
 /// GroupIndex is this workgroup within the grid.
 public enum GroupIndex {
-    public static var x: int { return int(_workgroupIDX()) }
-    public static var y: int { return int(_workgroupIDY()) }
-    public static var z: int { return int(_workgroupIDZ()) }
+    public static var x: int { return _n(_workgroupIDX()) }
+    public static var y: int { return _n(_workgroupIDY()) }
+    public static var z: int { return _n(_workgroupIDZ()) }
 }
 
 /// GroupSize is how many work-items a workgroup has.
 public enum GroupSize {
-    public static var x: int { return int(_workgroupSizeX()) }
-    public static var y: int { return int(_workgroupSizeY()) }
-    public static var z: int { return int(_workgroupSizeZ()) }
+    public static var x: int { return _n(_workgroupSizeX()) }
+    public static var y: int { return _n(_workgroupSizeY()) }
+    public static var z: int { return _n(_workgroupSizeZ()) }
 }
 
 /// GroupCount is how many workgroups the grid has.
 public enum GroupCount {
-    public static var x: int { return int(_numWorkgroupsX()) }
-    public static var y: int { return int(_numWorkgroupsY()) }
-    public static var z: int { return int(_numWorkgroupsZ()) }
+    public static var x: int { return _n(_numWorkgroupsX()) }
+    public static var y: int { return _n(_numWorkgroupsY()) }
+    public static var z: int { return _n(_numWorkgroupsZ()) }
 }
 
 // ---- working together (§6.2) ----
@@ -104,9 +109,9 @@ public func Barrier() {
 /// Wave is the work-items that run in lock-step: a warp, a SIMD-group.
 public enum Wave {
     /// Lane is this work-item's place in its wave.
-    public static var Lane: int { return int(_laneID()) }
+    public static var Lane: int { return _n(_laneID()) }
     /// Size is how wide a wave is: 32 or 64 on a GPU, 1 on the CPU.
-    public static var Size: int { return int(_waveSize()) }
+    public static var Size: int { return _n(_waveSize()) }
 
     public static func Shuffle(_ v: int32, from lane: int) -> int32 {
         return int32(bitPattern: _shflIdx(uint32(bitPattern: v), int32(lane)))
