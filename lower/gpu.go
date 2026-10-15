@@ -17,8 +17,8 @@ import (
 //     its parameters loaded from the slot the runtime filled, which is how
 //     the CPU device runs a work-item;
 //   - its descriptor, <kernel>$gpu: the name of its entry in the Metal
-//     library, the library, the thunk, and how many slots a launch fills
-//     (stdlib/runtime/gpu/gpu.cpp says the layout).
+//     library, the library, the thunk, how many slots a launch fills,
+//     and the kernel as PTX (stdlib/runtime/gpu/gpu.cpp says the layout).
 //
 // A launch's kernel is named by a builtin (gen.KernelDescriptorBuiltin)
 // that is the descriptor's address: this module's own, or another's.
@@ -42,6 +42,11 @@ type KernelImage struct {
 	// nil where it could not be built for Apple's GPUs, which run it on
 	// the CPU instead.
 	Metallib []byte
+	// PTX is the kernel as PTX text for NVIDIA's GPUs, holding
+	// KernelEntry, which takes the grid's size after its parameters
+	// (Options.GridGuard); nil where it was not built, as for an Apple
+	// target, or could not be.
+	PTX []byte
 	// Barrier is whether the kernel waits at a barrier, which the CPU
 	// device runs with a thread per work-item.
 	Barrier bool
@@ -129,6 +134,8 @@ func (l *lowerer) writeKernelDescriptor(kernel, name string, img *KernelImage, p
 		rec.Field("flags", ir.StoreI64.FType())
 		rec.Field("params", ir.StoreI64.FType())
 		rec.Field("label", ir.StorePtr.FType())
+		rec.Field("ptx", ir.StorePtr.FType())
+		rec.Field("ptxSize", ir.StoreI64.FType())
 		l.kernelRecord = rec
 	}
 	var flags int64
@@ -142,6 +149,14 @@ func (l *lowerer) writeKernelDescriptor(kernel, name string, img *KernelImage, p
 		g.Internal()
 		lib = ir.RelocInit(g)
 	}
+	ptx := ir.Lit(ir.Int(0))
+	if len(img.PTX) > 0 {
+		// NUL-terminated: the driver takes PTX as a C string.
+		g := l.out.Global(l.sym(kernel+"$gpu_ptx"), ir.RO, ir.Array(uint64(len(img.PTX)+1), ir.StoreI8.FType())).
+			Init(ir.Str(string(img.PTX) + "\x00")).Align(16)
+		g.Internal()
+		ptx = ir.RelocInit(g)
+	}
 	g := l.out.Global(name, ir.RO, l.kernelRecord.FType()).
 		Init(ir.Fields(
 			ir.Val("name", ir.RelocInit(entry)),
@@ -151,6 +166,8 @@ func (l *lowerer) writeKernelDescriptor(kernel, name string, img *KernelImage, p
 			ir.Val("flags", ir.Lit(ir.Int(flags))),
 			ir.Val("params", ir.Lit(ir.Int(int64(params)))),
 			ir.Val("label", ir.RelocInit(label)),
+			ir.Val("ptx", ptx),
+			ir.Val("ptxSize", ir.Lit(ir.Int(int64(len(img.PTX))))),
 		)).
 		Align(8)
 	// A kernel private to this module -- a generic one's specialization,
@@ -252,7 +269,8 @@ func (l *lowerer) kernelEntries() error {
 				params[i] = f.ParamOf(w.Type(), "p"+itoa(i))
 			}
 		}
-		b := f.Entry()
+		grid := l.gridParams(f)
+		b := l.guardGridIn(f, f.Entry(), grid)
 		args := make([]ir.Value, len(words))
 		for i, p := range params {
 			if asPointer[i] {
@@ -265,6 +283,39 @@ func (l *lowerer) kernelEntries() error {
 		b.Return()
 	}
 	return nil
+}
+
+// gridParams adds the grid's size to an entry, as Options.GridGuard
+// says: three i32s after the entry's own parameters. None otherwise.
+func (l *lowerer) gridParams(f *ir.Func) []ir.I32 {
+	if !l.guardGrid {
+		return nil
+	}
+	return []ir.I32{
+		f.ParamOf(ir.TypeI32, "gx").(ir.I32),
+		f.ParamOf(ir.TypeI32, "gy").(ir.I32),
+		f.ParamOf(ir.TypeI32, "gz").(ir.I32),
+	}
+}
+
+// guardGridIn returns from an entry for a work-item outside the grid, on
+// any axis, and is the block the rest of the entry goes in: b itself
+// where there is no grid to keep to.
+func (l *lowerer) guardGridIn(f *ir.Func, b *ir.Block, grid []ir.I32) *ir.Block {
+	if grid == nil {
+		return b
+	}
+	outside := f.Block("outside")
+	outside.Return()
+	for a, axis := range []ir.Axis{ir.X, ir.Y, ir.Z} {
+		id := b.I64.Add(
+			b.I64.Mul(b.I64.SExtI32(b.I32.WorkgroupID(axis)), b.I64.SExtI32(b.I32.WorkgroupSize(axis))),
+			b.I64.SExtI32(b.I32.WorkitemID(axis)))
+		inside := f.Block("inside" + itoa(a))
+		b.BrIf(b.I64.SLt(id, b.I64.SExtI32(grid[a])), inside.To(), outside.To())
+		b = inside
+	}
+	return b
 }
 
 // isStructType reports whether t is a struct, or an instance of one.
@@ -652,7 +703,8 @@ func (l *lowerer) mapEntry(base string, mask uint64) error {
 	args = append(args, f.ParamPtr("p"+itoa(n)))
 	n++
 	args = append(args, param(ir.TypeI64))
-	b := f.Entry()
+	grid := l.gridParams(f)
+	b := l.guardGridIn(f, f.Entry(), grid)
 	index := b.I64.Add(
 		b.I64.Mul(b.I64.SExtI32(b.I32.WorkgroupID(ir.X)), b.I64.SExtI32(b.I32.WorkgroupSize(ir.X))),
 		b.I64.SExtI32(b.I32.WorkitemID(ir.X)))

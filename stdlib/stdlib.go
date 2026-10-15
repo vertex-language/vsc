@@ -423,6 +423,10 @@ func asmNum(n int) string { return string(rune('0' + n)) }
 // runtime/gpu/gpu.cpp). Where there is none, the unit runs a group with
 // barriers on a thread per work-item instead.
 func GPUAsm(target string) (string, bool) {
+	if target == "x86_64-linux" {
+		const name = "vertex_gpu_switch"
+		return "\t.text\n\t.globl " + name + "\n\t.type " + name + ", @function\n\t.p2align 4\n" + name + ":" + gpuSwitchX64SysV, true
+	}
 	if !strings.HasPrefix(target, "arm64-") && !strings.HasPrefix(target, "aarch64-") {
 		return "", false
 	}
@@ -476,6 +480,38 @@ const gpuSwitchARM64 = `
 	ldr d14, [sp, #144]
 	ldr d15, [sp, #152]
 	add sp, sp, #160
+	ret
+`
+
+// gpuSwitchX64SysV is vertex_gpu_switch(from, to) under the System V
+// ABI: what a callee keeps -- RBX, RBP, R12-R15, and the MXCSR and x87
+// control words -- pushed on this stack, this stack pointer stored
+// through from (RDI), the one stored through to (RSI) loaded, and the
+// same popped from it. A fiber's first frame (runtime/gpu/gpu.cpp) holds
+// the default control words, and returns to where the fiber starts. The
+// assembler has no stmxcsr, ldmxcsr, fnstcw or fldcw, so they are bytes:
+// stmxcsr (%rsp), fnstcw 4(%rsp), then ldmxcsr (%rsp), fldcw 4(%rsp).
+const gpuSwitchX64SysV = `
+	pushq %rbp
+	pushq %rbx
+	pushq %r12
+	pushq %r13
+	pushq %r14
+	pushq %r15
+	subq $8, %rsp
+	.byte 0x0f, 0xae, 0x1c, 0x24
+	.byte 0xd9, 0x7c, 0x24, 0x04
+	movq %rsp, (%rdi)
+	movq (%rsi), %rsp
+	.byte 0x0f, 0xae, 0x14, 0x24
+	.byte 0xd9, 0x6c, 0x24, 0x04
+	addq $8, %rsp
+	popq %r15
+	popq %r14
+	popq %r13
+	popq %r12
+	popq %rbx
+	popq %rbp
 	ret
 `
 

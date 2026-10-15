@@ -87,7 +87,10 @@ public final class Device {
     /// as it is, and a model costs its size once, not twice. p is
     /// page-aligned (a mapping's start is); owner is what keeps the memory
     /// alive -- the mapping -- and is kept as long as the buffer is. Its
-    /// contents are the caller's to leave unchanged.
+    /// contents are the caller's to leave unchanged. A discrete GPU (CUDA)
+    /// would read host memory across the bus every time, so there the
+    /// bytes are copied to the device once -- but for another buffer's
+    /// memory, which is the device's already and is taken in place.
     public func Wrap(_ p: UnsafeMutableRawPointer, bytes: int, keeping owner: AnyObject) throws -> Buffer<uint8> {
         guard let h = _bufferWrap(_h, p, bytes) else { throw DeviceError.noMemory }
         let memory = _Memory(_h: h)

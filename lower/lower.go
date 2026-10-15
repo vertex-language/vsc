@@ -26,6 +26,11 @@ type Options struct {
 	// name, and an entry point for each of DeviceKernels.
 	Device        bool
 	DeviceKernels []string
+	// GridGuard is for a device that runs whole workgroups past the
+	// grid's end, as CUDA does and Metal's dispatchThreads does not:
+	// each entry takes the grid's size as three i32s after its own
+	// parameters, and a work-item outside it returns at once.
+	GridGuard bool
 }
 
 // Module translates a lowered SIL module (sil.StageLowered) into a VIR module for the target.
@@ -45,6 +50,7 @@ func Module(m *sil.Module, target ir.Target, opts Options) (*ir.Module, error) {
 	l.kernels = opts.Kernels
 	l.device = opts.Device
 	l.deviceKernels = opts.DeviceKernels
+	l.guardGrid = opts.GridGuard
 	// How big a context each async function wants, before anything is
 	// lowered: a caller allocates the callee's, so it has to know.
 	l.asyncSizes = map[string]int64{}
@@ -156,7 +162,7 @@ func (l *lowerer) weakenCoreRecords() {
 // lowerer maintains translation state across a lowered module.
 type lowerer struct {
 	// target is what the module is lowered for.
-	target ir.Target
+	target      ir.Target
 	emptyTable  *ir.Global               // emptyWitnessTable's, once made
 	closures    map[string]closureParts  // capturing closures' forwarders, by body
 	releasers   map[string]*ir.Func      // a stack context's last release, by body; nil for none
@@ -172,6 +178,7 @@ type lowerer struct {
 	kernels       map[string]*KernelImage
 	device        bool
 	deviceKernels []string
+	guardGrid     bool
 	kernelDescs   map[string]ir.Symbol
 	kernelRecord  *ir.Type
 	callee        map[string]ir.Callee

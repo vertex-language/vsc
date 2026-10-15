@@ -15,6 +15,10 @@
 //     never loads it, and nothing here needs an Objective-C compiler.
 //     A kernel is the .metallib the compiler embedded beside it.
 //
+//   - CUDA, opened the same way (libcuda.so.1, the driver API) where the
+//     target is not Apple's. A kernel is the PTX the compiler embedded
+//     beside it, which the driver compiles the first time it is launched.
+//
 // A kernel is known by its descriptor, which the compiler writes beside
 // every kernel (vsc/lower, gpu.go). A launch is built an argument slot at
 // a time, in the order of the kernel's parameters as the device sees
@@ -85,6 +89,8 @@ struct vertex_gpu_kernel {
   i64 flags;                 // kernelUsesBarrier
   i64 params;                // how many slots a launch fills
   const char* label;         // the kernel's own (mangled) name
+  const char* ptx;           // null where there is no PTX image
+  i64 ptxSize;
 };
 }
 
@@ -92,25 +98,29 @@ namespace {
 
 constexpr i64 kernelUsesBarrier = 1;
 
-enum Kind : i64 { KindCPU = 0, KindMetal = 1 };
+enum Kind : i64 { KindCPU = 0, KindMetal = 1, KindCUDA = 2 };
 
 struct Device;
 
 struct Buffer {
   Device* device;
-  u8* contents;  // host-visible, on both kinds: Apple's memory is unified
+  // Host-visible, on every kind: Apple's memory is unified, and CUDA's
+  // is managed -- one address the host and the device both use.
+  u8* contents;
   i64 bytes;
   void* metal;  // id<MTLBuffer>, or null on the CPU
   bool wrapped;  // contents belong to the caller (a mapped file): not freed
+  bool cudaOwned;  // contents are CUDA managed memory, freed by the driver
 };
 
-// A pipeline made for one kernel on one Metal device.
+// A pipeline made for one kernel on one Metal or CUDA device.
 struct Pipeline {
   const vertex_gpu_kernel* kernel;
-  void* state;  // id<MTLComputePipelineState>
+  void* state;  // id<MTLComputePipelineState>, or a CUfunction
   i64 maxThreads;
   i64 width;
   Pipeline* next;
+  void* module;  // the CUmodule the CUfunction is in
 };
 
 // How many command buffers a device keeps committed and not waited for.
@@ -145,6 +155,9 @@ struct Device {
   // passes encode into; renderFlush commits it.
   void* renderBuffer;  // id<MTLCommandBuffer>
   void* renderLast;    // the last one committed, until it's waited for
+  // CUDA: the device's primary context. Launches go on its null stream,
+  // in order, and pendingLaunches counts those not yet waited for.
+  void* cuda;  // CUcontext
 };
 
 // ---- Metal, through the Objective-C runtime ----
@@ -215,11 +228,98 @@ void report(const char* what, id error) {
 }
 }  // namespace objc
 
+// ---- CUDA, through the driver API ----
+
+namespace cuda {
+
+using Result = i32;
+
+Result (*init)(u32);
+Result (*deviceGetCount)(i32*);
+Result (*deviceGet)(i32*, i32);
+Result (*deviceGetAttribute)(i32*, i32, i32);
+Result (*deviceTotalMem)(usize*, i32);
+Result (*primaryCtxRetain)(void**, i32);
+Result (*ctxSetCurrent)(void*);
+Result (*ctxSynchronize)();
+Result (*memAllocManaged)(u64*, usize, u32);
+Result (*memFree)(u64);
+Result (*memcpyHtoD)(u64, const void*, usize);
+Result (*pointerGetAttribute)(void*, i32, u64);
+Result (*moduleLoadDataEx)(void**, const void*, u32, i32*, void**);
+Result (*moduleGetFunction)(void**, void*, const char*);
+Result (*funcGetAttribute)(i32*, i32, void*);
+Result (*launchKernel)(void*, u32, u32, u32, u32, u32, u32, u32, void*, void**, void**);
+Result (*getErrorString)(Result, const char**);
+
+constexpr i32 attrWarpSize = 10;
+constexpr i32 funcMaxThreadsPerBlock = 0;
+constexpr i32 pointerIsManaged = 8;
+constexpr u32 memAttachGlobal = 1;
+constexpr i32 jitErrorLogBuffer = 5;
+constexpr i32 jitErrorLogBufferSize = 6;
+
+bool loaded = false;
+bool available = false;
+
+template <typename F>
+bool find(void* lib, const char* name, F* f) {
+  *f = reinterpret_cast<F>(dlsym(lib, name));
+  return *f != nullptr;
+}
+
+bool load() {
+  if (loaded) return available;
+  loaded = true;
+  void* lib = dlopen("libcuda.so.1", 2);
+  if (!lib) lib = dlopen("libcuda.so", 2);
+  if (!lib) {
+    if (vertex_pal_getenv("VERTEX_GPU_DEBUG")) say("gpu: dlopen libcuda failed\n");
+    return false;
+  }
+  available = find(lib, "cuInit", &init) && find(lib, "cuDeviceGetCount", &deviceGetCount) &&
+              find(lib, "cuDeviceGet", &deviceGet) && find(lib, "cuDeviceGetAttribute", &deviceGetAttribute) &&
+              find(lib, "cuDeviceTotalMem_v2", &deviceTotalMem) &&
+              find(lib, "cuDevicePrimaryCtxRetain", &primaryCtxRetain) &&
+              find(lib, "cuCtxSetCurrent", &ctxSetCurrent) && find(lib, "cuCtxSynchronize", &ctxSynchronize) &&
+              find(lib, "cuMemAllocManaged", &memAllocManaged) && find(lib, "cuMemFree_v2", &memFree) &&
+              find(lib, "cuMemcpyHtoD_v2", &memcpyHtoD) && find(lib, "cuModuleLoadDataEx", &moduleLoadDataEx) &&
+              find(lib, "cuPointerGetAttribute", &pointerGetAttribute) &&
+              find(lib, "cuModuleGetFunction", &moduleGetFunction) &&
+              find(lib, "cuFuncGetAttribute", &funcGetAttribute) && find(lib, "cuLaunchKernel", &launchKernel) &&
+              find(lib, "cuGetErrorString", &getErrorString);
+  if (!available) {
+    say("gpu: libcuda is here, but not the driver API it expects\n");
+    return false;
+  }
+  if (init(0) != 0) {
+    if (vertex_pal_getenv("VERTEX_GPU_DEBUG")) say("gpu: cuInit failed\n");
+    available = false;
+  }
+  return available;
+}
+
+// report says what failed, and the driver's word for why.
+void report(const char* what, Result r) {
+  say("gpu: ");
+  say(what);
+  const char* s = nullptr;
+  if (getErrorString && getErrorString(r, &s) == 0 && s) {
+    say(": ");
+    say(s);
+  }
+  say("\n");
+}
+
+}  // namespace cuda
+
 // ---- devices ----
 
 Device cpuDevice = {KindCPU, nullptr, nullptr, 0, 1, nullptr, {}};
 Device metalDevice = {KindMetal, nullptr, nullptr, 0, 32, nullptr, {}};
+Device cudaDevice = {KindCUDA, nullptr, nullptr, 0, 32, nullptr, {}};
 bool metalTried = false;
+bool cudaTried = false;
 Lock devicesLock;
 
 Device* metal() {
@@ -239,6 +339,39 @@ Device* metal() {
   }
   devicesLock.unlock();
   return metalDevice.metal && metalDevice.queue ? &metalDevice : nullptr;
+}
+
+// The first CUDA device, in its primary context; null where there is none.
+Device* nvidia() {
+  devicesLock.lock();
+  if (!cudaTried) {
+    cudaTried = true;
+    i32 n = 0;
+    i32 dev = 0;
+    void* ctx = nullptr;
+    if (cuda::load() && cuda::deviceGetCount(&n) == 0 && n > 0 && cuda::deviceGet(&dev, 0) == 0 &&
+        cuda::primaryCtxRetain(&ctx, dev) == 0) {
+      usize bytes = 0;
+      i32 warp = 32;
+      cuda::ctxSetCurrent(ctx);
+      cuda::deviceTotalMem(&bytes, dev);
+      cuda::deviceGetAttribute(&warp, cuda::attrWarpSize, dev);
+      // Set here, not only where cudaDevice is defined: what a static
+      // initializer leaves is not every target's to rely on.
+      cudaDevice.kind = KindCUDA;
+      cudaDevice.cuda = ctx;
+      cudaDevice.memory = static_cast<i64>(bytes);
+      cudaDevice.waveSize = warp;
+    }
+  }
+  devicesLock.unlock();
+  return cudaDevice.cuda ? &cudaDevice : nullptr;
+}
+
+// The device a GPU is: Metal's where there is one, else CUDA's.
+Device* gpuDevice() {
+  Device* m = metal();
+  return m ? m : nvidia();
 }
 
 // ---- the CPU device ----
@@ -303,9 +436,17 @@ struct WorkItem {
 #if VERTEX_GPU_FIBERS
 extern "C" void vertex_gpu_switch(void** from, void** to);
 
+#if defined(__x86_64__)
+// The frame vertex_gpu_switch pops: MXCSR and the x87 control word, R15
+// to R12, RBX, RBP, and the return address -- and a word above it in a
+// fiber's first, so that it starts with its stack as a call leaves it.
+constexpr usize switchFrame = 72;
+constexpr usize switchReturn = 56;  // where the return address is in it
+#else
 // The frame vertex_gpu_switch pops: x19-x28, x29, x30, d8-d15.
 constexpr usize switchFrame = 160;
 constexpr usize switchReturn = 88;  // where x30 is in it
+#endif
 
 // A work-item's stack. A kernel's host function inlines what it calls,
 // so it needs little; the CPU device's stacks are this size.
@@ -449,6 +590,12 @@ void runGroupOnFibers(Launch* l, i64 index, Fibers* pool, WorkItem* worker) {
         // the return address where the fiber starts.
         u8* top = f->stack + fiberStack - switchFrame;
         vertex_pal_fill(top, 0, switchFrame);
+#if defined(__x86_64__)
+        // The control words a thread starts with: every floating-point
+        // exception masked, round to nearest.
+        *reinterpret_cast<u32*>(top) = 0x1f80;
+        *reinterpret_cast<u16*>(top + 4) = 0x037f;
+#endif
         *reinterpret_cast<void**>(top + switchReturn) = reinterpret_cast<void*>(&fiberMain);
         f->sp = top;
       }
@@ -858,11 +1005,14 @@ void sayKernelTimes() {
   kernelTimes.used = 0;
 }
 
+i32 syncCUDA(Device* d);
+
 // syncDevice runs what has been encoded on d and waits for it, and for
 // what was committed before: what the host reads from a buffer, or
 // writes to one, is then what the launches before made of it. 0 when
 // they ran; 7 when one failed.
 i32 syncDevice(Device* d) {
+  if (d && d->kind == KindCUDA) return syncCUDA(d);
   if (!d || d->kind != KindMetal) return 0;
   objc::id cbs[kCommitted];
   d->pendingLock.lock();
@@ -1030,6 +1180,119 @@ i32 runMetal(Launch* l) {
   return result;
 }
 
+// ---- running on CUDA ----
+
+// bind makes d's context the calling thread's: an async function may
+// resume on any thread.
+void bind(Device* d) { cuda::ctxSetCurrent(d->cuda); }
+
+// syncCUDA waits for what was launched on d. 0 when it ran; 7 when one
+// failed -- a trap, or a fault, after which the context is lost.
+i32 syncCUDA(Device* d) {
+  d->pendingLock.lock();
+  if (d->pendingLaunches == 0) {
+    d->pendingLock.unlock();
+    return 0;
+  }
+  bind(d);
+  cuda::Result r = cuda::ctxSynchronize();
+  d->pendingLaunches = 0;
+  d->pendingLock.unlock();
+  if (r != 0) {
+    cuda::report("a launch failed", r);
+    return 7;
+  }
+  return 0;
+}
+
+// cudaKernelFor is k loaded on d: its PTX compiled by the driver, the
+// first time it is asked for. Null where it cannot be.
+Pipeline* cudaKernelFor(Device* d, const vertex_gpu_kernel* k) {
+  d->lock.lock();
+  for (Pipeline* p = d->pipelines; p; p = p->next) {
+    if (p->kernel == k) {
+      d->lock.unlock();
+      return p;
+    }
+  }
+  Pipeline* made = nullptr;
+  bind(d);
+  char log[8192];
+  log[0] = 0;
+  i32 options[2] = {cuda::jitErrorLogBuffer, cuda::jitErrorLogBufferSize};
+  void* values[2] = {log, reinterpret_cast<void*>(static_cast<u64>(sizeof(log)))};
+  void* module = nullptr;
+  void* fn = nullptr;
+  cuda::Result r = cuda::moduleLoadDataEx(&module, k->ptx, 2, options, values);
+  if (r != 0) {
+    cuda::report("the driver would not compile a kernel's PTX", r);
+    say(k->label ? k->label : k->name);
+    say("\n");
+    say(log);
+    say("\n");
+  } else if ((r = cuda::moduleGetFunction(&fn, module, k->name)) != 0) {
+    cuda::report("the PTX has no entry", r);
+  } else {
+    made = allocate<Pipeline>(1);
+    made->kernel = k;
+    made->state = fn;
+    made->module = module;
+    i32 most = 1024;
+    cuda::funcGetAttribute(&most, cuda::funcMaxThreadsPerBlock, fn);
+    made->maxThreads = most;
+    made->width = d->waveSize;
+    made->next = d->pipelines;
+    d->pipelines = made;
+  }
+  d->lock.unlock();
+  return made;
+}
+
+// runCUDA launches l on its CUDA device's null stream, without a wait:
+// launches there run in order, and the host waits when it next touches
+// a buffer's memory (syncCUDA). The kernel's entry takes the grid's size
+// after its parameters, and a thread outside the grid -- in the last
+// block on an axis it does not fill -- returns at once.
+i32 runCUDA(Launch* l) {
+  Device* d = l->device;
+  Pipeline* p = cudaKernelFor(d, l->kernel);
+  if (!p) return 5;
+  i64 per = l->per[0] * l->per[1] * l->per[2];
+  if (per > p->maxThreads) {
+    say("gpu: a workgroup larger than this kernel can have on this device\n");
+    return 6;
+  }
+  if (l->groups[0] > 0x7fffffff || l->groups[1] > 65535 || l->groups[2] > 65535) {
+    say("gpu: a grid larger than CUDA launches\n");
+    return 6;
+  }
+  i32 grid[3] = {static_cast<i32>(l->grid[0]), static_cast<i32>(l->grid[1]), static_cast<i32>(l->grid[2])};
+  void** params = allocate<void*>(static_cast<usize>(l->count + 3));
+  for (i64 i = 0; i < l->count; i++) params[i] = &l->values[i];
+  for (int a = 0; a < 3; a++) params[l->count + a] = &grid[a];
+  d->pendingLock.lock();
+  bind(d);
+  cuda::Result r = cuda::launchKernel(p->state, static_cast<u32>(l->groups[0]), static_cast<u32>(l->groups[1]),
+                                      static_cast<u32>(l->groups[2]), static_cast<u32>(l->per[0]),
+                                      static_cast<u32>(l->per[1]), static_cast<u32>(l->per[2]), 0, nullptr,
+                                      params, nullptr);
+  if (r == 0) d->pendingLaunches++;
+  d->pendingLock.unlock();
+  release(params, sizeof(void*) * static_cast<usize>(l->count + 3), 16);
+  if (r != 0) {
+    cuda::report("cuLaunchKernel", r);
+    say(l->kernel->label ? l->kernel->label : l->kernel->name);
+    say("\n");
+    return 5;
+  }
+  if (env().sync) {
+    i32 result = syncCUDA(d);
+    if (env().debug) say(result == 0 ? "gpu: cuda launch ran\n" : "gpu: cuda launch failed\n");
+    return result;
+  }
+  return 0;
+}
+
 void grow(Launch* l) {
   if (l->count < l->capacity) return;
   i64 cap = l->capacity ? l->capacity * 2 : 16;
@@ -1097,19 +1360,19 @@ void* vertex_gpu_device_cpu() { return &cpuDevice; }
 void* vertex_gpu_device_default() {
   const char* want = vertex_pal_getenv("VERTEX_GPU");
   if (want && same(want, "cpu")) return &cpuDevice;
-  Device* m = metal();
-  if (m) return m;
-  if (want && same(want, "metal")) {
-    say("gpu: VERTEX_GPU=metal, and this machine has no Metal device; using the CPU\n");
+  Device* g = gpuDevice();
+  if (g) return g;
+  if (want && (same(want, "metal") || same(want, "cuda"))) {
+    say("gpu: VERTEX_GPU asks for a GPU, and this machine has none; using the CPU\n");
   }
   return &cpuDevice;
 }
 
-i64 vertex_gpu_device_count() { return metal() ? 2 : 1; }
+i64 vertex_gpu_device_count() { return gpuDevice() ? 2 : 1; }
 
 void* vertex_gpu_device_at(i64 i) {
-  Device* m = metal();
-  if (m && i == 0) return m;
+  Device* g = gpuDevice();
+  if (g && i == 0) return g;
   return &cpuDevice;
 }
 
@@ -1118,6 +1381,8 @@ i64 vertex_gpu_device_memory(void* d) { return static_cast<Device*>(d)->memory; 
 i64 vertex_gpu_device_wave_size(void* d) { return static_cast<Device*>(d)->waveSize; }
 
 // ---- buffers ----
+
+void vertex_gpu_buffer_release(void* buf);
 
 void* vertex_gpu_buffer_create(void* dev, i64 bytes) {
   Device* d = static_cast<Device*>(dev);
@@ -1134,6 +1399,19 @@ void* vertex_gpu_buffer_create(void* dev, i64 bytes) {
       release(b, sizeof(Buffer), alignof(Buffer));
       return nullptr;
     }
+  } else if (d->kind == KindCUDA) {
+    u64 p = 0;
+    bind(d);
+    cuda::Result r = cuda::memAllocManaged(&p, static_cast<usize>(n), cuda::memAttachGlobal);
+    if (r != 0) {
+      if (env().debug) cuda::report("cuMemAllocManaged", r);
+      release(b, sizeof(Buffer), alignof(Buffer));
+      return nullptr;
+    }
+    b->contents = reinterpret_cast<u8*>(p);
+    b->cudaOwned = true;
+    // Managed memory is not zeroed; the other kinds' is.
+    vertex_pal_fill(b->contents, 0, static_cast<usize>(n));
   } else {
     b->contents = static_cast<u8*>(vertex_pal_alloc(static_cast<usize>(n), 64));
     if (!b->contents) {
@@ -1155,6 +1433,34 @@ void* vertex_gpu_buffer_wrap(void* dev, void* ptr, i64 bytes) {
   Device* d = static_cast<Device*>(dev);
   const u64 page = 16384;
   if (!ptr || bytes <= 0) return nullptr;
+  if (d->kind == KindCUDA) {
+    // Memory the driver already manages -- another buffer's -- is the
+    // device's as it is, and is taken in place.
+    u32 managed = 0;
+    bind(d);
+    if (cuda::pointerGetAttribute(&managed, cuda::pointerIsManaged, reinterpret_cast<u64>(ptr)) == 0 && managed) {
+      Buffer* b = allocate<Buffer>(1);
+      b->device = d;
+      b->bytes = bytes;
+      b->contents = static_cast<u8*>(ptr);
+      b->wrapped = true;
+      return b;
+    }
+    // Host memory a discrete GPU would read across the bus, every time:
+    // a mapped weight file, which is what this is for. Its bytes are
+    // copied to the device once instead, and the caller's memory -- which
+    // is the caller's to leave unchanged -- is not kept.
+    Buffer* b = static_cast<Buffer*>(vertex_gpu_buffer_create(dev, bytes));
+    if (!b) return nullptr;
+    bind(d);
+    cuda::Result r = cuda::memcpyHtoD(reinterpret_cast<u64>(b->contents), ptr, static_cast<usize>(bytes));
+    if (r != 0) {
+      cuda::report("cuMemcpyHtoD", r);
+      vertex_gpu_buffer_release(b);
+      return nullptr;
+    }
+    return b;
+  }
   // Metal takes whole pages; the CPU device reads any memory.
   if (d->kind == KindMetal && (reinterpret_cast<u64>(ptr) & (4096 - 1)) != 0) return nullptr;
   Buffer* b = allocate<Buffer>(1);
@@ -1189,6 +1495,9 @@ void vertex_gpu_buffer_release(void* buf) {
     objc::send<void>(b->metal, "release");
   } else if (b->wrapped) {
     // The caller's memory.
+  } else if (b->cudaOwned) {
+    bind(b->device);
+    cuda::memFree(reinterpret_cast<u64>(b->contents));
   } else if (b->contents) {
     release(b->contents, static_cast<usize>(b->bytes > 0 ? b->bytes : 16), 64);
   }
@@ -1271,11 +1580,14 @@ i32 vertex_gpu_launch_end(void* launch, i64 gx, i64 gy, i64 gz, i64 wx, i64 wy, 
     chooseGroup(l, wx, wy, wz);
     for (int a = 0; a < 3; a++) l->groups[a] = (l->grid[a] + l->per[a] - 1) / l->per[a];
     for (i64 i = 0; i < l->count; i++) l->slots[i] = &l->values[i];
-    // A kernel with no Metal image -- one AIR cannot express, as a
-    // float64 on Apple's GPUs -- runs on the CPU: Metal's buffers are
-    // host memory on Apple's machines, so its arguments already are.
+    // A kernel with no image for its device -- one AIR cannot express,
+    // as a float64 on Apple's GPUs -- runs on the CPU: Metal's buffers
+    // are host memory on Apple's machines, and CUDA's managed memory is
+    // the host's too, so its arguments already are.
     if (l->device->kind == KindMetal && l->kernel->metallib) {
       result = runMetal(l);
+    } else if (l->device->kind == KindCUDA && l->kernel->ptx) {
+      result = runCUDA(l);
     } else {
       result = runCPU(l);
     }

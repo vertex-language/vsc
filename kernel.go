@@ -12,7 +12,10 @@ import (
 	"github.com/vertex-language/ir"
 	airlower "github.com/vertex-language/ir/lower/air"
 	"github.com/vertex-language/ir/lower/inline"
+	ptxlower "github.com/vertex-language/ir/lower/ptx"
 	irtext "github.com/vertex-language/ir/text"
+	"github.com/vertex-language/ptx"
+	ptxtext "github.com/vertex-language/ptx/text"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/internal/sil/gen"
 	"github.com/vertex-language/vsc/lower"
@@ -85,7 +88,7 @@ func compileKernels(m *sil.Module, target ir.Target) (map[string]*lower.KernelIm
 	out := map[string]*lower.KernelImage{}
 	var diags []Diagnostic
 	for _, e := range entries {
-		img, ds := compileKernel(e.name, e.k, m, gpuSIL)
+		img, ds := compileKernel(e.name, e.k, m, gpuSIL, target)
 		diags = append(diags, ds...)
 		if img != nil {
 			out[e.name] = img
@@ -95,13 +98,72 @@ func compileKernels(m *sil.Module, target ir.Target) (map[string]*lower.KernelIm
 }
 
 // compileKernel builds one kernel, as the entry name says: the kernel k
-// itself, or a map variant of it.
-func compileKernel(name string, k *sil.Func, m, gpuSIL *sil.Module) (*lower.KernelImage, []Diagnostic) {
+// itself, or a map variant of it -- for Apple's GPUs where the target is
+// Apple's, and for NVIDIA's everywhere else.
+func compileKernel(name string, k *sil.Func, m, gpuSIL *sil.Module, target ir.Target) (*lower.KernelImage, []Diagnostic) {
 	dev := sil.NewModule(m.Name()+"_device", sil.StageLowered)
 	if err := reachDevice(k, m, gpuSIL, dev); err != nil {
 		return nil, []Diagnostic{kernelError(k, err.Error())}
 	}
-	vir, err := lower.Module(dev, ir.AIR64, lower.Options{Device: true, DeviceKernels: []string{name}})
+	img := &lower.KernelImage{}
+	if appleTarget(target) {
+		vir, ds := deviceVIR(name, k, dev, ir.AIR64, false, img)
+		if vir == nil {
+			return nil, ds
+		}
+		// f16 and bf16 in f32 until the AIR lowering selects Metal's own
+		// half instructions (see ir.Module.LegalizeHalf) -- but for
+		// widening an f16, which the GPU does in one instruction where the
+		// legalized form is a dozen: a quantized weight's scale is read
+		// that way in every block.
+		vir.LegalizeHalfNativeWiden()
+		if err := vir.Err(); err != nil {
+			return nil, []Diagnostic{kernelError(k, "cannot be lowered for a device: "+err.Error())}
+		}
+		dumpDevice(k, ".vir", func() []byte { return printVIR(vir) })
+		am, err := airlower.Lower(vir, airlower.Options{})
+		if err == nil {
+			img.Metallib, err = metallib.Build(am)
+		}
+		if err != nil {
+			img.Metallib = nil
+			return img, []Diagnostic{kernelWarning(k, "is not built for Apple GPUs, and runs on the CPU there: "+err.Error())}
+		}
+		dumpDevice(k, ".metallib", func() []byte { return img.Metallib })
+		return img, nil
+	}
+	// A CUDA launch runs whole blocks, past the grid's end: the entry
+	// takes the grid's size and returns from a work-item outside it.
+	vir, ds := deviceVIR(name, k, dev, ir.NVPTX64, true, img)
+	if vir == nil {
+		return nil, ds
+	}
+	// f16 and bf16 in f32: the PTX lowering selects no half instructions.
+	vir.LegalizeHalf()
+	if err := vir.Err(); err != nil {
+		return nil, []Diagnostic{kernelError(k, "cannot be lowered for a device: "+err.Error())}
+	}
+	dumpDevice(k, ".vir", func() []byte { return printVIR(vir) })
+	// sm_70 and PTX 8.0: what every CUDA 12 and later driver JITs, for
+	// any GPU since Volta.
+	pm, err := ptxlower.Lower(vir, ptxlower.Options{SM: ptx.SM70, ISA: ptx.ISA80, Prune: true})
+	var src string
+	if err == nil {
+		src, err = ptxtext.Print(pm)
+	}
+	if err != nil {
+		return img, []Diagnostic{kernelWarning(k, "is not built for NVIDIA GPUs, and runs on the CPU there: "+err.Error())}
+	}
+	img.PTX = []byte(src)
+	dumpDevice(k, ".ptx", func() []byte { return img.PTX })
+	return img, nil
+}
+
+// deviceVIR lowers the device module dev for a GPU target, with name's
+// entry, inlined into it, its shared storage made; img.Barrier says
+// whether it waits at one. Nil and why, where it cannot be.
+func deviceVIR(name string, k *sil.Func, dev *sil.Module, target ir.Target, guard bool, img *lower.KernelImage) (*ir.Module, []Diagnostic) {
+	vir, err := lower.Module(dev, target, lower.Options{Device: true, DeviceKernels: []string{name}, GridGuard: guard})
 	if err != nil {
 		return nil, []Diagnostic{kernelError(k, "cannot be lowered for a device: "+err.Error())}
 	}
@@ -109,7 +171,6 @@ func compileKernel(name string, k *sil.Func, m, gpuSIL *sil.Module) (*lower.Kern
 	if err := inline.Module(vir, inline.Options{Into: entry}); err != nil {
 		return nil, []Diagnostic{kernelError(k, "cannot be inlined for a device: "+err.Error())}
 	}
-	img := &lower.KernelImage{}
 	for _, f := range vir.Funcs() {
 		if !entry(f) {
 			continue
@@ -125,37 +186,36 @@ func compileKernel(name string, k *sil.Func, m, gpuSIL *sil.Module) (*lower.Kern
 			return true
 		})
 	}
-	// f16 and bf16 in f32 until the AIR lowering selects Metal's own half
-	// instructions (see ir.Module.LegalizeHalf) -- but for widening an f16,
-	// which the GPU does in one instruction where the legalized form is a
-	// dozen: a quantized weight's scale is read that way in every block.
-	vir.LegalizeHalfNativeWiden()
-	if err := vir.Err(); err != nil {
-		return nil, []Diagnostic{kernelError(k, "cannot be lowered for a device: "+err.Error())}
-	}
-	// VSC_DUMP_DEVICE=dir writes each kernel's device VIR there, as the
-	// AIR lowering is handed it: for reading what a kernel became.
+	return vir, nil
+}
+
+// appleTarget is whether a target's GPUs are Apple's, which Metal drives.
+func appleTarget(t ir.Target) bool {
+	return strings.HasSuffix(t.Use(), "/macos") || strings.HasSuffix(t.Use(), "/ios")
+}
+
+// dumpDevice writes what a kernel became, for reading, where
+// VSC_DUMP_DEVICE names a directory: its device VIR as a backend is handed
+// it, and the backend's image.
+func dumpDevice(k *sil.Func, ext string, bytes func() []byte) {
 	if dir := os.Getenv("VSC_DUMP_DEVICE"); dir != "" {
-		var buf strings.Builder
-		if err := irtext.Print(&buf, vir); err == nil {
-			_ = os.WriteFile(filepath.Join(dir, k.SourceName()+".vir"), []byte(buf.String()), 0o644)
-		}
+		_ = os.WriteFile(filepath.Join(dir, k.SourceName()+ext), bytes(), 0o644)
 	}
-	var diags []Diagnostic
-	am, err := airlower.Lower(vir, airlower.Options{})
-	if err == nil {
-		img.Metallib, err = metallib.Build(am)
+}
+
+func printVIR(m *ir.Module) []byte {
+	var buf strings.Builder
+	if err := irtext.Print(&buf, m); err != nil {
+		return nil
 	}
-	if dir := os.Getenv("VSC_DUMP_DEVICE"); dir != "" && err == nil {
-		_ = os.WriteFile(filepath.Join(dir, k.SourceName()+".metallib"), img.Metallib, 0o644)
-	}
-	if err != nil {
-		img.Metallib = nil
-		d := kernelError(k, "is not built for Apple GPUs, and runs on the CPU there: "+err.Error())
-		d.Severity = token.Warn
-		diags = append(diags, d)
-	}
-	return img, diags
+	return []byte(buf.String())
+}
+
+// kernelWarning is a kernelError that does not stop the build.
+func kernelWarning(k *sil.Func, msg string) Diagnostic {
+	d := kernelError(k, msg)
+	d.Severity = token.Warn
+	return d
 }
 
 // kernelError is a diagnostic about a kernel, where no position is known

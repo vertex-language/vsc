@@ -9,11 +9,16 @@ package vsc_test
 //	// want: [5.0, 5.0]     a line of standard output, in order
 //	// error: a kernel      the build fails, saying this
 //
-// Every file that builds is run twice, on the CPU device and on Metal
-// (VERTEX_GPU=cpu, =metal), and both must print what it wants: the CPU
-// device is the oracle the GPU is held to, and a file the two disagree
-// on names the kernel. On a machine with no Metal the second run is the
-// CPU again, which the runtime says on standard error.
+// Every file that builds is run twice, on the CPU device and on the GPU
+// -- Metal on a Mac, CUDA elsewhere (VERTEX_GPU=cpu, =metal, =cuda) --
+// and both must print what it wants: the CPU device is the oracle the GPU
+// is held to, and a file the two disagree on names the kernel. On a
+// machine with no GPU the second run is the CPU again, which the runtime
+// says on standard error.
+//
+// TestKernelsBuildPTX builds every file for x86_64-linux as well, where
+// kernels are PTX, so that a kernel the PTX lowering cannot take is
+// found on a Mac too.
 
 import (
 	"bytes"
@@ -21,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -92,7 +98,11 @@ func TestKernels(t *testing.T) {
 				t.Errorf("vsc said something building it:\n%s", stderr.String())
 			}
 			want := strings.Join(spec.want, "\n") + "\n"
-			for _, device := range []string{"cpu", "metal"} {
+			gpu := "cuda"
+			if runtime.GOOS == "darwin" {
+				gpu = "metal"
+			}
+			for _, device := range []string{"cpu", gpu} {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				cmd := exec.CommandContext(ctx, bin)
 				cmd.Env = append(os.Environ(), "VERTEX_GPU="+device)
@@ -107,6 +117,31 @@ func TestKernels(t *testing.T) {
 				if out.String() != want {
 					t.Errorf("on %s:\n--- got ---\n%s--- want ---\n%s", device, out.String(), want)
 				}
+			}
+		})
+	}
+}
+
+func TestKernelsBuildPTX(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("tests", "kernel", "*.vs"))
+	if err != nil || len(files) == 0 {
+		t.Skip("no kernels in tests/kernel")
+	}
+	sort.Strings(files)
+	for _, path := range files {
+		name := strings.TrimSuffix(filepath.Base(path), ".vs")
+		t.Run(name, func(t *testing.T) {
+			if len(readKernelSpec(t, path).errText) > 0 {
+				return
+			}
+			bin := filepath.Join(t.TempDir(), name)
+			var stdout, stderr bytes.Buffer
+			if code := cli.Run([]string{"build", "-target", "x86_64-linux", "-o", bin, path}, &stdout, &stderr); code != 0 {
+				t.Fatalf("vsc refused it for x86_64-linux:\n%s", stderr.String())
+			}
+			// "is not built for NVIDIA GPUs": the PTX lowering refused it.
+			if stderr.Len() > 0 {
+				t.Errorf("vsc said something building it for x86_64-linux:\n%s", stderr.String())
 			}
 		})
 	}
