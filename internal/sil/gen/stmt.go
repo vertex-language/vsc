@@ -1011,11 +1011,22 @@ func (g *gen) existentialDecl(b *ast.PatternBinding, sym analyzer.Symbol, name s
 	if isLet {
 		kind = "let"
 	}
-	slot := g.blk.AllocStackFor(t, name, kind)
-	g.locals[sym] = &local{addr: slot, typ: t, mem: true}
 	if b.Value == nil {
+		// Given its value later, perhaps on some paths only: each
+		// assignment ends what the slot held, and the scope ends what it
+		// holds last. A slot zeroed where it is declared holds nothing
+		// to end until then -- its metadata word null -- where the stack
+		// would otherwise hand it whatever was there before (in an async
+		// function, another value's frame slot).
+		slot := g.blk.AllocStackFor(t, name, kind, "zeroed")
+		g.locals[sym] = &local{addr: slot, typ: t, mem: true}
+		if !g.scriptGlobal {
+			g.destroyAddrLater(slot)
+		}
 		return
 	}
+	slot := g.blk.AllocStackFor(t, name, kind)
+	g.locals[sym] = &local{addr: slot, typ: t, mem: true}
 	// A top-level binding of main.swift, which Swift makes a global and
 	// never destroys (see scriptVarDecl).
 	global := g.scriptGlobal

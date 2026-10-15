@@ -1,6 +1,6 @@
 # tests
 
-A ladder: one small thing per file, numbered `001`–`384` in the order the
+A ladder: one small thing per file, numbered `001`–`385` in the order the
 rungs climb, from an empty program to a closing program that uses most of
 the language.
 
@@ -68,6 +68,7 @@ around it.
 | 382 | `String(chars[i..<j])`: a String from an `ArraySlice<Character>` |
 | 383 | `UInt32(text, radix: 8)` and the rest are failable for every integer type; `ok ? [] : xs` types the empty literal from the other branch |
 | 384 | A `try?` passed straight to a call -- `Box(try? read())` -- ends with its statement instead of leaking |
+| 385 | `var x: P` given its value on each branch of an async function: the first assignment ends nothing, whatever an earlier frame left in the slot, and the scope ends the last value |
 
 ## Rules
 

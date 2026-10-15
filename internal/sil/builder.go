@@ -48,8 +48,8 @@ func (b *Block) AllocStack(t Type, attrs ...string) *Value {
 }
 
 // AllocStackFor allocates local stack storage attributed to a named source binding.
-func (b *Block) AllocStackFor(t Type, name, kind string) *Value {
-	return b.add(AllocStack, Aux{Type: t, Name: name, Attrs: []string{kind}}, nil,
+func (b *Block) AllocStackFor(t Type, name, kind string, attrs ...string) *Value {
+	return b.add(AllocStack, Aux{Type: t, Name: name, Attrs: append([]string{kind}, attrs...)}, nil,
 		t.Address()).Result()
 }
 

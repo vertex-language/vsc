@@ -110,6 +110,45 @@ func main() -> Int32 {
 	}
 }
 
+// TestAnExistentialAssignedLaterStartsEmpty: `var x: P` given its value
+// on each branch. Every assignment ends what the slot held first, so the
+// slot has to start holding nothing -- zeroed, its metadata word null --
+// and the scope ends what it holds last.
+//
+// It was a bare alloc_stack: the first assignment destroyed whatever an
+// earlier frame left there. In an async function, after an await, that
+// was another value's words -- nn/llama's Load released a live object and
+// later called through a garbage pointer -- and nothing ended the last
+// value, which leaked. tests/385 runs the same program.
+func TestAnExistentialAssignedLaterStartsEmpty(t *testing.T) {
+	got, diags := generate(t, "main", `
+protocol P: AnyObject { func f() -> Int }
+final class A: P { func f() -> Int { return 1 } }
+final class B: P { func f() -> Int { return 2 } }
+func tick(_ n: Int) async -> Int { return n }
+func pick(_ k: Int) async throws -> Int {
+    var x: P
+    if await tick(k) > 2 {
+        x = A()
+    } else {
+        x = B()
+    }
+    return x.f()
+}`)
+	for _, d := range diags {
+		t.Fatalf("refused: %s", d.Message)
+	}
+	body := bodyOf(t, got, "$s4main4pickyS2iYaKF")
+	if !strings.Contains(body, `alloc_stack $any P, var, zeroed, name "x"`) {
+		t.Errorf("x is not zeroed where it is declared:\n%s", body)
+	}
+	// One destroy for each assignment, and one where x's scope ends.
+	if n := strings.Count(body, "destroy_addr"); n != 3 {
+		t.Errorf("%d destroy_addr, want 3 -- one per assignment and one "+
+			"for the last value:\n%s", n, body)
+	}
+}
+
 // TestAnExistentialBindingIsStorage: a binding of existential type is
 // a slot, not a value, and using it hands over the slot.
 //
