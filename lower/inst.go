@@ -461,6 +461,18 @@ func (c *fn) makeStruct(in *sil.Inst) error {
 			parts = append(parts, inner...)
 			continue
 		}
+		// An element held in memory -- a call's result too wide for the
+		// registers the convention returns in, as an enum with a String
+		// payload is under SysV's two -- is read back as its leaves, the
+		// registers it would otherwise be held in.
+		if from, inMemory := c.mem[a]; inMemory {
+			got, err := c.leavesInMemory(in, a, from)
+			if err != nil {
+				return err
+			}
+			parts = append(parts, got...)
+			continue
+		}
 		got, err := c.operand(in, a)
 		if err != nil {
 			return err
@@ -473,6 +485,39 @@ func (c *fn) makeStruct(in *sil.Inst) error {
 	}
 	c.multi[res] = parts
 	return nil
+}
+
+// leavesInMemory loads a value held in memory at from into the registers
+// a value of its type is held in: its leaves, each from its offset.
+func (c *fn) leavesInMemory(in *sil.Inst, v *sil.Value, from ir.Ptr) ([]ir.Value, error) {
+	if r, ok := machine(v.Type()); ok {
+		got, err := c.loadScalar(in, from, r)
+		if err != nil {
+			return nil, c.fail(ErrType, in.Op(), err.Error())
+		}
+		return []ir.Value{got}, nil
+	}
+	st, ok := structOf(v.Type())
+	if !ok {
+		return nil, c.fail(ErrUnsupported, in.Op(), whyNoRegister(v.Type()))
+	}
+	ls, ok := structLeaves(st)
+	if !ok {
+		return nil, c.fail(ErrUnsupported, in.Op(), whyNoRegister(v.Type()))
+	}
+	out := make([]ir.Value, 0, len(ls))
+	for _, l := range ls {
+		r, ok := machineOf(l.typ)
+		if !ok {
+			return nil, c.fail(ErrType, in.Op(), whyNoRegister(sil.Object(l.typ)))
+		}
+		got, err := c.loadScalar(in, c.fieldAddr(from, l.offset), r)
+		if err != nil {
+			return nil, c.fail(ErrType, in.Op(), err.Error())
+		}
+		out = append(out, got)
+	}
+	return out, nil
 }
 
 // holdsNothing reports whether a value of t occupies no bytes.
