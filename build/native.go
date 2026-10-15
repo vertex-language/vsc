@@ -282,6 +282,9 @@ type bindingGen struct {
 	funcs   []funcOut
 	skipped []string
 	seenFn  map[string]bool
+	// spelled is the fixed-width typedef -- int64_t, uint32_t -- the type
+	// being mapped was written with, if any: see fixedWidth.
+	spelled string
 }
 
 type enumOut struct {
@@ -429,8 +432,14 @@ func (g *bindingGen) addFunc(fn *sema.FuncSymbol) {
 		name:  fn.SymName,
 		cxx:   "::" + strings.Join(append(append([]string(nil), path...), fn.SymName), "::"),
 	}
+	specs := paramSpecs(fn)
 	for i, p := range fn.FuncType.Params {
+		g.spelled = ""
+		if i < len(specs) {
+			g.spelled = g.typedefName(specs[i])
+		}
 		m, why := g.param(p.Type)
+		g.spelled = ""
 		if why != "" {
 			g.skip(fn.SymName, fmt.Sprintf("parameter %d is %s: %s", i+1, p.Type.String(), why))
 			return
@@ -444,7 +453,9 @@ func (g *bindingGen) addFunc(fn *sema.FuncSymbol) {
 		}
 		f.params = append(f.params, paramOut{name: name, t: m})
 	}
+	g.spelled = g.typedefName(fn.DeclSpecs)
 	ret, why := g.result(fn.FuncType.Ret)
+	g.spelled = ""
 	if why != "" {
 		g.skip(fn.SymName, fmt.Sprintf("it returns %s: %s", fn.FuncType.Ret.String(), why))
 		return
@@ -455,11 +466,63 @@ func (g *bindingGen) addFunc(fn *sema.FuncSymbol) {
 	g.funcs = append(g.funcs, f)
 }
 
+// fixedWidth is the Vertex type of each fixed-width integer typedef, as
+// Swift imports them: by name, whatever the target makes them -- int64_t
+// is long on Linux and long long on macOS, and an int64 on both.
+var fixedWidth = map[string]string{
+	"int8_t": "int8", "int16_t": "int16", "int32_t": "int32", "int64_t": "int64",
+	"uint8_t": "uint8", "uint16_t": "uint16", "uint32_t": "uint32", "uint64_t": "uint64",
+}
+
+// typedefName is the name a declaration's type is written as, where that
+// is one plain name: `int64_t n`, `const uint32_t* p`.
+func (g *bindingGen) typedefName(specs *ast.DeclSpecs) string {
+	if specs == nil || g.unit == nil {
+		return ""
+	}
+	for _, sp := range specs.List {
+		if n, ok := sp.(*ast.NamedTypeSpec); ok {
+			if id, ok := n.Name.(*ast.Ident); ok {
+				return id.Text(g.unit)
+			}
+		}
+	}
+	return ""
+}
+
+// paramSpecs is the specifiers each of fn's parameters was written with,
+// where its declaration is at hand.
+func paramSpecs(fn *sema.FuncSymbol) []*ast.DeclSpecs {
+	d := fn.Declarator
+	for d != nil {
+		switch x := d.(type) {
+		case *ast.FuncDeclarator:
+			out := make([]*ast.DeclSpecs, len(x.Params))
+			for i, p := range x.Params {
+				if p != nil {
+					out[i] = p.Specs
+				}
+			}
+			return out
+		case *ast.PointerDeclarator:
+			d = x.Inner
+		case *ast.ParenDeclarator:
+			d = x.Inner
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
 // basic is the Vertex type of a C++ arithmetic type, by width.
 func (g *bindingGen) basic(t types.Type) (string, bool) {
 	b, ok := types.Unqualify(t).(*types.Basic)
 	if !ok {
 		return "", false
+	}
+	if v, ok := fixedWidth[g.spelled]; ok && b.K >= types.SChar && b.K <= types.ULongLong {
+		return v, true
 	}
 	switch b.K {
 	case types.Bool:
