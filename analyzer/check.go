@@ -714,6 +714,9 @@ func (c *checker) declareImportedVars(decls []ast.Decl, scope *Scope) {
 func (c *checker) recordModule(imp Import, staging, scope *Scope) {
 	own := NewScope(nil, token.NoPos, token.NoPos)
 	c.modules[imp.bound()] = own
+	if _, ok := c.info.ModuleBound[imp.Name]; !ok {
+		c.info.ModuleBound[imp.Name] = imp.bound()
+	}
 	if imp.Name == "gpu" {
 		c.gpuAlias = imp.bound()
 	}

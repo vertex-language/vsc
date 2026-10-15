@@ -401,6 +401,9 @@ type importer struct {
 	// names is each folder's package name, as its package declaration
 	// gives it, once the folder has been read.
 	names map[string]string
+	// modules is each folder's module name: what its symbols are mangled
+	// under (moduleNameOf), once the folder has been read.
+	modules map[string]string
 	// ahead is folders being read and parsed before the walk reaches
 	// them, by directory.
 	ahead map[string]*prefetch
@@ -550,7 +553,7 @@ func (l *importer) moduleDeps(files []*ast.File, units []*token.File, dir string
 				if err != nil {
 					continue
 				}
-				if name := l.names[d]; name != "" && !slices.Contains(out, name) {
+				if name := l.modules[d]; name != "" && !slices.Contains(out, name) {
 					out = append(out, name)
 				}
 			}
@@ -929,8 +932,13 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 			}
 		}
 	}
-	l.out = append(l.out, analyzer.Import{Name: name, As: as, Files: files, Units: units, Deps: l.moduleDeps(files, units, dir)})
-	l.pkgs = append(l.pkgs, Package{Name: name, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque,
+	module := moduleNameOf(path, name)
+	if l.modules == nil {
+		l.modules = map[string]string{}
+	}
+	l.modules[dir] = module
+	l.out = append(l.out, analyzer.Import{Name: module, As: as, Files: files, Units: units, Deps: l.moduleDeps(files, units, dir)})
+	l.pkgs = append(l.pkgs, Package{Name: module, Dir: dir, Sources: srcs, Native: len(folder.Native) > 0, Deps: deps, Opaque: opaque,
 		Surface: surface(files, units)})
 	if l.onPackage != nil {
 		l.onPackage(l.pkgs[len(l.pkgs)-1])
@@ -1149,6 +1157,31 @@ func parseSource(src Source, cfg ifconfig.Config) readFile {
 	}
 	ifconfig.Resolve(parsed, cfg)
 	return readFile{src: src, unit: tf, parsed: parsed}
+}
+
+// moduleNameOf is the module a package imported by path compiles as: the
+// name its symbols are mangled under. A package of one path segment --
+// gpu, tensor, nn -- is its package name. Deeper ones are their path,
+// spelled as an identifier (nn/llama is nn_llama, github.com/you/geo/shape
+// github_com_you_geo_shape), so that two packages of one name -- nn/llama
+// and llm/llama -- are two modules in one program, as two Go packages of
+// one name are. Code names a package by its package name or an alias
+// either way; this is only what the linker sees.
+func moduleNameOf(path, name string) string {
+	p := strings.Trim(path, "/")
+	if !strings.Contains(p, "/") || strings.HasPrefix(p, ".") {
+		return name
+	}
+	b := []byte(p)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+			b[i] = '_'
+		}
+	}
+	if b[0] >= '0' && b[0] <= '9' {
+		return "_" + string(b)
+	}
+	return string(b)
 }
 
 // lastSegment returns the trailing folder name from a path.

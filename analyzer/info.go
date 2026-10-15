@@ -278,6 +278,11 @@ type Info struct {
 
 	// ImportedTypes maps imported types to declaring module names.
 	ImportedTypes map[types.Type]string
+	// ModuleBound is the name each imported module is bound to in this
+	// module's code -- its package name, or an import's alias -- by module
+	// name: where a module named for its path (nn_llama) is spelled as the
+	// code spells it (llama), as an interface must.
+	ModuleBound map[string]string
 
 	// SwiftModules tracks imported swiftc interface module names.
 	SwiftModules map[string]bool
@@ -415,6 +420,7 @@ func NewInfo() *Info {
 		Imported:          make(map[Symbol]string),
 		ImportedUnits:     make(map[Symbol]*token.File),
 		ImportedTypes:     make(map[types.Type]string),
+		ModuleBound:       make(map[string]string),
 		SwiftModules:      make(map[string]bool),
 		Diagnostics:       nil,
 	}

@@ -3,6 +3,7 @@ package vsc_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -265,8 +266,48 @@ func TestFolderImportNamedByFolder(t *testing.T) {
 		}
 		return
 	}
-	if len(u.Packages) != 1 || u.Packages[0].Name != "fmt" {
-		t.Fatalf("packages = %+v, want one named fmt", u.Packages)
+	// Code names it fmt; it compiles as the module its path names, so
+	// that another package called fmt elsewhere is another module.
+	if len(u.Packages) != 1 || u.Packages[0].Name != "std_fmt" {
+		t.Fatalf("packages = %+v, want one module std_fmt", u.Packages)
+	}
+}
+
+// Two packages of one name -- nn/llama and llm/llama -- are two modules,
+// each named for its path, so one program links both: a package that
+// imports the other under an alias, and a program that imports it.
+func TestPackagesOfOneNameAreTwoModules(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	for _, p := range []string{"nn/llama", "llm/llama"} {
+		if err := os.MkdirAll(filepath.Join(root, p), 0o777); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, filepath.Join(root, "nn", "llama", "net.vs"), "package llama\n\npublic func width() -> int32 { return 10 }\n")
+	write(t, filepath.Join(root, "llm", "llama", "model.vs"),
+		"package llama\n\nimport net \"nn/llama\"\n\npublic func width() -> int32 { return net.width() + 1 }\n")
+	main := filepath.Join(dir, "main.vs")
+	write(t, main, "import \"llm/llama\"\n\nfunc main() -> int32 { return llama.width() }\n")
+	src, _ := os.ReadFile(main)
+	u, diags := vsc.Compile([]vsc.Source{{Name: main, Text: src}}, vsc.Options{
+		Module:       "main",
+		Target:       ir.AArch64MacOS,
+		PackagePaths: []string{root},
+	})
+	if vsc.Errors(diags) {
+		for _, d := range diags {
+			t.Errorf("%s", d)
+		}
+		return
+	}
+	var names []string
+	for _, p := range u.Packages {
+		names = append(names, p.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"llm_llama", "nn_llama"}) {
+		t.Fatalf("modules = %v, want llm_llama and nn_llama", names)
 	}
 }
 

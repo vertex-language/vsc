@@ -206,6 +206,9 @@ func (p *printer) typeText(t types.Type) string {
 			ok = ok && mod != ""
 		}
 		if ok && (i == 0 || text[i-1] != '.') {
+			if bound, named := p.m.Info.ModuleBound[mod]; named && bound != "" {
+				mod = bound
+			}
 			b.WriteString(mod + ".")
 		}
 		b.WriteString(word)
