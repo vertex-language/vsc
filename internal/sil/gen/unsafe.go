@@ -355,6 +355,83 @@ func (g *gen) arraySlice(t types.Type) (types.Type, bool) {
 	return inst.Args[0], true
 }
 
+// appendSlice appends slice v -- a value of the ArraySlice type st -- to the
+// array of type arrayType at slot: its base array's elements from its start
+// up to its end, in one runtime call, which copies the bytes of plain
+// elements. A slice walked as a sequence calls the runtime once an element.
+func (g *gen) appendSlice(at ast.Node, slot, v *sil.Value, st, arrayType types.Type) bool {
+	elem, ok := g.arraySlice(st)
+	if !ok {
+		return false
+	}
+	meta, ok := g.stdlibMetadata(at, elem)
+	if !ok {
+		return false
+	}
+	lt := lowerType(arrayType)
+	intLT := lowerType(types.Typ[types.Int])
+	// The base array is read in place, borrowed out of the slice.
+	slice := v
+	if v.Ownership() == sil.Owned {
+		slice = g.blk.BeginBorrow(v)
+	}
+	base := g.blk.StructExtract(slice, memberName(st, "base"), lt)
+	lo, hi := g.sliceBounds(slice, st)
+	g.runtimeVoid(stdlib.ArrayAppendRange, []sil.Param{
+		{Type: lt.Address(), Convention: sil.ParamInout},
+		{Type: lt, Convention: sil.ParamGuaranteed},
+		{Type: intLT, Convention: sil.ParamUnowned},
+		{Type: intLT, Convention: sil.ParamUnowned},
+		{Type: rawPointerType()},
+	}, slot, base, lo, hi, meta)
+	if slice != v {
+		g.blk.EndBorrow(slice)
+	}
+	return true
+}
+
+// sliceOfElem is whether x is an ArraySlice of elem: what appendSlice can
+// put in an array of elem.
+func (g *gen) sliceOfElem(x ast.Expr, elem types.Type) bool {
+	e, ok := g.arraySlice(g.typeOf(x))
+	return ok && types.Identical(e, elem)
+}
+
+// arrayOfSlice lowers `Array(s)` of an ArraySlice: an empty array, and the
+// slice's elements appended in one copy.
+func (g *gen) arrayOfSlice(e *ast.CallExpr) (*sil.Value, bool) {
+	if e.Args == nil || len(e.Args.Args) != 1 || e.Args.Args[0].Label != nil {
+		return nil, false
+	}
+	t := g.typeOf(e)
+	arr, ok := arrayOf(t)
+	if !ok {
+		return nil, false
+	}
+	src := e.Args.Args[0].X
+	if !g.sliceOfElem(src, arr.Elem) {
+		return nil, false
+	}
+	v := g.expr(src)
+	if v == nil {
+		return nil, true
+	}
+	empty := g.makeArray(e, t, arr.Elem, nil)
+	if empty == nil {
+		return nil, true
+	}
+	g.forget(empty)
+	lt := lowerType(t)
+	slot := g.blk.AllocStack(lt)
+	g.blk.Store(empty, slot, storeQualifier(lt))
+	if !g.appendSlice(e, slot, v, g.typeOf(src), t) {
+		return nil, true
+	}
+	made := g.blk.Load(slot, "take")
+	g.destroyLater(made)
+	return made, true
+}
+
 // sliceBounds is a slice's start and end index, taken out of it.
 func (g *gen) sliceBounds(v *sil.Value, t types.Type) (start, end *sil.Value) {
 	it := lowerType(types.Typ[types.Int])

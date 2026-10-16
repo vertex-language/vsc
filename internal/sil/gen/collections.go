@@ -232,6 +232,9 @@ func (g *gen) collectionMethodCall(e *ast.CallExpr, mem *ast.MemberExpr) (*sil.V
 	if mem.Name == nil {
 		return nil, false
 	}
+	if v, ok := g.appendSliceCall(e, mem); ok {
+		return v, true
+	}
 	// One the checker resolved to a method an extension declares --
 	// `contains(where:)` beside the runtime's `contains(_:)` -- is that.
 	if g.info.Methods[mem] != nil {
@@ -268,6 +271,39 @@ func (g *gen) collectionMethodCall(e *ast.CallExpr, mem *ast.MemberExpr) (*sil.V
 		}
 	}
 	return g.collectionCall(e, m, mem.X, exprArgs(exprs...)), true
+}
+
+// appendSliceCall lowers `a.append(contentsOf: b[i..<j])` on an array, where
+// the slice's elements are the array's: one copy, ahead of the Sequence
+// extension the checker resolves the call to, which takes an element at a
+// time. The slice is read before the array is opened for writing, as the
+// general call reads its argument after taking the receiver's slot.
+func (g *gen) appendSliceCall(e *ast.CallExpr, mem *ast.MemberExpr) (*sil.Value, bool) {
+	if g.text(mem.Name) != "append" || e.Args == nil || len(e.Args.Args) != 1 {
+		return nil, false
+	}
+	a := e.Args.Args[0]
+	if a.Label == nil || g.text(a.Label) != "contentsOf" || g.writesThroughElement(mem.X) {
+		return nil, false
+	}
+	recvType := g.typeOf(mem.X)
+	arr, ok := recvType.Underlying().(*types.Array)
+	if !ok || !g.sliceOfElem(a.X, arr.Elem) {
+		return nil, false
+	}
+	v := g.expr(a.X)
+	if v == nil {
+		return nil, true
+	}
+	addr := g.lvalue(mem.X)
+	if addr == nil {
+		g.refuse(e, "a mutating call on "+g.exprKind(mem.X)+", which is not a variable")
+		return nil, true
+	}
+	access := g.blk.BeginAccess(addr, "modify", "unknown")
+	g.appendSlice(e, access, v, g.typeOf(a.X), recvType)
+	g.blk.EndAccess(access)
+	return g.void(), true
 }
 
 // utf8Of is the string x reads the bytes of, where x is `s.utf8`.

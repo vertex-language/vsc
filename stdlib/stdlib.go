@@ -154,6 +154,10 @@ const (
 	// Array mutation and queries. See runtime/collections.cpp.
 	ArrayAppend          = "vertex_array_append"
 	ArrayAppendContents  = "vertex_array_append_contents"
+	// ArrayAppendRange appends a slice's elements -- its base array's from
+	// its start up to its end -- in one copy: Array(s) and
+	// append(contentsOf: s) of an ArraySlice.
+	ArrayAppendRange = "vertex_array_append_range"
 	ArrayAssign          = "vertex_array_assign"
 	ArrayElementForWrite = "vertex_array_element_for_write"
 	// DictionaryValueForWrite is `d[key, default: value]` as a place to

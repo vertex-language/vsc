@@ -437,6 +437,34 @@ void vertex_array_append_utf8(ArrayStorage** slot, u64 s0, u64 s1) {
   a->count += static_cast<i64>(b.count);
 }
 
+// vertex_array_append_range copies other's elements from start up to end
+// onto the end: `Array(b[i..<j])` and `a.append(contentsOf: b[i..<j])`. A
+// slice walked as a sequence calls the runtime once an element; this is
+// one copy, of the bytes for plain elements.
+void vertex_array_append_range(ArrayStorage** slot, ArrayStorage* other, i64 start, i64 end,
+                               const Metadata* element) {
+  if (start < 0 || end < start || end > other->count)
+    fatal("Index out of range");
+  i64 n = end - start;
+  if (n == 0)
+    return;
+  bool self = other == *slot;
+  if (self)
+    vertex_retain(&other->header);
+  ArrayStorage* a = roomFor(slot, (*slot)->count + n, element);
+  const ValueWitnessTable* vw = witnesses(element);
+  u8* from = elementsOf(other) + start * vw->stride;
+  if (isPOD(vw)) {
+    copyBytes(elementsOf(a) + a->count * vw->stride, from, static_cast<usize>(n) * vw->stride);
+  } else {
+    for (i64 i = 0; i < n; i++)
+      vw->initializeWithCopy(elementsOf(a) + (a->count + i) * vw->stride, from + i * vw->stride, element);
+  }
+  a->count += n;
+  if (self)
+    vertex_release(&other->header);
+}
+
 // vertex_array_append_contents copies every element of other onto the end.
 void vertex_array_append_contents(ArrayStorage** slot, ArrayStorage* other, const Metadata* element) {
   i64 n = other->count;

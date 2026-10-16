@@ -737,6 +737,12 @@ func (g *gen) call(e *ast.CallExpr) *sil.Value {
 		}
 		return g.optionalFor(from, v, g.typeOf(from), g.substituted(t))
 	}
+	// Array(s) of an ArraySlice: its elements, in one copy.
+	if g.info.ArraySequences[e] != nil {
+		if v, ok := g.arrayOfSlice(e); ok {
+			return v
+		}
+	}
 	// Array(s) of any other sequence: its elements, appended in order.
 	if it := g.info.ArraySequences[e]; it != nil {
 		return g.arrayOfSequence(e, it)
