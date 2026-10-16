@@ -362,4 +362,17 @@ void* vertex_pal_thread_get(void) {
 }
 
 const char* vertex_pal_getenv(const char* name) { return getenv(name); }
+
+#if defined(__aarch64__)
+unsigned long getauxval(unsigned long type);
+
+// AT_HWCAP's bits, the kernel's report of what the cores have.
+vertex::u32 vertex_pal_cpu_capabilities(void) {
+  unsigned long h = getauxval(16);
+  auto bit = [&](int b) { return vertex::u32((h >> b) & 1); };
+  vertex::u32 crc = bit(7);
+  return bit(3) << 1 | bit(4) << 2 | bit(5) << 3 | bit(6) << 4 | bit(21) << 5 | bit(18) << 6 |
+         bit(19) << 7 | crc << 8 | crc << 9;
+}
+#endif
 }

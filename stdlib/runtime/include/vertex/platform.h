@@ -101,4 +101,9 @@ bool vertex_pal_parse_double(const vertex::u8* bytes, vertex::usize count, doubl
 // The process ends here, without unwinding anything.
 [[noreturn]] void vertex_pal_abort(void);
 
+// The IR's capabilities (§P) the processor has, bit c for capability c, as
+// the operating system reports them: AArch64's are the kernel's to say.
+// x86-64 asks cpuid itself (crypto.cpp), and its layers do not define this.
+vertex::u32 vertex_pal_cpu_capabilities(void);
+
 }

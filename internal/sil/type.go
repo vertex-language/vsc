@@ -192,6 +192,10 @@ var (
 	// BuiltinBFloat16 is bfloat16, which Swift's SIL has no name for: the
 	// name is LLVM's type's.
 	BuiltinBFloat16   = &Builtin{"BFloat16"}
+	// BuiltinVec128 is v128, sixteen bytes in a vector register. Swift's
+	// SIL names vectors by lane (Vec4xInt32); the IR does not, and nor
+	// does this.
+	BuiltinVec128     = &Builtin{"Vec128"}
 	BuiltinIntLiteral = &Builtin{"IntLiteral"}
 	BuiltinNativeObj  = &Builtin{"NativeObject"}
 	BuiltinRawPointer = &Builtin{"RawPointer"}

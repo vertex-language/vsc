@@ -296,6 +296,15 @@ func (l *lowerer) declare(f *sil.Func) error {
 	}
 	out := l.out.Func(l.sym(f.Name()))
 	l.defs[f.Name()] = out
+	for _, a := range f.Attrs() {
+		if list, ok := strings.CutPrefix(a, sil.AttrRequires); ok {
+			for _, name := range strings.Split(list, ",") {
+				if c, ok := ir.ParseCapability(name); ok {
+					out.Requires(c)
+				}
+			}
+		}
+	}
 	if err := l.applySig(f, out, sig); err != nil {
 		return err
 	}
@@ -521,6 +530,8 @@ func (l *lowerer) applySig(f *sil.Func, out *ir.Func, sig *ir.Sig) error {
 			out.ParamF64(name, attrs...)
 		case ir.TypePtr:
 			out.ParamPtr(name, attrs...)
+		case ir.TypeV128:
+			out.ParamV128(name, attrs...)
 		default:
 			return &Error{Err: ErrType, Func: f.Name(), What: p.Type.String()}
 		}
@@ -543,6 +554,8 @@ func (l *lowerer) applySig(f *sil.Func, out *ir.Func, sig *ir.Sig) error {
 			out.ReturnsF64(r.Attrs...)
 		case ir.TypePtr:
 			out.ReturnsPtr(r.Attrs...)
+		case ir.TypeV128:
+			out.ReturnsV128(r.Attrs...)
 		default:
 			return &Error{Err: ErrType, Func: f.Name(), What: r.Type.String()}
 		}

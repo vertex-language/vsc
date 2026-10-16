@@ -33,6 +33,7 @@ func taskAsmX64Windows() string {
 		{"vertex_witness_call", witnessCallX64Windows},
 		{"vertex_witness_call1", witnessCall1X64Windows},
 		{"vertex_witness_call_static2", witnessCallStatic2X64Windows},
+		{"vertex_cpuid", cpuidX64Windows},
 	} {
 		out += "\t.globl " + r.name + "\n\t.p2align 4\n" + r.name + ":" + r.body
 	}
@@ -202,6 +203,7 @@ func taskAsmX64SysV() string {
 		{"vertex_witness_call", witnessCallX64SysV},
 		{"vertex_witness_call1", witnessCall1X64SysV},
 		{"vertex_witness_call_static2", witnessCallStatic2X64SysV},
+		{"vertex_cpuid", cpuidX64SysV},
 	} {
 		out += "\t.globl " + r.name + "\n\t.type " + r.name + ", @function\n\t.p2align 4\n" + r.name + ":" + r.body
 	}
@@ -278,3 +280,34 @@ const witnessCallStatic2X64SysV = `
 
 // sysvArgRegs is the SysV convention's six integer argument registers.
 var sysvArgRegs = [...]string{"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"}
+
+// vertex_cpuid(leaf, subleaf, out): the four registers of a cpuid leaf,
+// stored at out in the order eax, ebx, ecx, edx. RBX is callee-saved on
+// both conventions and cpuid writes it.
+const cpuidX64SysV = `
+	pushq %rbx
+	movl %edi, %eax
+	movl %esi, %ecx
+	movq %rdx, %r8
+	cpuid
+	movl %eax, (%r8)
+	movl %ebx, 4(%r8)
+	movl %ecx, 8(%r8)
+	movl %edx, 12(%r8)
+	popq %rbx
+	retq
+`
+
+// cpuidX64Windows is vertex_cpuid with the arguments in RCX, RDX and R8.
+const cpuidX64Windows = `
+	pushq %rbx
+	movl %ecx, %eax
+	movl %edx, %ecx
+	cpuid
+	movl %eax, (%r8)
+	movl %ebx, 4(%r8)
+	movl %ecx, 8(%r8)
+	movl %edx, 12(%r8)
+	popq %rbx
+	retq
+`

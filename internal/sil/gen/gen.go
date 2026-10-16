@@ -1227,6 +1227,7 @@ func (g *gen) functionNamed(d *ast.FuncDecl, recv types.Type, symbol string) {
 	}
 	f := g.m.Func(name).SetSourceName(sym.Name()).
 		SetLinkage(linkage).SetAttr("ossa")
+	g.requires(d, f)
 	g.fn = f
 	// Pre-register all nested functions in this body.
 	g.registerNested(d.Body, name)

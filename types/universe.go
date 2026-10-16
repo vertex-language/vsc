@@ -27,6 +27,7 @@ var Typ = [...]*Basic{
 	UntypedNil:    {kind: UntypedNil, info: IsUntyped, name: "untyped nil"},
 	Float16:       {kind: Float16, info: IsFloat, name: "Float16"},
 	BFloat16:      {kind: BFloat16, info: IsFloat, name: "BFloat16"},
+	V128:          {kind: V128, info: 0, name: "V128"},
 }
 
 // The universe is in two tiers, and the order matters.
@@ -64,6 +65,7 @@ var swiftTypes = map[string]Type{
 	"Double":    Typ[Double],
 	"Float16":   Typ[Float16],
 	"BFloat16":  Typ[BFloat16],
+	"V128":      Typ[V128],
 	"String":    Typ[String],
 	"Character": Typ[Character],
 	"Void":      Typ[Void],
@@ -113,6 +115,7 @@ var vertexTypes = map[string]Type{
 	"float16":  Typ[Float16],
 	"half":     Typ[Float16],
 	"bfloat16": Typ[BFloat16],
+	"v128":     Typ[V128],
 	"string":   Typ[String],
 	"char":     Typ[Character],
 	"void":     Typ[Void],
@@ -145,6 +148,7 @@ var vertexNames = map[string]string{
 	"Double":    "float64",
 	"Float16":   "float16",
 	"BFloat16":  "bfloat16",
+	"V128":      "v128",
 	"String":    "string",
 	"Character": "char",
 	"Void":      "void",

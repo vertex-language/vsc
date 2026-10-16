@@ -451,6 +451,8 @@ func builtinFor(t types.Type) types.Type {
 		return sil.BuiltinFPIEEE16
 	case types.BFloat16:
 		return sil.BuiltinBFloat16
+	case types.V128:
+		return sil.BuiltinVec128
 	}
 	return sil.BuiltinInt64
 }
@@ -2488,6 +2490,8 @@ func builtinNamed(name string) types.Type {
 		return sil.BuiltinFPIEEE16
 	case "BFloat16":
 		return sil.BuiltinBFloat16
+	case "Vec128":
+		return sil.BuiltinVec128
 	}
 	return sil.BuiltinInt64
 }

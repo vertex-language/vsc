@@ -9,6 +9,11 @@ import (
 
 // builtin translates a Builtin.* instruction into VIR operations.
 func (c *fn) builtin(name string, args []ir.Value) ([]ir.Value, error) {
+	// The vector, cryptographic and checksum builtins name IR verbs
+	// outright: see vec.go.
+	if out, ok, err := c.vecBuiltin(name, args); ok {
+		return out, err
+	}
 	// A conversion names two types rather than one -- the source in
 	// the verb and the destination after it -- so it cannot be read
 	// by the "verb plus width" split below.

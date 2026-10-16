@@ -381,6 +381,19 @@ func TestRuntimeCollections(t *testing.T) {
 	}
 }
 
+// TestRuntimeCrypto checks the routines a program calls where its
+// processor lacks a cryptographic instruction (runtime/crypto.cpp)
+// against what the instructions answer: see stdlib/tests/crypto.cpp.
+func TestRuntimeCrypto(t *testing.T) {
+	golden, err := os.ReadFile(filepath.Join("..", "stdlib", "tests", "crypto_golden.h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := runtimeProgram(t, "crypto.cpp", map[string]string{"crypto_golden.h": string(golden)}); out != "" {
+		t.Errorf("routines that disagree with the instruction:\n%s", out)
+	}
+}
+
 // TestRuntimeTaskAllocator: the bump pointer an async function's frames
 // come from, which everything about the async ABI rests on. See
 // docs/vertex_swift_async.md.

@@ -45,6 +45,8 @@ func Alignof(t Type, target *Target) int64 {
 			return 4
 		case Int64, UInt64, Double:
 			return 8
+		case V128:
+			return 16
 		case Void, Never:
 			return 1
 		default:
@@ -117,6 +119,8 @@ func Sizeof(t Type, target *Target) int64 {
 			return 4
 		case Int64, UInt64, Double:
 			return 8
+		case V128:
+			return 16
 		case Int, UInt:
 			return target.WordSize
 		case String, Character:

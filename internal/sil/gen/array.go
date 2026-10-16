@@ -258,6 +258,7 @@ var metadataRecords = map[types.BasicKind]string{
 	types.Double:   "Double",
 	types.Float16:  "Float16",
 	types.BFloat16: "BFloat16",
+	types.V128:     "V128",
 	types.String:   "String",
 	types.Void:     "Void",
 }

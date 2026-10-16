@@ -95,6 +95,7 @@ var stdlib = map[types.BasicKind]struct {
 	// Vertex's own: a struct of the standard library, as Float16 is,
 	// under the name Swift would give it if it had one.
 	types.BFloat16: {"BFloat16", Struct},
+	types.V128:     {"V128", Struct},
 }
 
 // extendedType writes the standard library type an extension extends, as

@@ -701,6 +701,8 @@ func (l *lowerer) fieldTypeRecord(t types.Type) (ir.Symbol, bool) {
 			name, known = "Float16", true
 		case types.BFloat16:
 			name, known = "BFloat16", true
+		case types.V128:
+			name, known = "V128", true
 		}
 		if !known {
 			return nil, false

@@ -1050,6 +1050,11 @@ func (c *fn) loadScalar(in *sil.Inst, p ir.Ptr, r repr) (ir.Value, error) {
 		return c.b.F16().Load(p), nil
 	case ir.TypeBF16:
 		return c.b.BF16().Load(p), nil
+	case ir.TypeV128:
+		// Sixteen bytes wherever they are: a vector is loaded from a
+		// buffer's middle as often as from its start, and an unaligned
+		// access costs nothing on any core in scope.
+		return c.b.V128().Load(p, ir.Align(1)), nil
 	case ir.TypePtr:
 		return c.b.Ptr.Load(p), nil
 	case ir.TypeI1:
@@ -1171,6 +1176,8 @@ func (c *fn) storeScalar(in *sil.Inst, v ir.Value, p ir.Ptr, r repr) error {
 		c.b.F16().Store(v, p)
 	case ir.BF16:
 		c.b.BF16().Store(v, p)
+	case ir.V128:
+		c.b.V128().Store(v, p, ir.Align(1)) // as loadScalar's
 	case ir.Ptr:
 		c.b.Ptr.Store(v, p)
 	case ir.I1:
@@ -1724,6 +1731,8 @@ func (c *fn) throwInst(in *sil.Inst) error {
 			vals = append(vals, c.b.F64.Const(0))
 		case ir.TypePtr:
 			vals = append(vals, c.b.Ptr.Const())
+		case ir.TypeV128:
+			vals = append(vals, c.b.V128().Zero())
 		default:
 			// Narrow results (i1 for Bool) have no plain zero literal;
 			// zeroOf builds one. Nothing reads it on the error path.
@@ -1811,6 +1820,8 @@ func zeroOf(b *ir.Block, r ir.RegType) (ir.Value, bool) {
 		return b.F64.Const(0), true
 	case ir.TypePtr:
 		return b.Ptr.Const(), true
+	case ir.TypeV128:
+		return b.V128().Zero(), true
 	}
 	return nil, false
 }
@@ -2789,6 +2800,8 @@ func (c *fn) zeroOf(in *sil.Inst, t types.Type) (ir.Value, error) {
 		return c.b.F64.Const(0), nil
 	case ir.TypePtr:
 		return c.b.Ptr.Const(), nil
+	case ir.TypeV128:
+		return c.b.V128().Zero(), nil
 	}
 	return nil, c.fail(ErrType, in.Op(), r.reg.String())
 }

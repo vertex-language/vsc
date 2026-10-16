@@ -384,5 +384,10 @@ func frameRegs(t sil.Type) ([]ir.RegType, bool) {
 	if !ok {
 		return nil, false
 	}
+	// A frame's slots are words, and a v128 is two of them: it does not
+	// cross a suspension yet, and saying so beats keeping half of it.
+	if r.reg == ir.TypeV128 {
+		return nil, false
+	}
 	return []ir.RegType{r.reg}, true
 }

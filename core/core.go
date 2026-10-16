@@ -79,6 +79,8 @@ func Layout(t types.Type) (field, machine string, ok bool) {
 		return "_value", "FPIEEE16", true
 	case types.BFloat16:
 		return "_value", "BFloat16", true
+	case types.V128:
+		return "_value", "Vec128", true
 	}
 	return "", "", false
 }

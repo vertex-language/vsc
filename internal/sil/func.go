@@ -30,6 +30,10 @@ type Func struct {
 // AttrSwift marks a foreign Swift function declaration.
 const AttrSwift = "swift_foreign"
 
+// AttrRequires prefixes the attribute `@requires(aes, clmul)` becomes:
+// "requires:aes,clmul", the capabilities the IR function will Require.
+const AttrRequires = "requires:"
+
 func (f *Func) Module() *Module { return f.m }
 func (f *Func) Name() string    { return f.name }
 

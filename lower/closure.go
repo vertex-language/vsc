@@ -298,6 +298,8 @@ func (c *fn) storeRegister(in *sil.Inst, v ir.Value, p ir.Ptr) error {
 		c.b.F16().Store(r, p)
 	case ir.BF16:
 		c.b.BF16().Store(r, p)
+	case ir.V128:
+		c.b.V128().Store(r, p, ir.Align(8)) // capture slots are word-aligned
 	case ir.Ptr:
 		c.b.Ptr.Store(r, p)
 	default:
@@ -521,6 +523,8 @@ func (l *lowerer) forwarder(name string, body *sil.Func, sig *types.Signature, c
 				v = b.F16().Load(at)
 			case ir.TypeBF16:
 				v = b.BF16().Load(at)
+			case ir.TypeV128:
+				v = b.V128().Load(at, ir.Align(8))
 			case ir.TypePtr:
 				v = b.Ptr.Load(at)
 			default:
@@ -571,6 +575,8 @@ func forwarderParam(f *ir.Func, name string, t ir.RegType, attrs []ir.ParamAttr)
 		return f.ParamF64(name, attrs...), nil
 	case ir.TypePtr:
 		return f.ParamPtr(name, attrs...), nil
+	case ir.TypeV128:
+		return f.ParamV128(name, attrs...), nil
 	}
 	return nil, fmt.Errorf("a parameter in a %s register", t)
 }
@@ -593,6 +599,8 @@ func forwarderRet(f *ir.Func, t ir.RegType, attrs []ir.ParamAttr) error {
 		f.ReturnsF64(attrs...)
 	case ir.TypePtr:
 		f.ReturnsPtr(attrs...)
+	case ir.TypeV128:
+		f.ReturnsV128(attrs...)
 	default:
 		return fmt.Errorf("a result in a %s register", t)
 	}

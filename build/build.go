@@ -13,6 +13,7 @@ import (
 
 	amd64elf "github.com/vertex-language/amd64/obj/elf"
 	amd64pe "github.com/vertex-language/amd64/obj/pe"
+	arm64feature "github.com/vertex-language/arm64/feature"
 	arm64elf "github.com/vertex-language/arm64/obj/elf"
 	arm64macho "github.com/vertex-language/arm64/obj/macho"
 	machocore "github.com/vertex-language/macho"
@@ -54,6 +55,8 @@ func Object(m *ir.Module, opts Options) ([]byte, error) {
 func aarch64MachO(m *ir.Module, opts Options) ([]byte, error) {
 	done := timing.Start("isel+regalloc")
 	o, err := arm64lower.Lower(m, arm64lower.Options{
+		OptLevel:      arm64lower.O1,
+		Features:      appleSilicon,
 		LibcallPrefix: "_",
 		Variadic:      arm64lower.VariadicDarwin,
 	})
@@ -84,6 +87,7 @@ func aarch64MachO(m *ir.Module, opts Options) ([]byte, error) {
 // where named ones would.
 func aarch64ELF(m *ir.Module) ([]byte, error) {
 	o, err := arm64lower.Lower(m, arm64lower.Options{
+		OptLevel: arm64lower.O1,
 		Variadic: arm64lower.VariadicAAPCS64,
 	})
 	if err != nil {
@@ -135,3 +139,15 @@ func Host() (ir.Target, bool) {
 	}
 	return ir.Target{}, false
 }
+
+// appleSilicon is what every Mac with an Apple processor has, the M1 and
+// on: Armv8.5-A with the AES, SHA-1/SHA-256, SHA-512/SHA-3 and CRC32
+// instructions, which is what makes the IR's cryptographic verbs (§V5)
+// instructions there rather than calls.
+var appleSilicon = func() arm64feature.Set {
+	s, err := arm64feature.ParseFeatures("armv8.5-a+aes+sha2+sha3+crc")
+	if err != nil {
+		panic("build: " + err.Error())
+	}
+	return s
+}()

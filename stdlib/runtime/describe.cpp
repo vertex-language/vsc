@@ -8,7 +8,7 @@
 extern "C" {
 extern const vertex::FullMetadata vertex_metadata_Bool, vertex_metadata_Int8,
     vertex_metadata_UInt8, vertex_metadata_Int16, vertex_metadata_UInt16,
-    vertex_metadata_Int32, vertex_metadata_UInt32, vertex_metadata_Float, vertex_metadata_Float16, vertex_metadata_BFloat16,
+    vertex_metadata_Int32, vertex_metadata_UInt32, vertex_metadata_Float, vertex_metadata_Float16, vertex_metadata_BFloat16, vertex_metadata_V128,
     vertex_metadata_Int, vertex_metadata_UInt, vertex_metadata_Int64,
     vertex_metadata_UInt64, vertex_metadata_Double, vertex_metadata_String,
     vertex_metadata_Any;
@@ -369,6 +369,7 @@ void typeName(Text& t, const Metadata* type) {
       {&vertex_metadata_Double, "Double"}, {&vertex_metadata_String, "String"},
       {&vertex_metadata_Any, "Any"},       {&vertex_metadata_Float16, "Float16"},
       {&vertex_metadata_BFloat16, "BFloat16"},
+      {&vertex_metadata_V128, "V128"},
   };
   if (type == nullptr) {
     textString(t, "<unknown>");
@@ -496,6 +497,21 @@ void describe(Text& t, const void* value, const Metadata* type) {
   }
   if (is(type, vertex_metadata_BFloat16)) {
     describeFloat(t, *static_cast<const u16*>(value), 8, 8);
+    return;
+  }
+  if (is(type, vertex_metadata_V128)) {
+    // Its sixteen bytes in memory order, as v128.const spells them: which
+    // lanes they are is not the value's to say.
+    static const char hex[] = "0123456789abcdef";
+    const unsigned char* b = static_cast<const unsigned char*>(value);
+    char text[2 + 32];
+    text[0] = '0';
+    text[1] = 'x';
+    for (int i = 0; i < 16; i++) {
+      text[2 + 2 * i] = hex[b[i] >> 4];
+      text[3 + 2 * i] = hex[b[i] & 15];
+    }
+    textAppend(t, reinterpret_cast<const u8*>(text), sizeof text);
     return;
   }
   if (type->kind == kindOptional) {

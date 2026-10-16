@@ -349,4 +349,28 @@ void* vertex_pal_thread_get(void) {
 }
 
 const char* vertex_pal_getenv(const char* name) { return getenv(name); }
+
+#if defined(__aarch64__)
+int sysctlbyname(const char* name, void* value, vertex::usize* size, void* newValue, vertex::usize newSize);
+
+// hw.optional.arm.FEAT_*: one integer each, 1 where the core has it.
+static bool darwinFeature(const char* name) {
+  int v = 0;
+  vertex::usize n = sizeof v;
+  return sysctlbyname(name, &v, &n, nullptr, 0) == 0 && v != 0;
+}
+
+vertex::u32 vertex_pal_cpu_capabilities(void) {
+  vertex::u32 c = 0;
+  c |= vertex::u32(darwinFeature("hw.optional.arm.FEAT_AES")) << 1;
+  c |= vertex::u32(darwinFeature("hw.optional.arm.FEAT_PMULL")) << 2;
+  c |= vertex::u32(darwinFeature("hw.optional.arm.FEAT_SHA1")) << 3;
+  c |= vertex::u32(darwinFeature("hw.optional.arm.FEAT_SHA256")) << 4;
+  c |= vertex::u32(darwinFeature("hw.optional.arm.FEAT_SHA512")) << 5;
+  c |= vertex::u32(darwinFeature("hw.optional.arm.FEAT_SM3")) << 6;
+  c |= vertex::u32(darwinFeature("hw.optional.arm.FEAT_SM4")) << 7;
+  vertex::u32 crc = darwinFeature("hw.optional.armv8_crc32");
+  return c | crc << 8 | crc << 9;
+}
+#endif
 }

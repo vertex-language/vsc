@@ -43,6 +43,7 @@ VERTEX_TRIVIAL_WITNESSES(trivial1, 1)
 VERTEX_TRIVIAL_WITNESSES(trivial2, 2)
 VERTEX_TRIVIAL_WITNESSES(trivial4, 4)
 VERTEX_TRIVIAL_WITNESSES(trivial8, 8)
+VERTEX_TRIVIAL_WITNESSES(trivial16, 16)
 
 // The empty tuple, Void: no bytes, a stride of one, as Swift lays it out.
 static const ValueWitnessTable trivial0 = {
@@ -211,6 +212,7 @@ extern const FullMetadata vertex_metadata_UInt32 = {&trivial4, {kindStruct, null
 extern const FullMetadata vertex_metadata_Float  = {&trivial4, {kindStruct, nullptr}};
 extern const FullMetadata vertex_metadata_Float16  = {&trivial2, {kindStruct, nullptr}};
 extern const FullMetadata vertex_metadata_BFloat16 = {&trivial2, {kindStruct, nullptr}};
+extern const FullMetadata vertex_metadata_V128     = {&trivial16, {kindStruct, nullptr}};
 extern const FullMetadata vertex_metadata_Int    = {&trivial8, {kindStruct, nullptr}};
 extern const FullMetadata vertex_metadata_UInt   = {&trivial8, {kindStruct, nullptr}};
 extern const FullMetadata vertex_metadata_Int64  = {&trivial8, {kindStruct, nullptr}};

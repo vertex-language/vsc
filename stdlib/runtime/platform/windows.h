@@ -164,4 +164,17 @@ void vertex_pal_sleep(vertex::u64 nanoseconds) {
   vertex::u64 ms = (nanoseconds + 999999u) / 1000000u;
   Sleep(static_cast<unsigned long>(ms));
 }
+
+#if defined(__aarch64__)
+int IsProcessorFeaturePresent(unsigned feature);
+
+// PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE (30) is AES, PMULL, SHA-1 and
+// SHA-256 together; CRC32 is 31 and SHA-512 65.
+vertex::u32 vertex_pal_cpu_capabilities(void) {
+  vertex::u32 crypto = IsProcessorFeaturePresent(30) != 0;
+  vertex::u32 crc = IsProcessorFeaturePresent(31) != 0;
+  vertex::u32 sha512 = IsProcessorFeaturePresent(65) != 0;
+  return crypto << 1 | crypto << 2 | crypto << 3 | crypto << 4 | sha512 << 5 | crc << 8 | crc << 9;
+}
+#endif
 }

@@ -4948,3 +4948,54 @@ extension Float {
         self = v
     }
 }
+
+// ---- Vectors ----
+
+extension V128 {
+    // The zero vector.
+    static var zero: V128 { return v128ZextI64(0) }
+
+    // Sixteen bytes read from memory, wherever they are: no alignment is
+    // asked for.
+    init(loading p: UnsafeRawPointer) { self = p.load(as: V128.self) }
+
+    // Two 64-bit lanes, lane 0 first.
+    init(_ lane0: UInt64, _ lane1: UInt64) {
+        self = v128I64x2UnpackLow(v128ZextI64(lane0), v128ZextI64(lane1))
+    }
+
+    // Four 32-bit lanes, lane 0 first.
+    init(_ lane0: UInt32, _ lane1: UInt32, _ lane2: UInt32, _ lane3: UInt32) {
+        let lo = v128I32x4UnpackLow(v128ZextI32(lane0), v128ZextI32(lane1))
+        let hi = v128I32x4UnpackLow(v128ZextI32(lane2), v128ZextI32(lane3))
+        self = v128I64x2UnpackLow(lo, hi)
+    }
+
+    // Its sixteen bytes written to memory, wherever it is.
+    func store(to p: UnsafeMutableRawPointer) { p.storeBytes(of: self, as: V128.self) }
+}
+
+// The bitwise operators, on all sixteen bytes.
+func ^ (a: V128, b: V128) -> V128 { return v128Xor(a, b) }
+func & (a: V128, b: V128) -> V128 { return v128And(a, b) }
+func | (a: V128, b: V128) -> V128 { return v128Or(a, b) }
+prefix func ~ (a: V128) -> V128 { return v128Not(a) }
+func ^= (a: inout V128, b: V128) { a = v128Xor(a, b) }
+func &= (a: inout V128, b: V128) { a = v128And(a, b) }
+func |= (a: inout V128, b: V128) { a = v128Or(a, b) }
+
+// What the processor running this has, of the IR's capabilities: the
+// cryptographic instructions a function marked @requires uses directly.
+// Each is asked of the processor once, and is true at compile time where
+// the target always has it.
+extension CPU {
+    static var hasAES: Bool { return _cpuHas(1) }
+    static var hasCLMUL: Bool { return _cpuHas(2) }
+    static var hasSHA1: Bool { return _cpuHas(3) }
+    static var hasSHA256: Bool { return _cpuHas(4) }
+    static var hasSHA512: Bool { return _cpuHas(5) }
+    static var hasSM3: Bool { return _cpuHas(6) }
+    static var hasSM4: Bool { return _cpuHas(7) }
+    static var hasCRC32: Bool { return _cpuHas(8) }
+    static var hasCRC32C: Bool { return _cpuHas(9) }
+}

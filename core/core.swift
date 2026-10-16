@@ -1213,3 +1213,299 @@ func _initialize<T>(_ p: UnsafeMutablePointer<T>, _ value: T)
 func _deinitialize<T>(_ p: UnsafeMutablePointer<T>)
 @_builtin("take")
 func _take<T>(_ p: UnsafeMutablePointer<T>) -> T
+
+// ---- Vectors and cryptography ----
+
+// v128 (V128 here) is sixteen bytes in a vector register: the IR's v128,
+// and nothing more. Which lanes the bytes are is each operation's, so the
+// shape is in the name -- v128I32x4Add adds four 32-bit lanes -- as it is
+// in the IR's verb, v128.i32x4_add, which every function here is one of.
+// They are functions rather than members because some take a literal --
+// a lane, a shuffle's pattern, an AES round constant -- that the
+// instruction needs written where it is called; a member forwarding it
+// would hand the instruction a variable. A cryptographic one on a
+// processor without the instruction is a call that answers the same, in
+// constant time; @requires and CPU.hasAES say when it is the instruction.
+
+// A AND b.
+@_builtin("v128_and")
+func v128And(_ a: V128, _ b: V128) -> V128
+// A OR b.
+@_builtin("v128_or")
+func v128Or(_ a: V128, _ b: V128) -> V128
+// A XOR b.
+@_builtin("v128_xor")
+func v128Xor(_ a: V128, _ b: V128) -> V128
+// Every bit inverted.
+@_builtin("v128_not")
+func v128Not(_ a: V128) -> V128
+// A AND NOT b.
+@_builtin("v128_andnot")
+func v128AndNot(_ a: V128, _ b: V128) -> V128
+// A XOR b XOR c.
+@_builtin("v128_xor3")
+func v128Xor3(_ a: V128, _ b: V128, _ c: V128) -> V128
+// A XOR (b AND NOT c).
+@_builtin("v128_xor_andnot")
+func v128XorAndNot(_ a: V128, _ b: V128, _ c: V128) -> V128
+// The register shifted left by a literal count of bytes.
+@_builtin("v128_shl_bytes")
+func v128ShlBytes(_ a: V128, _ k: Int) -> V128
+// The register shifted right by a literal count of bytes.
+@_builtin("v128_shr_bytes")
+func v128ShrBytes(_ a: V128, _ k: Int) -> V128
+// X in lane 0, zero above.
+@_builtin("v128_zext_i32")
+func v128ZextI32(_ x: UInt32) -> V128
+// X in lane 0, zero above.
+@_builtin("v128_zext_i64")
+func v128ZextI64(_ x: UInt64) -> V128
+@_builtin("v128_i8x16_add")
+func v128I8x16Add(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_add")
+func v128I16x8Add(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i32x4_add")
+func v128I32x4Add(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i64x2_add")
+func v128I64x2Add(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_sub")
+func v128I8x16Sub(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_sub")
+func v128I16x8Sub(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i32x4_sub")
+func v128I32x4Sub(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i64x2_sub")
+func v128I64x2Sub(_ a: V128, _ b: V128) -> V128
+// The low halves of the products.
+@_builtin("v128_i16x8_mul")
+func v128I16x8Mul(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_mulhi_s")
+func v128I16x8MulHiS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_mulhi_u")
+func v128I16x8MulHiU(_ a: V128, _ b: V128) -> V128
+// Lanes 0 and 2 multiplied into two i64.
+@_builtin("v128_i32x4_mul_even_u")
+func v128I32x4MulEvenU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_add_sat_s")
+func v128I8x16AddSatS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_add_sat_u")
+func v128I8x16AddSatU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_add_sat_s")
+func v128I16x8AddSatS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_add_sat_u")
+func v128I16x8AddSatU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_sub_sat_s")
+func v128I8x16SubSatS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_sub_sat_u")
+func v128I8x16SubSatU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_sub_sat_s")
+func v128I16x8SubSatS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_sub_sat_u")
+func v128I16x8SubSatU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_min_u")
+func v128I8x16MinU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_max_u")
+func v128I8x16MaxU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_min_s")
+func v128I16x8MinS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_max_s")
+func v128I16x8MaxS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_avgr_u")
+func v128I8x16AvgrU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_avgr_u")
+func v128I16x8AvgrU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_sad_u")
+func v128I8x16SadU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_madd_s")
+func v128I16x8MaddS(_ a: V128, _ b: V128) -> V128
+// A mask.
+@_builtin("v128_i8x16_eq")
+func v128I8x16Eq(_ a: V128, _ b: V128) -> V128
+// A mask.
+@_builtin("v128_i16x8_eq")
+func v128I16x8Eq(_ a: V128, _ b: V128) -> V128
+// A mask.
+@_builtin("v128_i32x4_eq")
+func v128I32x4Eq(_ a: V128, _ b: V128) -> V128
+// A mask.
+@_builtin("v128_i8x16_gt_s")
+func v128I8x16GtS(_ a: V128, _ b: V128) -> V128
+// A mask.
+@_builtin("v128_i16x8_gt_s")
+func v128I16x8GtS(_ a: V128, _ b: V128) -> V128
+// A mask.
+@_builtin("v128_i32x4_gt_s")
+func v128I32x4GtS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_shl")
+func v128I16x8Shl(_ a: V128, _ count: UInt32) -> V128
+@_builtin("v128_i32x4_shl")
+func v128I32x4Shl(_ a: V128, _ count: UInt32) -> V128
+@_builtin("v128_i64x2_shl")
+func v128I64x2Shl(_ a: V128, _ count: UInt32) -> V128
+@_builtin("v128_i16x8_shr_u")
+func v128I16x8ShrU(_ a: V128, _ count: UInt32) -> V128
+@_builtin("v128_i32x4_shr_u")
+func v128I32x4ShrU(_ a: V128, _ count: UInt32) -> V128
+@_builtin("v128_i64x2_shr_u")
+func v128I64x2ShrU(_ a: V128, _ count: UInt32) -> V128
+@_builtin("v128_i16x8_shr_s")
+func v128I16x8ShrS(_ a: V128, _ count: UInt32) -> V128
+@_builtin("v128_i32x4_shr_s")
+func v128I32x4ShrS(_ a: V128, _ count: UInt32) -> V128
+// Each lane rotated left by a literal count.
+@_builtin("v128_i32x4_rotl")
+func v128I32x4Rotl(_ a: V128, _ k: Int) -> V128
+// Each lane rotated left by a literal count.
+@_builtin("v128_i64x2_rotl")
+func v128I64x2Rotl(_ a: V128, _ k: Int) -> V128
+// The top bit of each lane, lane 0 in bit 0.
+@_builtin("v128_i8x16_bitmask")
+func v128I8x16Bitmask(_ a: V128) -> UInt32
+@_builtin("v128_i8x16_splat")
+func v128I8x16Splat(_ x: UInt32) -> V128
+@_builtin("v128_i16x8_splat")
+func v128I16x8Splat(_ x: UInt32) -> V128
+@_builtin("v128_i32x4_splat")
+func v128I32x4Splat(_ x: UInt32) -> V128
+@_builtin("v128_i64x2_splat")
+func v128I64x2Splat(_ x: UInt64) -> V128
+@_builtin("v128_i16x8_extract_lane_u")
+func v128I16x8ExtractLaneU(_ a: V128, _ lane: Int) -> UInt32
+@_builtin("v128_i16x8_replace_lane")
+func v128I16x8ReplaceLane(_ a: V128, _ x: UInt32, _ lane: Int) -> V128
+@_builtin("v128_i32x4_extract_lane")
+func v128I32x4ExtractLane(_ a: V128, _ lane: Int) -> UInt32
+@_builtin("v128_i64x2_extract_lane")
+func v128I64x2ExtractLane(_ a: V128, _ lane: Int) -> UInt64
+// Four 2-bit selectors, lane 0's lowest.
+@_builtin("v128_i32x4_shuffle")
+func v128I32x4Shuffle(_ a: V128, _ k: Int) -> V128
+@_builtin("v128_i16x8_shuffle_low")
+func v128I16x8ShuffleLow(_ a: V128, _ k: Int) -> V128
+@_builtin("v128_i16x8_shuffle_high")
+func v128I16x8ShuffleHigh(_ a: V128, _ k: Int) -> V128
+@_builtin("v128_i8x16_unpack_low")
+func v128I8x16UnpackLow(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_unpack_high")
+func v128I8x16UnpackHigh(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_unpack_low")
+func v128I16x8UnpackLow(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_unpack_high")
+func v128I16x8UnpackHigh(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i32x4_unpack_low")
+func v128I32x4UnpackLow(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i32x4_unpack_high")
+func v128I32x4UnpackHigh(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i64x2_unpack_low")
+func v128I64x2UnpackLow(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i64x2_unpack_high")
+func v128I64x2UnpackHigh(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_narrow_s")
+func v128I8x16NarrowS(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i8x16_narrow_u")
+func v128I8x16NarrowU(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_narrow_s")
+func v128I16x8NarrowS(_ a: V128, _ b: V128) -> V128
+// Table[index[i]], zero where an index is 16 or more.
+@_builtin("v128_i8x16_swizzle")
+func v128I8x16Swizzle(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_i16x8_bswap")
+func v128I16x8Bswap(_ a: V128) -> V128
+@_builtin("v128_i32x4_bswap")
+func v128I32x4Bswap(_ a: V128) -> V128
+@_builtin("v128_i64x2_bswap")
+func v128I64x2Bswap(_ a: V128) -> V128
+// One AES round: SubBytes, ShiftRows, MixColumns, then XOR key.
+@_builtin("v128_aes_enc")
+func v128AesEnc(_ a: V128, _ b: V128) -> V128
+// The final AES round, without MixColumns.
+@_builtin("v128_aes_enc_last")
+func v128AesEncLast(_ a: V128, _ b: V128) -> V128
+// A round of the equivalent inverse cipher.
+@_builtin("v128_aes_dec")
+func v128AesDec(_ a: V128, _ b: V128) -> V128
+// The final inverse round, without InvMixColumns.
+@_builtin("v128_aes_dec_last")
+func v128AesDecLast(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_aes_inv_mix_columns")
+func v128AesInvMixColumns(_ a: V128) -> V128
+// AES-NI's aeskeygenassist, rcon a literal.
+@_builtin("v128_aes_keygen_assist")
+func v128AesKeygenAssist(_ a: V128, _ k: Int) -> V128
+// Carry-less product of one lane of each: bit 0 of the literal picks a's high lane, bit 1 b's.
+@_builtin("v128_i64x2_clmul")
+func v128I64x2Clmul(_ a: V128, _ b: V128, _ k: Int) -> V128
+@_builtin("v128_sha1_rounds_ch")
+func v128Sha1RoundsCh(_ abcd: V128, _ e: UInt32, _ wk: V128) -> V128
+@_builtin("v128_sha1_rounds_parity")
+func v128Sha1RoundsParity(_ abcd: V128, _ e: UInt32, _ wk: V128) -> V128
+@_builtin("v128_sha1_rounds_maj")
+func v128Sha1RoundsMaj(_ abcd: V128, _ e: UInt32, _ wk: V128) -> V128
+@_builtin("v128_sha1_msg1")
+func v128Sha1Msg1(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sha1_msg2")
+func v128Sha1Msg2(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_sha256_rounds_abcd")
+func v128Sha256RoundsAbcd(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sha256_rounds_efgh")
+func v128Sha256RoundsEfgh(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sha256_msg1")
+func v128Sha256Msg1(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_sha256_msg2")
+func v128Sha256Msg2(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sha512_rounds_1")
+func v128Sha512Rounds1(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sha512_rounds_2")
+func v128Sha512Rounds2(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sha512_msg1")
+func v128Sha512Msg1(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_sha512_msg2")
+func v128Sha512Msg2(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sm3_ss1")
+func v128Sm3Ss1(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sm3_tt1a")
+func v128Sm3Tt1a(_ a: V128, _ b: V128, _ c: V128, _ k: Int) -> V128
+@_builtin("v128_sm3_tt1b")
+func v128Sm3Tt1b(_ a: V128, _ b: V128, _ c: V128, _ k: Int) -> V128
+@_builtin("v128_sm3_tt2a")
+func v128Sm3Tt2a(_ a: V128, _ b: V128, _ c: V128, _ k: Int) -> V128
+@_builtin("v128_sm3_tt2b")
+func v128Sm3Tt2b(_ a: V128, _ b: V128, _ c: V128, _ k: Int) -> V128
+@_builtin("v128_sm3_partw1")
+func v128Sm3Partw1(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sm3_partw2")
+func v128Sm3Partw2(_ a: V128, _ b: V128, _ c: V128) -> V128
+@_builtin("v128_sm4_rounds")
+func v128Sm4Rounds(_ a: V128, _ b: V128) -> V128
+@_builtin("v128_sm4_key")
+func v128Sm4Key(_ a: V128, _ b: V128) -> V128
+
+// CRC-32C (Castagnoli) and CRC-32 (IEEE 802.3), bit-reflected, with no
+// inversion either side: the low 8, 16 or 32 bits of data, or all 64,
+// folded into crc. The ~0 a protocol starts from and the ~ it ends with
+// are the protocol's.
+@_builtin("crc_crc32c_u8")
+func crc32cU8(_ crc: UInt32, _ data: UInt32) -> UInt32
+@_builtin("crc_crc32c_u16")
+func crc32cU16(_ crc: UInt32, _ data: UInt32) -> UInt32
+@_builtin("crc_crc32c_u32")
+func crc32cU32(_ crc: UInt32, _ data: UInt32) -> UInt32
+@_builtin("crc_crc32c_u64")
+func crc32cU64(_ crc: UInt32, _ data: UInt64) -> UInt32
+@_builtin("crc_crc32_u8")
+func crc32U8(_ crc: UInt32, _ data: UInt32) -> UInt32
+@_builtin("crc_crc32_u16")
+func crc32U16(_ crc: UInt32, _ data: UInt32) -> UInt32
+@_builtin("crc_crc32_u32")
+func crc32U32(_ crc: UInt32, _ data: UInt32) -> UInt32
+@_builtin("crc_crc32_u64")
+func crc32U64(_ crc: UInt32, _ data: UInt64) -> UInt32
+
+// Whether the processor running this has a capability, by its number in
+// the IR's list; CPU's properties are how it is asked.
+@_builtin("cpu_has")
+func _cpuHas(_ capability: Int32) -> Bool
+
+// The processor running the program, asked what it has: see its extension
+// in the algorithms.
+enum CPU {}

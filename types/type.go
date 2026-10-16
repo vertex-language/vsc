@@ -49,6 +49,12 @@ const (
 	// in it. They come last so that no other kind's number moves.
 	Float16
 	BFloat16
+
+	// V128 is sixteen bytes in a vector register, the IR's v128: what the
+	// vector and cryptographic instructions take and give. The bytes are
+	// all it is -- which lanes they are is the operation's business, as it
+	// is the IR's -- and it comes last for the reason the two before it do.
+	V128
 )
 
 // BasicInfo flags describing basic type properties.
