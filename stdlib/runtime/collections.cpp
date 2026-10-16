@@ -157,6 +157,14 @@ void hashInto(Sip& s, const void* value, const Metadata* type) {
         u32 c = b.bytes[i];
         sipBytes(s, reinterpret_cast<const u8*>(&c), 4);
       }
+    } else if (belowCombining(b.bytes, b.count)) {
+      // Its own NFC form: its scalars, as the normalizing path below
+      // would give them, without the allocation and the tables.
+      usize at = 0;
+      while (at < b.count) {
+        u32 c = decodeScalar(b.bytes, b.count, &at);
+        sipBytes(s, reinterpret_cast<const u8*>(&c), 4);
+      }
     } else {
       auto* nfc = static_cast<u32*>(vertex_pal_alloc(4 * sizeof(u32) * (b.count + 1), 4));
       if (nfc == nullptr)

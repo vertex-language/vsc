@@ -353,10 +353,24 @@ inline bool asciiOnly(const u8* bytes, usize count) {
   return true;
 }
 
+// belowCombining is whether every scalar of a string is below U+0300, where
+// the combining marks begin: in UTF-8, no byte of 0xCC or more. Such a
+// string is its own NFC form -- nothing in it decomposes into, or composes
+// with, a mark -- so it hashes by its scalars and compares by its bytes,
+// with no normalization. That is ASCII, Latin-1 and Latin Extended, and
+// the U+0100-U+0143 byte-level BPE vocabularies spell every token with.
+inline bool belowCombining(const u8* bytes, usize count) {
+  for (usize i = 0; i < count; i++)
+    if (bytes[i] >= 0xCC)
+      return false;
+  return true;
+}
+
 // canonicalCompare orders two strings by the scalar values of their NFC
-// forms, which is Swift's order, and answers -1, 0 or 1.
+// forms, which is Swift's order, and answers -1, 0 or 1. UTF-8 orders as
+// its scalars do, so two strings already in NFC compare by their bytes.
 inline i32 canonicalCompare(const u8* a, usize an, const u8* b, usize bn) {
-  if (asciiOnly(a, an) && asciiOnly(b, bn)) {
+  if (belowCombining(a, an) && belowCombining(b, bn)) {
     usize n = an < bn ? an : bn;
     for (usize i = 0; i < n; i++)
       if (a[i] != b[i])
