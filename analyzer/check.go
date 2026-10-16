@@ -119,6 +119,10 @@ type checker struct {
 	// assigning is the member being written by the assignment under
 	// check, whose read rules do not apply to it.
 	assigning ast.Expr
+	// circular is the module variables an initializer reached again
+	// while its own dependencies were being declared: a name not found
+	// among them is a circular reference. See declareModuleVar.
+	circular map[string]bool
 	// pkgScope is the module's own scope: where a top-level function is
 	// declared, as against one local to a body.
 	pkgScope *Scope
@@ -395,16 +399,10 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 	// other statement -- declaring it ahead of them would be saying it
 	// held its value before the line that gives it one. Swift draws the
 	// same line and draws it at the file: top-level code lives in one
-	// file, and a variable anywhere else is order-independent.
-	for _, f := range files {
-		if f.Unit != nil {
-			c.file = f.Unit
-		}
-		if !declarationsOnly(f.Stmts) {
-			continue
-		}
-		c.declareModuleVars(declsOf(f.Stmts), pkgScope)
-	}
+	// file, and a variable anywhere else is order-independent -- down
+	// to its initializer, which may read a variable declared below it
+	// or in a file read later, because Swift initializes each on first use.
+	c.declareModuleVars(files, pkgScope)
 
 	// Pass 4.9: The functions returning `some P`, whose bodies say what
 	// their callers get. One whose body does not check here yet -- it

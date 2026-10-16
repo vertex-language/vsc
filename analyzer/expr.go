@@ -716,6 +716,10 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			if u := types.LookupUniverse(name); u != nil {
 				return &types.Metatype{Instance: u}
 			}
+			if c.circular[name] {
+				c.errorf(e.Name.Pos(), "circular reference")
+				return types.Typ[types.Invalid]
+			}
 			c.errorf(e.Name.Pos(), "cannot find '%s' in scope", name)
 			return types.Typ[types.Invalid]
 		}

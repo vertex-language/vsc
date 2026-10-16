@@ -1456,3 +1456,48 @@ public func (w: borrowing Window) SetSize(_ size: Size) {}
 		return true
 	})
 }
+
+// TestModuleVarsInAnyOrder: a module-scope variable's initializer may read
+// one declared below it, or in a file the compiler reads after its own.
+// Swift initializes each on first use, so order says nothing about
+// which is ready first, and swiftc takes every case below in any order.
+func TestModuleVarsInAnyOrder(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []string
+	}{
+		{"later file", []string{
+			"let n = smallText.count\n",
+			"let smallText = \"a b\"\n",
+		}},
+		{"earlier file", []string{
+			"let smallText = \"a b\"\n",
+			"let n = smallText.count\n",
+		}},
+		{"below in the file", []string{
+			"let n: Int = words.count + 1\nlet words = text.split(separator: \" \")\nlet text = \"a b c\"\n",
+		}},
+		{"through a closure", []string{
+			"let lengths = names.map { $0.count + base }\n",
+			"let names = [\"ab\", \"c\"]\nlet base = 10\n",
+		}},
+		{"through a function", []string{
+			"let table: [String] = parse(tableText)\nfunc parse(_ s: String) -> [String] { return [s] }\n",
+			"let tableText = \"x\"\n",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := checkFiles(t, tc.files...); len(got) != 0 {
+				t.Errorf("reported %v", got)
+			}
+		})
+	}
+
+	// One that reads itself, through another, is still refused, in
+	// swiftc's words.
+	got := checkFiles(t, "let a = b + 1\nlet b = a + 1\n")
+	if len(got) != 1 || got[0] != "circular reference" {
+		t.Errorf("a cycle of initializers reported %v, want a circular reference", got)
+	}
+}

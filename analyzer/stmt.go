@@ -559,7 +559,7 @@ func (c *checker) opaqueValue(at ast.Expr, o *types.Opaque, t types.Type) {
 }
 
 // declareModuleVars declares the module's stored variables, before any
-// body is checked.
+// body is checked, from files that are declarations and nothing else.
 //
 // A module-scope variable is visible to the whole module and not only to
 // what the compiler happened to read after it -- Swift has no ordering
@@ -568,25 +568,95 @@ func (c *checker) opaqueValue(at ast.Expr, o *types.Opaque, t types.Type) {
 // Without this, a `let` in one file is out of scope in another the
 // compiler read first, which is a rule about file order and nothing else.
 //
-// An initializer is checked here, so one variable may read another only
-// where that other is already declared. That much order remains, and it
-// is the order Swift's own module-scope initializers run in.
-func (c *checker) declareModuleVars(decls []ast.Decl, scope *Scope) {
-	for _, decl := range decls {
-		d, ok := decl.(*ast.VarDecl)
-		if !ok {
+// Nor does one initializer need the variables it reads declared above
+// it: Swift initializes each of these lazily, on first use, and so does
+// the addressor this compiler gives one. An initializer is checked once
+// the variables it names are, whichever file declares them and wherever
+// in it, so their types are known when it is.
+func (c *checker) declareModuleVars(files []*ast.File, scope *Scope) {
+	var all []*moduleVarDecl
+	byName := map[string][]*moduleVarDecl{}
+	for _, f := range files {
+		if !declarationsOnly(f.Stmts) {
 			continue
 		}
-		for _, b := range d.Bindings {
-			// A computed variable is a getter and no storage:
-			// declareFunctions has it.
-			if b.Body != nil || b.Accessors != nil {
+		unit := f.Unit
+		if unit == nil {
+			unit = c.file
+		}
+		for _, decl := range declsOf(f.Stmts) {
+			d, ok := decl.(*ast.VarDecl)
+			if !ok {
 				continue
 			}
-			c.checkStored(b, d.Kind == token.LET, scope)
+			for _, b := range d.Bindings {
+				// A computed variable is a getter and no storage:
+				// declareFunctions has it.
+				if b.Body != nil || b.Accessors != nil {
+					continue
+				}
+				v := &moduleVarDecl{decl: d, binding: b, file: unit}
+				all = append(all, v)
+				ast.Inspect(b.Pat, func(n ast.Node) bool {
+					if id, ok := n.(*ast.IdentPattern); ok && id.Name != nil {
+						name := id.Name.Text(unit)
+						byName[name] = append(byName[name], v)
+					}
+					return true
+				})
+			}
 		}
-		c.markIsolatedVars(d)
 	}
+	for _, v := range all {
+		c.declareModuleVar(v, byName, scope)
+	}
+}
+
+// A moduleVarDecl is one binding declareModuleVars declares, and how far
+// it has got.
+type moduleVarDecl struct {
+	decl    *ast.VarDecl
+	binding *ast.PatternBinding
+	file    *token.File
+	// checking is set while the initializer's own dependencies are being
+	// declared, and done once the binding is: a variable reached again
+	// while it is checking is one its own initializer reads, which the
+	// lookup reports as Swift does, a circular reference.
+	checking, done bool
+}
+
+// declareModuleVar declares v, after the module variables its initializer
+// names.
+func (c *checker) declareModuleVar(v *moduleVarDecl, byName map[string][]*moduleVarDecl, scope *Scope) {
+	if v.done || v.checking {
+		return
+	}
+	v.checking = true
+	if b := v.binding; b.Value != nil {
+		ast.Inspect(b.Value, func(n ast.Node) bool {
+			id, ok := n.(*ast.IdentExpr)
+			if !ok || id.Name == nil {
+				return true
+			}
+			name := id.Name.Text(v.file)
+			for _, dep := range byName[name] {
+				if dep.checking {
+					if c.circular == nil {
+						c.circular = map[string]bool{}
+					}
+					c.circular[name] = true
+				}
+				c.declareModuleVar(dep, byName, scope)
+			}
+			return true
+		})
+	}
+	prev := c.file
+	c.file = v.file
+	c.checkStored(v.binding, v.decl.Kind == token.LET, scope)
+	c.markIsolatedVars(v.decl)
+	c.file = prev
+	v.checking, v.done = false, true
 }
 
 func (c *checker) checkDecl(decl ast.Decl, scope *Scope) {
