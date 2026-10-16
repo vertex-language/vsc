@@ -243,6 +243,7 @@ Result (*primaryCtxRetain)(void**, i32);
 Result (*ctxSetCurrent)(void*);
 Result (*ctxSynchronize)();
 Result (*memAllocManaged)(u64*, usize, u32);
+Result (*memsetD8)(u64, u8, usize);  // optional: zeroing on the device
 Result (*memFree)(u64);
 Result (*memcpyHtoD)(u64, const void*, usize);
 Result (*pointerGetAttribute)(void*, i32, u64);
@@ -292,6 +293,7 @@ bool load() {
     say("gpu: libcuda is here, but not the driver API it expects\n");
     return false;
   }
+  find(lib, "cuMemsetD8_v2", &memsetD8);
   if (init(0) != 0) {
     if (vertex_pal_getenv("VERTEX_GPU_DEBUG")) say("gpu: cuInit failed\n");
     available = false;
@@ -1410,8 +1412,13 @@ void* vertex_gpu_buffer_create(void* dev, i64 bytes) {
     }
     b->contents = reinterpret_cast<u8*>(p);
     b->cudaOwned = true;
-    // Managed memory is not zeroed; the other kinds' is.
-    vertex_pal_fill(b->contents, 0, static_cast<usize>(n));
+    // Managed memory is not zeroed; the other kinds' is. Zeroed on the
+    // device, in launch order: zeroed by the host, every page would be
+    // faulted in on the host and then migrated to the device at the first
+    // launch that touches it -- for every buffer, every time one is made.
+    if (!cuda::memsetD8 || cuda::memsetD8(p, 0, static_cast<usize>(n)) != 0) {
+      vertex_pal_fill(b->contents, 0, static_cast<usize>(n));
+    }
   } else {
     b->contents = static_cast<u8*>(vertex_pal_alloc(static_cast<usize>(n), 64));
     if (!b->contents) {
