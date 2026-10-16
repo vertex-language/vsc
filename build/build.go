@@ -99,7 +99,7 @@ func aarch64ELF(m *ir.Module) ([]byte, error) {
 // amd64ELF lowers for x86-64 under SysV, as Linux has it, and writes an
 // ELF relocatable object. Libcalls are unprefixed.
 func amd64ELF(m *ir.Module) ([]byte, error) {
-	o, err := amd64lower.Lower(m, amd64lower.Options{})
+	o, err := amd64lower.Lower(m, amd64lower.Options{OptLevel: amd64lower.O1})
 	if err != nil {
 		return nil, fmt.Errorf("build: %w", err)
 	}
@@ -112,7 +112,7 @@ func amd64ELF(m *ir.Module) ([]byte, error) {
 
 // amd64PE lowers for x86-64 and writes a COFF object file.
 func amd64PE(m *ir.Module, opts Options) ([]byte, error) {
-	o, err := amd64lower.Lower(m, amd64lower.Options{})
+	o, err := amd64lower.Lower(m, amd64lower.Options{OptLevel: amd64lower.O1})
 	if err != nil {
 		return nil, fmt.Errorf("build: %w", err)
 	}
