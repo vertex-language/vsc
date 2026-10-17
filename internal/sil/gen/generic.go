@@ -136,38 +136,12 @@ func (g *gen) emitSpecialization(sym *analyzer.FuncSymbol, name string, subst ma
 		return errNoGenericBody(sym.Name())
 	}
 
-	outer := struct {
-		fn      *sil.Func
-		entry   bool
-		blk     *sil.Block
-		scopes  []*scope
-		locals  map[analyzer.Symbol]*local
-		loops   []loop
-		pending string
-		recv    types.Type
-		self    *local
-		subst   map[*types.TypeParam]types.Type
-		throws  bool
-		catches []catchTarget
-		tryBang bool
-		tryCall *ast.CallExpr
-	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.subst,
-		g.throws, g.catches, g.tryBang, g.tryCall}
-	// The instantiation is lowered in the middle of its caller, which may
-	// be inside a `do`: what the caller's throws are caught by is the
-	// caller's, and has to be there again when its lowering resumes.
-	defer func() {
-		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
-		g.scopes, g.locals = outer.scopes, outer.locals
-		g.loops, g.pending = outer.loops, outer.pending
-		g.recv, g.self, g.subst = outer.recv, outer.self, outer.subst
-		g.throws, g.catches, g.tryBang, g.tryCall = outer.throws, outer.catches, outer.tryBang, outer.tryCall
-	}()
-
+	// The instantiation is lowered in the middle of its caller -- which
+	// may be inside a `do`, or an initializer with its own way to return --
+	// so all of the caller's state is set aside and put back after.
+	defer g.apart()()
 	// The body is read in the file it was written in, which is not
 	// always the file of the call that asked for it.
-	prevFile := g.file
-	defer func() { g.file = prevFile }()
 	if f := g.fileOf(decl); f != nil {
 		g.file = f
 	}

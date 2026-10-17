@@ -1034,10 +1034,17 @@ func (g *gen) boxArg(a ast.Expr, v *sil.Value, want []types.Type, i int) *sil.Va
 	if to, ok := g.info.CStrings[a]; ok {
 		return g.cStringArg(v, to)
 	}
+	from := g.typeOf(a)
+	// A pointer Swift converts at a call -- mutable to immutable, typed to
+	// raw -- has the same bits; it is retyped, and then wrapped if the
+	// parameter is optional, as one of the parameter's type would be.
+	if to, ok := g.info.PointerArgs[a]; ok && v != nil {
+		v = g.retypePointer(v, to)
+		from = to
+	}
 	if i >= len(want) {
 		return v
 	}
-	from := g.typeOf(a)
 	// An optional wraps for the same reason an existential boxes: the
 	// parameter is a different type from the argument, and something
 	// has to make one into the other. See optional.go.
@@ -1503,6 +1510,11 @@ func enumOwnsOnlyReferences(t types.Type) bool {
 
 // payloadOwnsOnlyReferences is the same question of what one case carries.
 func payloadOwnsOnlyReferences(t types.Type) bool {
+	// An existential -- an `Error` a case carries -- is copied and
+	// destroyed through its own type's witnesses, which the enum's call.
+	if _, ok := existentialOf(t); ok {
+		return true
+	}
 	switch u := t.Underlying().(type) {
 	case *types.Basic:
 		return u.Kind() == types.String || lowerType(t).Trivial()

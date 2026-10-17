@@ -678,13 +678,21 @@ func (c *checker) associatedType(params []*ast.Param, scope *Scope) types.Type {
 func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Scope) []*types.Field {
 	pat := b.Pat
 	var fieldType types.Type
+	pending := false
 	if tp, ok := pat.(*ast.TypedPattern); ok {
 		// The annotation is read in the type's own scope: a member
 		// may be written in terms of the type's generic parameters.
 		fieldType = c.resolveType(tp.Type, typeScope)
 		pat = tp.Pat
 	} else if b.Value != nil {
+		quiet := len(c.info.Diagnostics)
 		fieldType = c.checkExpr(b.Value, nil, typeScope)
+		// A default that calls a function is typed again once functions
+		// are declared, which is after members are read: `var xs = seed()`.
+		if c.deferDefaults && isInvalid(fieldType) {
+			c.info.Diagnostics = c.info.Diagnostics[:quiet]
+			pending = true
+		}
 	}
 	c.declarePattern(b.Pat, fieldType, isConst, typeScope)
 
@@ -702,6 +710,9 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 	}
 	if b.Value != nil {
 		c.info.FieldDefaults[f] = b.Value
+	}
+	if pending {
+		c.pendingFields = append(c.pendingFields, pendingField{binding: b, pat: pat, field: f, scope: typeScope, file: c.file})
 	}
 	// A `var` of an optional type with no value starts as nil, and the
 	// memberwise initializer may leave it out.
@@ -1111,17 +1122,20 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 					w := c.resolveType(attr.Name, typeScope)
 					f := got[0]
 					storage := &types.Field{Name: "_" + f.Name, Type: w, Isolated: f.Isolated}
-					if call := c.wrapperInit(attr, b); call != nil {
+					call := c.wrapperInit(attr, b)
+					if call != nil {
 						storage.HasDefault = true
 						c.info.FieldDefaults[storage] = call
 						c.info.WrapperInits[b] = call
 					}
-					typeScope.Insert(NewVar(storage.Name, w, attr.Pos(), false, types.DefaultOwnership))
+					sv := NewVar(storage.Name, w, attr.Pos(), false, types.DefaultOwnership)
+					typeScope.Insert(sv)
 					f.IsComputed, f.HasSetter, f.HasDefault = true, true, false
 					f.Wrapper = storage.Name
 					*fields = append(*fields, storage)
 					*computed = append(*computed, f)
-					c.wrapped = append(c.wrapped, wrappedProperty{field: f, wrapper: w, computed: computed, scope: typeScope, at: attr.Pos()})
+					c.wrapped = append(c.wrapped, wrappedProperty{field: f, wrapper: w, computed: computed, scope: typeScope, at: attr.Pos(),
+						storage: storage, storageVar: sv, call: call})
 				case c.hasModifier(m.Mods, "lazy") && len(got) == 1 && computed != nil && fields != nil:
 					// `lazy var x: T = e` is stored as an optional, nil until
 					// the getter first runs e, and read and written as a T.
@@ -2256,6 +2270,11 @@ type wrappedProperty struct {
 	computed *[]*types.Field
 	scope    *Scope
 	at       token.Pos
+	// storage is the stored property holding the wrapper, `_name`, and
+	// storageVar its name in the type's scope; call is what it starts as.
+	storage    *types.Field
+	storageVar *VarSymbol
+	call       *ast.CallExpr
 }
 
 // wrapperAttr is the attribute among attrs naming a property wrapper, or nil.
@@ -2325,19 +2344,63 @@ func (c *checker) finishWrappedProperties() {
 			c.errorf(w.at, "property wrapper '%s' has no 'wrappedValue'", w.wrapper)
 			continue
 		}
+		// A generic wrapper written bare -- `@Box var next = "x"` -- is
+		// the instance the property's type, or its initial value, says.
+		subst := c.wrapperSubst(w, value)
 		if w.field.Type == nil || isInvalid(w.field.Type) {
-			w.field.Type = value.Type
+			w.field.Type = types.Substitute(value.Type, subst)
 		}
 		w.field.HasSetter = !value.IsConst && (!value.IsComputed || value.HasSetter)
 		if p := wrapperMember(w.wrapper, "projectedValue"); p != nil {
-			proj := &types.Field{Name: "$" + w.field.Name, Type: p.Type, IsComputed: true,
+			pt := types.Substitute(p.Type, subst)
+			proj := &types.Field{Name: "$" + w.field.Name, Type: pt, IsComputed: true,
 				HasSetter: !p.IsConst && (!p.IsComputed || p.HasSetter),
 				Wrapper:   w.field.Wrapper, Projected: true, Isolated: w.field.Isolated}
 			*w.computed = append(*w.computed, proj)
-			w.scope.Insert(NewVar(proj.Name, p.Type, w.at, false, types.DefaultOwnership))
+			w.scope.Insert(NewVar(proj.Name, pt, w.at, false, types.DefaultOwnership))
 		}
 	}
 	c.wrapped = nil
+}
+
+// wrapperSubst binds a generic wrapper's parameters, where its attribute
+// named it without arguments, from the property's written type or else
+// from the call its storage starts as; the storage takes the instance.
+// It is nil for any other wrapper.
+func (c *checker) wrapperSubst(w wrappedProperty, value *types.Field) map[*types.TypeParam]types.Type {
+	if _, inst := w.wrapper.(*types.GenericInstance); inst || w.storage == nil {
+		return nil
+	}
+	params := typeParamsOf(w.wrapper)
+	if len(params) == 0 {
+		return nil
+	}
+	subst := make(map[*types.TypeParam]types.Type, len(params))
+	if w.field.Type != nil && !isInvalid(w.field.Type) {
+		types.UnifyArg(value.Type, w.field.Type, subst)
+	} else if w.call != nil {
+		quiet := len(c.info.Diagnostics)
+		if gi, ok := c.inferInstance(w.wrapper, w.call, w.scope).(*types.GenericInstance); ok && len(gi.Args) == len(params) {
+			for i, p := range params {
+				subst[p] = gi.Args[i]
+			}
+		}
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	}
+	args := make([]types.Type, len(params))
+	for i, p := range params {
+		a, ok := subst[p]
+		if !ok {
+			return nil
+		}
+		args[i] = a
+	}
+	inst := &types.GenericInstance{Base: w.wrapper, Args: args}
+	w.storage.Type = inst
+	if w.storageVar != nil {
+		w.storageVar.SetType(inst)
+	}
+	return subst
 }
 
 // wrapperMember is a wrapper type's property of a name, stored or computed.

@@ -98,6 +98,9 @@ type closureCapture struct {
 	// catch binding -- which has no register form to capture: the closure
 	// is given a box holding a copy of it, made where the closure is.
 	copied bool
+	// accessor is "get" or "set" for one of a computed local's accessors,
+	// which the closure is given as the function value it is.
+	accessor string
 }
 
 // captureList evaluates what a closure's capture list binds, here where
@@ -255,6 +258,16 @@ func (g *gen) closureCaptures(e ast.Node) ([]closureCapture, string) {
 				return true
 			}
 			if sym := g.info.Uses[x.Name]; sym != nil {
+				if lc := g.computedLocals[sym]; lc != nil && g.locals[sym] == nil {
+					if !seen[sym] {
+						seen[sym] = true
+						caps = append(caps, closureCapture{sym: sym, loc: &local{value: lc.get, typ: lc.get.Type()}, accessor: "get"})
+						if lc.set != nil {
+							caps = append(caps, closureCapture{sym: sym, loc: &local{value: lc.set, typ: lc.set.Type()}, accessor: "set"})
+						}
+					}
+					return true
+				}
 				if l, ok := g.locals[sym]; ok {
 					// A value, or a variable in a box of its own. Anything
 					// else -- an inout parameter, storage on the stack, an
@@ -323,9 +336,11 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 		tryBang bool
 		tryCall *ast.CallExpr
 		self    *local
+		comp    map[analyzer.Symbol]*localComputed
 	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv,
-		g.throws, g.catches, g.tryBang, g.tryCall, g.self}
+		g.throws, g.catches, g.tryBang, g.tryCall, g.self, g.computedLocals}
 	defer func() {
+		g.computedLocals = outer.comp
 		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
 		g.scopes, g.locals = outer.scopes, outer.locals
 		g.loops, g.pending, g.recv = outer.loops, outer.pending, outer.recv
@@ -386,7 +401,30 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 	// The receiver, captured, is kept too, for a nested function that
 	// calls itself to hand on (below).
 	var selfCapture *local
-	for _, c := range caps {
+	// A computed local the body uses is the accessors it was given.
+	if len(caps) > 0 {
+		inner := make(map[analyzer.Symbol]*localComputed, len(g.computedLocals))
+		for k, v := range g.computedLocals {
+			inner[k] = v
+		}
+		g.computedLocals = inner
+	}
+	accessors := map[*closureCapture]*local{}
+	for i := range caps {
+		c := caps[i]
+		if c.accessor != "" {
+			v := f.Param(c.loc.typ, sil.ParamGuaranteed)
+			lc := g.computedLocals[c.sym]
+			nc := &localComputed{typ: lc.typ, get: lc.get, set: lc.set}
+			if c.accessor == "get" {
+				nc.get = v
+			} else {
+				nc.set = v
+			}
+			g.computedLocals[c.sym] = nc
+			accessors[&caps[i]] = &local{value: v, typ: c.loc.typ}
+			continue
+		}
 		if c.copied {
 			// The copy's box: storage of the closure's own, used where
 			// it is, as the value it was copied from was.
@@ -434,6 +472,10 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 				inner[i] = closureCapture{sym: c.sym, loc: selfCapture, self: true}
 				continue
 			}
+			if l := accessors[&caps[i]]; l != nil {
+				inner[i] = closureCapture{sym: c.sym, loc: l, accessor: c.accessor}
+				continue
+			}
 			inner[i] = closureCapture{sym: c.sym, loc: g.locals[c.sym]}
 		}
 		g.locals[self] = &local{value: g.closureValue(f, sig, inner), typ: lowerType(sig)}
@@ -467,12 +509,14 @@ func (g *gen) captureBody(sig *types.Signature, caps []closureCapture, syms []an
 		return f
 	}
 
+	restoreSiblings := g.within(stmts)
 	for _, st := range stmts {
 		g.stmt(st)
 		if g.blk == nil || g.blk.Term() != nil {
 			break
 		}
 	}
+	restoreSiblings()
 	if g.blk != nil && g.blk.Term() == nil {
 		g.unwind()
 		if sig.Results != nil && !isVoid(sig.Results) {
@@ -614,6 +658,10 @@ func (g *gen) captured(e ast.Node) (string, bool) {
 
 // nestedFunc lowers a function declared inside another one.
 func (g *gen) nestedFunc(d *ast.FuncDecl) {
+	if g.hoisted[d] {
+		return
+	}
+	g.hoistCallees(d)
 	if _, ok := g.captured(d); ok {
 		g.capturingNestedFunc(d)
 		return
@@ -645,6 +693,43 @@ func (g *gen) nestedFunc(d *ast.FuncDecl) {
 	g.localFunc = true
 	g.function(d, nil)
 	g.localFunc = prevLocal
+}
+
+// hoistCallees lowers, ahead of d, each local function declared after d in
+// the same statement list that d calls and that captures: such a function
+// is a value made where it is declared, and d's body needs it made. Swift
+// lets local functions name each other in either order.
+func (g *gen) hoistCallees(d *ast.FuncDecl) {
+	if g.hoisted == nil {
+		g.hoisted = map[*ast.FuncDecl]bool{}
+	}
+	after := false
+	for _, st := range g.siblings {
+		ds, ok := st.(*ast.DeclStmt)
+		if !ok {
+			continue
+		}
+		f, ok := ds.D.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if f == d {
+			after = true
+			continue
+		}
+		if !after || g.hoisted[f] || f.Body == nil {
+			continue
+		}
+		sym, _ := g.info.Defs[f.Name].(*analyzer.FuncSymbol)
+		if sym == nil || !callsItself(d.Body, sym, g.info) {
+			continue
+		}
+		if _, captures := g.captured(f); !captures {
+			continue
+		}
+		g.nestedFunc(f)
+		g.hoisted[f] = true
+	}
 }
 
 // capturingNestedFunc lowers a nested function that uses names from the

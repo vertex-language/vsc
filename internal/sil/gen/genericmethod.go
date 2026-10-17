@@ -5,7 +5,6 @@ import (
 
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
-	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/mangle"
 	"github.com/vertex-language/vsc/types"
 )
@@ -335,32 +334,9 @@ func (g *gen) emitMethodSpecialization(decl *ast.FuncDecl, inst types.Type, name
 	}
 	g.specialized[name] = true
 
-	outer := struct {
-		fn      *sil.Func
-		entry   bool
-		blk     *sil.Block
-		scopes  []*scope
-		locals  map[analyzer.Symbol]*local
-		loops   []loop
-		pending string
-		recv    types.Type
-		self    *local
-		subst   map[*types.TypeParam]types.Type
-		throws  bool
-		catches []catchTarget
-		tryBang bool
-		tryCall *ast.CallExpr
-	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.subst,
-		g.throws, g.catches, g.tryBang, g.tryCall}
-	prevFile := g.file
-	defer func() {
-		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
-		g.scopes, g.locals = outer.scopes, outer.locals
-		g.loops, g.pending = outer.loops, outer.pending
-		g.recv, g.self, g.subst = outer.recv, outer.self, outer.subst
-		g.throws, g.catches, g.tryBang, g.tryCall = outer.throws, outer.catches, outer.tryBang, outer.tryCall
-		g.file = prevFile
-	}()
+	// Lowered in the middle of its caller (an initializer, a `do`): the
+	// caller's state is set aside, and put back after.
+	defer g.apart()()
 	if f := g.fileOf(decl); f != nil {
 		g.file = f
 	}

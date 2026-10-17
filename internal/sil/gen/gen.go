@@ -228,12 +228,8 @@ func polymorphic(files []*ast.File, info *analyzer.Info) map[*types.Class]bool {
 		}
 	}
 	for _, f := range files {
-		for _, stmt := range f.Stmts {
-			decl, ok := stmt.(*ast.DeclStmt)
-			if !ok {
-				continue
-			}
-			cd, ok := decl.D.(*ast.ClassDecl)
+		for _, d := range classDecls(f.Stmts) {
+			cd, ok := d.(*ast.ClassDecl)
 			if !ok || cd.Name == nil {
 				continue
 			}
@@ -533,11 +529,23 @@ type gen struct {
 	tryBang bool          // the next call that may fail is under try!
 	// tryCall is the method call a `try?` or `try!` is written on, and
 	// what the keyword asks of it; the call takes them at its apply.
-	tryCall     *ast.CallExpr
-	vars        map[analyzer.Symbol]*moduleVar    // module-level variables, shared by every file
-	getters     map[analyzer.Symbol]*moduleGetter // computed module-level variables, shared by every file
-	staticRecv  types.Type                        // the type whose static initializer is being lowered
-	localFunc   bool                              // lowering a function declared inside another
+	tryCall *ast.CallExpr
+	vars    map[analyzer.Symbol]*moduleVar    // module-level variables, shared by every file
+	getters map[analyzer.Symbol]*moduleGetter // computed module-level variables, shared by every file
+	// computedLocals are the computed variables declared in the function
+	// being lowered.
+	computedLocals map[analyzer.Symbol]*localComputed
+	staticRecv     types.Type // the type whose static initializer is being lowered
+	localFunc      bool       // lowering a function declared inside another
+	// siblings is the statement list being lowered, and hoisted the local
+	// functions lowered ahead of where they are declared: one that captures
+	// is a closure value made at its declaration, so a function before it
+	// that calls it has it made first (nestedFunc).
+	siblings []ast.Stmt
+	// condParts, while an `if let (a, b)` binds, collects the owned
+	// parts the payload is taken apart into (bindCondition).
+	condParts   *[]*sil.Value
+	hoisted     map[*ast.FuncDecl]bool
 	tryOptional bool
 	tryTrap     bool
 	publicTypes map[string]bool // nominal types this module exports
@@ -754,6 +762,7 @@ func (g *gen) moduleOfType(t types.Type) string {
 	if g.info == nil || t == nil {
 		return g.module
 	}
+	t = unalias(t)
 	// Error is the universe's and the others core's: all the standard
 	// library's, as Swift spells them.
 	if p, ok := t.(*types.Protocol); ok && (p == types.ErrorProtocol || p == types.AnyObjectProtocol || g.isCoreType(p)) {
@@ -799,7 +808,7 @@ func (g *gen) isCoreType(t types.Type) bool {
 
 // enclosingType is the type a nominal one is declared inside, or nil.
 func enclosingType(t types.Type) types.Type {
-	switch n := t.(type) {
+	switch n := unalias(t).(type) {
 	case *types.Struct:
 		return n.In
 	case *types.Class:
@@ -854,7 +863,7 @@ type cleanup struct {
 	deferred *ast.CodeBlock
 }
 
-func (g *gen) push()       { g.scopes = append(g.scopes, &scope{}) }
+func (g *gen) push() { g.scopes = append(g.scopes, &scope{}) }
 
 // pushArgs opens a call's argument scope: what evaluating the call makes
 // on the way -- its arguments' temporaries -- is registered here and ends

@@ -19,6 +19,7 @@ func (g *gen) block(b *ast.CodeBlock) {
 		defer g.initDI.enter()()
 	}
 	g.push()
+	defer g.within(b.Stmts)()
 	for _, s := range b.Stmts {
 		g.stmt(s)
 		if g.blk == nil || g.blk.Term() != nil {
@@ -26,6 +27,14 @@ func (g *gen) block(b *ast.CodeBlock) {
 		}
 	}
 	g.popReachable()
+}
+
+// within makes stmts the statement list being lowered, until the function
+// it answers is called.
+func (g *gen) within(stmts []ast.Stmt) func() {
+	prev := g.siblings
+	g.siblings = stmts
+	return func() { g.siblings = prev }
 }
 
 // stmt lowers one statement inside a formal scope of its own, so
@@ -497,14 +506,19 @@ func (g *gen) assign(e *ast.BinaryExpr) {
 			// Wrapped in the optional the setter takes, the value is
 			// the optional's: a borrowed one is copied into it, and the
 			// optional ends with the statement, as `x as T?` does.
-			from := g.typeOf(e.Y)
-			_, toOpt := optionalOf(ref.Subscript.Result)
+			// A generic type's subscript takes its instance's T?, not
+			// the declaration's.
+			from, to := g.typeOf(e.Y), ref.Subscript.Result
+			if st := g.typeOf(sub); st != nil {
+				to = st
+			}
+			_, toOpt := optionalOf(to)
 			_, fromOpt := optionalOf(from)
 			if toOpt && !fromOpt && v.Ownership() != sil.None {
-				v = g.optionalFor(e.Y, g.consume(v), from, ref.Subscript.Result)
+				v = g.optionalFor(e.Y, g.consume(v), from, to)
 				g.destroyLater(v)
 			} else {
-				v = g.optionalFor(e.Y, v, from, ref.Subscript.Result)
+				v = g.optionalFor(e.Y, v, from, to)
 			}
 			g.declaredSubscriptWrite(sub, ref, v)
 			return
@@ -638,6 +652,9 @@ func (g *gen) lvalue(e ast.Expr) *sil.Value {
 		if sym := g.info.Uses[n.Name]; sym != nil {
 			if l := g.locals[sym]; l != nil {
 				return l.addr
+			}
+			if lc := g.computedLocals[sym]; lc != nil {
+				return g.computedLocalAddr(n, lc)
 			}
 			if addr, _, ok := g.moduleVarAddr(sym); ok {
 				return addr
@@ -859,6 +876,10 @@ func (g *gen) text(n ast.Node) string {
 // varDecl lowers variable bindings: let binds SSA values; var allocates a box.
 func (g *gen) varDecl(d *ast.VarDecl) {
 	for _, b := range d.Bindings {
+		if b.Body != nil || b.Accessors != nil {
+			g.computedLocalDecl(b)
+			continue
+		}
 		if tp, ok := untyped(b.Pat).(*ast.TuplePattern); ok {
 			g.tupleDecl(tp, b, d.Kind == token.LET)
 			continue
@@ -1176,12 +1197,14 @@ func (g *gen) conditionChain(conds []ast.Node, fail func() *sil.Block) bool {
 	for _, c := range conds {
 		switch c := c.(type) {
 		case *ast.OptionalBinding:
-			payload, ok := g.bindCondition(c, failing)
+			payloads, ok := g.bindCondition(c, failing)
 			if !ok {
 				return false
 			}
-			if payload != nil && payload.Ownership() == sil.Owned {
-				bound = append(bound, payload)
+			for _, payload := range payloads {
+				if payload != nil && payload.Ownership() == sil.Owned {
+					bound = append(bound, payload)
+				}
 			}
 		case *ast.CaseCond:
 			arm, ok := g.caseCondition(c, failing)
@@ -1459,12 +1482,14 @@ func (g *gen) switchStmt(s *ast.SwitchStmt) {
 			next = bodies[i+1]
 		}
 		g.loops = append(g.loops, loop{header: header, lazyExit: cont, depth: depth, isSwitch: true, next: next})
+		restoreSiblings := g.within(cs.Stmts)
 		for _, st := range cs.Stmts {
 			g.stmt(st)
 			if g.blk == nil || g.blk.Term() != nil {
 				break
 			}
 		}
+		restoreSiblings()
 		g.loops = g.loops[:len(g.loops)-1]
 		if g.blk != nil && g.blk.Term() == nil {
 			g.pop()
@@ -2707,6 +2732,21 @@ func (g *gen) bindLoopVar(pat ast.Pattern, v *sil.Value, t sil.Type) {
 	if sym == nil {
 		return
 	}
+	// `for var p in ps`: each element in a variable of its own, which the
+	// body may write to; the sequence keeps what it had.
+	if vb, ok := pat.(*ast.ValueBindingPattern); ok && vb.Kind == token.VAR {
+		if v.Ownership() != sil.Owned && !t.Trivial() {
+			v = g.blk.CopyValue(v)
+		}
+		box := g.blk.AllocBox(t, g.text(name), "var")
+		borrow := g.blk.BeginBorrow(box, "var_decl")
+		addr := g.blk.ProjectBox(borrow, 0, t)
+		g.locals[sym] = &local{addr: addr, box: box, typ: t}
+		g.destroyLater(box)
+		g.endBorrowLater(borrow)
+		g.blk.Store(v, addr, storeQualifier(t))
+		return
+	}
 	bound := g.blk.MoveValue(v, "lexical", "var_decl")
 	g.blk.DebugValue(bound, g.text(name), "let")
 	g.destroyLater(bound)
@@ -3009,6 +3049,9 @@ func (g *gen) bindPatternTo(p ast.Pattern, v *sil.Value, t types.Type) bool {
 			for i, part := range parts {
 				if !types_[i].Trivial() {
 					g.destroyLater(part)
+					if g.condParts != nil {
+						*g.condParts = append(*g.condParts, part)
+					}
 				}
 				elems[i] = part
 			}

@@ -235,8 +235,9 @@ func main() -> Int32 { return fib(10) }`)
 func TestRefusalsCoverTheirSpan(t *testing.T) {
 	src := `
 class Base {
-    init?(n: Int) {
-        return nil
+    init() {}
+    convenience init?(n: Int) {
+        self.init()
     }
 }
 func main() -> Int32 {

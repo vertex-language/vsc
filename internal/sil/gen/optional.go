@@ -212,7 +212,7 @@ func optionalDepth(t types.Type) int {
 }
 
 // bindCondition lowers an optional binding condition (if/while/guard let x = v) using switch_enum.
-func (g *gen) bindCondition(b *ast.OptionalBinding, fail func() *sil.Block) (*sil.Value, bool) {
+func (g *gen) bindCondition(b *ast.OptionalBinding, fail func() *sil.Block) ([]*sil.Value, bool) {
 	subject := b.Value
 	if subject == nil {
 		g.refuse(b, "a binding condition with no value")
@@ -240,10 +240,20 @@ func (g *gen) bindCondition(b *ast.OptionalBinding, fail func() *sil.Block) (*si
 	// `if let (a, b) = pair` takes the payload apart as a case pattern
 	// takes what a case carries.
 	if _, isTuple := b.Pat.(*ast.TuplePattern); isTuple {
-		if !g.bindPatternTo(b.Pat, payload, o.Wrapped) {
+		// What is owned is taken apart, and its parts are what a later
+		// condition's failure lets go of.
+		var parts []*sil.Value
+		prevParts := g.condParts
+		g.condParts = &parts
+		ok := g.bindPatternTo(b.Pat, payload, o.Wrapped)
+		g.condParts = prevParts
+		if !ok {
 			return nil, false
 		}
-		return payload, true
+		if payload.Ownership() == sil.Owned {
+			return parts, true
+		}
+		return nil, true
 	}
 	_, sym := g.binding(&ast.PatternBinding{Pat: b.Pat})
 	// `if var x = o` binds storage the body may change, which starts as
@@ -262,13 +272,13 @@ func (g *gen) bindCondition(b *ast.OptionalBinding, fail func() *sil.Block) (*si
 		g.blk.Store(v, addr, storeQualifier(wrapped))
 		g.locals[sym] = &local{addr: addr, box: box, typ: wrapped}
 		g.destroyLater(box)
-		return box, true
+		return []*sil.Value{box}, true
 	}
 	if sym != nil {
 		g.locals[sym] = &local{value: payload, typ: wrapped}
 	}
 	g.destroyLater(payload)
-	return payload, true
+	return []*sil.Value{payload}, true
 }
 
 // nilCoalescing lowers `a ?? b` by switching on a and evaluating b only on the none branch.

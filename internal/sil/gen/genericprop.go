@@ -178,9 +178,9 @@ func (g *gen) genericAccessor(at ast.Node, recv types.Type, f *types.Field, sett
 	g.specialized[name] = true
 
 	restore := g.aside()
+	defer restore()
 	endSpecialization := g.asSpecialization()
 	defer endSpecialization()
-	defer restore()
 	if file := g.fileOf(decl.binding); file != nil {
 		g.file = file
 	}
@@ -194,41 +194,11 @@ func (g *gen) genericAccessor(at ast.Node, recv types.Type, f *types.Field, sett
 	return name, t, true
 }
 
-// aside saves the state of the function being lowered, so that another
-// can be lowered in the middle of it, and returns what restores it.
+// aside sets the function being lowered aside, so that another can be
+// lowered in the middle of it, and returns what puts it back: apart, by
+// the name this file has always used.
 func (g *gen) aside() func() {
-	outer := struct {
-		fn      *sil.Func
-		entry   bool
-		blk     *sil.Block
-		scopes  []*scope
-		locals  map[analyzer.Symbol]*local
-		loops   []loop
-		pending string
-		recv    types.Type
-		self    *local
-		subst   map[*types.TypeParam]types.Type
-		throws  bool
-		catches []catchTarget
-		tryBang bool
-		tryCall *ast.CallExpr
-	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self, g.subst,
-		g.throws, g.catches, g.tryBang, g.tryCall}
-	prevFile := g.file
-	// What the outer statement is to write back when it ends is its own:
-	// a statement of the specialization emitted here must not flush it
-	// into the specialization's body.
-	writebacks := g.writebacks
-	g.writebacks = nil
-	return func() {
-		g.writebacks = writebacks
-		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
-		g.scopes, g.locals = outer.scopes, outer.locals
-		g.loops, g.pending = outer.loops, outer.pending
-		g.recv, g.self, g.subst = outer.recv, outer.self, outer.subst
-		g.throws, g.catches, g.tryBang, g.tryCall = outer.throws, outer.catches, outer.tryBang, outer.tryCall
-		g.file = prevFile
-	}
+	return g.apart()
 }
 
 // extensionProperty is the protocol whose extension gives t the computed
@@ -281,9 +251,9 @@ func (g *gen) protocolAccessor(at ast.Node, recv types.Type, f *types.Field) (st
 	g.specialized[name] = true
 
 	restore := g.aside()
+	defer restore()
 	endSpecialization := g.asSpecialization()
 	defer endSpecialization()
-	defer restore()
 	if file := g.fileOf(decl.binding); file != nil {
 		g.file = file
 	}

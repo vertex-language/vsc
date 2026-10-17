@@ -145,6 +145,26 @@ func (c *checker) reconcileLiterals(x ast.Expr, lhs types.Type, y ast.Expr, rhs 
 	return lhs, rhs
 }
 
+// typeLiteralMeta is the metatype a collection literal of types is,
+// element by element: `[Level]` inside `[[Level]]` is [Level].Type.
+func typeLiteralMeta(t types.Type) (*types.Metatype, bool) {
+	switch u := t.(type) {
+	case *types.Metatype:
+		return u, true
+	case *types.Array:
+		if m, ok := typeLiteralMeta(u.Elem); ok {
+			return &types.Metatype{Instance: &types.Array{Elem: m.Instance}}, true
+		}
+	case *types.Dictionary:
+		k, kok := typeLiteralMeta(u.Key)
+		v, vok := typeLiteralMeta(u.Value)
+		if kok && vok {
+			return &types.Metatype{Instance: &types.Dictionary{Key: k.Instance, Value: v.Instance}}, true
+		}
+	}
+	return nil, false
+}
+
 // emptyCollectionLit reports whether e is `[]` or `[:]`.
 func emptyCollectionLit(e ast.Expr) bool {
 	switch l := unparen(e).(type) {
@@ -202,6 +222,24 @@ func (c *checker) adoptTree(e ast.Expr, want types.Type, scope *Scope) (types.Ty
 		return nil, false
 	}
 	return c.checkExpr(e, want, scope), true
+}
+
+// decimalLiterals reports whether every item is made of number literals
+// alone and at least one of them is written with a decimal point.
+func (c *checker) decimalLiterals(items []ast.Expr) bool {
+	decimal := false
+	for _, el := range items {
+		if !c.isLiteralTree(el) {
+			return false
+		}
+		ast.Inspect(el, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.FLOAT_LIT {
+				decimal = true
+			}
+			return !decimal
+		})
+	}
+	return decimal
 }
 
 // isLiteralTree reports whether an expression consists entirely of numeric literals and operators.
@@ -961,6 +999,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			ctx := lhs
 			if opName == "??" {
 				ctx = unwrappedContext(lhs)
+				if mayBeNilLiteral(e.Y) && !isOptionalType(ctx) {
+					ctx = lhs
+				}
 			} else {
 				ctx = c.implicitOperandContext(scope, opName, lhs, e.Y, 1)
 			}
@@ -974,7 +1015,8 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			// `nil` there is the optional itself.
 			lhs = c.checkExpr(e.X, operandCtx, scope)
 			ctx := unwrappedContext(lhs)
-			if lit, isLit := unparen(e.Y).(*ast.BasicLit); isLit && lit.Kind == token.NIL && !isOptionalType(ctx) {
+			// So is a fallback that may be nil itself: `a ?? (c ? b : nil)`.
+			if mayBeNilLiteral(e.Y) && !isOptionalType(ctx) {
 				ctx = lhs
 			}
 			rhs = c.checkExpr(e.Y, ctx, scope)
@@ -1020,12 +1062,19 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// So is one compared with a type an array literal makes: an
 		// option set, `p == [.read, .write]`.
 		if opName == "==" || opName == "!=" || opName == "+" || opName == "+=" {
-			if _, lit := unparen(e.Y).(*ast.ArrayLit); lit && takesArrayLiteral(lhs) && !types.Identical(lhs, rhs) {
-				rhs = c.checkExpr(e.Y, lhs, scope)
+			// An optional array on the other side types the literal as the
+			// array inside: `reply?.Ints == [0, 0, 32, 32]`.
+			comparing := opName == "==" || opName == "!="
+			lhsCtx, rhsCtx := lhs, rhs
+			if comparing {
+				lhsCtx, rhsCtx = unwrappedContext(lhs), unwrappedContext(rhs)
+			}
+			if _, lit := unparen(e.Y).(*ast.ArrayLit); lit && takesArrayLiteral(lhsCtx) && !types.Identical(lhsCtx, rhs) {
+				rhs = c.checkExpr(e.Y, lhsCtx, scope)
 			} else if opName == "+=" {
 				// The left of += is what is assigned to; it is never retyped.
-			} else if _, lit := unparen(e.X).(*ast.ArrayLit); lit && takesArrayLiteral(rhs) && !types.Identical(lhs, rhs) {
-				lhs = c.checkExpr(e.X, rhs, scope)
+			} else if _, lit := unparen(e.X).(*ast.ArrayLit); lit && takesArrayLiteral(rhsCtx) && !types.Identical(lhs, rhsCtx) {
+				lhs = c.checkExpr(e.X, rhsCtx, scope)
 			}
 		}
 		// So is a dictionary literal compared with a dictionary: `d == [:]`.
@@ -1084,7 +1133,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 
 		case "??":
 			if opt, ok := lhs.(*types.Optional); ok {
-				if t, adopted := c.adoptTree(e.Y, opt.Wrapped, scope); adopted {
+				if mayBeNilLiteral(e.Y) {
+					// An optional fallback, read as one above.
+				} else if t, adopted := c.adoptTree(e.Y, opt.Wrapped, scope); adopted {
 					rhs = t
 				}
 				switch {
@@ -1118,7 +1169,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			c.typeErrorf(e.Op.Pos(), "binary operator '%s' cannot be applied to operands of type '%s' and '%s'", opName, lhs, rhs)
 			return lhs
 
-		case "+=", "-=", "*=", "/=":
+		// Every compound assignment has no value: `{ c.w |= 2 }` is a
+		// () -> Void, as `{ n += 1 }` is.
+		case "+=", "-=", "*=", "/=", "%=", "|=", "&=", "^=", "<<=", ">>=", "&+=", "&-=", "&*=", "&<<=", "&>>=":
 			if id, ok := e.X.(*ast.IdentExpr); ok {
 				name := id.Name.Text(c.file)
 				if sym := scope.Lookup(name); sym != nil {
@@ -1185,7 +1238,14 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// around to give it one, it is of the other branch's type --
 		// `ok ? [] : try read()`.
 		var thenT, elseT types.Type
-		if expected == nil && emptyCollectionLit(e.Then) && !emptyCollectionLit(e.Else) {
+		// So has an implicit member: `debug ? g.PendingError : .none`.
+		if expected == nil && implicitOperand(e.Else) && !implicitOperand(e.Then) {
+			thenT = c.checkExpr(e.Then, nil, scope)
+			elseT = c.checkExpr(e.Else, literalDefault(thenT), scope)
+		} else if expected == nil && implicitOperand(e.Then) && !implicitOperand(e.Else) {
+			elseT = c.checkExpr(e.Else, nil, scope)
+			thenT = c.checkExpr(e.Then, literalDefault(elseT), scope)
+		} else if expected == nil && emptyCollectionLit(e.Then) && !emptyCollectionLit(e.Else) {
 			elseT = c.checkExpr(e.Else, nil, scope)
 			thenT = c.checkExpr(e.Then, elseT, scope)
 		} else if expected == nil && emptyCollectionLit(e.Else) && !emptyCollectionLit(e.Then) {
@@ -1627,6 +1687,28 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				if t, found := c.requirementInit(e, tp, args, scope); found {
 					return t
 				}
+				// One bound to a class -- `E: Element` -- is made by the
+				// class's required initializer, which every subclass has.
+				for _, k := range tp.Constraints {
+					cl, isClass := k.Underlying().(*types.Class)
+					if !isClass || len(cl.Inits) == 0 {
+						continue
+					}
+					sig := c.pickInitializer(cl.Inits, args)
+					if sig == nil {
+						sig = c.soleInitializerOfArity(cl.Inits, len(args))
+					}
+					if sig == nil {
+						continue
+					}
+					if !sig.Required {
+						c.typeErrorf(e.Pos(), "constructing an object of class type '%s' with a metatype value must use a 'required' initializer", tp)
+						return inst
+					}
+					c.info.Inits[e] = sig
+					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+					return initResult(inst, sig)
+				}
 			}
 			// `UnsafeMutablePointer<T>(bitPattern: n)` is the pointer at
 			// address n, or nil at zero: Swift's failable init?(bitPattern:)
@@ -1663,7 +1745,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		// `[T](...)`: an array literal of one type is the array type, and
 		// a call of it makes an array -- empty, or of count copies.
 		if arr, ok := calleeType.(*types.Array); ok {
-			if meta, ok := arr.Elem.(*types.Metatype); ok {
+			if meta, ok := typeLiteralMeta(arr.Elem); ok {
 				inst := &types.Array{Elem: meta.Instance}
 				if len(args) == 0 {
 					return inst
@@ -1845,7 +1927,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				return t
 			}
 		}
-		baseType := c.checkExpr(e.X, nil, scope)
+		// An array literal indexed where a number is wanted is an array of
+		// that number: `let skill: Float = [0.985, 0.97][i]`.
+		var baseWant types.Type
+		if _, lit := unparen(e.X).(*ast.ArrayLit); lit && len(e.Args) == 1 && e.Args[0].Label == nil && expected != nil {
+			if b, ok := expected.Underlying().(*types.Basic); ok && b.Info()&types.IsNumeric != 0 && b.Info()&types.IsUntyped == 0 {
+				baseWant = &types.Array{Elem: expected}
+			}
+		}
+		baseType := c.checkExpr(e.X, baseWant, scope)
 		var index, fallback types.Type
 		var result types.Type = types.Typ[types.Invalid]
 		switch b := baseType.Underlying().(type) {
@@ -1895,14 +1985,17 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		if t, ok := c.collectionLiteralInit(e, expected, scope); ok {
 			return t
 		}
-		if setT, ok := expected.(*types.Set); ok {
+		// Where an optional one is wanted -- `r = []` for an `[UInt8]?` --
+		// the literal is the collection inside.
+		ctx := unwrappedContext(expected)
+		if setT, ok := ctx.(*types.Set); ok {
 			for _, el := range e.Items {
 				c.checkExpr(el, setT.Elem, scope)
 			}
 			return setT
 		}
 		var elemType types.Type
-		if arrT, ok := expected.(*types.Array); ok {
+		if arrT, ok := ctx.(*types.Array); ok {
 			elemType = arrT.Elem
 		}
 		// `[nil, 0, -3]` with nothing to say what it is: an array of
@@ -1924,6 +2017,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					elemType = &types.Optional{Wrapped: literalDefault(other)}
 				}
 			}
+		}
+		// Number literals with nothing to say what they are, some of them
+		// decimals, are Doubles all: `[1, 0.7, 0]` is a [Double].
+		if elemType == nil && len(e.Items) > 1 && c.decimalLiterals(e.Items) {
+			elemType = types.Typ[types.Double]
 		}
 		for _, el := range e.Items {
 			et := c.checkExpr(el, elemType, scope)
@@ -1968,9 +2066,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		return &types.Dictionary{Key: keyType, Value: valType}
 
 	case *ast.TupleExpr:
+		// An optional tuple wanted -- `return (true, 1)` from a function
+		// answering `(Bool, UInt64)?` -- types the tuple inside.
 		var want *types.Tuple
-		if expected != nil {
-			want, _ = expected.Underlying().(*types.Tuple)
+		if ctx := unwrappedContext(expected); ctx != nil {
+			want, _ = ctx.Underlying().(*types.Tuple)
 		}
 		elems := make([]*types.TupleElement, len(e.Elems))
 		for i, el := range e.Elems {
@@ -1991,8 +2091,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			// An element given where an optional of it is wanted --
 			// `(true, 1)` for a `(Bool?, Int)` -- is the tuple's as the
 			// optional, wrapped when the tuple is made.
+			// So is one given where an existential is wanted -- `("oem",
+			// mem)` for a `(String, any Image)` -- boxed when it is made.
 			if elemWant != nil && !isInvalid(t) && !types.Identical(t, elemWant) {
-				if _, isOpt := elemWant.(*types.Optional); isOpt && c.assignableTo(t, elemWant) {
+				_, isOpt := elemWant.(*types.Optional)
+				_, isEx := elemWant.Underlying().(*types.Existential)
+				if (isOpt || isEx) && c.assignableTo(t, elemWant) {
 					t = elemWant
 				}
 			}
@@ -2024,7 +2128,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				want = opt.Wrapped
 			}
 			got := c.checkExpr(e.X, want, scope)
-			if isInvalid(got) || types.Identical(got, types.Typ[types.Void]) {
+			if isInvalid(got) {
 				return got
 			}
 			if _, already := got.(*types.Optional); already {
@@ -3087,6 +3191,18 @@ func (c *checker) lookupValue(scope *Scope, name string) Symbol {
 	return nil
 }
 
+// mayBeNilLiteral reports whether e is `nil`, or a choice one of whose
+// arms is: what makes the fallback of a `??` an optional.
+func mayBeNilLiteral(e ast.Expr) bool {
+	switch x := unparen(e).(type) {
+	case *ast.BasicLit:
+		return x.Kind == token.NIL
+	case *ast.ConditionalExpr:
+		return mayBeNilLiteral(x.Then) || mayBeNilLiteral(x.Else)
+	}
+	return false
+}
+
 // unwrappedContext returns the wrapped type if t is optional, or t itself.
 func unwrappedContext(t types.Type) types.Type {
 	if o, ok := t.(*types.Optional); ok {
@@ -3216,6 +3332,8 @@ func (c *checker) integerBoundNamed(e ast.Expr, name string, base types.Type) (t
 			// Two's complement, sign-extended: the bits of -(2^(bits-1)).
 			v = ^uint64(0) << (bits - 1)
 		}
+	case "zero":
+		// AdditiveArithmetic's: `.zero` where an integer is wanted.
 	default:
 		return nil, false
 	}
@@ -3390,6 +3508,13 @@ func (c *checker) basicInit(e *ast.CallExpr, b *types.Basic, inst types.Type, ar
 		c.info.Types[e] = out
 		return out, true
 	case b.Kind() == types.String && len(args) == 2 && label(0) == "decoding" && label(1) == "as":
+		// UTF-16 code units are the core's to decode, in source.
+		quietCodec := len(c.info.Diagnostics)
+		codecType := c.checkExpr(args[1].X, nil, scope)
+		c.info.Diagnostics = c.info.Diagnostics[:quietCodec]
+		if meta, ok := codecType.(*types.Metatype); ok && typeNameOf(meta.Instance) == "UTF16" {
+			return c.coreFuncCall(e, "_stringDecodingUTF16", scope)
+		}
 		bytes := &types.Array{Elem: types.Typ[types.UInt8]}
 		// Any sequence of bytes -- a slice, a string's utf8 -- is read as
 		// the array of them: `String(decoding: buf[0..<n], as: UTF8.self)`.
@@ -3723,7 +3848,30 @@ func (c *checker) coreInitCall(e *ast.CallExpr, scope *Scope) (types.Type, bool)
 			fn, ok = "_setOfString", true
 		}
 	}
-	if !ok || c.modules["Swift"] == nil {
+	// Array(s) of a set: its members, in the set's order.
+	if key == "Array(_:)" {
+		quiet := len(c.info.Diagnostics)
+		at := c.checkExpr(e.Args.Args[0].X, nil, scope)
+		c.info.Diagnostics = c.info.Diagnostics[:quiet]
+		if at != nil {
+			if _, isSet := at.Underlying().(*types.Set); isSet {
+				fn, ok = "_arrayOfSet", true
+			}
+		}
+	}
+	if !ok {
+		return nil, false
+	}
+	return c.coreFuncCall(e, fn, scope)
+}
+
+// coreFuncCall checks call e as a call of the core function fn with the
+// same arguments, their labels dropped, and records it to be lowered as
+// that call: what the core writes in source for an initializer of a type
+// it does not declare.
+func (c *checker) coreFuncCall(e *ast.CallExpr, fn string, scope *Scope) (types.Type, bool) {
+	id, ok := e.Fun.(*ast.IdentExpr)
+	if !ok || id.Name == nil || e.Args == nil || c.modules["Swift"] == nil {
 		return nil, false
 	}
 	sym, ok := c.modules["Swift"].Lookup(fn).(*FuncSymbol)

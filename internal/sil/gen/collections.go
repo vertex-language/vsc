@@ -196,10 +196,6 @@ func (g *gen) collectionCall(at ast.Node, m core.Method, recv ast.Expr, args []c
 		f()
 	}
 	switch {
-	case m.ResultOut && isOptionalExistential(m.Result):
-		// An optional existential stays in memory, as an existential does:
-		// the use takes it from there.
-		return out
 	case m.ResultOut:
 		rt := lowerType(m.Result)
 		qual := "take"

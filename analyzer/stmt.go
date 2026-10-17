@@ -354,6 +354,22 @@ func (c *checker) declareCasePattern(pat ast.Pattern, subjectType types.Type, sc
 			c.typeErrorf(p.X.Pos(), "expression pattern of type '%s' cannot match values of type '%s'", t, subjectType)
 		}
 	case *ast.EnumCasePattern:
+		// A case of the enum an optional wraps, matched against the
+		// optional, is that case inside `.some`: `if case .linux = cfg.Boot`.
+		if o, ok := underlying(subjectType).(*types.Optional); ok && p.Type == nil && p.Name != nil {
+			name := p.Name.Text(c.file)
+			if en, isEnum := underlyingEnumOf(o.Wrapped); isEnum && name != "some" && name != "none" {
+				for _, cs := range en.Cases {
+					if cs.Name != name {
+						continue
+					}
+					inner := *p
+					p.Name = &ast.Ident{Span: p.Name.Span, Synth: "some"}
+					p.Args = &ast.TuplePattern{Span: p.Span, Elems: []*ast.TuplePatternElem{{Span: p.Span, Pat: &inner}}}
+					break
+				}
+			}
+		}
 		// `case Code.refused:` over something that is not that enum
 		// names a static property of Code, and matches what it equals.
 		if p.Type != nil && p.Args == nil && p.Name != nil {

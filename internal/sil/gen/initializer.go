@@ -19,9 +19,6 @@ func (g *gen) initializer(d *ast.InitDecl, recv types.Type) {
 		return
 	}
 	switch {
-	case (d.Question.IsValid() || d.Exclaim.IsValid()) && isClass(recv):
-		g.refuse(d, "a failable initializer of a class")
-		return
 	case isClass(recv):
 		g.classInitializer(d, recv)
 		return
@@ -208,6 +205,10 @@ func (g *gen) classInitializer(d *ast.InitDecl, recv types.Type) {
 		g.refuse(d, "this initializer")
 		return
 	}
+	if sig.Failable && (sig.Convenience || sig.Throws) {
+		g.refuse(d, "a failable initializer of a class that is a convenience one or throws")
+		return
+	}
 	if sig.Convenience {
 		g.convenienceInit(d, recv, sig, alloc)
 		return
@@ -235,6 +236,12 @@ func (g *gen) convenienceInit(d *ast.InitDecl, recv types.Type, sig *types.Signa
 	g.scopes, g.loops, g.pending = nil, nil, ""
 	g.recv, g.self, g.initReturn = recv, nil, nil
 	g.convenience, g.convSelf = true, nil
+	// A throwing one's error leaves through its error result, as any
+	// throwing function's does.
+	g.throws, g.catches = sig.Throws, nil
+	if sig.Throws {
+		f.SetThrows(errorBoxType())
+	}
 	g.push()
 	g.blk = f.Entry()
 
@@ -262,7 +269,7 @@ func (g *gen) convenienceInit(d *ast.InitDecl, recv types.Type, sig *types.Signa
 			g.blk.Unreachable()
 			return
 		}
-		self := g.convSelf
+		self := g.blk.CopyValue(g.convSelf)
 		g.unwind()
 		g.blk.Return(self)
 	}
@@ -310,14 +317,20 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 	self := f.Param(t, sil.ParamGuaranteed)
 	f.Type().Convention = sil.Method
 	f.Type().Async = sig.Async
-	f.SetResult(t, resultConvention(t))
+	// An init? hands back .some(self), or .none where it returns nil.
+	made := t
+	if sig.Failable {
+		made = lowerType(&types.Optional{Wrapped: recv})
+	}
+	f.SetResult(made, resultConvention(made))
 	g.blk.DebugValue(self, "self", "let")
 
 	g.classFieldDefaults(recv, self)
 	g.defaultAncestors(recv, self)
-	// What the body sets, as it is lowered: an error leaving it once
-	// everything is set leaves a complete instance (classAllocator).
-	if sig.Throws {
+	// What the body sets, as it is lowered: an error leaving it, or a
+	// `return nil`, once everything is set leaves a complete instance
+	// (classAllocator).
+	if sig.Throws || sig.Failable {
 		prevDI := g.initDI
 		g.initDI = newInitTracker(recv, self)
 		defer func() { g.initDI = prevDI }()
@@ -331,7 +344,21 @@ func (g *gen) classInitBody(d *ast.InitDecl, recv types.Type,
 			g.callSuperInit(d, recv, implicitSuper, nil)
 		}
 		g.unwind()
-		g.blk.Return(g.blk.CopyValue(self))
+		v := g.blk.CopyValue(self)
+		if sig.Failable {
+			v = g.blk.Enum(made, optionalSome, v)
+		}
+		g.blk.Return(v)
+	}
+	prevFail := g.initFail
+	defer func() { g.initFail = prevFail }()
+	g.initFail = nil
+	if sig.Failable {
+		g.initFail = func() {
+			g.leaveCompleteInit()
+			g.unwind()
+			g.blk.Return(g.blk.Enum(made, optionalNone, nil))
+		}
 	}
 
 	g.block(d.Body)
@@ -555,7 +582,11 @@ func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body s
 	f.Param(sil.ThinMetatype(recv), sil.ParamUnowned)
 	f.Type().Convention = sil.Method
 	f.Type().Async = sig.Async
-	f.SetResult(t, resultConvention(t))
+	result := t
+	if sig.Failable {
+		result = lowerType(&types.Optional{Wrapped: recv})
+	}
+	f.SetResult(result, resultConvention(result))
 	if sig.Throws {
 		f.SetThrows(errorBoxType())
 	}
@@ -571,13 +602,42 @@ func (g *gen) classAllocator(recv types.Type, sig *types.Signature, name, body s
 			sil.Param{Type: t, Convention: sil.ParamGuaranteed})
 		callee.Type().Convention = sil.Method
 		callee.Type().Async = sig.Async
-		callee.SetResult(t, resultConvention(t))
+		callee.SetResult(result, resultConvention(result))
 		if sig.Throws {
 			callee.SetThrows(errorBoxType())
 		}
 	}
 	obj := g.blk.AllocRef(t)
 	args = append(args, obj)
+	if sig.Failable {
+		// The body returned nil: the instance is let go of as one that
+		// threw is, finished or not (below).
+		got := g.blk.Apply(g.blk.FunctionRef(callee), result, args...)
+		some, none := f.Block(), f.Block()
+		inst := some.Arg(t, sil.Owned)
+		g.blk.SwitchEnum(got,
+			sil.Case{Member: optionalSome, Dest: some},
+			sil.Case{Member: optionalNone, Dest: none})
+		g.blk = some
+		g.blk.DestroyValue(obj)
+		g.blk.Return(g.blk.Enum(result, optionalSome, inst))
+		g.blk = none
+		unfinished := g.runtimeResult(stdlib.InitUnfinished,
+			[]sil.Param{{Type: t, Convention: sil.ParamGuaranteed}},
+			sil.Object(sil.BuiltinInt64), obj)
+		bit := g.blk.Builtin("cmp_ne_Int64", sil.Object(sil.BuiltinInt1), unfinished,
+			g.blk.IntegerLiteral(sil.Object(sil.BuiltinInt64), 0))
+		partial, complete := f.Block(), f.Block()
+		g.blk.CondBr(bit, partial, nil, complete, nil)
+		g.blk = complete
+		g.blk.DestroyValue(obj)
+		g.blk.Return(g.blk.Enum(result, optionalNone, nil))
+		g.blk = partial
+		g.endStoredProperties(recv, obj)
+		g.blk.DeallocRef(obj)
+		g.blk.Return(g.blk.Enum(result, optionalNone, nil))
+		return
+	}
 	if !sig.Throws {
 		made := g.blk.Apply(g.blk.FunctionRef(callee), t, args...)
 		g.blk.DestroyValue(obj)
@@ -1104,6 +1164,11 @@ func (g *gen) convenienceDelegation(e *ast.CallExpr) (*sil.Value, bool) {
 		return nil, true
 	}
 	g.convSelf = g.consume(v)
+	// The body's to let go of on a path that leaves without it -- a throw
+	// after self.init; a return hands on a copy (convenienceInit).
+	if len(g.scopes) > 0 {
+		g.scopes[0].cleanups = append(g.scopes[0].cleanups, cleanup{destroy: g.convSelf})
+	}
 	return g.void(), true
 }
 

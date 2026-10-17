@@ -85,7 +85,7 @@ func (g *gen) getter(e *ast.MemberExpr, recv types.Type, f *types.Field) *sil.Va
 func (g *gen) getterCall(at ast.Node, recv types.Type, f *types.Field,
 	receiver func() *sil.Value) *sil.Value {
 
-	if cl, ok := receiverClass(recv); ok && g.isPoly(cl) && f.LazyStorage == "" {
+	if cl, ok := receiverClass(recv); ok && g.dispatches(cl) && f.LazyStorage == "" {
 		return g.dynamicGetter(cl, f, receiver)
 	}
 	resultType := f.Type
@@ -756,7 +756,7 @@ func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, v
 // is what a compound assignment has: it read the property, applied
 // the operator, and has the answer in hand.
 func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Field, v *sil.Value) {
-	if cl, ok := receiverClass(recv); ok && g.isPoly(cl) && f.LazyStorage == "" {
+	if cl, ok := receiverClass(recv); ok && g.dispatches(cl) && f.LazyStorage == "" {
 		g.dynamicSetter(mem, cl, f, v)
 		return
 	}
@@ -1254,6 +1254,10 @@ func (g *gen) emitWrapperAccessors(recv types.Type, f *types.Field, linkage sil.
 		wrapper = g.blk.Load(access, loadQualifier(wlt))
 		g.blk.EndAccess(access)
 		g.destroyLater(wrapper)
+		// Its property is taken out of it borrowed.
+		if wrapper.Ownership() == sil.Owned {
+			wrapper = g.borrow(wrapper)
+		}
 	} else {
 		wrapper = g.blk.StructExtract(self, member, wlt)
 	}

@@ -486,6 +486,16 @@ func (g *gen) switchOnPatterns(s *ast.SwitchStmt, subject *sil.Value, t types.Ty
 				g.blk = missBlk
 				continue
 			}
+			// Where several patterns lead to one body and none binds a
+			// name, each lets go of what it took before going there: the
+			// body is reached from all of them, and owns none of their
+			// values.
+			if len(cs.Items) > 1 {
+				for k := len(m.owned) - 1; k >= 0; k-- {
+					g.blk.DestroyValue(m.owned[k])
+				}
+				m.owned = nil
+			}
 			// The body owns what the match took, from here on.
 			if len(m.owned) > 0 {
 				if g.armOwned == nil {

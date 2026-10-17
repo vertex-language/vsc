@@ -152,11 +152,13 @@ func (g *gen) tryApply(e *ast.CallExpr, callee *sil.Value, args []*sil.Value,
 
 	if optional {
 		if isVoid(result) {
-			// Nothing to make optional: both edges go on, the failed one
-			// letting its error go.
+			// A Void?: () where the call returned, nil where it threw, the
+			// failed edge letting its error go.
+			opt := lowerType(&types.Optional{Wrapped: result})
 			normal := g.fn.Block()
 			failed := g.fn.Block()
 			join := g.fn.Block()
+			made := join.Arg(opt, sil.None)
 			var box *sil.Value
 			if !imported {
 				box = failed.Arg(errorBoxType(), sil.Owned)
@@ -166,11 +168,11 @@ func (g *gen) tryApply(e *ast.CallExpr, callee *sil.Value, args []*sil.Value,
 			if box != nil {
 				g.blk.DestroyValue(box)
 			}
-			g.blk.Br(join)
+			g.blk.Br(join, g.blk.Enum(opt, optionalNone, nil))
 			g.blk = normal
-			g.blk.Br(join)
+			g.blk.Br(join, g.blk.Enum(opt, optionalSome, g.void()))
 			g.blk = join
-			return g.void()
+			return made
 		}
 		// try? on a call that answers T? answers T?, not T?? (SE-0230):
 		// the value goes on as it is, and a failure is its nil.
@@ -284,7 +286,11 @@ func (g *gen) tryExpr(e *ast.TryExpr) *sil.Value {
 	var name *ast.Ident
 	switch f := call.Fun.(type) {
 	case *ast.IdentExpr:
-		name = f.Name
+		// A method named without self, `try? postTarget()`, is
+		// `self.postTarget()`: a method call, whichever file declares it.
+		if _, isMethod := g.implicitMethod(f); !isMethod {
+			name = f.Name
+		}
 	case *ast.MemberExpr:
 		if _, isFunc := g.info.Uses[f.Name].(*analyzer.FuncSymbol); isFunc {
 			name = f.Name

@@ -369,7 +369,7 @@ func (l *lowerer) contextReleaser(name string, caps []*sil.Value) (*ir.Func, err
 	}
 	owns := false
 	for _, a := range caps {
-		if !a.Type().Trivial() {
+		if !a.Type().IsAddress() && !a.Type().Trivial() {
 			owns = true
 		}
 	}
@@ -389,6 +389,11 @@ func (l *lowerer) contextRelease(name string, caps []*sil.Value, free bool) (*ir
 	var owned []ownedWord
 	offsets, _ := captureLayout(caps)
 	for i, a := range caps {
+		// An address -- an inout parameter's storage -- is the caller's:
+		// the context holds where it is, and owns none of what is there.
+		if a.Type().IsAddress() {
+			continue
+		}
 		one := &types.Struct{Fields: []*types.Field{{Name: "capture", Type: a.Type().Formal()}}}
 		words, ok := ownedWords(one, int64(stdlib.HeaderBytes)+offsets[i])
 		if !ok {

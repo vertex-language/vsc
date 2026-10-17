@@ -122,6 +122,41 @@ extension Array {
         return out
     }
 
+    // The runs of elements between those isSeparator picks out.
+    func split(maxSplits: Int = Int.max, omittingEmptySubsequences: Bool = true, whereSeparator isSeparator: (Element) throws -> Bool) rethrows -> [ArraySlice<Element>] {
+        var out: [ArraySlice<Element>] = []
+        var start = 0
+        var i = 0
+        while i < count {
+            if out.count < maxSplits {
+                if try isSeparator(self[i]) {
+                    if i > start || !omittingEmptySubsequences {
+                        out.append(ArraySlice(base: self, startIndex: start, endIndex: i))
+                    }
+                    start = i + 1
+                }
+            }
+            i += 1
+        }
+        if count > start || !omittingEmptySubsequences {
+            out.append(ArraySlice(base: self, startIndex: start, endIndex: count))
+        }
+        return out
+    }
+
+    // The elements put last to first, in place.
+    mutating func reverse() {
+        var i = 0
+        var j = count - 1
+        while i < j {
+            let t = self[i]
+            self[i] = self[j]
+            self[j] = t
+            i += 1
+            j -= 1
+        }
+    }
+
     // The elements in the order areInIncreasingOrder puts them, stable as
     // Swift's sort is: a merge sort, whose runs of 16 are first put in
     // order by insertion, and whose passes merge pairs of runs from one
@@ -474,6 +509,10 @@ extension Dictionary {
         return acc
     }
 
+    // Every pair taken out. The capacity is not kept either way.
+    mutating func removeAll() { self = [:] }
+    mutating func removeAll(keepingCapacity keepCapacity: Bool) { self = [:] }
+
     // The pairs of other put in, combine choosing a value where both have
     // the key.
     mutating func merge(_ other: [Key: Value], uniquingKeysWith combine: (Value, Value) -> Value) {
@@ -525,6 +564,10 @@ extension Set {
         for x in other where !contains(x) { out._insert(x) }
         return out
     }
+
+    // Every member taken out. The capacity is not kept either way.
+    mutating func removeAll() { self = Set<Element>() }
+    mutating func removeAll(keepingCapacity keepCapacity: Bool) { self = Set<Element>() }
 
     mutating func formUnion(_ other: Set<Element>) { self = union(other) }
     mutating func formIntersection(_ other: Set<Element>) { self = intersection(other) }
@@ -593,6 +636,51 @@ extension Set where Element: Comparable {
 func _setOfArray<Element: Hashable>(_ xs: [Element]) -> Set<Element> {
     var out = Set<Element>()
     for x in xs { out._insert(x) }
+    return out
+}
+
+// String(decoding: units, as: UTF16.self): the scalars the code units
+// spell, a surrogate without its other half read as U+FFFD, as Swift's
+// decoding repairs it.
+func _stringDecodingUTF16(_ units: [UInt16], _ codec: UTF16.Type) -> String {
+    var bytes: [UInt8] = []
+    var i = 0
+    while i < units.count {
+        var v = UInt32(units[i])
+        i += 1
+        if v >= 0xD800 && v <= 0xDBFF {
+            if i < units.count && units[i] >= 0xDC00 && units[i] <= 0xDFFF {
+                v = 0x10000 + ((v - 0xD800) << 10) + (UInt32(units[i]) - 0xDC00)
+                i += 1
+            } else {
+                v = 0xFFFD
+            }
+        } else if v >= 0xDC00 && v <= 0xDFFF {
+            v = 0xFFFD
+        }
+        if v < 0x80 {
+            bytes.append(UInt8(v))
+        } else if v < 0x800 {
+            bytes.append(UInt8(0xC0 | (v >> 6)))
+            bytes.append(UInt8(0x80 | (v & 0x3F)))
+        } else if v < 0x10000 {
+            bytes.append(UInt8(0xE0 | (v >> 12)))
+            bytes.append(UInt8(0x80 | ((v >> 6) & 0x3F)))
+            bytes.append(UInt8(0x80 | (v & 0x3F)))
+        } else {
+            bytes.append(UInt8(0xF0 | (v >> 18)))
+            bytes.append(UInt8(0x80 | ((v >> 12) & 0x3F)))
+            bytes.append(UInt8(0x80 | ((v >> 6) & 0x3F)))
+            bytes.append(UInt8(0x80 | (v & 0x3F)))
+        }
+    }
+    return String(decoding: bytes, as: UTF8.self)
+}
+
+// Array(s) of a set: its members, in the set's order.
+func _arrayOfSet<Element: Hashable>(_ s: Set<Element>) -> [Element] {
+    var out: [Element] = []
+    for x in s { out.append(x) }
     return out
 }
 
@@ -1290,6 +1378,38 @@ extension _UTF16View {
     }
 
     var isEmpty: Bool { return _string.isEmpty }
+
+    func makeIterator() -> _UTF16Iterator {
+        return _UTF16Iterator(_string: _string, _at: 0, _trail: 0)
+    }
+
+    // A new array of what transform makes of each code unit, in order.
+    func map<T>(_ transform: (UInt16) -> T) -> [T] {
+        var out: [T] = []
+        for u in self { out.append(transform(u)) }
+        return out
+    }
+}
+
+extension _UTF16Iterator: IteratorProtocol {
+    // The next code unit, or nil past the last: a scalar past the first
+    // plane is a lead surrogate, then its trail.
+    mutating func next() -> UInt16? {
+        if _trail != 0 {
+            let t = _trail
+            _trail = 0
+            return t
+        }
+        let packed = _scalarAt(_string, _at)
+        let end = packed >> 21
+        if end == _at { return nil }
+        _at = end
+        let v = UInt32(packed & 0x1FFFFF)
+        if v <= 0xFFFF { return UInt16(v) }
+        let w = v - 0x10000
+        _trail = UInt16(0xDC00 + (w & 0x3FF))
+        return UInt16(0xD800 + (w >> 10))
+    }
 }
 
 extension _UTF16View: CustomStringConvertible {
@@ -1655,6 +1775,37 @@ extension String {
         return out
     }
 
+    // The runs of Characters between those isSeparator picks out.
+    func split(maxSplits: Int = Int.max, omittingEmptySubsequences: Bool = true, whereSeparator isSeparator: (Character) throws -> Bool) rethrows -> [Substring] {
+        let count = _utf8Count(self)
+        var out: [Substring] = []
+        var start = 0
+        var at = 0
+        var splits = 0
+        while at < count {
+            let end = _characterEnd(self, at)
+            if splits < maxSplits {
+                if try isSeparator(Character(_string: _stringSlice(self, at, end))) {
+                    if !(omittingEmptySubsequences && start == at) {
+                        out.append(Substring(_base: self, _start: start, _end: at))
+                        splits += 1
+                    }
+                    start = end
+                }
+            }
+            at = end
+        }
+        if !(omittingEmptySubsequences && start == count) {
+            out.append(Substring(_base: self, _start: start, _end: count))
+        }
+        return out
+    }
+
+    // The runs of Characters between whole occurrences of separator.
+    func split(separator: String, maxSplits: Int = Int.max, omittingEmptySubsequences: Bool = true) -> [Substring] {
+        return _splitOn(self, 0, _utf8Count(self), separator, maxSplits, omittingEmptySubsequences)
+    }
+
     // The String with every run of target's Characters replaced by
     // replacement, left to right.
     func replacing(_ target: String, with replacement: String) -> String {
@@ -1889,6 +2040,75 @@ extension Substring {
         }
         return out
     }
+
+    // The runs of Characters between those isSeparator picks out.
+    func split(maxSplits: Int = Int.max, omittingEmptySubsequences: Bool = true, whereSeparator isSeparator: (Character) throws -> Bool) rethrows -> [Substring] {
+        var out: [Substring] = []
+        var start = _start
+        var at = _start
+        var splits = 0
+        while at < _end {
+            let end = _characterEnd(_base, at)
+            if splits < maxSplits {
+                if try isSeparator(Character(_string: _stringSlice(_base, at, end))) {
+                    if !(omittingEmptySubsequences && start == at) {
+                        out.append(Substring(_base: _base, _start: start, _end: at))
+                        splits += 1
+                    }
+                    start = end
+                }
+            }
+            at = end
+        }
+        if !(omittingEmptySubsequences && start == _end) {
+            out.append(Substring(_base: _base, _start: start, _end: _end))
+        }
+        return out
+    }
+
+    // The runs of Characters between whole occurrences of separator.
+    func split(separator: String, maxSplits: Int = Int.max, omittingEmptySubsequences: Bool = true) -> [Substring] {
+        return _splitOn(_base, _start, _end, separator, maxSplits, omittingEmptySubsequences)
+    }
+
+}
+
+// split(separator:) of the Characters of base between byte offsets start
+// and end, on whole occurrences of a separator of any length.
+func _splitOn(_ base: String, _ from: Int, _ to: Int, _ separator: String, _ maxSplits: Int, _ omitting: Bool) -> [Substring] {
+    let sep = Array(separator)
+    var out: [Substring] = []
+    if sep.isEmpty {
+        if !(omitting && from == to) { out.append(Substring(_base: base, _start: from, _end: to)) }
+        return out
+    }
+    var start = from
+    var at = from
+    var splits = 0
+    while at < to {
+        var p = at
+        var k = 0
+        while k < sep.count && p < to {
+            let e = _characterEnd(base, p)
+            if Character(_string: _stringSlice(base, p, e)) != sep[k] { break }
+            p = e
+            k += 1
+        }
+        if k == sep.count && splits < maxSplits {
+            if !(omitting && start == at) {
+                out.append(Substring(_base: base, _start: start, _end: at))
+                splits += 1
+            }
+            start = p
+            at = p
+        } else {
+            at = _characterEnd(base, at)
+        }
+    }
+    if !(omitting && start == to) {
+        out.append(Substring(_base: base, _start: start, _end: to))
+    }
+    return out
 }
 
 // A String and a Substring are equal when their Characters are, as
@@ -2084,6 +2304,18 @@ extension Range where Bound: FixedWidthInteger {
     func forEach(_ body: (Bound) -> Void) {
         for x in self { body(x) }
     }
+
+    // The first integer predicate holds for, or nil.
+    func first(where predicate: (Bound) throws -> Bool) rethrows -> Bound? {
+        for x in self where try predicate(x) { return x }
+        return nil
+    }
+
+    // Whether predicate holds for any integer.
+    func contains(where predicate: (Bound) throws -> Bool) rethrows -> Bool {
+        for x in self where try predicate(x) { return true }
+        return false
+    }
 }
 
 extension ClosedRange where Bound: FixedWidthInteger {
@@ -2130,6 +2362,18 @@ extension ClosedRange where Bound: FixedWidthInteger {
     // body, called with each integer in order.
     func forEach(_ body: (Bound) -> Void) {
         for x in self { body(x) }
+    }
+
+    // The first integer predicate holds for, or nil.
+    func first(where predicate: (Bound) throws -> Bool) rethrows -> Bound? {
+        for x in self where try predicate(x) { return x }
+        return nil
+    }
+
+    // Whether predicate holds for any integer.
+    func contains(where predicate: (Bound) throws -> Bool) rethrows -> Bool {
+        for x in self where try predicate(x) { return true }
+        return false
     }
 }
 
@@ -4699,6 +4943,16 @@ extension UnsafeMutablePointer {
         }
     }
 
+    // count values copied from source over the ones already here, first
+    // to last, as Swift's does where the two do not overlap.
+    func update(from source: UnsafePointer<Pointee>, count: Int) {
+        var i = 0
+        while i < count {
+            (self + i).pointee = (source + i).pointee
+            i += 1
+        }
+    }
+
     func advanced(by n: Int) -> UnsafeMutablePointer<Pointee> { return self + n }
     func successor() -> UnsafeMutablePointer<Pointee> { return self + 1 }
     func predecessor() -> UnsafeMutablePointer<Pointee> { return self - 1 }
@@ -4826,12 +5080,8 @@ extension UnsafeMutableRawBufferPointer: RandomAccessCollection {
     }
 }
 
-// What for-in over a raw buffer walks: its bytes, in order.
-struct _UnsafeRawBufferIterator: IteratorProtocol {
-    let _base: UnsafeRawPointer?
-    var _at: Int
-    let _end: Int
-
+extension _UnsafeRawBufferIterator: IteratorProtocol {
+    // The next byte, or nil past the last.
     mutating func next() -> UInt8? {
         if _at >= _end { return nil }
         let x = _base!.load(fromByteOffset: _at, as: UInt8.self)

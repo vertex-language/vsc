@@ -621,6 +621,8 @@ protocol Hashable: Equatable {
 // UTF-8, as the encoding String(decoding:as:) is told to read. Swift's
 // Unicode.UTF8; nothing is made of it but its type.
 enum UTF8 {}
+// UTF-16, as String(decoding:as:) is told to read code units.
+enum UTF16 {}
 
 // A type that says what it is as text: what interpolation and print show.
 protocol CustomStringConvertible {
@@ -775,6 +777,13 @@ enum Result<Success, Failure: Error> {
 struct UnsafeRawBufferPointer {
     let baseAddress: UnsafeRawPointer?
     let count: Int
+}
+
+// What for-in over a raw buffer walks: its bytes, in order.
+struct _UnsafeRawBufferIterator {
+    let _base: UnsafeRawPointer?
+    var _at: Int
+    let _end: Int
 }
 
 // Some of an array's elements, in place: those from startIndex up to
@@ -1136,7 +1145,9 @@ func _scalarProperties(_ value: UInt32) -> UInt32
 func _scalarWholeNumber(_ value: UInt32) -> Int
 
 // Swift's namespace for Unicode's types: `Unicode.Scalar`.
-enum Unicode {}
+enum Unicode {
+    typealias Scalar = UnicodeScalar
+}
 
 // A Unicode scalar value: what a Character is made of. `Unicode.Scalar`
 // names it too.
@@ -1152,6 +1163,13 @@ struct _UnicodeScalarView {
 
 struct _UTF16View {
     let _string: String
+}
+// What for-in over a String's utf16 walks: its scalars, each one or two
+// code units, the second of a pair held until it is asked for.
+struct _UTF16Iterator {
+    let _string: String
+    var _at: Int
+    var _trail: UInt16
 }
 
 // What for-in over a String's unicodeScalars walks, from byte _at on.

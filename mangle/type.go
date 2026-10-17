@@ -318,6 +318,9 @@ func (m *mangler) basic(b *types.Basic) error {
 // part of a symbol: two declarations that differ only in which spelling
 // of a type they used are the same declaration.
 func (m *mangler) named(n *types.Named) error {
+	if a := n.Aliased(); a != nil {
+		return m.typ(a)
+	}
 	switch u := n.Underlying().(type) {
 	case *types.Struct:
 		return m.nominal(n.Name, Struct)

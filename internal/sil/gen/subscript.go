@@ -341,7 +341,12 @@ func (g *gen) declaredSubscriptAddr(e *ast.SubscriptExpr, ref *analyzer.Subscrip
 	if cur == nil {
 		return nil
 	}
+	// The element as this use has it: a generic type's subscript answers
+	// its instance's T, not the declaration's.
 	t := lowerType(ref.Subscript.Result)
+	if et := g.typeOf(e); et != nil {
+		t = lowerType(et)
+	}
 	slot := g.blk.AllocStack(t)
 	g.blk.Store(g.consume(cur), slot, storeQualifier(t))
 	g.writebacks = append(g.writebacks, func() {

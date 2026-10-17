@@ -59,6 +59,10 @@ func NewVar(name string, typ types.Type, pos token.Pos, isConst bool, ownership 
 
 func (v *VarSymbol) Name() string                   { return v.name }
 func (v *VarSymbol) Type() types.Type               { return v.typ }
+
+// SetType gives the variable its type once it is known: a stored
+// property whose default could not be typed until functions were declared.
+func (v *VarSymbol) SetType(t types.Type) { v.typ = t }
 func (v *VarSymbol) Pos() token.Pos                 { return v.pos }
 func (v *VarSymbol) Decl() ast.Decl                 { return v.decl }
 func (v *VarSymbol) SetDecl(d ast.Decl)             { v.decl = d }

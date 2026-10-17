@@ -239,6 +239,12 @@ type Info struct {
 	// NUL-terminated copy that lives until the call returns.
 	CStrings map[ast.Expr]types.Type
 
+	// PointerArgs are the arguments that are a pointer passed where Swift
+	// converts it to another -- a mutable pointer where an immutable one is
+	// wanted, a typed one where a raw one is -- mapped to the pointer type
+	// they become.
+	PointerArgs map[ast.Expr]*types.Pointer
+
 	// Unwrapped are the expressions whose value is an implicitly unwrapped
 	// optional used as the type it wraps -- a `T!` result passed where a T
 	// is wanted -- mapped to the optional they are unwrapped from. Types
@@ -392,6 +398,7 @@ func NewInfo() *Info {
 		KernelMaps:        make(map[*ast.CallExpr]uint64),
 		Defaults:          make(map[*types.Param]ast.Expr),
 		CStrings:          make(map[ast.Expr]types.Type),
+		PointerArgs:       make(map[ast.Expr]*types.Pointer),
 		Layouts:           make(map[*ast.MemberExpr]Layout),
 		TypeOfs:           make(map[*ast.CallExpr]types.Type),
 		Unwrapped:         make(map[ast.Expr]types.Type),

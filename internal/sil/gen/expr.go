@@ -149,9 +149,20 @@ func (g *gen) expr(e ast.Expr) *sil.Value {
 				g.release(held)
 				return nil
 			}
-			// An element the tuple holds as an optional is wrapped.
+			// An element the tuple holds as an optional is wrapped, and one
+			// it holds as an existential is that existential as a value:
+			// boxed where it is not one, copied out of memory where it is.
 			if tt != nil && i < len(tt.Elements) {
-				v = g.optionalFor(el.X, v, g.typeOf(el.X), tt.Elements[i].Type)
+				want := tt.Elements[i].Type
+				if isExistentialType(want) {
+					v = g.existentialValue(el.X, v, g.typeOf(el.X), want)
+					if v == nil {
+						g.release(held)
+						return nil
+					}
+				} else {
+					v = g.optionalFor(el.X, v, g.typeOf(el.X), want)
+				}
 			}
 			elems = append(elems, v)
 			held = g.hold(held, v)
@@ -465,6 +476,9 @@ func (g *gen) ident(e *ast.IdentExpr) *sil.Value {
 	}
 	l := g.locals[sym]
 	if l == nil {
+		if lc := g.computedLocals[sym]; lc != nil {
+			return g.computedLocalRead(lc)
+		}
 		// A computed module-level variable, read by calling its getter.
 		if v, ok := g.moduleGetterCall(sym); ok {
 			return v
@@ -1697,7 +1711,7 @@ func (g *gen) methodCall(e *ast.CallExpr, ref *analyzer.MethodRef, receiver func
 	// Dynamic dispatch for polymorphic classes via vtable.
 	// A method with type parameters of its own has no row: it is
 	// specialized where it is called.
-	if cl, ok := receiverClass(ref.Recv); ok && g.isPoly(cl) && len(ref.Method.Sig.TypeParams) == 0 {
+	if cl, ok := receiverClass(ref.Recv); ok && g.dispatches(cl) && len(ref.Method.Sig.TypeParams) == 0 {
 		return g.dynamicCall(e, ref, cl, receiver)
 	}
 	var symbol string
@@ -2091,6 +2105,7 @@ func (g *gen) methodSymbol(ref *analyzer.MethodRef) string {
 
 // nominalChain returns enclosing nominal types, outermost first.
 func nominalChain(t types.Type) []mangle.Nominal {
+	t = unalias(t)
 	nom, ok := nominalOf(t)
 	if !ok {
 		return nil
@@ -2367,9 +2382,20 @@ func (g *gen) conditionalAs(e *ast.ConditionalExpr, bit *sil.Value, t types.Type
 
 	g.blk.CondBr(bit, thenBlk, nil, elseBlk, nil)
 
+	// A `nil` arm of an optional choice is that optional's none, whatever
+	// the literal was left typed as.
+	arm := func(x ast.Expr) *sil.Value {
+		if lit, ok := unparen(x).(*ast.BasicLit); ok && lit.Kind == token.NIL {
+			if _, isOpt := optionalOf(t); isOpt {
+				return g.blk.Enum(result, optionalNone, nil)
+			}
+		}
+		return g.rvalue(x)
+	}
+
 	g.blk = thenBlk
 	yes := g.branchArm(func() *sil.Value {
-		v := g.rvalue(e.Then)
+		v := arm(e.Then)
 		if v == nil {
 			return nil
 		}
@@ -2382,7 +2408,7 @@ func (g *gen) conditionalAs(e *ast.ConditionalExpr, bit *sil.Value, t types.Type
 
 	g.blk = elseBlk
 	no := g.branchArm(func() *sil.Value {
-		v := g.rvalue(e.Else)
+		v := arm(e.Else)
 		if v == nil {
 			return nil
 		}
@@ -2536,10 +2562,25 @@ func memberName(base types.Type, name string) string {
 }
 
 func typeName(t types.Type) string {
+	t = unalias(t)
 	if named, ok := t.(*types.Named); ok {
 		return named.Name
 	}
 	return t.String()
+}
+
+// unalias is the type a typealias names, through any number of them, or t
+// itself where it is not one. A type is mangled, and its members named,
+// as it is declared: `typealias BE = binary.BigEndian` names no symbol.
+func unalias(t types.Type) types.Type {
+	for t != nil {
+		n, ok := t.(*types.Named)
+		if !ok || n.Aliased() == nil {
+			return t
+		}
+		t = n.Aliased()
+	}
+	return t
 }
 
 func isClass(t types.Type) bool {
@@ -3070,6 +3111,7 @@ func (g *gen) specializedIntegerBound(e *ast.MemberExpr) (*sil.Value, bool) {
 		if signed {
 			v = ^uint64(0) << (bits - 1)
 		}
+	case "zero":
 	default:
 		return nil, false
 	}
@@ -3121,6 +3163,17 @@ func (g *gen) classDefault(owner types.Type, name string) (ast.Expr, map[*types.
 	}
 	if def, ok := g.classDefaults(owner)[name]; ok {
 		return def, nil
+	}
+	// Storage the checker gave a default of its own: a wrapped
+	// property's wrapper, `_level`, made from what the property is set to.
+	if cl, ok := owner.Underlying().(*types.Class); ok {
+		for _, f := range cl.Fields {
+			if f != nil && f.Name == name {
+				if def := g.info.FieldDefaults[f]; def != nil {
+					return def, nil
+				}
+			}
+		}
 	}
 	return nil, nil
 }

@@ -89,6 +89,17 @@ func (g *gen) pointerConvert(e *ast.CallExpr, arg ast.Expr, from, to types.Type)
 	return g.blk.AddressToPointer(addr, lowerType(to)), true
 }
 
+// retypePointer is pointer v as one of type to: the same bits, passed
+// through an address of the new pointee as pointerConvert passes them.
+func (g *gen) retypePointer(v *sil.Value, to *types.Pointer) *sil.Value {
+	elem := to.Elem
+	if elem == nil {
+		elem = types.Typ[types.UInt8]
+	}
+	addr := g.blk.PointerToAddress(v, lowerType(elem).Address())
+	return g.blk.AddressToPointer(addr, lowerType(to))
+}
+
 // pointerEquality lowers pointer comparison (p == q and p != q).
 func (g *gen) pointerEquality(e *ast.BinaryExpr, op string) (*sil.Value, bool) {
 	if op != "==" && op != "!=" {

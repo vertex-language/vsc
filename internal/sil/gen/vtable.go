@@ -13,13 +13,9 @@ import (
 // vtables emits one dispatch table per class declared in the module.
 func (g *gen) vtables(files []*ast.File) {
 	for _, f := range files {
-		for _, stmt := range f.Stmts {
-			decl, ok := stmt.(*ast.DeclStmt)
-			if !ok {
-				continue
-			}
+		for _, d := range classDecls(f.Stmts) {
 			var name *ast.Ident
-			switch d := decl.D.(type) {
+			switch d := d.(type) {
 			case *ast.ClassDecl:
 				name = d.Name
 			case *ast.ActorDecl:
@@ -45,7 +41,7 @@ func (g *gen) vtables(files []*ast.File) {
 			}
 			t := g.m.VTable(cl.Name)
 			t.Layout = sym.Type()
-			if declaresDeinit(decl.D) {
+			if declaresDeinit(d) {
 				t.Deinit = deinitSymbol(g.module, sym.Type())
 			}
 			// Every class has metadata, so that an instance can say what
@@ -60,6 +56,42 @@ func (g *gen) vtables(files []*ast.File) {
 	}
 }
 
+// classDecls is every class and actor declared in stmts: at the top
+// level, and inside another type or an extension, at any depth.
+func classDecls(stmts []ast.Stmt) []ast.Decl {
+	var out []ast.Decl
+	var walk func(n ast.Node)
+	walk = func(n ast.Node) {
+		var body *ast.MemberBlock
+		switch d := n.(type) {
+		case *ast.ClassDecl:
+			out = append(out, d)
+			body = d.Body
+		case *ast.ActorDecl:
+			out = append(out, d)
+			body = d.Body
+		case *ast.StructDecl:
+			body = d.Body
+		case *ast.EnumDecl:
+			body = d.Body
+		case *ast.ExtensionDecl:
+			body = d.Body
+		}
+		if body == nil {
+			return
+		}
+		for _, m := range body.Members {
+			walk(m)
+		}
+	}
+	for _, stmt := range stmts {
+		if decl, ok := stmt.(*ast.DeclStmt); ok {
+			walk(decl.D)
+		}
+	}
+	return out
+}
+
 // isPoly says calls on cl's members go through its table: it has
 // subclasses here, or it is imported, and its subclasses may be anywhere.
 func (g *gen) isPoly(cl *types.Class) bool {
@@ -68,6 +100,18 @@ func (g *gen) isPoly(cl *types.Class) bool {
 		return true
 	}
 	return d.Pkg != "" && !d.Final && len(d.TypeParams) == 0
+}
+
+// dispatches says a member reached through cl goes through cl's table.
+// A final generic class's own members do not: nothing overrides them, and
+// a table row is the member unspecialized, where a direct call is to its
+// specialization for the instance's arguments.
+func (g *gen) dispatches(cl *types.Class) bool {
+	if !g.isPoly(cl) {
+		return false
+	}
+	d := cl.Declared()
+	return !(d.Final && len(d.TypeParams) > 0)
 }
 
 // classMethod looks member up in self's table. An imported class's table

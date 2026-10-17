@@ -888,10 +888,51 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 				c.info.CStrings[arg.X] = param.Type
 				continue
 			}
+			if to, ok := pointerArgConversion(argType, param.Type); ok {
+				c.info.PointerArgs[arg.X] = to
+				continue
+			}
 			c.typeErrorf(arg.Pos(), "cannot convert value of type '%s' to expected argument type '%s'", argType, param.Type)
 		}
 	}
 	return sig
+}
+
+// pointerArgConversion is the pointer type an argument of type from is
+// made into for a parameter of type to, where Swift converts one at a
+// call: a mutable pointer where an immutable one of the same pointee is
+// wanted, and a typed pointer where a raw one is, mutable to either and
+// immutable to immutable. The parameter may be optional, the argument
+// not; what is answered is the pointer the parameter wraps.
+func pointerArgConversion(from, to types.Type) (*types.Pointer, bool) {
+	if from == nil || to == nil {
+		return nil, false
+	}
+	if o, ok := to.Underlying().(*types.Optional); ok {
+		to = o.Wrapped
+	}
+	if to == nil {
+		return nil, false
+	}
+	f, ok := from.Underlying().(*types.Pointer)
+	if !ok || f.Opaque {
+		return nil, false
+	}
+	t, ok := to.Underlying().(*types.Pointer)
+	if !ok || t.Opaque || (t.Mutable && !f.Mutable) {
+		return nil, false
+	}
+	switch {
+	case t.Elem == nil:
+		// To a raw pointer, from a typed or raw one.
+		if f.Elem == nil && f.Mutable == t.Mutable {
+			return nil, false
+		}
+		return t, true
+	case f.Elem != nil && f.Mutable && !t.Mutable && types.Identical(f.Elem, t.Elem):
+		return t, true
+	}
+	return nil, false
 }
 
 // isString reports whether t is String.

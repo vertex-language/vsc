@@ -25,6 +25,10 @@ type checker struct {
 	// type-checks default arguments after declarations too.
 	deferDefaults   bool
 	pendingDefaults []pendingDefault
+	// pendingFields are the stored properties with no type written whose
+	// default could not be typed while members were read, typed again once
+	// functions are declared.
+	pendingFields []pendingField
 
 	// initLog is the deferred lets given their value since the branch
 	// being checked began; see branch.
@@ -373,6 +377,9 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		}
 		c.declareFunctions(declsOf(f.Stmts), pkgScope)
 	}
+
+	// Pass 4.2: Stored properties typed by a default that calls a function.
+	c.checkPendingFields()
 
 	// Pass 4.3: Parameter defaults, now that every declaration is in.
 	c.checkPendingDefaults()
@@ -797,6 +804,35 @@ func (c *checker) checkDefault(e ast.Expr, t types.Type, scope *Scope) {
 		return
 	}
 	c.checkExpr(e, t, scope)
+}
+
+type pendingField struct {
+	binding *ast.PatternBinding
+	pat     ast.Pattern
+	field   *types.Field
+	scope   *Scope
+	file    *token.File
+}
+
+// checkPendingFields types each queued stored property by its default,
+// now that the functions it may call are declared, and gives the field
+// and the name it binds that type.
+func (c *checker) checkPendingFields() {
+	prev := c.file
+	for _, p := range c.pendingFields {
+		c.file = p.file
+		t := c.checkExpr(p.binding.Value, nil, p.scope)
+		if p.field != nil {
+			p.field.Type = t
+		}
+		if id, ok := p.pat.(*ast.IdentPattern); ok && id.Name != nil {
+			if v, ok := c.info.Defs[id.Name].(*VarSymbol); ok {
+				v.SetType(t)
+			}
+		}
+	}
+	c.pendingFields = nil
+	c.file = prev
 }
 
 // checkPendingDefaults checks the defaults queued so far, each in the
