@@ -307,8 +307,18 @@ mask, vertex layout); `DepthStencilState.Create`, `SamplerState.Create`; and
 `RenderPass.Begin` with `SetPipeline`, `SetViewport`, `SetScissor`,
 `SetRaster`, `SetBytes`, `SetTexture`, `SetSampler`, `Draw`, `DrawIndexed` and
 `End`. Passes go into one command buffer; `device.Commit` runs them, and a
-texture's `Read` or `Write` waits for what was committed. `gpu/raster` draws
-with them.
+texture's `Read` or `Write` waits for what was committed; `Upload` doesn't
+wait (its bytes are staged and copied on the GPU after what's already
+committed). `gpu/raster` draws with them.
+
+In a window: `gpu.Layer.Attach(device:view:width:height:scale:)` lays a
+`CAMetalLayer` over a window's view (`window.Surface.RawParts`), and
+`Layer.Present(scene, overlay:, backdrop:)` draws a frame where it was drawn:
+the scene texture scaled to the window, an optional frosted `Backdrop` (a
+rounded rectangle blurred, the rest dimmed), an optional premultiplied
+overlay (a HUD) over it, presented when the GPU gets there, nothing read
+back. `Layer.Capture` is the same composite read back, for screenshots.
+`entity/run`'s `Window(…, present:, …)` runs a program this way.
 
 ### Devices
 

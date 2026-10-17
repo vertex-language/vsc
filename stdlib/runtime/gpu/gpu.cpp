@@ -2256,6 +2256,26 @@ void vertex_gpu_render_draw_indexed(void* enc, i64 primitive, i64 count, i64 ind
   objc::send<void>(b, "release");
 }
 
+// A device buffer for a buffer slot of the vertex (0) or fragment (1)
+// stage, from offset: vertices that stay on the device between draws.
+void vertex_gpu_render_set_buffer(void* enc, i64 stage, void* buf, i64 offset, i64 index) {
+  Encoder* e = static_cast<Encoder*>(enc);
+  Buffer* b = static_cast<Buffer*>(buf);
+  if (!b || !b->metal) return;
+  objc::send<void>(e->metal, stage == 0 ? "setVertexBuffer:offset:atIndex:" : "setFragmentBuffer:offset:atIndex:",
+                   static_cast<objc::id>(b->metal), static_cast<u64>(offset), static_cast<u64>(index));
+}
+
+// Indexed, the indices in a device buffer from offset.
+void vertex_gpu_render_draw_indexed_buffer(void* enc, i64 primitive, i64 count, i64 indexSize, void* buf, i64 offset, i64 instances) {
+  Encoder* e = static_cast<Encoder*>(enc);
+  Buffer* b = static_cast<Buffer*>(buf);
+  if (!b || !b->metal) return;
+  objc::send<void>(e->metal, "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:",
+                   static_cast<u64>(primitive), static_cast<u64>(count), static_cast<u64>(indexSize == 4 ? 1 : 0),
+                   static_cast<objc::id>(b->metal), static_cast<u64>(offset), static_cast<u64>(instances));
+}
+
 // Commits what was drawn; when wait, until the GPU is done. 0, or 7 when it failed.
 i32 vertex_gpu_render_commit(void* dev, i64 wait) {
   Device* d = static_cast<Device*>(dev);
@@ -2263,4 +2283,274 @@ i32 vertex_gpu_render_commit(void* dev, i64 wait) {
   return renderFlush(d, wait != 0);
 }
 
+// Host bytes into a region of a texture, queued: copied into a staging
+// buffer now and onto the texture by the GPU, in a command buffer of its
+// own committed at once -- after everything committed before it, before
+// what's still being encoded -- so the host never waits (unlike
+// vertex_gpu_texture_write). The caller must not need the texture's old
+// contents on the host.
+void vertex_gpu_texture_upload(void* t, i64 level, i64 slice, i64 x, i64 y, i64 w, i64 h, const void* bytes, i64 bytesPerRow) {
+  Texture* tex = static_cast<Texture*>(t);
+  if (!tex || tex->format == 2 || w <= 0 || h <= 0) return;
+  Device* d = tex->device;
+  void* pool = objc::poolPush();
+  // Just the region's bytes, packed: a narrow region of a wide image
+  // doesn't send whole rows.
+  i64 row = w * (tex->format == 1 ? 16 : 4);
+  objc::id staging = objc::send<objc::id>(d->metal, "newBufferWithLength:options:", static_cast<u64>(row * h), static_cast<u64>(0));
+  u8* to = static_cast<u8*>(objc::send<void*>(staging, "contents"));
+  const u8* from = static_cast<const u8*>(bytes);
+  for (i64 k = 0; k < h; k++) vertex_pal_copy(to + k * row, from + k * bytesPerRow, static_cast<usize>(row));
+  bytesPerRow = row;
+  objc::id cb = objc::send<objc::id>(d->queue, "commandBuffer");
+  objc::id blit = objc::send<objc::id>(cb, "blitCommandEncoder");
+  objc::Size origin = {static_cast<u64>(x), static_cast<u64>(y), 0};
+  objc::Size size = {static_cast<u64>(w), static_cast<u64>(h), 1};
+  objc::send<void>(blit,
+                   "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+                   staging, static_cast<u64>(0), static_cast<u64>(bytesPerRow), static_cast<u64>(bytesPerRow * h), size, tex->metal,
+                   static_cast<u64>(slice), static_cast<u64>(level), origin);
+  objc::send<void>(blit, "endEncoding");
+  objc::send<void>(cb, "commit");
+  objc::send<void>(staging, "release");  // the command buffer holds it
+  objc::poolPop(pool);
+}
+
 }  // extern "C"
+
+// ---- a window's layer: frames presented where they were drawn ----
+//
+// A CAMetalLayer laid over a window's view (an NSView, from
+// window.Surface.RawParts). Presenting draws one full-screen triangle into
+// the layer's next drawable: the scene texture, scaled to the window; a
+// frosted backdrop inside a rounded rectangle if asked (the rest dimmed);
+// an overlay (a HUD, premultiplied) over it; then the drawable is
+// presented when the GPU gets there. Nothing is read back.
+
+namespace {
+
+const char* kCompositeSource = R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+struct VOut { float4 pos [[position]]; float2 uv; };
+vertex VOut vxFull(uint vid [[vertex_id]]) {
+  float2 p = float2(float((vid << 1) & 2), float(vid & 2));
+  VOut o;
+  o.pos = float4(p * 2.0 - 1.0, 0.0, 1.0);
+  o.uv = float2(p.x, 1.0 - p.y);
+  return o;
+}
+struct Params { float4 box; float radius; float strength; float overlay; float pad; float2 size; float2 pad2; };
+fragment float4 vxComposite(VOut in [[stage_in]], texture2d<float> scene [[texture(0)]], texture2d<float> over [[texture(1)]],
+                            sampler s [[sampler(0)]], constant Params& p [[buffer(0)]]) {
+  float2 uv = in.uv;
+  float3 c = scene.sample(s, uv).rgb;
+  if (p.strength > 0.0) {
+    c *= 1.0 - 0.35 * p.strength;
+    float2 px = uv * p.size;
+    float2 half_ = p.box.zw * 0.5;
+    float2 q = abs(px - (p.box.xy + half_)) - (half_ - p.radius);
+    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - p.radius;
+    float inside = clamp(0.5 - d, 0.0, 1.0);
+    if (inside > 0.0) {
+      float2 step_ = float2(3.0) / p.size * (p.size.y / 720.0);
+      float3 b = float3(0.0);
+      for (int j = -5; j <= 5; j++) {
+        for (int i = -5; i <= 5; i++) {
+          b += scene.sample(s, uv + float2(float(i), float(j)) * step_).rgb;
+        }
+      }
+      b /= 121.0;
+      c = mix(c, b * 0.82 + 0.1, inside * p.strength);
+    }
+  }
+  if (p.overlay > 0.5) {
+    float4 o = over.sample(s, uv);
+    c = o.rgb + c * (1.0 - o.a);
+  }
+  return float4(c, 1.0);
+}
+)MSL";
+
+struct Layer {
+  Device* device;
+  objc::id layer;     // CAMetalLayer, retained
+  objc::id pipeline;  // MTLRenderPipelineState, into BGRA8 (the drawable)
+  objc::id capture;   // the same, into RGBA8 (a texture to read back)
+  objc::id sampler;   // MTLSamplerState
+};
+
+// compose encodes the composite into a texture through a pipeline.
+void compose(Layer* l, objc::id cb, objc::id into, objc::id pipeline, Texture* sc, Texture* ov, const float* params) {
+  objc::id rp = objc::send<objc::id>(objc::getClass("MTLRenderPassDescriptor"), "renderPassDescriptor");
+  objc::id ca = objc::send<objc::id>(objc::send<objc::id>(rp, "colorAttachments"), "objectAtIndexedSubscript:", static_cast<u64>(0));
+  objc::send<void>(ca, "setTexture:", into);
+  objc::send<void>(ca, "setLoadAction:", static_cast<u64>(0));  // don't care: every pixel is drawn
+  objc::send<void>(ca, "setStoreAction:", static_cast<u64>(1));
+  objc::id enc = objc::send<objc::id>(cb, "renderCommandEncoderWithDescriptor:", rp);
+  objc::send<void>(enc, "setRenderPipelineState:", pipeline);
+  objc::send<void>(enc, "setFragmentTexture:atIndex:", sc->metal, static_cast<u64>(0));
+  objc::send<void>(enc, "setFragmentTexture:atIndex:", ov ? ov->metal : sc->metal, static_cast<u64>(1));
+  objc::send<void>(enc, "setFragmentSamplerState:atIndex:", l->sampler, static_cast<u64>(0));
+  objc::send<void>(enc, "setFragmentBytes:length:atIndex:", params, static_cast<u64>(12 * sizeof(float)), static_cast<u64>(0));
+  objc::send<void>(enc, "drawPrimitives:vertexStart:vertexCount:", static_cast<u64>(3), static_cast<u64>(0), static_cast<u64>(3));
+  objc::send<void>(enc, "endEncoding");
+}
+
+struct CGSize2 {
+  double width, height;
+};
+struct CGRect4 {
+  double x, y, w, h;
+};
+
+}  // namespace
+
+extern "C" {
+
+// A layer over view (an NSView*) for frames width × height pixels at the
+// view's backing scale. Null where there's no Metal, or it can't be made.
+void* vertex_gpu_layer_attach(void* dev, void* view, i64 width, i64 height, double scale) {
+  Device* d = static_cast<Device*>(dev);
+  if (!d || d->kind != KindMetal || !view) return nullptr;
+  static bool quartz = false;
+  if (!quartz) {
+    quartz = dlopen("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", 1) != nullptr;
+    if (!quartz) return nullptr;
+  }
+  void* pool = objc::poolPush();
+  objc::id layer = objc::send<objc::id>(objc::send<objc::id>(objc::getClass("CAMetalLayer"), "alloc"), "init");
+  if (!layer) {
+    objc::poolPop(pool);
+    return nullptr;
+  }
+  objc::send<void>(layer, "setDevice:", d->metal);
+  objc::send<void>(layer, "setPixelFormat:", static_cast<u64>(80));  // BGRA8Unorm
+  objc::send<void>(layer, "setFramebufferOnly:", static_cast<signed char>(1));
+  objc::send<void>(layer, "setOpaque:", static_cast<signed char>(1));
+  CGSize2 ds = {static_cast<double>(width), static_cast<double>(height)};
+  objc::send<void>(layer, "setDrawableSize:", ds);
+  objc::send<void>(layer, "setContentsScale:", scale);
+  // Laid over the view's own layer, filling it as it resizes.
+  objc::send<void>(view, "setWantsLayer:", static_cast<signed char>(1));
+  objc::id host = objc::send<objc::id>(view, "layer");
+  CGRect4 bounds = objc::send<CGRect4>(view, "bounds");
+  objc::send<void>(layer, "setFrame:", bounds);
+  objc::send<void>(layer, "setAutoresizingMask:", static_cast<u32>(2 | 16));
+  objc::send<void>(host, "addSublayer:", layer);
+  // The composite pipeline and its sampler.
+  objc::id error = nullptr;
+  objc::id lib = objc::send<objc::id>(d->metal, "newLibraryWithSource:options:error:",
+                                      nsString(reinterpret_cast<const u8*>(kCompositeSource), static_cast<i64>(length(kCompositeSource))),
+                                      static_cast<objc::id>(nullptr), &error);
+  if (!lib) {
+    objc::report("the window layer's shader didn't compile", error);
+    objc::send<void>(layer, "release");
+    objc::poolPop(pool);
+    return nullptr;
+  }
+  objc::id vfn = objc::send<objc::id>(lib, "newFunctionWithName:", nsString(reinterpret_cast<const u8*>("vxFull"), 6));
+  objc::id ffn = objc::send<objc::id>(lib, "newFunctionWithName:", nsString(reinterpret_cast<const u8*>("vxComposite"), 11));
+  objc::id pd = objc::send<objc::id>(objc::send<objc::id>(objc::getClass("MTLRenderPipelineDescriptor"), "alloc"), "init");
+  objc::send<void>(pd, "setVertexFunction:", vfn);
+  objc::send<void>(pd, "setFragmentFunction:", ffn);
+  objc::id ca = objc::send<objc::id>(objc::send<objc::id>(pd, "colorAttachments"), "objectAtIndexedSubscript:", static_cast<u64>(0));
+  objc::send<void>(ca, "setPixelFormat:", static_cast<u64>(80));
+  error = nullptr;
+  objc::id state = objc::send<objc::id>(d->metal, "newRenderPipelineStateWithDescriptor:error:", pd, &error);
+  objc::send<void>(ca, "setPixelFormat:", static_cast<u64>(70));
+  objc::id capture = objc::send<objc::id>(d->metal, "newRenderPipelineStateWithDescriptor:error:", pd, static_cast<objc::id*>(nullptr));
+  objc::send<void>(pd, "release");
+  objc::send<void>(vfn, "release");
+  objc::send<void>(ffn, "release");
+  objc::send<void>(lib, "release");
+  if (!state) {
+    objc::report("the window layer's pipeline", error);
+    objc::send<void>(layer, "release");
+    objc::poolPop(pool);
+    return nullptr;
+  }
+  objc::id sd = objc::send<objc::id>(objc::send<objc::id>(objc::getClass("MTLSamplerDescriptor"), "alloc"), "init");
+  objc::send<void>(sd, "setMinFilter:", static_cast<u64>(1));
+  objc::send<void>(sd, "setMagFilter:", static_cast<u64>(1));
+  objc::send<void>(sd, "setSAddressMode:", static_cast<u64>(0));
+  objc::send<void>(sd, "setTAddressMode:", static_cast<u64>(0));
+  objc::id sampler = objc::send<objc::id>(d->metal, "newSamplerStateWithDescriptor:", sd);
+  objc::send<void>(sd, "release");
+  objc::poolPop(pool);
+  Layer* l = allocate<Layer>(1);
+  l->device = d;
+  l->layer = layer;
+  l->pipeline = state;
+  l->capture = capture;
+  l->sampler = sampler;
+  return l;
+}
+
+// The drawable's size in pixels, and the view's backing scale.
+void vertex_gpu_layer_resize(void* lp, i64 width, i64 height, double scale) {
+  Layer* l = static_cast<Layer*>(lp);
+  if (!l || width <= 0 || height <= 0) return;
+  void* pool = objc::poolPush();
+  CGSize2 ds = {static_cast<double>(width), static_cast<double>(height)};
+  objc::send<void>(l->layer, "setDrawableSize:", ds);
+  objc::send<void>(l->layer, "setContentsScale:", scale);
+  objc::poolPop(pool);
+}
+
+// Presents a frame: scene (and overlay, which may be null) through the
+// composite into the next drawable. params, 12 floats: the backdrop's x,
+// y, width, height (drawable pixels), its corner radius and strength (0
+// none), whether there's an overlay, a pad, the drawable's width and
+// height, two pads. 0, or -1 when no drawable came.
+i32 vertex_gpu_layer_present(void* lp, void* scene, void* overlay, const float* params) {
+  Layer* l = static_cast<Layer*>(lp);
+  Texture* sc = static_cast<Texture*>(scene);
+  if (!l || !sc) return -1;
+  Device* d = l->device;
+  void* pool = objc::poolPush();
+  objc::id drawable = objc::send<objc::id>(l->layer, "nextDrawable");
+  if (!drawable) {
+    objc::poolPop(pool);
+    return -1;
+  }
+  d->lock.lock();
+  objc::id cb = renderBufferOf(d);
+  d->lock.unlock();
+  compose(l, cb, objc::send<objc::id>(drawable, "texture"), l->pipeline, sc, static_cast<Texture*>(overlay), params);
+  objc::send<void>(cb, "presentDrawable:", drawable);
+  objc::poolPop(pool);
+  return renderFlush(d, false);
+}
+
+// The same composite into an RGBA8 texture the layer's size (to read
+// back: a screenshot of what the window shows). 0, or -1.
+i32 vertex_gpu_layer_capture(void* lp, void* scene, void* overlay, const float* params, void* into) {
+  Layer* l = static_cast<Layer*>(lp);
+  Texture* sc = static_cast<Texture*>(scene);
+  Texture* to = static_cast<Texture*>(into);
+  if (!l || !sc || !to || !l->capture) return -1;
+  Device* d = l->device;
+  void* pool = objc::poolPush();
+  d->lock.lock();
+  objc::id cb = renderBufferOf(d);
+  d->lock.unlock();
+  compose(l, cb, to->metal, l->capture, sc, static_cast<Texture*>(overlay), params);
+  objc::poolPop(pool);
+  return renderFlush(d, false);
+}
+
+void vertex_gpu_layer_release(void* lp) {
+  Layer* l = static_cast<Layer*>(lp);
+  if (!l) return;
+  renderFlush(l->device, true);
+  objc::send<void>(l->layer, "removeFromSuperlayer");
+  objc::send<void>(l->layer, "release");
+  objc::send<void>(l->pipeline, "release");
+  if (l->capture) objc::send<void>(l->capture, "release");
+  if (l->sampler) objc::send<void>(l->sampler, "release");
+  release(l, sizeof(Layer), alignof(Layer));
+}
+
+}  // extern "C"
+

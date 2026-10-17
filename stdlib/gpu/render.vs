@@ -32,7 +32,15 @@ package gpu
 @_silgen_name("vertex_gpu_render_set_sampler") func _renderSetSampler(_ e: UnsafeMutableRawPointer, _ stage: int, _ s: UnsafeMutableRawPointer, _ index: int)
 @_silgen_name("vertex_gpu_render_draw") func _renderDraw(_ e: UnsafeMutableRawPointer, _ prim: int, _ start: int, _ count: int, _ instances: int)
 @_silgen_name("vertex_gpu_render_draw_indexed") func _renderDrawIndexed(_ e: UnsafeMutableRawPointer, _ prim: int, _ count: int, _ indexSize: int, _ indices: UnsafeRawPointer, _ n: int, _ instances: int)
+@_silgen_name("vertex_gpu_render_set_buffer") func _renderSetBuffer(_ e: UnsafeMutableRawPointer, _ stage: int, _ b: UnsafeMutableRawPointer, _ offset: int, _ index: int)
+@_silgen_name("vertex_gpu_render_draw_indexed_buffer") func _renderDrawIndexedBuffer(_ e: UnsafeMutableRawPointer, _ prim: int, _ count: int, _ indexSize: int, _ b: UnsafeMutableRawPointer, _ offset: int, _ instances: int)
 @_silgen_name("vertex_gpu_render_commit") func _renderCommit(_ d: UnsafeMutableRawPointer, _ wait: int) -> int32
+@_silgen_name("vertex_gpu_texture_upload") func _textureUpload(_ t: UnsafeMutableRawPointer, _ level: int, _ slice: int, _ x: int, _ y: int, _ w: int, _ h: int, _ bytes: UnsafeRawPointer, _ bytesPerRow: int)
+@_silgen_name("vertex_gpu_layer_attach") func _layerAttach(_ d: UnsafeMutableRawPointer, _ view: UnsafeMutableRawPointer, _ w: int, _ h: int, _ scale: float64) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_layer_resize") func _layerResize(_ l: UnsafeMutableRawPointer, _ w: int, _ h: int, _ scale: float64)
+@_silgen_name("vertex_gpu_layer_present") func _layerPresent(_ l: UnsafeMutableRawPointer, _ scene: UnsafeMutableRawPointer, _ overlay: UnsafeMutableRawPointer?, _ params: UnsafePointer<float32>) -> int32
+@_silgen_name("vertex_gpu_layer_release") func _layerRelease(_ l: UnsafeMutableRawPointer)
+@_silgen_name("vertex_gpu_layer_capture") func _layerCapture(_ l: UnsafeMutableRawPointer, _ scene: UnsafeMutableRawPointer, _ overlay: UnsafeMutableRawPointer?, _ params: UnsafePointer<float32>, _ into: UnsafeMutableRawPointer) -> int32
 
 /// RenderError is what making a rendering object can fail with.
 public enum RenderError: Error {
@@ -99,6 +107,100 @@ public final class Texture {
     /// Reads a region of a level into host bytes, after everything drawn so far.
     public func Read(level: int = 0, slice: int = 0, x: int, y: int, width: int, height: int, into bytes: UnsafeMutableRawPointer, bytesPerRow: int) {
         _textureRead(_h, level, slice, x, y, width, height, bytes, bytesPerRow)
+    }
+
+    /// Upload writes host bytes into a region of a level without waiting:
+    /// they're copied now and land on the texture after everything already
+    /// submitted and before anything submitted later (a pass still open
+    /// sees the new texels). Write waits for the GPU first.
+    public func Upload(level: int = 0, slice: int = 0, x: int, y: int, width: int, height: int, bytes: UnsafeRawPointer, bytesPerRow: int) {
+        _textureUpload(_h, level, slice, x, y, width, height, bytes, bytesPerRow)
+    }
+}
+
+/// Backdrop is a frosted panel a Layer draws under its overlay: the
+/// frame blurred and lifted inside a rounded rectangle (drawable pixels),
+/// the rest dimmed, by Strength (0 none, 1 full).
+public struct Backdrop {
+    public var X: float32
+    public var Y: float32
+    public var Width: float32
+    public var Height: float32
+    public var Radius: float32
+    public var Strength: float32
+
+    public init(x: float32, y: float32, width: float32, height: float32, radius: float32, strength: float32) {
+        X = x
+        Y = y
+        Width = width
+        Height = height
+        Radius = radius
+        Strength = strength
+    }
+}
+
+/// Layer is a window's surface on the GPU: frames drawn on the device are
+/// presented where they were drawn, with no copy back to the host. It's
+/// made over a native view (an NSView on macOS: window.Surface.RawParts),
+/// and each Present draws a scene texture scaled to the window, an
+/// optional frosted backdrop, and an optional overlay (premultiplied
+/// RGBA: a HUD drawn on the host and uploaded) over it.
+public final class Layer {
+    let _h: UnsafeMutableRawPointer
+    let device: Device
+    public private(set) var Width: int
+    public private(set) var Height: int
+
+    init(_h: UnsafeMutableRawPointer, device: Device, width: int, height: int) {
+        self._h = _h
+        self.device = device
+        Width = width
+        Height = height
+    }
+
+    /// Attach lays a layer over `view` for frames width × height pixels at
+    /// the view's backing scale; nil off Metal.
+    public static func Attach(device: Device, view: uint64, width: int, height: int, scale: float64) -> Layer? {
+        guard let v = UnsafeMutableRawPointer(bitPattern: UInt(view)) else { return nil }
+        guard let h = _layerAttach(device._h, v, width, height, scale) else { return nil }
+        return Layer(_h: h, device: device, width: width, height: height)
+    }
+
+    /// Resize sets the frames' size in pixels (the window's, as it changes).
+    public func Resize(width: int, height: int, scale: float64) {
+        if width == Width && height == Height { return }
+        Width = width
+        Height = height
+        _layerResize(_h, width, height, scale)
+    }
+
+    /// Present shows a frame; false when the window had no drawable to give.
+    @discardableResult
+    public func Present(_ scene: Texture, overlay: Texture? = nil, backdrop: Backdrop? = nil) -> bool {
+        let params = parameters(overlay != nil, backdrop)
+        let rc = params.withUnsafeBufferPointer { p in _layerPresent(_h, scene._h, overlay?._h, p.baseAddress!) }
+        return rc == 0
+    }
+
+    /// Capture is what Present would show, read back: RGBA, top row first,
+    /// Width × Height (a screenshot of the window). Nil off Metal.
+    public func Capture(_ scene: Texture, overlay: Texture? = nil, backdrop: Backdrop? = nil) -> [uint8]? {
+        guard let into = Texture.Create(device: device, width: Width, height: Height, format: .rgba8) else { return nil }
+        let params = parameters(overlay != nil, backdrop)
+        let rc = params.withUnsafeBufferPointer { p in _layerCapture(_h, scene._h, overlay?._h, p.baseAddress!, into._h) }
+        if rc != 0 { return nil }
+        var out = [uint8](repeating: 0, count: Width * Height * 4)
+        out.withUnsafeMutableBytes { p in into.Read(x: 0, y: 0, width: Width, height: Height, into: p.baseAddress!, bytesPerRow: Width * 4) }
+        return out
+    }
+
+    func parameters(_ overlay: bool, _ backdrop: Backdrop?) -> [float32] {
+        let b = backdrop ?? Backdrop(x: 0, y: 0, width: 0, height: 0, radius: 0, strength: 0)
+        return [b.X, b.Y, b.Width, b.Height, b.Radius, b.Strength, overlay ? 1 : 0, 0, float32(Width), float32(Height), 0, 0]
+    }
+
+    deinit {
+        _layerRelease(_h)
     }
 }
 
@@ -340,6 +442,11 @@ public final class RenderPass {
     public func SetBlendColor(_ r: float32, _ g: float32, _ b: float32, _ a: float32) { _renderSetBlendColor(_h, r, g, b, a) }
     /// Bytes for a buffer slot of the vertex (fragment: false) or fragment stage.
     public func SetBytes(fragment: bool, _ p: UnsafeRawPointer, count: int, index: int) { _renderSetBytes(_h, fragment ? 1 : 0, p, count, index) }
+    /// A device buffer's bytes from `offset` for a buffer slot: vertices
+    /// sent once and drawn many times.
+    public func SetBuffer(fragment: bool, _ b: Buffer<uint8>, offset: int, index: int) {
+        _renderSetBuffer(_h, fragment ? 1 : 0, b._memory._h, b._offset + offset, index)
+    }
     public func SetTexture(fragment: bool, _ t: Texture?, index: int) { _renderSetTexture(_h, fragment ? 1 : 0, t?._h, index) }
     public func SetSampler(fragment: bool, _ s: SamplerState, index: int) { _renderSetSampler(_h, fragment ? 1 : 0, s._h, index) }
     /// primitive: 0 points, 1 lines, 2 line strip, 3 triangles, 4 triangle strip.
@@ -347,6 +454,10 @@ public final class RenderPass {
     /// Indexed by 2- or 4-byte indices, from host memory.
     public func DrawIndexed(primitive: int, count: int, indexSize: int, indices: UnsafeRawPointer, bytes: int, instances: int) {
         _renderDrawIndexed(_h, primitive, count, indexSize, indices, bytes, instances)
+    }
+    /// Indexed by 2- or 4-byte indices in a device buffer, from `offset` bytes.
+    public func DrawIndexed(primitive: int, count: int, indexSize: int, buffer: Buffer<uint8>, offset: int, instances: int) {
+        _renderDrawIndexedBuffer(_h, primitive, count, indexSize, buffer._memory._h, buffer._offset + offset, instances)
     }
 }
 
