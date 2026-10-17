@@ -168,7 +168,25 @@ func (c *checker) lowerComponent(e *ast.MarkupElement, name string, scope *Scope
 	// the component again; its own live parts follow what they read.
 	call := mkCallArgs(fun, at, args)
 	once := &ast.ClosureExpr{Span: at, Lbrace: at.Lo, Rbrace: at.Hi, Stmts: []ast.Stmt{&ast.ExprStmt{Span: at, X: call}}}
-	return mkCall(mkPath(at, "component", "Component"), at, once)
+	node := mkCall(mkPath(at, "component", "Component"), at, once)
+	// Another package's component, called from a package with styles,
+	// carries this package's sheet: the page gets it even where this
+	// package makes no element of its own (`app.Run { <kit.Window /> }`),
+	// so its document rules apply.
+	if sheet := c.ownStyleSheet(scope); sheet != "" && c.namesImportedComponent(e.Name, name) {
+		return mkCall(mkPath(at, "component", "Styled"), at, mkPath(at, sheet), node)
+	}
+	return node
+}
+
+// namesImportedComponent reports whether a component's name is a module's:
+// `kit.Button`, written through its package.
+func (c *checker) namesImportedComponent(n *ast.MarkupName, name string) bool {
+	dot := strings.IndexByte(name, '.')
+	if dot < 0 {
+		return false
+	}
+	return c.modules[name[:dot]] != nil
 }
 
 // nameExpr is a component's name as an expression: `Card`, `app.Window`.

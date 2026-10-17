@@ -2354,7 +2354,15 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					want = nil
 				}
 				inferredRet := c.checkExpr(exprStmt.X, want, closureScope)
-				if retType == nil || open || types.Identical(retType, types.Typ[types.Void]) {
+				// Where the function wanted returns Void, the one
+				// expression's value is dropped, as Swift does: `{ a?.bump() }`
+				// (a Void?) is a () -> Void.
+				// (Only a Void?: elsewhere a Void here can be a generic
+				// call's placeholder that the body's type then decides.)
+				voidWanted := !unstated && !open && types.Identical(retType, types.Typ[types.Void]) && isOptionalVoid(inferredRet)
+				if voidWanted {
+					// The value is the statement's, and goes unused.
+				} else if retType == nil || open || types.Identical(retType, types.Typ[types.Void]) {
 					retType = inferredRet
 				} else if !c.assignableTo(inferredRet, retType) {
 					c.typeErrorf(exprStmt.X.Pos(), "cannot convert return value of type '%s' to expected return type '%s'", inferredRet, retType)
@@ -2398,6 +2406,13 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	default:
 		return types.Typ[types.Invalid]
 	}
+}
+
+// isOptionalVoid reports whether t is Void?: what an optional chain
+// ending in a call that returns nothing gives.
+func isOptionalVoid(t types.Type) bool {
+	o, ok := t.(*types.Optional)
+	return ok && o.Wrapped != nil && types.Identical(o.Wrapped, types.Typ[types.Void])
 }
 
 // unparen is e without the parentheses around it.

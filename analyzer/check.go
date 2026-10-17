@@ -29,6 +29,9 @@ type checker struct {
 	// default could not be typed while members were read, typed again once
 	// functions are declared.
 	pendingFields []pendingField
+	// lateDefaults are parameter defaults that didn't check before
+	// top-level code ran: checked again after it.
+	lateDefaults []pendingDefault
 
 	// initLog is the deferred lets given their value since the branch
 	// being checked began; see branch.
@@ -381,9 +384,6 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 	// Pass 4.2: Stored properties typed by a default that calls a function.
 	c.checkPendingFields()
 
-	// Pass 4.3: Parameter defaults, now that every declaration is in.
-	c.checkPendingDefaults()
-
 	// Pass 4.4: Derived conformances. Every conformance is known now, and
 	// none has been checked for its witnesses: what a type gets by
 	// conforming is made here, and checked with the module from here on.
@@ -410,6 +410,11 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 	// to its initializer, which may read a variable declared below it
 	// or in a file read later, because Swift initializes each on first use.
 	c.declareModuleVars(files, pkgScope)
+
+	// Pass 4.7: Parameter defaults, now that every declaration is in,
+	// module variables included: `init(m: Modifiers = noModifiers)`.
+	// One that reads a variable top-level code declares waits for it.
+	c.checkPendingDefaults()
 
 	// Pass 4.9: The functions returning `some P`, whose bodies say what
 	// their callers get. One whose body does not check here yet -- it
@@ -463,6 +468,16 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		}
 		c.currAsync = false
 	}
+
+	// The defaults that read what top-level code declares, now that it
+	// has: `let start = 7` then `func f(n: Int = start)`.
+	prevFile := c.file
+	for _, d := range c.lateDefaults {
+		c.file = d.file
+		c.checkExpr(d.expr, d.typ, d.scope)
+	}
+	c.lateDefaults = nil
+	c.file = prevFile
 
 	c.checkImportedAccess()
 
@@ -812,6 +827,8 @@ type pendingField struct {
 	field   *types.Field
 	scope   *Scope
 	file    *token.File
+	// isolated: the type is @MainActor, so its default runs there.
+	isolated bool
 }
 
 // checkPendingFields types each queued stored property by its default,
@@ -821,7 +838,10 @@ func (c *checker) checkPendingFields() {
 	prev := c.file
 	for _, p := range c.pendingFields {
 		c.file = p.file
+		prevIsolated := c.currIsolated
+		c.currIsolated = p.isolated
 		t := c.checkExpr(p.binding.Value, nil, p.scope)
+		c.currIsolated = prevIsolated
 		if p.field != nil {
 			p.field.Type = t
 		}
@@ -842,7 +862,12 @@ func (c *checker) checkPendingDefaults() {
 	prev := c.file
 	for _, d := range c.pendingDefaults {
 		c.file = d.file
+		quiet := len(c.info.Diagnostics)
 		c.checkExpr(d.expr, d.typ, d.scope)
+		if len(c.info.Diagnostics) > quiet {
+			c.info.Diagnostics = c.info.Diagnostics[:quiet]
+			c.lateDefaults = append(c.lateDefaults, d)
+		}
 	}
 	c.pendingDefaults = nil
 	c.file = prev

@@ -429,6 +429,11 @@ func (c *checker) moduleMember(t *ast.MemberType, module, name string, scope *Sc
 			c.spellingOf(t), module)
 		return types.Typ[types.Invalid]
 	}
+	// A typealias is the type it names, qualified or not:
+	// `component.Ref` is the `html.Node?` it spells.
+	if alias, ok := base.(*types.Named); ok && alias.Aliased() != nil && len(args) == 0 {
+		return alias.Aliased()
+	}
 	if len(args) == 0 {
 		return base
 	}
@@ -686,10 +691,17 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 		pat = tp.Pat
 	} else if b.Value != nil {
 		quiet := len(c.info.Diagnostics)
+		// A default runs where its type is isolated: a @MainActor
+		// class's `let model = Model()` may make a @MainActor value.
+		prevIsolated := c.currIsolated
+		c.currIsolated = c.currIsolated || c.memberIsolated
 		fieldType = c.checkExpr(b.Value, nil, typeScope)
+		c.currIsolated = prevIsolated
 		// A default that calls a function is typed again once functions
-		// are declared, which is after members are read: `var xs = seed()`.
-		if c.deferDefaults && isInvalid(fieldType) {
+		// are declared, which is after members are read: `var xs = seed()`,
+		// and `static let one = T(v: twice(21))`, whose type is known
+		// while its argument isn't yet.
+		if c.deferDefaults && (isInvalid(fieldType) || len(c.info.Diagnostics) > quiet) {
 			c.info.Diagnostics = c.info.Diagnostics[:quiet]
 			pending = true
 		}
@@ -712,7 +724,7 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 		c.info.FieldDefaults[f] = b.Value
 	}
 	if pending {
-		c.pendingFields = append(c.pendingFields, pendingField{binding: b, pat: pat, field: f, scope: typeScope, file: c.file})
+		c.pendingFields = append(c.pendingFields, pendingField{binding: b, pat: pat, field: f, scope: typeScope, file: c.file, isolated: c.memberIsolated})
 	}
 	// A `var` of an optional type with no value starts as nil, and the
 	// memberwise initializer may leave it out.

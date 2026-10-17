@@ -420,3 +420,33 @@ func main() -> Int32 { return Int32(lib.make().fromA) }
 	}
 	_ = u
 }
+
+// TestAQualifiedTypealiasIsTheTypeItNames: `kit.Ref`, a typealias of an
+// optional in another package, is that optional -- nil starts it, and it
+// compares with nil -- as the bare `Ref` is inside kit. It used to stay a
+// name of its own: `var n: kit.Ref = nil` was refused, and a property
+// wrapper's storage of that type was laid out wrong.
+func TestAQualifiedTypealiasIsTheTypeItNames(t *testing.T) {
+	root := t.TempDir()
+	writePackage(t, filepath.Join(root, "kit"), "kit", `
+public final class Thing { public init() {} }
+public typealias Ref = Thing?
+public typealias Count = Int32
+`)
+	_, diags := compile(t, `
+import "kit"
+final class Holder {
+    var n: kit.Ref = nil
+    var c: kit.Count = 3
+}
+func main() -> Int32 {
+    let h = Holder()
+    h.n = kit.Thing()
+    let k: Int32 = h.c
+    return h.n == nil ? 0 : k
+}
+`, vsc.Options{PackagePaths: []string{root}})
+	for _, d := range diags {
+		t.Errorf("compile: %v", d)
+	}
+}

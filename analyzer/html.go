@@ -130,6 +130,7 @@ var htmlEvents = map[string]struct{ event, typ string }{
 	"onKeyDown":       {"keydown", "KeyboardEvent"},
 	"onKeyUp":         {"keyup", "KeyboardEvent"},
 	"onInput":         {"input", "InputEvent"},
+	"onBeforeInput":   {"beforeinput", "InputEvent"},
 	"onChange":        {"change", "Event"},
 	"onSubmit":        {"submit", "SubmitEvent"},
 	"onReset":         {"reset", "Event"},
