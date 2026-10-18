@@ -132,6 +132,12 @@ func aarch64MachOExe(objs []Input, opts LinkOptions) ([]byte, error) {
 	}
 	// Sign Mach-O ad hoc; the linker derives the identifier from the entry symbol.
 	l.SetEntry(entry)
+	// Only what the entry point reaches is kept: a package of thousands
+	// of functions or constants (an icon set) costs a program only the
+	// ones it uses. The objects promise MH_SUBSECTIONS_VIA_SYMBOLS, and
+	// what must stay regardless (conformance tables) is marked
+	// no_dead_strip.
+	l.DeadStrip(true)
 
 	// Link libSystem stub for hosted macOS execution.
 	if !opts.Freestanding {
