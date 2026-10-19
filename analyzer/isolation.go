@@ -7,18 +7,8 @@ import (
 	"github.com/vertex-language/vsc/types"
 )
 
-// Isolation: what @MainActor means, checked as Swift checks it.
-//
-// A function, initializer, property or type may be marked @MainActor; a
-// type's members are then @MainActor too, in its body and in its
-// extensions, unless one says `nonisolated`. Top-level code, `main` and
-// what is nested in @MainActor code -- local functions and closures --
-// run on the main thread as well. The rule for the rest of the program
-// is Swift's for actor-isolated declarations: synchronous @MainActor code
-// is called from @MainActor code, or from an async function under
-// `await`, which is what gets the task to the main thread and back; an
-// async @MainActor function is called with `await` from anywhere, and
-// gets itself there.
+// Isolation checking for @MainActor declarations and actor-isolated members.
+// Synchronous @MainActor code must be invoked from @MainActor contexts or via await.
 
 // mainActorAttr is the attribute's spelling.
 const mainActorAttr = "MainActor"
@@ -36,9 +26,7 @@ func (c *checker) hasAttr(attrs []*ast.Attr, name string) bool {
 	return false
 }
 
-// declIsolated is whether a declaration with these attributes and
-// modifiers is @MainActor: marked so itself, or a member of a type that
-// is, unless it is `nonisolated`.
+// declIsolated reports whether a declaration is @MainActor isolated.
 func (c *checker) declIsolated(attrs []*ast.Attr, mods []*ast.Modifier) bool {
 	if c.hasModifier(mods, "nonisolated") {
 		return false

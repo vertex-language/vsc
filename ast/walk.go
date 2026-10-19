@@ -9,13 +9,9 @@ type Visitor interface {
 	Visit(Node) Visitor
 }
 
-// Walk traverses the tree rooted at n in depth-first order. Children
-// are discovered by reflection over exported fields in source order,
-// so new fields traverse without this file changing. Typed nils are
-// skipped, as are Span fields and fields tagged `ast:"-"`.
-//
-// This is the reference implementation; if it shows up in a profile,
-// generate the switch and keep this as the oracle.
+// Walk traverses the AST rooted at n in depth-first order using reflection
+// over exported fields. Typed nils, Span fields, and fields tagged `ast:"-"`
+// are skipped.
 func Walk(v Visitor, n Node) {
 	if n == nil || isNil(n) {
 		return

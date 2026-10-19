@@ -207,8 +207,6 @@ type CatchClause struct {
 	Body  *CodeBlock
 }
 
-// ---- conditions ----
-
 // AvailabilityCond is #available ( … ) or #unavailable ( … ); Kind
 // says which.
 type AvailabilityCond struct {
@@ -254,8 +252,6 @@ type OptionalBinding struct {
 	Assign  token.Pos
 	Value   Expr
 }
-
-// ---- compiler control statements ----
 
 // IfConfigStmt represents a conditional compilation block (`#if`, `#elseif`, `#else`, `#endif`).
 type IfConfigStmt struct {

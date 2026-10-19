@@ -11,33 +11,12 @@ import (
 	"github.com/vertex-language/vsc/token"
 )
 
-// surface hashes what a client's compile of a package can depend on: the
-// package's source with the bodies no client compiles taken out.
+// surface computes a SHA-256 hash of a package's public API surface for early-cutoff caching.
 //
-// A client calls an imported function by its symbol, and compiles only the
-// bodies it specializes or inlines: generic functions, every member of a
-// generic type or of an extension or receiver of one, and @inlinable
-// methods and initializers (see analyzer's checkImportedGenerics). So a
-// body outside those can change without any client's object changing,
-// and a build that keys a package on its imports' surfaces rather than
-// their sources need not rebuild a client for it: early cutoff.
-//
-// Everything else stays, declarations and initializers and default
-// values alike. Where it is not certain that a body is one no client
-// compiles -- an extension of a type declared elsewhere, which may be
-// generic -- the body stays too: keeping one costs a rebuild, and
-// dropping one a client needs would cost a stale object.
-//
-// Source positions reach generated code only as a line, a column and a
-// file name: #line and #column in a body a client compiles, or taken by a
-// call there from a default argument (precondition's line: UInt = #line).
-// So where such a body, or a #line, #column or #sourceLocation, follows a
-// body taken out in the same file, the body taken out is recorded as the
-// lines it spans and -- where kept text follows it on its closing line --
-// the column it closes at, and every position after it reads the same
-// whatever the body held. Where nothing follows that could read a
-// position, the body is taken out whole, so that an edit adding lines to
-// it is cut off too.
+// It strips non-inlinable, non-generic function bodies that clients never compile or specialize,
+// preventing edits to private implementations from triggering dependent package rebuilds.
+// Line and column boundaries are preserved so source location macros (#line, #column) in
+// subsequent declarations remain exact.
 func surface(files []*ast.File, units []*token.File) [32]byte {
 	s := newSurfacer(files, units)
 	h := sha256.New()
@@ -52,11 +31,8 @@ func surface(files []*ast.File, units []*token.File) [32]byte {
 	return sum
 }
 
-// prune is each file's text with the bodies no client compiles blanked:
-// every byte of them but line breaks made a space, so that each position
-// left reads the same line, column and offset as in the source. It is
-// what an importer needs of the files, and parses in a fraction of the
-// time. Its surface is the source's.
+// prune replaces non-inlinable bodies with spaces to accelerate importer parsing
+// while preserving exact source line, column, and offset coordinates.
 func prune(files []*ast.File, units []*token.File) [][]byte {
 	s := newSurfacer(files, units)
 	out := make([][]byte, len(files))
@@ -81,8 +57,7 @@ func prune(files []*ast.File, units []*token.File) [][]byte {
 // newSurfacer readies a walk of a package's files.
 func newSurfacer(files []*ast.File, units []*token.File) *surfacer {
 	s := &surfacer{nonGeneric: map[string]bool{}}
-	// A type the package declares without type parameters is the only
-	// kind an extension or receiver of it is certainly not generic for.
+	// Non-generic nominal types declared in the package.
 	generic := map[string]bool{}
 	for i, f := range files {
 		unit := unitOf(f, units, i)
@@ -204,8 +179,7 @@ func (s *surfacer) top(d ast.Decl) {
 	}
 }
 
-// typeBody takes out what no client compiles of a type's members: all of
-// them are compiled where the type is generic.
+// typeBody strips unneeded member bodies unless the type is generic.
 func (s *surfacer) typeBody(params *ast.GenericParams, body *ast.MemberBlock) {
 	if params == nil {
 		s.members(body)
@@ -214,9 +188,7 @@ func (s *surfacer) typeBody(params *ast.GenericParams, body *ast.MemberBlock) {
 	}
 }
 
-// members takes out the bodies of a non-generic type's members that a
-// client does not compile: all but methods and initializers with type
-// parameters of their own, and @inlinable ones.
+// members strips non-generic, non-inlinable member bodies.
 func (s *surfacer) members(body *ast.MemberBlock) {
 	if body == nil {
 		return
@@ -263,9 +235,7 @@ func (s *surfacer) members(body *ast.MemberBlock) {
 	}
 }
 
-// vars takes out the bodies of computed properties and property
-// observers. A stored property's initializer stays: a client may infer
-// the property's type from it.
+// vars strips computed property accessors and observers while keeping initializers.
 func (s *surfacer) vars(d *ast.VarDecl) {
 	for _, b := range d.Bindings {
 		s.drop(b.Body)

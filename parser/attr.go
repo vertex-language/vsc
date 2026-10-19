@@ -98,8 +98,6 @@ func (p *parser) balancedTokens() []token.Token {
 	return out
 }
 
-// ---- modifiers ----
-
 // modifierWords are the DeclarationModifiers that are contextual
 // keywords — which is most of them. Only the access levels, class and
 // static are reserved words.

@@ -5,24 +5,9 @@ import (
 	"github.com/vertex-language/vsc/types"
 )
 
-// Kernels: `func f(...) kernel`, the functions a GPU runs once per
-// work-item, and the launches that run them. proposed_vertex_kernel.md
-// says what they mean; this file is what the checker makes of them.
-//
-// A kernel's signature is checked where it is declared: what a device
-// can be handed (§5.1), and no async or throws. What its body reaches is
-// checked where it is compiled for the device, where every call it makes
-// is known (vsc's device compile).
-//
-// A launch, `k.Launch(args…, over: n, workgroup: w)`, is typed against
-// the kernel's own parameters, a gpu.Span<T> taken as a gpu.Buffer<T>,
-// and then written as the chain of the built-in gpu module's _Launch
-// methods that does it:
-//
-//	gpu._Launch(_kernel: gpu._kernelDescriptor())._float32(a)._buffer(x)._over1(n)._run()
-//
-// where the descriptor call is recorded against the kernel, and lowered
-// to the address of the descriptor the compiler writes beside it.
+// Kernel type checking and typed launch generation.
+// Validates kernel signatures (device-compatible parameter types, no async/throws)
+// and synthesizes typed Launch calls delegating to the runtime descriptor chain.
 
 // kernelScalar is what a kernel parameter of a scalar type is launched
 // with: the _Launch method that takes it.
@@ -399,15 +384,8 @@ func (c *checker) kernelLaunch(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) t
 	return c.checkExpr(chain, nil, scope)
 }
 
-// kernelMap checks `k.Map(args…)` and `k.Map(args…, into: out)` on an
-// element kernel (§4.2): an argument passed as a gpu.Buffer<T> where k
-// takes a T is mapped, element by element; any other is the same for
-// every element. It is written as the launch of the grid kernel the
-// compiler makes for that choice of mapped parameters:
-//
-//	gpu._Launch(_kernel: gpu._kernelDescriptor())._mapped(xs)._float32(t)._mapRun_float32()
-//
-// and returns the new buffer, or nothing with into:.
+// kernelMap checks k.Map(...) launches on element kernels, mapping buffer
+// arguments to scalar parameters and delegating to the synthesized grid kernel.
 func (c *checker) kernelMap(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) types.Type {
 	invalid := types.Typ[types.Invalid]
 	sig := sym.Signature()

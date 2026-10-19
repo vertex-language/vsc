@@ -10,32 +10,10 @@ import (
 	"github.com/vertex-language/vsc/types"
 )
 
-// Async arguments past the registers.
-//
-// Every call to an async function is a tail call (see async.go), and a
-// tail call has nowhere to put an argument that does not fit in a
-// register: the caller's frame is gone by the time the callee runs, and
-// the stack past it is the caller's caller's. swiftc answers with
-// swifttailcc, whose callee pops what it was passed. This compiler answers
-// with the one piece of memory the caller has made for the callee and
-// both can find: the callee's context. What does not fit in the
-// argument registers is written at the end of it, a word each, in order:
-//
-//	child := task_alloc(size)
-//	child[size - overflowBytes(n) + 8*k] = the k-th argument past the registers
-//	tail_call f(child, the arguments that fit)
-//
-// The end rather than a fixed offset, because the callee's layout is its
-// own business and the size is the one thing about it every caller knows,
-// even through a function value or across modules (see asyncRecord). A
-// callee with such arguments makes its frame that much bigger, and reads
-// them back at its entry, where they join the arguments that came in
-// registers as though they all had.
-//
-// What fits is decided by the same rule on both sides -- the target's
-// argument registers, counted over the signature -- so an argument that
-// fits travels exactly where swiftc's would, and only a call swiftc would
-// have spilled to the stack looks different.
+// Async arguments spilled beyond registers.
+// In async tail calls, spilled arguments cannot use caller stack frames.
+// Overflow arguments are stored at the end of the callee's allocated async context
+// frame and unpacked into locals upon function entry.
 
 // An argBudget is how many arguments a target passes in registers.
 type argBudget struct {

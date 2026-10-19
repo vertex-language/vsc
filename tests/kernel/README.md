@@ -2,7 +2,7 @@
 
 The kernel ladder: one small thing a kernel does per file, numbered
 `001`–`080` in the order the rungs climb, from an empty kernel to programs
-(see `proposed_vertex_kernel.md` on the Desktop for the design).
+(per the GPU kernel specification).
 
 There is no swiftc to compare with here, so each file says what it prints:
 

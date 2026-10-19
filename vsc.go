@@ -66,82 +66,53 @@ type Options struct {
 	Target ir.Target
 	// Stop specifies which phase to stop after (zero value runs all phases).
 	Stop Phase
-	// SkipVerify runs the SIL passes without the verifier: for printing
-	// a module the verifier refuses (--emit sil, --emit vir with
-	// -skip-verify), never for building one to run.
+	// SkipVerify runs SIL passes without the verifier for debugging (--emit sil or vir with -skip-verify).
 	SkipVerify bool
 	// PackagePaths are search roots for string import paths (e.g. `import "std/fmt"`).
 	PackagePaths []string
 	// ImportPaths are search directories for interface files (e.g. `import Lib`).
 	ImportPaths []string
-	// Packages resolves a string import path that no search root holds.
-	// It is what makes `import "net/tcp"` work in a program that has
-	// never seen the package: see vsc/importer, which the command line
-	// supplies. Nil never fetches anything, which is what compiling
-	// against what is already on disk wants.
+	// Packages resolves external string import paths not found in search roots.
+	// When nil, resolution does not fetch from remote repositories.
 	Packages PackageResolver
-	// AfterImports, when set, is asked once the imports are loaded
-	// whether the rest of the compile is wanted: false stops it there,
-	// with the Unit's Packages filled in. opaque says the module imports
-	// something from an interface file, which Packages does not cover.
-	// It is how a build that has the module's object cached already
-	// learns what to link without compiling the module again.
+	// AfterImports, when set, is called after imports are loaded. Returning
+	// false halts compilation early with Unit.Packages populated.
 	AfterImports func(pkgs []Package, opaque bool) bool
-	// OnPackage, when set, is told of each imported package as soon as the
-	// importer has it, which is after every package it imports: a build
-	// can start compiling it while the rest of the imports are read.
+	// OnPackage is invoked as soon as each imported package is ready,
+	// allowing concurrent compilation while remaining imports are read.
 	OnPackage func(Package)
-	// Summaries, when set, keeps what an importer reads of each folder it
-	// imports: the files with the bodies no client compiles blanked (see
-	// prune), which parse far faster than the source. Nil parses the
-	// source every time.
+	// Summaries caches pruned interface source for imported folders to speed
+	// up parsing. When nil, full sources are parsed on every import.
 	Summaries SummaryCache
 }
 
-// A SummaryCache holds pruned folders of source, by a key covering the
-// files' names and contents and the target (see summaryKey). An
-// implementation adds the compiler's identity to it.
+// A SummaryCache caches pruned source packages keyed by content and target architecture.
 type SummaryCache interface {
 	Get(key [32]byte) ([]byte, bool)
 	Put(key [32]byte, data []byte)
 }
 
-// A PackageResolver finds the source of a package named by a string
-// import path but not present as a folder.
+// A PackageResolver finds the source of a package named by an import path.
 type PackageResolver interface {
-	// Local is the directory of source for path, written in a file in
-	// fromDir, found without fetching anything: a checkout the build was
-	// told to use instead, or the checkout fromDir is itself inside, where
-	// path is that checkout or a folder of it. "" where neither answers.
+	// Local returns the local checkout directory for path without network access,
+	// or "" if not found locally.
 	Local(path, fromDir string) (string, error)
-	// Fetch is the directory of source for path, downloading the package
-	// it is in if need be, or "" where the path is not one this resolver
-	// can fetch.
+	// Fetch downloads and returns the directory for path, or "" if unhandled.
 	Fetch(path string) (string, error)
 }
 
-// A NativeBinder is a PackageResolver that can also read the C++ module
-// of a package folder: what its exports are to the package's Vertex, as
-// Vertex source that compiles as part of the package. Without one, a
-// folder with C++ in it does not import.
+// A NativeBinder provides Vertex bindings for C++ package modules.
 type NativeBinder interface {
-	// NativeSources is the Vertex source the C++ module in dir gives the
-	// package pkgName. path is the import path the folder was imported
-	// by, and says which module name the C++ must declare; "" is the
-	// program's own folder. public makes the exports the package's API,
-	// as they are for a folder of C++ alone.
+	// NativeSources returns generated Vertex declarations exported by the C++
+	// module in dir.
 	NativeSources(dir, path, pkgName string, public bool) ([]Source, error)
 }
 
-// A NativePrefetcher may start the slow part of binding a folder's C++ --
-// finding its module, which reads every header it includes -- as soon as
-// the importer sees the folder, before NativeSources asks. It is called
-// from the importer's read-ahead goroutines.
+// A NativePrefetcher begins parsing C++ headers asynchronously before
+// bindings are explicitly requested.
 type NativePrefetcher interface {
 	PrefetchNative(dir string, sources []string)
-	// PrefetchBindings may start binding the module as package pkgName,
-	// public as for NativeSources, once the folder's source is read. It
-	// is a guess: a binding asked for differently is made then.
+	// PrefetchBindings begins binding the module as pkgName once source is read.
 	PrefetchBindings(dir, pkgName string, public bool)
 }
 
@@ -178,8 +149,7 @@ type Unit struct {
 	// Packages are imported source packages in topological dependency order.
 	Packages []Package
 
-	// derived is how many of Files the compiler wrote itself: the checker's
-	// derived conformances; see analyzer/derived.go.
+	// derived is the count of synthesized files for derived conformances.
 	derived int
 }
 
@@ -189,21 +159,15 @@ type Package struct {
 	Name string
 	// Dir is the directory where the source files were found.
 	Dir string
-	// Sources are the package's source files: its .vs files, and the
-	// declarations its C++ module's exports are (see NativeBinder).
+	// Sources are the package's .vs files and C++ export declarations.
 	Sources []Source
-	// Native says the folder has a C++ module, whose objects the program
-	// links.
+	// Native indicates the package contains a C++ module.
 	Native bool
-	// Deps are the folders (Dir) of the packages this one imports, each
-	// earlier in the list than it. What a package compiles to depends on
-	// them too: it specializes their generics and inlines their bodies.
+	// Deps are the dependency directories in topological order.
 	Deps []string
-	// Opaque says the package imports a module from an interface file,
-	// which Deps does not name.
+	// Opaque indicates the package imports an interface file not tracked in Deps.
 	Opaque bool
-	// Surface hashes what a client's compile can depend on of the
-	// package: its source less the bodies no client compiles. See surface.
+	// Surface is a content hash of the package's public interface for early-cutoff caching.
 	Surface [32]byte
 }
 
@@ -218,13 +182,13 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	for _, src := range srcs {
 		tf := token.NewFile(src.Name, src.Text)
 		file, ds := parser.ParseFile(tf, 0)
-		// `#if` is settled for the target before anything reads the file.
+		// Resolve #if for the target before semantic analysis.
 		ifconfig.Resolve(file, ifcfg)
 		u.Files = append(u.Files, file)
 		u.Positions = append(u.Positions, tf)
 		diags = append(diags, attribute(ds, tf)...)
 	}
-	// The program's folders' styles are a source of the program's.
+	// Compile and append stylesheet sources for the program's folders.
 	styles, styleDiags := programStyles(u.Files, u.Positions, srcs, opts)
 	diags = append(diags, styleDiags...)
 	for _, src := range styles {
@@ -259,8 +223,7 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	info, checks := analyzer.CheckModule(opts.Module, u.Files, imports)
 	done()
 	u.Info = info
-	// What the module's types get by conforming, which the checker wrote:
-	// lowered, and described in an interface, with the module's own files.
+	// Append synthesized declarations for derived conformances.
 	if info.Derived != nil {
 		u.Files = append(u.Files, info.Derived)
 		u.Positions = append(u.Positions, info.Derived.Unit)
@@ -335,9 +298,7 @@ func (u *Unit) only() *token.File {
 	return nil
 }
 
-// attribute pairs each diagnostic with the file it is about: the one it
-// names, where it names one -- a module of several files is lowered file
-// by file, and each diagnostic knows which -- or else f.
+// attribute pairs each diagnostic with the file it originated from.
 func attribute(ds []token.Diagnostic, f *token.File) []Diagnostic {
 	out := make([]Diagnostic, len(ds))
 	for i, d := range ds {
@@ -374,8 +335,7 @@ func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []strin
 		}
 		l.readAll(f, unit, "")
 	}
-	// What the program imports itself, as against what only its imports
-	// do: where two modules declare one name, its own import's is meant.
+	// Mark direct imports so local imports take precedence over transitive ones.
 	for i := range l.out {
 		l.out[i].Direct = l.direct[l.out[i].Name] || (l.out[i].As != "" && l.direct[l.out[i].As])
 	}
@@ -384,10 +344,9 @@ func loadImports(files []*ast.File, units []*token.File, paths, pkgPaths []strin
 
 // An importer resolves and loads imported modules and packages.
 type importer struct {
-	// ifcfg settles the `#if`s of what is imported, as of the program.
+	// ifcfg settles `#if` blocks of imported sources for the target.
 	ifcfg ifconfig.Config
-	// target decides which of a folder's files are built: those named for
-	// another platform or architecture (net_windows.cpp) are not.
+	// target determines platform and architecture filtering for files.
 	target   ir.Target
 	paths    []string
 	pkgPaths []string
@@ -395,29 +354,20 @@ type importer struct {
 	fetched  map[string]string
 	fetchErr map[string]error
 	seen     map[string]bool
-	// direct is the modules the program's own files import, by the name
-	// they are bound to.
+	// direct tracks modules directly imported by the program's files.
 	direct map[string]bool
-	// names is each folder's package name, as its package declaration
-	// gives it, once the folder has been read.
+	// names maps package directory paths to package names.
 	names map[string]string
-	// modules is each folder's module name: what its symbols are mangled
-	// under (moduleNameOf), once the folder has been read.
+	// modules maps package directory paths to mangled module names.
 	modules map[string]string
-	// loading is the folders being read or read, and loadedAt where each
-	// read one's Import is in out: a package is loaded once, by its
-	// folder, whatever names its importers bind it to.
+	// loading tracks in-flight folders; loadedAt indexes loaded imports in out.
 	loading  map[string]bool
 	loadedAt map[string]int
-	// ahead is folders being read and parsed before the walk reaches
-	// them, by directory.
+	// ahead tracks packages being prefetched and parsed in parallel.
 	ahead map[string]*prefetch
-	// found is each import path's folder, by the path and the directory
-	// of the file importing it: every import of net/tcp in a folder is
-	// resolved once, not once per file (294 for http_server's 26
-	// packages, each reading a directory).
+	// found caches resolved package directories by import path and importing directory.
 	found map[[2]string]foundFolder
-	// summaries keeps the pruned text of folders read before.
+	// summaries caches pruned package sources.
 	summaries SummaryCache
 	// onPackage is Options.OnPackage.
 	onPackage func(Package)
@@ -428,9 +378,7 @@ type importer struct {
 
 // readAll reads every module a file imports. `via` is the module
 // whose interface asked for them, empty for the program's own.
-//
-// It returns the folders the file imports, and whether it imports a
-// module from an interface file, which a build cache key does not cover.
+// It returns imported folder paths and whether an opaque interface file was imported.
 func (l *importer) readAll(f *ast.File, unit *token.File, via string) (deps []string, opaque bool) {
 	for _, stmt := range f.Stmts {
 		decl, ok := stmt.(*ast.DeclStmt)
@@ -441,9 +389,6 @@ func (l *importer) readAll(f *ast.File, unit *token.File, via string) (deps []st
 		if !ok || unit == nil {
 			continue
 		}
-		// The string form names a folder of source rather than a
-		// module built elsewhere. A group is punctuation standing for
-		// one import each, so it is the same loop.
 		for _, spec := range imp.Paths {
 			if dir := l.readFolder(spec, imp, unit, via); dir != "" {
 				deps = append(deps, dir)
@@ -530,9 +475,7 @@ func (l *importer) read(name string, at *ast.ImportDecl, unit *token.File, via s
 	})
 }
 
-// moduleDeps are the names of the modules a package's files import, now
-// that each has been read: what the package's own names resolve against
-// before anything else loaded.
+// moduleDeps returns the unique names of modules imported by the package files.
 func (l *importer) moduleDeps(files []*ast.File, units []*token.File, dir string) []string {
 	var out []string
 	for i, f := range files {
@@ -805,9 +748,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		fail(err.Error())
 		return ""
 	}
-	// A package imported again -- io, by nearly everything -- is already
-	// loaded under its name. Reading and parsing its folder again only to
-	// learn that was most of what loading imports cost.
+	// Fast-path: return immediately if this package directory is already loaded.
 	if name, ok := l.names[dir]; ok {
 		as := name
 		if spec.Alias != nil {
@@ -829,8 +770,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		pre = l.readAhead(dir)
 	}
 	<-pre.done
-	// A folder's trees are this import's alone: the checker rewrites
-	// them, so another import of it parses its own.
+	// Remove from ahead map; ASTs are unique per import because the checker mutates them.
 	delete(l.ahead, dir)
 	folder, err := pre.folder, pre.err
 	if err != nil {
@@ -855,8 +795,6 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		srcs = append(srcs, r.src)
 		return true
 	}
-	// The folder's files were read and parsed at once, and are added in
-	// order.
 	read := pre.read
 	for i, name := range folder.Vertex {
 		if err := read[i].err; err != nil {
@@ -898,8 +836,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 	}
 	l.loading[dir] = true
 
-	// The folder's .vss files are its stylesheet, carried by a source
-	// generated from them (see vsc/vss).
+	// Compile and append stylesheet source if package contains .vss files.
 	if len(folder.Styles) > 0 {
 		gen, ds := styleSource(dir, packageNameOf(files, units), importPaths(files, units), l.folder)
 		l.diags = append(l.diags, ds...)
@@ -908,9 +845,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		}
 	}
 
-	// The folder's C++ module is more of the package: its exports are
-	// declarations the package's Vertex sees, and its API where the folder
-	// has no Vertex of its own.
+	// Generate Vertex bridge declarations for C++ module exports.
 	if len(folder.Native) > 0 {
 		nb, ok := l.packages.(NativeBinder)
 		if !ok {
@@ -929,8 +864,7 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 		}
 	}
 
-	// What these files import is known now: start reading it, so the
-	// walk below finds each folder parsed rather than parsing it then.
+	// Asynchronously prefetch transitive imports.
 	for i, f := range files {
 		l.prefetchImports(f, units[i])
 	}
@@ -1051,10 +985,7 @@ func (l *importer) readAhead(dir string) *prefetch {
 	return pre
 }
 
-// bindAhead starts binding the folder's C++ module as the package its
-// source names, once that source is read: see PrefetchBindings. A folder
-// of C++ alone is the package its directory is named for, and its
-// exports are its API.
+// bindAhead prefetches C++ bindings for folder dir once its package name is known.
 func bindAhead(pf NativePrefetcher, dir string, pre *prefetch) {
 	if pre.err != nil || pre.folder == nil || len(pre.folder.Native) == 0 || anyBad(pre.read) {
 		return
@@ -1122,10 +1053,7 @@ func decodeSummary(data []byte, n int) ([][]byte, bool) {
 	return out, len(data) == 0
 }
 
-// prefetchImports starts reading every folder f imports that is neither
-// loaded nor on its way. Resolving a path stays here, on the walk's
-// goroutine; only the reading and parsing go ahead. A path that does not
-// resolve is left for the walk to report.
+// prefetchImports starts asynchronous reading and parsing of unvisited imported folders.
 func (l *importer) prefetchImports(f *ast.File, unit *token.File) {
 	for _, stmt := range f.Stmts {
 		decl, ok := stmt.(*ast.DeclStmt)
@@ -1183,14 +1111,8 @@ func (l *importer) bind(i int, as string) {
 	imp.Aliases = append(imp.Aliases, as)
 }
 
-// moduleNameOf is the module a package imported by path compiles as: the
-// name its symbols are mangled under. A package of one path segment --
-// gpu, tensor, nn -- is its package name. Deeper ones are their path,
-// spelled as an identifier (nn/llama is nn_llama, github.com/you/geo/shape
-// github_com_you_geo_shape), so that two packages of one name -- nn/llama
-// and llm/llama -- are two modules in one program, as two Go packages of
-// one name are. Code names a package by its package name or an alias
-// either way; this is only what the linker sees.
+// moduleNameOf returns the mangled module identifier for a package import path.
+// Single-segment paths retain their name; deeper paths convert punctuation to underscores.
 func moduleNameOf(path, name string) string {
 	p := strings.Trim(path, "/")
 	if !strings.Contains(p, "/") || strings.HasPrefix(p, ".") {

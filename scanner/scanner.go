@@ -96,8 +96,6 @@ func (s *scanner) peek(i int) byte {
 
 func (s *scanner) at(i int, c byte) bool { return s.off+i < len(s.src) && s.src[s.off+i] == c }
 
-// ---- trivia ----
-
 // skipShebang consumes an initial #! line if present.
 func (s *scanner) skipShebang() {
 	if len(s.src) >= 2 && s.src[0] == '#' && s.src[1] == '!' {
@@ -176,8 +174,6 @@ func (s *scanner) comment(start int) {
 	}
 	s.adjacent = false
 }
-
-// ---- tokens ----
 
 func (s *scanner) scanToken() {
 	s.quietTok = false
@@ -333,8 +329,6 @@ func (s *scanner) scanPound() {
 	s.off = word // leave the identifier — MacroExpansion reads it
 	s.emit(token.POUND, start)
 }
-
-// ---- operators ----
 
 func (s *scanner) peekOperChar(i int) bool {
 	if s.off+i < len(s.src) {
@@ -502,8 +496,6 @@ func (s *scanner) rightBound(end int, left bool) bool {
 	return true
 }
 
-// ---- emission and diagnostics ----
-
 func (s *scanner) emit(k token.Kind, start int) { s.emitFlags(k, start, 0) }
 
 func (s *scanner) emitFlags(k token.Kind, start int, fl token.Flags) {
@@ -551,8 +543,6 @@ func (s *scanner) report(sev token.Severity, lo, hi int, msg string) {
 		Pos: s.f.Pos(lo), End: s.f.Pos(hi), Severity: sev, Message: msg,
 	})
 }
-
-// ---- character classes ----
 
 func isDigit(c byte) bool    { return '0' <= c && c <= '9' }
 func isBinDigit(c byte) bool { return c == '0' || c == '1' }

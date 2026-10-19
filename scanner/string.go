@@ -281,8 +281,6 @@ func (s *scanner) scanEscape(st *strLit) {
 	}
 }
 
-// ---- regex literals ----
-
 // tryRegex attempts to read a RegexLiteral at start, whose pound
 // delimiter is pounds long and whose slash sits at start+pounds. It
 // reports whether it read one; on failure the cursor is where it

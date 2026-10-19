@@ -2,53 +2,18 @@ package mangle
 
 import "strconv"
 
-// Word substitutions.
+// Word substitutions in Swift symbol mangling.
 //
-// Swift's mangler does not spell a name twice. It splits every
-// identifier it writes into words, remembers each one that is at
-// least two characters, and writes a back-reference where a later
-// identifier repeats one -- so `sumPair(_ p: Pair)` spells "Pair"
-// once, in the function's own name, and the parameter's type is a
-// letter pointing back at it.
-//
-// This is not an optimization that can be skipped. A symbol is either
-// the name swiftc gives it or it is a different symbol, and a
-// compiler that spells the name in full links to nothing where swiftc
-// linked to something. It is why calling a real Swift library needed
-// this before it needed anything else.
-//
-// # The encoding
-//
-// An identifier with no repeated word is a length and the text.
-// One with repeated words is
+// Swift ABI mangling compresses repeated identifier words (>= 2 characters)
+// using back-references. Repeated words are encoded as:
 //
 //	'0' ( length text )? ( letter ( length text )? )* length text?
 //
-// -- a leading zero to say which form this is, then the text and the
-// substitutions in the order they appear, then whatever is left, with
-// its length, always written even when it is empty. A substitution is
-// a letter: lowercase for every one but the last, uppercase for the
-// last, which is what tells a reader where the run ends.
+// A leading '0' indicates substitution mode. Intermediate substitutions use
+// lowercase letters ('a'-'z'), and the final substitution uses uppercase ('A'-'Z').
 //
-//	sumPair      Pair               0C0          word 2, nothing left
-//	sumPairAgain PairBox            0C3Box       word 2, then "Box"
-//	sumBox       PairBox            04PairC0     "Pair", then word 2
-//	makeHttpRequest HttpRequestHandler 0cD7Handler  words 2 and 3, then "Handler"
-//
-// Every one of those is swiftc's own answer, read out of its object
-// file; mangle/testdata/words.swift is the corpus and the oracle test
-// compares against it.
-//
-// # What a word is
-//
-// A word begins at the start of the identifier, at an uppercase
-// letter following a lowercase one, and at the last uppercase letter
-// of a run that is followed by a lowercase one -- so HttpRequest is
-// two words and HTTPRequest is "HTTP" and "Request". A digit or an
-// underscore belongs to the word it follows and starts none.
-//
-// The comparison is exact. `box` and `Box` are two words, which is
-// why `boxPair` substitutes only the Pair.
+// Words are delineated by camelCase/PascalCase boundaries, uppercase runs
+// preceding lowercase letters, and digits/underscores adhering to preceding words.
 
 // maxWords is how many words a symbol remembers. The letters that
 // spell a substitution are a-z and A-Z used as one alphabet of

@@ -34,8 +34,7 @@ var emits = []emitMode{
 	{"lib", vsc.All, ".so"},
 	{"vir", vsc.All, ".vir"},
 	{"sil", vsc.Lowered, ".sil"},
-	// The SIL as generated, before the ownership passes verify it: for
-	// reading what the generator wrote when the verifier refuses it.
+	// Unverified raw SIL directly from generator, before mandatory passes.
 	{"rawsil", vsc.Raw, ".sil"},
 	{"interface", vsc.Checked, iface.Extension},
 }
@@ -93,11 +92,6 @@ func cmdBuild(args []string, stdout, stderr io.Writer) int {
 }
 
 // doBuild compiles the sources and returns the output path and exit code.
-//
-// What is built is, in order: the SwiftPM package here when there is a
-// Package.swift and no files are named (see package.go); the program a
-// bare name is, cmd/<name> of this checkout; the folder or files named;
-// and with nothing named, the folder here.
 func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, int) {
 	mode, ok := lookupEmit(bf.emit)
 	if !ok {
@@ -105,8 +99,7 @@ func doBuild(bf *buildFlags, names []string, stdout, stderr io.Writer) (string, 
 		return "", exitUsage
 	}
 	if bf.skipVerify {
-		// Unverified SIL is for reading: nothing built from it is run or
-		// cached.
+		// -skip-verify is only valid when inspecting intermediate representations.
 		if mode.name != "sil" && mode.name != "vir" && mode.name != "rawsil" {
 			fmt.Fprintln(stderr, "vsc: -skip-verify is for --emit sil, vir or rawsil, to read what the verifier refuses")
 			return "", exitUsage
@@ -181,14 +174,11 @@ func doFilesBuild(bf *buildFlags, mode emitMode, names []string, target ir.Targe
 	}
 
 	opts := bf.options(target, mode.stop)
-	// A program linked whole may have its own object cached: then the
-	// compile stops once its imports are known, which is what the link
-	// needs of it.
+	// When cached, compilation stops once imports are resolved for linking.
 	var mainKey buildcache.Key
 	var cachedMain []byte
 	keyedMain := false
-	// A program linked whole has its packages built as the importer finds
-	// them; see packageStream.
+	// Compile packages concurrently as they are discovered by the importer.
 	var stream *packageStream
 	if mode.name == "exe" && !bf.freestanding {
 		build.WarmRuntime(target)

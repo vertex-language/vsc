@@ -201,20 +201,10 @@ func (g *gen) fileOf(n ast.Node) *token.File {
 	return g.fileIdx.of(n)
 }
 
-// A fileIndex answers which file of a module a node is in, for every gen
-// of the module at once: each file's gen asks, and the index is built
-// once, the first time any of them does.
+// fileIndex maps AST nodes to their containing token.File within a module.
 //
-// It replaces a walk per question. A node from the core or an import was
-// looked for in the module's own files first, walked to the end of each,
-// once per function the module named.
-//
-// Two tiers. Almost every question is about a declaration, so the first
-// is every node outside a function body -- declarations, their
-// parameters and defaults, their members -- which is a small part of an
-// imported file. Only a node inside a body (a local function) walks the
-// rest, once. The core's own declarations are in neither file list and
-// are answered "no file" by the first tier without walking anything.
+// Uses a two-tier lookup: a shallow index for top-level and member declarations,
+// and a lazily populated deep index for nodes inside function bodies (e.g. local functions).
 type fileIndex struct {
 	files   []*ast.File
 	decls   map[ast.Node]*token.File

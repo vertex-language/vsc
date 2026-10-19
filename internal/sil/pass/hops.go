@@ -7,24 +7,12 @@ import (
 	"github.com/vertex-language/vsc/types"
 )
 
-// Hops home that cannot move the task.
+// elideHomeHops eliminates redundant executor home-hop checks in async functions.
 //
-// A nonisolated async function runs on the task's home executor, so after
-// every await the generator checks the task is still there and hops back
-// if not: `vertex_task_needs_hop(home)`, then a branch to a hop. What was
-// awaited decides whether the task can have moved. A nonisolated async
-// function -- a Vertex one, called directly or through a closure whose
-// type is not @MainActor -- ends on the task's home: it hopped there in its
-// prologue if it awaits anything, checked the same way after each of its
-// own awaits, and otherwise never left where its caller was, which was
-// home. So the check after awaiting one is answered before it is asked.
-//
-// That is what this pass removes: a home check whose nearest suspension
-// before it, walking back through single predecessors, is a call of such
-// a function. A check after anything else -- a runtime primitive (they are
-// the vertex_ functions), a @MainActor function, a hop, the function's
-// entry -- is left alone. Each one removed is a runtime call, a thread
-// slot lookup and a branch saved per await.
+// When awaiting a nonisolated async function that finishes on the caller's home
+// executor, subsequent `vertex_task_needs_hop(home)` checks are redundant and
+// safely removed. Checks following actor-isolated calls, runtime primitives,
+// or entry blocks are preserved.
 func elideHomeHops(f *sil.Func) {
 	if f.IsDeclaration() || f.Type() == nil || !f.Type().Async {
 		return

@@ -475,16 +475,9 @@ func (c *fn) kernelDescriptorCall(in *sil.Inst) (bool, error) {
 	return true, nil
 }
 
-// ---- Map: the grid kernel an element kernel stands for (§4.2) ----
-//
-// An element kernel f(a, b, …) -> R, mapped with some of its parameters
-// taken from buffers (the mask), is launched as a grid kernel the
-// compiler writes here: work-item i reads element i of each mapped
-// buffer, calls f with those and the broadcast arguments, and writes
-// element i of the output. Its parameters are each of f's -- a mapped
-// one as a buffer's pointer and count, a broadcast one as itself -- and
-// then the output's pointer and count. The grid is the output's count;
-// a work-item past it does nothing.
+// Map grid kernel generation (§4.2):
+// An element kernel f(a, b, …) -> R mapped over buffer parameters is
+// launched as a synthesized grid kernel where work-item i processes element i.
 
 // splitMapVariant reads a map variant's name, <f>$map<mask>.
 func splitMapVariant(name string) (base string, mask uint64, ok bool) {

@@ -294,31 +294,25 @@ print(onGPU == onCPU)                                        // true
 | `gpu.Wave` | `Lane`, `Size`, `Shuffle…`, `Any`, `All`, `Ballot`, `First`, `Sum`, `Min`, `Max` |
 | `gpu.Atomic` | `Add`, `Sub`, `Min`, `Max`, `And`, `Or`, `Xor`, `Exchange`, `CompareExchange`, on integers and floats |
 
-On the host: `gpu.Default()`, `gpu.CPU()`, `gpu.Devices()`,
-`device.Upload`, `device.CreateBuffer`, `device.Wrap` (existing host memory,
-no copy), and on a buffer `Download`, `Copy`, `Fill`, `Slice` and `View(as:)`.
+#### Host and buffer operations
 
-Rendering, on Metal (on the CPU device these make nothing, and callers draw
-on the CPU): `gpu.Texture.Create` (2D or cube, RGBA8, RGBA32F or
-depth-stencil, with mip levels) with `Write` and `Read`; `gpu.Library(device:
-source:)`, Metal source compiled while the program runs, and its `Function`;
-`gpu.RenderPipeline` from a `PipelineDescriptor` (formats, blending, write
-mask, vertex layout); `DepthStencilState.Create`, `SamplerState.Create`; and
-`RenderPass.Begin` with `SetPipeline`, `SetViewport`, `SetScissor`,
-`SetRaster`, `SetBytes`, `SetTexture`, `SetSampler`, `Draw`, `DrawIndexed` and
-`End`. Passes go into one command buffer; `device.Commit` runs them, and a
-texture's `Read` or `Write` waits for what was committed; `Upload` doesn't
-wait (its bytes are staged and copied on the GPU after what's already
-committed). `gpu/raster` draws with them.
+- **Devices**: `gpu.Default()`, `gpu.CPU()`, `gpu.Devices()`
+- **Allocations**: `device.Upload`, `device.CreateBuffer`, `device.Wrap` (zero-copy wrapping of existing host memory)
+- **Buffer operations**: `Download`, `Copy`, `Fill`, `Slice`, and `View(as:)`
 
-In a window: `gpu.Layer.Attach(device:view:width:height:scale:)` lays a
-`CAMetalLayer` over a window's view (`window.Surface.RawParts`), and
-`Layer.Present(scene, overlay:, backdrop:)` draws a frame where it was drawn:
-the scene texture scaled to the window, an optional frosted `Backdrop` (a
-rounded rectangle blurred, the rest dimmed), an optional premultiplied
-overlay (a HUD) over it, presented when the GPU gets there, nothing read
-back. `Layer.Capture` is the same composite read back, for screenshots.
-`entity/run`'s `Window(…, present:, …)` runs a program this way.
+#### Rendering on Metal
+
+On CPU devices, these calls are no-ops and callers draw on CPU. On Metal:
+
+- **Textures**: `gpu.Texture.Create` (2D or cube; RGBA8, RGBA32F, or depth-stencil; mip levels) with `Write` and `Read`.
+- **Pipelines**: `gpu.Library(device:source:)` (runtime-compiled Metal source) and its `Function`; `gpu.RenderPipeline` from a `PipelineDescriptor` (formats, blending, write mask, vertex layout); `DepthStencilState.Create`, `SamplerState.Create`.
+- **Render passes**: `RenderPass.Begin` with `SetPipeline`, `SetViewport`, `SetScissor`, `SetRaster`, `SetBytes`, `SetTexture`, `SetSampler`, `Draw`, `DrawIndexed`, and `End`.
+- **Execution**: Passes record into a single command buffer executed by `device.Commit`. Texture `Read`/`Write` waits for committed work, while `Upload` stages and copies asynchronously. `gpu/raster` uses these primitives to draw.
+- **Window presentation**: `gpu.Layer.Attach(device:view:width:height:scale:)` lays a `CAMetalLayer` over a window view (`window.Surface.RawParts`). `Layer.Present(scene, overlay:, backdrop:)` composites directly on the GPU without CPU readback:
+  - The scene texture scaled to the window.
+  - An optional frosted `Backdrop` (a rounded rectangle blurred with the background dimmed).
+  - An optional premultiplied overlay (HUD).
+  - `Layer.Capture` reads back the same composite for screenshots. `entity/run`'s `Window(…, present:, …)` runs a program this way.
 
 ### Devices
 
@@ -599,7 +593,7 @@ the program: `vsc run hub -- resolve hf.co/Qwen/Qwen3-0.6B`.
 
 `vsc install` is `go install`: a name is `cmd/<name>`, a folder that is a
 library (or has no `.vs` files) stands for every program in its `cmd/`, and
-an import path is fetched first -- `vsc install time/cmd/stopwatch`,
+an import path is fetched first: `vsc install time/cmd/stopwatch`,
 `vsc install github.com/you/tool/cmd/tool@v1.2`. Each program is named for its
 folder; one built with `-target` for another machine lands in
 `$VERTEXBIN/<target>/`.
@@ -725,7 +719,7 @@ print(add(40, 2))
 
 | Suite | Checks |
 | :--- | :--- |
-| `tests/` | the language ladder: 281 small programs, from an empty one up, each built and run and its output compared with the reference compiler's |
+| `tests/` | the language ladder: over 450 small programs (`001`–`454`), climbing from an empty one up, each built and run and its output compared with the reference compiler's |
 | `tests/kernel` | 80 kernel programs, run on the CPU device and on Metal, plus the errors the kernel checker must give |
 | `build/testdata/packages` | package builds: mixed `.vs` and C++ folders, Objective-C++ frameworks |
 | `build/testdata/interop`, `cinterop` | linking with other compilers' objects, and C calling conventions |

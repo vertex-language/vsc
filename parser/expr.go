@@ -499,8 +499,6 @@ func (p *parser) atArgLabel() bool {
 	return p.at(token.IDENT) || p.kind().IsKeyword()
 }
 
-// ---- primary expressions ----
-
 func (p *parser) parsePrimaryExpr(fl exprFlags) ast.Expr {
 	lo := p.pos()
 	switch k := p.kind(); {

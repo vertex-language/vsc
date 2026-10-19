@@ -236,8 +236,6 @@ func TestOwnLoweredCorpusVerifies(t *testing.T) {
 	}
 }
 
-// --- helpers ---
-
 // lowered takes a source file all the way to a SIL module this
 // package will accept.
 func lowered(t *testing.T, path string) *sil.Module {

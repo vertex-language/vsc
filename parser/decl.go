@@ -68,8 +68,6 @@ func (p *parser) parseDecl() ast.Decl {
 	return &ast.BadDecl{Span: p.span(lo)}
 }
 
-// ---- import ----
-
 // parseReceiver parses a method receiver clause `(name: [mod] Type)`.
 func (p *parser) parseReceiver() *ast.Receiver {
 	lo := p.pos()
@@ -185,8 +183,6 @@ func (p *parser) parseImport(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifi
 	d.Span = p.span(lo)
 	return d
 }
-
-// ---- let and var ----
 
 func (p *parser) parseVarDecl(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
 	d := &ast.VarDecl{Attrs: attrs, Mods: mods, Keyword: p.pos(), Kind: p.kind()}
@@ -327,8 +323,6 @@ func (p *parser) parseAccessorBlock() *ast.AccessorBlock {
 	return b
 }
 
-// ---- typealias and associatedtype ----
-
 func (p *parser) parseTypealias(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
 	d := &ast.TypealiasDecl{Attrs: attrs, Mods: mods, Keyword: p.pos()}
 	p.next()
@@ -355,8 +349,6 @@ func (p *parser) parseAssociatedType(lo token.Pos, attrs []*ast.Attr, mods []*as
 	d.Span = p.span(lo)
 	return d
 }
-
-// ---- functions, initializers, subscripts ----
 
 // atStringStart reports whether the token n ahead begins a string
 // literal, counting the pound run of a raw one.
@@ -513,8 +505,6 @@ func (p *parser) parseSubscript(lo token.Pos, attrs []*ast.Attr, mods []*ast.Mod
 	return d
 }
 
-// ---- type declarations ----
-
 func (p *parser) parseEnum(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
 	d := &ast.EnumDecl{Attrs: attrs, Mods: mods, Enum: p.pos()}
 	p.next()
@@ -655,8 +645,6 @@ func (p *parser) parseExtension(lo token.Pos, attrs []*ast.Attr, mods []*ast.Mod
 	return d
 }
 
-// ---- operators and precedence groups ----
-
 func (p *parser) parseOperatorDecl(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifier) ast.Decl {
 	d := &ast.OperatorDecl{Attrs: attrs, Operator: p.pos()}
 	p.next()
@@ -773,8 +761,6 @@ func (p *parser) parseMacro(lo token.Pos, attrs []*ast.Attr, mods []*ast.Modifie
 	d.Span = p.span(lo)
 	return d
 }
-
-// ---- member blocks ----
 
 // container says which member list the grammar gives the declaration
 // being read, so a member that is not in it can be named as such.

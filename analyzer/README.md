@@ -28,8 +28,11 @@ preferring silence to that.
 - **Members.** A member that a declared type does not have is
   reported. A member of a type whose members are not modelled is not,
   because not knowing is not evidence.
-- **Conformance**, nominally: a type conforms to a protocol because it
-  said so, never because its members line up.
+- **Conformance and derivations**, nominally: a type conforms to a protocol because it
+  said so, and derived conformances (`Equatable`, `Hashable`, `CaseIterable`) are synthesized
+  for eligible structs and enums.
+- **Result builders (SE-0289).** Attributes naming result builders rewrite closure bodies into
+  synthesized builder calls.
 - **Generic calls**, by unifying the arguments with the parameters:
   `identity(3)` is a call to `(Int) -> Int`, and `Box(v: 3)` makes a
   `Box<Int>`.
@@ -37,27 +40,18 @@ preferring silence to that.
   bases, hexadecimal floats, escapes, pound delimiters, multiline
   indentation — and the value is recorded in `Info.Values`. This is
   the last step between a spelling and a constant a backend can emit.
-- **Mutability, definite initialization, consumption**, and the two
-  actor-isolation rules the model can express.
+- **Mutability, definite initialization, consumption**, and
+  actor-isolation rules (`@MainActor`, `nonisolated`).
 
 ## What it does not know, and stays quiet about
 
-- **The standard library.** There is none. `Int` has no members, `+`
-  is not declared anywhere, and `Array` and `String` are modelled as
-  types with no surface. A member of one is Invalid, silently.
-- **Overload resolution**, beyond a fit. A name may be declared more
-  than once, and a call takes the one declaration whose parameters its
-  arguments fit. Swift ranks the candidates and picks the best; this
-  requires exactly one to fit, and where several do or none does it
-  says nothing rather than choosing.
-- **Protocol requirements**, beyond the presence of a declared
-  conformance. Whether a conforming type actually satisfies what it
-  promised is checked only in the one pass that reports it.
-- **Constraint solving.** Generic inference is a structural match of
-  arguments against parameters. There is no bidirectional inference,
-  no literal defaulting through constraints, no `where` clauses.
-- **Regular expressions, key paths, macros, property wrappers, result
-  builders, packs.** They parse; they have no type here.
+- **Complex bidirectional constraint solving.** Generic inference is a structural match of
+  arguments against parameters. Complex multi-statement constraint solving with literal
+  defaulting falls back to explicit annotations.
+- **Overload ranking**, beyond an exact structural fit. A call takes the one declaration whose
+  parameters its arguments match unambiguously; where several fit without a clear rank,
+  it prefers silence over an arbitrary guess.
+- **Macros and parameter packs.** They parse into the AST; full macro expansion is deferred.
 
 Each of these is a place the checker returns Invalid without a
 diagnostic. `typeErrorf` is how that stays quiet: a diagnostic whose

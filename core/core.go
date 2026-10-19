@@ -41,11 +41,8 @@ func Files() (*ast.File, *token.File, []token.Diagnostic) {
 	return file, unit, errs
 }
 
-// Algorithms parses and returns the core's algorithms -- what the core
-// defines in source over what core.swift declares: Array's map and
-// filter, zip, stride and the rest -- once, the same tree for every
-// module compiled. A module lowers what it uses of them, specialized for
-// the types it uses them with.
+// Algorithms parses and caches standard library algorithms (map, filter, zip, stride)
+// defined in algorithms.swift, parsed once across compilations.
 func Algorithms() (*ast.File, *token.File, []token.Diagnostic) {
 	algOnce.Do(func() {
 		algUnit = token.NewFile("algorithms.swift", []byte(algorithms))

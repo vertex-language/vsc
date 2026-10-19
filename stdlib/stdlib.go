@@ -336,21 +336,12 @@ func SwiftBridgeUnit(target string) (string, bool) {
 	return "", false
 }
 
-// The runtime's assembly, which is the two jobs C++ cannot do.
+// Low-level runtime assembly routines for async continuations and suspending primitives.
 //
-// One is entering a continuation: an async function is handed its context
-// in the context register and a closure's captures in the self register,
-// and nothing C++ says loads either. It also saves them, because an async
-// function does not -- the context register is callee-saved under AAPCS64
-// and is not under Swift's convention on top of it.
-//
-// The other is the shape of the runtime's own suspending primitives. They
-// are async functions in the ABI sense, so they are entered with the
-// context in X22 and their arguments from X0 -- and a C function reads
-// its first argument from X0. Each is reached through a thunk that shifts
-// its arguments up and puts the context in X0, then branches to the C. A
-// branch and not a call, so that when the C returns it returns to the
-// executor that entered the task.
+// 1. Continuation entry: sets up context and self registers (X22/X20 on ARM64)
+//    and preserves callee-saved registers across Swift async calls.
+// 2. Suspending primitives: ABI thunks shifting async arguments to C calling
+//    conventions before tail-calling into C runtime routines.
 
 // taskEnterARM64 is vertex_task_enter(code, async, self, a0, a1).
 const taskEnterARM64 = "\n" +

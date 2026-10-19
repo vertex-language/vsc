@@ -428,8 +428,6 @@ func documentLevel(prelude string) bool {
 	return prelude != ""
 }
 
-// ---- the header's tokens ----
-
 func skipSpaces(src []byte, i int) int {
 	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
 		i++

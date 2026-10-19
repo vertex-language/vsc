@@ -18,19 +18,11 @@ func (s *scanner) scanIdent(start int) {
 	s.emit(token.Lookup(string(s.src[start:s.off])), start)
 }
 
-// scanEscapedIdent consumes `identifier`. The backticks are part of
-// the span but not of the name: Ident.Text strips them.
+// scanEscapedIdent consumes a backtick-escaped or raw identifier (`name`).
 //
-// A backtick does two jobs. It escapes a spelling that is otherwise a
-// keyword, which is what lets a program declare something called
-// `class`; and it introduces a raw identifier, whose name need not be
-// an identifier at all — `hello world` and `f(x)` are names a test
-// framework gives its cases.
-//
-// What a raw identifier may not hold: a backslash, a line break, or
-// any whitespace but the space itself. What it may not be: empty,
-// all spaces, or a name made only of operator characters, which would
-// have no way to be told from an operator at the use site.
+// Escapes allow using reserved keywords as identifiers or forming raw identifiers
+// containing spaces and symbols. Backslashes, newlines, empty names, all-whitespace,
+// or operator-only names are rejected.
 func (s *scanner) scanEscapedIdent() {
 	start := s.off
 	s.off++ // the opening backtick

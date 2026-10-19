@@ -49,11 +49,7 @@ func clean(t *testing.T, f *sil.Func) {
 	}
 }
 
-// ---- sound ----
-
-// TestBorrowedParameterVerifies is the shape of `func borrows(_ b:
-// Box) -> Int`: nothing is owned, nothing is consumed, and the
-// verifier has nothing to say.
+// TestBorrowedParameterVerifies tests that borrowed parameters verify cleanly.
 func TestBorrowedParameterVerifies(t *testing.T) {
 	f := fn("borrows")
 	b := f.Param(boxT, sil.ParamGuaranteed)
@@ -101,8 +97,6 @@ func TestBranchesVerify(t *testing.T) {
 	no.Return(no.IntegerLiteral(intT, 2))
 	clean(t, f)
 }
-
-// ---- structure ----
 
 func TestNoTerminator(t *testing.T) {
 	f := fn("noterm")
@@ -171,8 +165,6 @@ func TestDominance(t *testing.T) {
 	wants(t, f, ErrDominance)
 }
 
-// ---- rule one ----
-
 func TestLeak(t *testing.T) {
 	f := fn("leak")
 	f.Param(boxT, sil.ParamOwned) // never consumed
@@ -220,8 +212,6 @@ func TestConsumedOnOnePath(t *testing.T) {
 	join.Return(join.IntegerLiteral(intT, 0))
 	wants(t, f, ErrLeak)
 }
-
-// ---- rule two ----
 
 func TestBorrowNotEnded(t *testing.T) {
 	f := fn("openborrow")

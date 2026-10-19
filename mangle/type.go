@@ -17,9 +17,8 @@ var standard = map[types.BasicKind]byte{
 	types.Character: 'J',
 }
 
-// standardProtocols are the standard library's protocols the scheme
-// gives a letter of their own, after an S as the types' are: SQ is
-// Equatable, and so on. swiftc writes $sSQMp for Equatable's descriptor.
+// standardProtocols maps standard library protocols to single-letter substitutions
+// (prefixed with 'S', e.g. SQ for Equatable, giving $sSQMp for its descriptor).
 var standardProtocols = map[string]byte{
 	"Equatable":        'Q',
 	"Comparable":       'L',
@@ -31,10 +30,8 @@ var standardProtocols = map[string]byte{
 	"BinaryInteger":    'z',
 }
 
-// standardNominals are the standard library's structs the scheme gives a
-// letter of their own, after an S: SJ is Character, Sn Range. Those this
-// compiler has as nominal types of its core are written by them, so that
-// a symbol naming one is swiftc's.
+// standardNominals maps standard library structs to single-letter substitutions
+// (prefixed with 'S', e.g. SJ for Character, Sn for Range).
 var standardNominals = map[string]byte{
 	"Character":                     'J',
 	"Range":                         'n',

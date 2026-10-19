@@ -6,10 +6,7 @@ import (
 	"unsafe"
 )
 
-// Position is a resolved location in a File. Line and Column are
-// 1-based; Offset is a byte offset, and Column counts bytes, not
-// scalars — a diagnostic's underline is drawn from the span, and
-// every editor that reads a column expects the byte one.
+// Position is a resolved location in a File. Line, Column, and Offset count 1-based bytes.
 type Position struct {
 	Filename string
 	Offset   int
@@ -35,8 +32,7 @@ func NewFile(name string, src []byte) *File {
 	return f
 }
 
-// scanLines records line starts. \n, \r\n, and lone \r all terminate
-// a line — the grammar's LineTerminator.
+// scanLines records line start byte offsets for \n, \r\n, and lone \r.
 func (f *File) scanLines() {
 	starts := []int32{0}
 	src := f.src
@@ -88,17 +84,12 @@ func (f *File) Offset(p Pos) int {
 	return int(p) - 1
 }
 
-// Slice returns the bytes of a span — the spelling of whatever the
-// span covers. Feed this to decoders.
+// Slice returns the source bytes of a span.
 func (f *File) Slice(pos, end Pos) []byte {
 	return f.src[f.Offset(pos):f.Offset(end)]
 }
 
-// String is Slice as a string, sharing the source's bytes rather than
-// copying them: a File's source is never written once it is made, so the
-// string is as immutable as any other. Names are asked for constantly --
-// every identifier the checker resolves -- and the copies were a tenth of
-// what checking allocated.
+// String returns the span as a string, zero-copy referencing the immutable file source.
 func (f *File) String(pos, end Pos) string {
 	b := f.Slice(pos, end)
 	if len(b) == 0 {
@@ -121,9 +112,7 @@ func (f *File) Position(p Pos) Position {
 	}
 }
 
-// Line returns the 1-based line a Pos falls on. It is Position's line
-// without the rest of the work — the scanner asks this often, for the
-// grammar's line-sensitive rules.
+// Line returns the 1-based line number for Pos via binary search.
 func (f *File) Line(p Pos) int {
 	off := f.Offset(p)
 	return sort.Search(len(f.lineStarts), func(i int) bool {
@@ -131,8 +120,7 @@ func (f *File) Line(p Pos) int {
 	})
 }
 
-// LineText returns line n (1-based) without its terminator — for a
-// diagnostic renderer that underlines the offending source.
+// LineText returns line n (1-based) without its line terminator.
 func (f *File) LineText(n int) []byte {
 	if n < 1 || n > len(f.lineStarts) {
 		return nil
@@ -148,8 +136,7 @@ func (f *File) LineText(n int) []byte {
 	return f.src[lo:hi]
 }
 
-// Between returns the trivia — whitespace and comments — between two
-// tokens, for formatters.
+// Between returns whitespace and comments between two tokens.
 func (f *File) Between(prev, next Token) []byte {
 	lo, hi := f.Offset(prev.End), f.Offset(next.Pos)
 	if lo > hi {

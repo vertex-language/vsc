@@ -784,8 +784,6 @@ func TestProgramExitsZero(t *testing.T) {
 	}
 }
 
-// --- the harness ---
-
 func runSwift(t *testing.T, module, swift, mainC string) string {
 	t.Helper()
 	out, err := exec.Command(buildSwift(t, module, swift, mainC)).CombinedOutput()

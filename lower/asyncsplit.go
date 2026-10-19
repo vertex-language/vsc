@@ -6,34 +6,10 @@ import (
 	"github.com/vertex-language/vsc/stdlib"
 )
 
-// Cutting an async function into the functions it becomes.
-//
-// An async function that gives up its thread cannot be one function: it
-// leaves at a suspension and comes back where the callee's context says,
-// and a function cannot be re-entered in the middle. So it becomes
-//
-//	f          the prologue: arguments into the frame, then into the body
-//	f…TA_      every block of it, behind a dispatch on where to carry on
-//	f…TQn_     one per suspension: what the call answered into the frame,
-//	           the call's frame freed, back to the body
-//
-// Swift emits a funclet per suspension instead, each holding the code
-// that follows it. One body behind a dispatch is the other way of
-// splitting a coroutine, and it is the one that survives a loop with an
-// `await` in it: the code after a suspension branches back to the code
-// before it, which is an ordinary branch while both are in one function
-// and an impossible one when they are not.
-//
-// None of that is visible across a call. What a caller writes into
-// `resumeParent` is an address, and whether it belongs to a funclet
-// holding the rest of the function or to a stub that jumps into a shared
-// body is this compiler's business. The protocol either way is Swift's;
-// see docs/vertex_swift_async.md.
-//
-// Anything that has to cross a boundary lives in the frame and is read
-// from it at every use. That is more loads than a smarter pass would
-// emit, and it is right whatever the control flow does, which is worth
-// more here than the loads cost.
+// Async function code splitting.
+// Splices async functions into entry prologues, shared dispatch bodies (...TA_),
+// and resume funclets (...TQn_) per suspension point. Loop-crossing suspensions
+// dispatch back into the common body. Frame slots preserve state across suspensions.
 
 func bodyName(f *sil.Func) string { return f.Name() + "TA_" }
 
@@ -762,26 +738,9 @@ func (l *lowerer) asyncFrameSize(name string) (int64, bool) {
 	return size, ok
 }
 
-// The record beside an async function.
-//
-// A caller of an async function allocates the callee's frame, so it has
-// to know how big that frame is -- which is the callee's business and is
-// not in its type. Swift answers with a record beside every async
-// function, named by the function's symbol and `Tu`:
-//
-//	<{ i32 relativeFunction, i32 expectedContextSize }>
-//
-// The first field is the distance from the record to the function, so
-// the pair is position independent and can live in read-only memory; the
-// second is the size. A call through a function value reads both:
-//
-//	%3 = load i32, ptr %fp          ; the offset
-//	%7 = %fp + sext(%3)             ; the code
-//	%9 = load i32, ptr %fp + 4      ; the size
-//	%11 = call swiftcc ptr @swift_task_alloc(i64 zext(%9))
-//
-// which is measured from swiftc rather than guessed. See
-// docs/vertex_swift_async.md.
+// Async function companion record (<name>Tu).
+// Emits position-independent metadata <i32 relativeFuncOffset, i32 frameSize>
+// allowing callers to allocate appropriately sized task context frames.
 
 // asyncRecordName is what that record is called for a function.
 func asyncRecordName(name string) string { return name + "Tu" }

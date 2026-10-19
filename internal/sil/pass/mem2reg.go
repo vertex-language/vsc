@@ -4,31 +4,12 @@ import (
 	"github.com/vertex-language/vsc/internal/sil"
 )
 
-// Stack-slot promotion: swiftc's SILMem2Reg, for the slots it matters most
-// for.
+// promoteSlots implements stack-slot promotion (SILMem2Reg) for trivial types.
 //
-// A `var` of trivial type -- an Int, a Bool, a UInt8, a pointer -- is an
-// alloc_stack that every read loads from and every write stores to, and
-// lowered as it stands each of those is a memory access: a loop counter
-// costs a load and a store per iteration. When nothing takes the slot's
-// address beyond loading and storing through it, the slot is only a
-// variable, and the loads can read the value last stored instead. Where
-// two stores reach one load, the block the paths meet at takes the value
-// as a block argument, which is SIL's phi.
-//
-// This is the textbook construction (Cytron et al.): block arguments at the
-// iterated dominance frontier of the stores, pruned to the blocks the slot
-// is live into, then a walk of the dominator tree that carries the current
-// value down it. Only trivial slots are promoted -- their loads and stores
-// say [trivial] -- so there is no ownership to thread through the new
-// arguments; a slot whose value would need a retain on each copy is left in
-// memory, as are slots whose address goes anywhere but a load, a store, an
-// access scope or its own dealloc_stack.
-//
-// A slot is promoted only when every read of it has a value to read on
-// every path, which definite initialization already guarantees for a
-// source `var`; a slot the walk finds read with nothing stored is left
-// alone rather than given an undefined value.
+// Promotes local alloc_stack slots to SSA values using iterated dominance frontiers
+// (Cytron et al.) with block arguments as phi nodes. Promotion is restricted to
+// trivial types (no ownership overhead) whose addresses are only loaded, stored,
+// accessed, or deallocated.
 func promoteSlots(f *sil.Func) {
 	if f.IsDeclaration() {
 		return

@@ -327,8 +327,6 @@ func (p *parser) parseTypeSuffixes(t ast.Type, lo token.Pos) ast.Type {
 	}
 }
 
-// ---- parameters ----
-
 // parseParamList reads a ParameterList up to close. defaults says
 // whether a parameter may carry `= Expression`, which a declaration's
 // may and a function type's may not.
@@ -344,14 +342,8 @@ func (p *parser) parseParamList(close token.Kind, defaults bool) []*ast.Param {
 	return out
 }
 
-// parseParam reads one Parameter.
-//
-// The grammar writes `[ArgumentLabel :] [ParameterModifierList] Type
-// [...]` and uses it for a function type and a function declaration
-// alike. A declaration's parameter carries two things that leaves
-// out — the local name of `func move(to dest: point)`, and a default
-// value — so both are read here, and only the default is refused
-// where it means nothing. See the README.
+// parseParam reads one Parameter, handling argument labels, local names,
+// modifiers, and optional default values.
 func (p *parser) parseParam(defaults bool) *ast.Param {
 	lo := p.pos()
 	param := &ast.Param{Attrs: p.parseAttrs()}
@@ -439,8 +431,6 @@ func (p *parser) parseThrowsClause() *ast.ThrowsClause {
 	c.Span = p.span(lo)
 	return c
 }
-
-// ---- generics ----
 
 // parseGenericParams reads < GenericParameterList >.
 func (p *parser) parseGenericParams() *ast.GenericParams {

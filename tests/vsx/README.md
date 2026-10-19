@@ -1,8 +1,8 @@
 # tests/vsx
 
-The ladder for `.vsx`, Vertex with markup (`proposed_vsx.md` on the
-Desktop is the design). Markup has no oracle the way the Swift ladder has
-swiftc, so each test writes down what it expects.
+The ladder for `.vsx`, Vertex with markup (per the VSX markup RFC specification).
+Markup has no oracle the way the Swift ladder has swiftc, so each test writes
+down what it expects.
 
 | Folder | What | Checked by |
 | --- | --- | --- |

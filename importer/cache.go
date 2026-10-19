@@ -9,12 +9,8 @@ import (
 // CacheEnv is the variable that says where fetched packages are kept.
 const CacheEnv = "VERTEXCACHE"
 
-// CacheDir is where fetched packages are kept: VERTEXCACHE where it is
-// set, and a "vertex" directory in this machine's cache otherwise --
-// ~/Library/Caches on macOS, ~/.cache on Linux, AppData on Windows.
-//
-// Everything under it is fetched and can be deleted: a build that finds
-// it empty does the same work again over the network.
+// CacheDir returns the root directory where fetched packages are cached.
+// It checks VERTEXCACHE, falling back to os.UserCacheDir() ("vertex" subfolder).
 func CacheDir() string {
 	if dir := os.Getenv(CacheEnv); dir != "" {
 		return dir
@@ -22,18 +18,12 @@ func CacheDir() string {
 	if base, err := os.UserCacheDir(); err == nil {
 		return filepath.Join(base, "vertex")
 	}
-	// No home directory to speak of. A directory beside the program's
-	// own work is better than failing the build.
+	// Fall back to a temporary directory if user cache is unavailable.
 	return filepath.Join(os.TempDir(), "vertex-cache")
 }
 
-// PackageDir is where a module's checkout belongs, whether or not it is
-// there yet: the repository's own name, and the ref it was taken at.
-//
-//	<cache>/pkg/github.com/vertex-language/net-tcp@main
-//
-// The ref is part of the name so that two programs wanting different
-// branches of one repository do not fight over a single directory.
+// PackageDir returns the cached checkout directory for a module and ref:
+// <cache>/pkg/<repo>@<ref>.
 func PackageDir(m Module, cache string) string {
 	name := strings.TrimPrefix(m.Repo, "https://")
 	name = strings.TrimPrefix(name, "http://")

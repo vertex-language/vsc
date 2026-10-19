@@ -119,7 +119,7 @@ func CInterface(ci CImport) ([]byte, []string, error) {
 	return out.Bytes(), skipped, nil
 }
 
-// headerFiles is every header under dir, in a stable order.
+// headerFiles returns sorted header paths found under dir.
 func headerFiles(dir string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -156,8 +156,8 @@ type cMapper struct {
 	windows bool
 }
 
-// declaration is a C function as a Swift declaration of its symbol, or why
-// it is not one yet.
+// declaration maps a C function symbol to a Swift function declaration string,
+// or returns an explanation if it cannot be imported.
 func (m cMapper) declaration(fn *sema.FuncSymbol) (string, string) {
 	var params []string
 	for i, p := range fn.FuncType.Params {

@@ -16,8 +16,7 @@ import (
 // inst translates a single SIL instruction into VIR.
 func (c *fn) inst(in *sil.Inst) error {
 	switch in.Op() {
-
-	// --- the ones that cost nothing ---
+	// Zero-cost instructions.
 
 	case sil.DebugValue:
 		if v, ok := c.value(in.Args()[0]); ok && in.Aux().Name != "" && v.Def() != nil {
@@ -132,7 +131,7 @@ func (c *fn) inst(in *sil.Inst) error {
 		c.refNames[in.Result()] = in.Aux().Name
 		return nil
 
-	// --- literals ---
+	// Literals.
 
 	case sil.IntegerLiteral:
 		// Swift passes a with_overflow builtin a third operand saying
@@ -148,7 +147,7 @@ func (c *fn) inst(in *sil.Inst) error {
 	case sil.FloatLiteral:
 		return c.floatLiteral(in)
 
-	// --- arithmetic ---
+	// Arithmetic operations.
 
 	case sil.BuiltinCall:
 		return c.builtinCall(in)
@@ -162,7 +161,7 @@ func (c *fn) inst(in *sil.Inst) error {
 	case sil.CondFail:
 		return c.condFail(in)
 
-	// --- memory ---
+	// Memory operations.
 
 	case sil.AllocRef:
 		return c.allocRef(in)
@@ -191,14 +190,14 @@ func (c *fn) inst(in *sil.Inst) error {
 	case sil.Store:
 		return c.store(in)
 
-	// --- lifetime, now that it is calls ---
+	// Lifetime management.
 
 	case sil.StrongRetain:
 		return c.refCount(in, &c.l.retain, stdlib.Retain)
 	case sil.StrongRelease:
 		return c.refCount(in, &c.l.release, stdlib.Release)
 
-	// --- calls and control flow ---
+	// Calls and control flow.
 
 	case sil.Apply:
 		return c.apply(in)

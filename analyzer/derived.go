@@ -10,24 +10,14 @@ import (
 	"github.com/vertex-language/vsc/types"
 )
 
-// Derived conformances, as swiftc's Sema makes them (DerivedConformance,
-// DerivedConformanceEquatableHashable, DerivedConformanceCaseIterable).
+// Synthesizes derived protocol conformances (Equatable, Hashable, CaseIterable).
 //
-// A struct or enum that conforms to Equatable -- itself, or through a
-// protocol that refines it: Comparable, Hashable, OptionSet, one of the
-// program's own -- and has no `==` of its own gets one, comparing every
-// stored property in the order they are declared, or an enum's cases and
-// what they carry. One that is Hashable and has no hash(into:) gets that,
-// combining the same; so does an enum of cases alone, which is Hashable
-// without saying so. An enum of cases alone that is CaseIterable gets its
-// allCases. swiftc names the `==` it makes __derived_struct_equals and
-// __derived_enum_equals, and so does this.
-//
-// It is decided here, once every conformance a type has -- from its
-// declaration and its extensions -- is known and before any is checked
-// for its witnesses, which is where swiftc derives one. The members are
-// written as an extension of the type in a file of their own, which is
-// checked and lowered with the module like any other: Info.Derived.
+// For structs and enums with explicit conformances lacking explicit implementations:
+// - Equatable: synthesizes memberwise `==` (__derived_struct_equals / __derived_enum_equals).
+// - Hashable: synthesizes memberwise `hash(into:)`.
+// - CaseIterable: synthesizes `allCases` for simple enums.
+// Derived members are emitted into a synthesized AST file (Info.Derived) and checked
+// alongside user source files.
 
 // DerivedStructEquals is the name of the `==` swiftc derives for a struct.
 const DerivedStructEquals = "__derived_struct_equals"

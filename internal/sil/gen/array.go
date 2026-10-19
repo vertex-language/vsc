@@ -331,18 +331,9 @@ func (g *gen) elementAt(at ast.Node, base *sil.Value, t types.Type,
 	_, isExistential := existentialOf(m.Result)
 
 	raw := sil.Object(sil.BuiltinRawPointer)
-	// An element that is only bits -- a byte, a number, a struct of them
-	// -- is read as Swift reads it: the bounds check, then a load at the
-	// index's stride from where the storage keeps its elements. A byte
-	// loop is then loads and compares, with no call in it.
-	//
-	// Any other element whose layout is known here -- a String, a class
-	// reference, a struct holding them -- is found the same way and then
-	// copied out (load [copy]: its references retained), which is what the
-	// runtime's vertex_array_element did after a call and a lookup of the
-	// stride in the element's witnesses. A generic element's stride is not
-	// known until run time, and an existential is read as a temporary in
-	// memory; both keep the call.
+	// Trivial and statically sized non-generic elements are indexed directly inline:
+	// unsigned bounds check, element pointer calculation, and load (with [copy] retain
+	// for non-trivial types). Generic elements or existentials fall back to runtime calls.
 	if !isExistential && (elem.Trivial() || !mentionsTypeParam(m.Result)) {
 		intT := types.Typ[types.Int]
 		word := sil.Object(builtinFor(intT))
@@ -392,15 +383,8 @@ func (g *gen) elementAt(at ast.Node, base *sil.Value, t types.Type,
 	return v
 }
 
-// elementAddr is where an array element is, for writing through: `a[i].x =
-// v`, `a[i].mutate()`, `a[i][j] = v`. It is Array's mutable addressor --
-// the storage is made the variable's alone and the element's address
-// handed back -- so the write changes this array and no other.
-//
-// Swift begins that access once the value or the arguments are evaluated,
-// so that one reading or copying the array sees it as it was; callers
-// that write through an element evaluate those first (see
-// writesThroughElement).
+// elementAddr yields the mutable address of an array element for mutating writes
+// (`a[i].x = v`, `a[i].mutate()`), ensuring uniquely referenced storage before modification.
 func (g *gen) elementAddr(e *ast.SubscriptExpr) *sil.Value {
 	t := g.typeOf(e.X)
 	arr, ok := t.Underlying().(*types.Array)

@@ -179,15 +179,8 @@ func (p *parser) parseDictLitRest(lo, lsquare token.Pos, first ast.Expr) ast.Exp
 	return d
 }
 
-// ---- closures ----
-
-// parseClosure reads '{' [AttributeList] [ClosureSignature]
-// [Statements] '}'.
-//
-// Whether a signature is there cannot be decided by looking: `{ [a] in
-// … }` captures a, and `{ [a] }` is a closure returning an array. So
-// the signature is attempted, and the attempt is undone if it does not
-// reach the `in` that ends one.
+// parseClosure parses '{' [AttributeList] [ClosureSignature] [Statements] '}',
+// speculatively parsing a signature until the terminating 'in'.
 func (p *parser) parseClosure() *ast.ClosureExpr {
 	lo := p.pos()
 	c := &ast.ClosureExpr{Lbrace: p.expect(token.LBRACE)}
@@ -387,16 +380,7 @@ func (p *parser) parseClosureParams() *ast.ClosureParams {
 	return c
 }
 
-// ---- key paths ----
-
-// parseKeyPath reads \ [Type] [.] KeyPathComponents, or the subscript
-// form.
-//
-// The root type is read as a name and its generic arguments, and
-// stops at the first dot: everything after it is a component. That
-// makes `\Outer.Inner.x` a root of Outer and two components, even
-// where Inner is a nested type — telling those apart is name
-// resolution, and the analyzer does it with the components in hand.
+// parseKeyPath reads \ [Type] [.] KeyPathComponents, or the subscript form.
 func (p *parser) parseKeyPath() ast.Expr {
 	lo := p.pos()
 	k := &ast.KeyPathExpr{Backslash: p.pos()}

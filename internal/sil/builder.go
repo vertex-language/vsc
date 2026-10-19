@@ -2,7 +2,8 @@ package sil
 
 // Instruction builder methods for Block.
 
-// ---- ownership ----
+// Ownership instructions.
+
 
 // CopyValue produces an owned copy of a value the caller keeps.
 func (b *Block) CopyValue(v *Value) *Value {
@@ -40,7 +41,8 @@ func (b *Block) ExtendLifetime(v *Value) *Inst {
 	return b.add(ExtendLifetime, Aux{}, []*Value{v})
 }
 
-// ---- memory ----
+// Memory instructions.
+
 
 // AllocStack allocates local storage for type t and yields its address.
 func (b *Block) AllocStack(t Type, attrs ...string) *Value {
@@ -128,7 +130,8 @@ func (b *Block) MarkUninitialized(addr *Value, kind string) *Value {
 		[]*Value{addr}, addr.typ).Result()
 }
 
-// ---- aggregates ----
+// Aggregate instructions.
+
 
 // Struct builds a struct value from field operands in declaration order.
 func (b *Block) Struct(t Type, fields ...*Value) *Value {
@@ -182,7 +185,8 @@ func (b *Block) UncheckedTakeEnumDataAddr(addr *Value, member string, t Type) *V
 	return b.add(UncheckedTakeEnumDataAddr, Aux{Member: member}, []*Value{addr}, t.Address()).Result()
 }
 
-// ---- references and calls ----
+// Reference and call instructions.
+
 
 // RefElementAddr yields the address of a stored property in a class instance.
 func (b *Block) RefElementAddr(ref *Value, member string, t Type) *Value {
@@ -291,7 +295,7 @@ func (b *Block) MetadataGlobal(instance Type, symbol string, off int64) *Value {
 	}, nil, Object(BuiltinRawPointer)).Result()
 }
 
-// ---- literals ----
+// Literal instructions.
 
 // IntegerLiteral is a literal of a builtin integer type.
 func (b *Block) IntegerLiteral(t Type, n int64) *Value {
@@ -309,7 +313,7 @@ func (b *Block) StringLiteral(s string, encoding string) *Value {
 		Object(BuiltinRawPointer)).Result()
 }
 
-// ---- builtins ----
+// Builtin instructions.
 
 // Builtin invokes a compiler builtin instruction by name.
 func (b *Block) Builtin(name string, result Type, args ...*Value) *Value {
@@ -321,14 +325,14 @@ func (b *Block) CondFail(cond *Value, message string) *Inst {
 	return b.add(CondFail, Aux{Text: message}, []*Value{cond})
 }
 
-// ---- debug ----
+// Debug instructions.
 
 // DebugValue emits debug variable attribution.
 func (b *Block) DebugValue(v *Value, name string, attrs ...string) *Inst {
 	return b.add(DebugValue, Aux{Name: name, Attrs: attrs}, []*Value{v})
 }
 
-// ---- terminators ----
+// Terminator instructions.
 
 // Br branches unconditionally, passing the destination's arguments.
 func (b *Block) Br(dest *Block, args ...*Value) *Inst {

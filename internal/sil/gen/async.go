@@ -424,16 +424,9 @@ func (g *gen) there() int64 {
 	return hopHome
 }
 
-// prologueHop starts an async function's body where it runs: Swift's
-// rule (SE-0338), that code isolated to no actor runs on the task's own
-// executor -- its home, or the executor it prefers -- and not on whatever
-// actor called it.
-//
-// A nonisolated one that never suspends and is quick -- no loop, no call
-// -- is left where its caller was: nothing in it can tell, and the hop
-// would give a function that needed no frame one. One that loops or calls
-// can tell by how long it takes: a decode that never awaits, called from
-// the main actor, would hold the main thread for all of it. It hops.
+// prologueHop hops to the appropriate executor at async function entry (SE-0338).
+// Nonisolated async functions hop to the task's home executor, unless proven
+// trivial (no awaits, loops, or function calls) to avoid unnecessary frame allocation.
 func (g *gen) prologueHop(body []ast.Stmt) {
 	if !g.isolated() && !analyzer.Awaits(body) && quickBody(body) {
 		return

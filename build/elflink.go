@@ -14,17 +14,9 @@ import (
 	elflink "github.com/vertex-language/elf/link"
 )
 
-// An ELF platform links against a libc the device has and the host need not:
-// bionic on Android, glibc on Linux. Each system library an image needs is
-// stood in for by a stub linked on the spot -- a shared object with the
-// library's soname and a definition of every symbol the link leaves
-// undefined. The dynamic linker searches every DT_NEEDED library for a name,
-// so it does not matter which stub a symbol is in; libc's has them all and
-// the others are there for their DT_NEEDED entries.
-//
-// So nothing of the host's is read: no sysroot, no crt files, no NDK. The
-// program's entry is vsc's own, which hands the kernel's initial stack to
-// the runtime (vertex_raw_args, for the arguments) and to libc's start.
+// ELF linking uses synthetic stub libraries (soname + undefined symbol stubs)
+// rather than requiring host sysroots or NDK installations.
+// Program entry points initialize runtime argument structures directly from the kernel stack.
 
 // An elfPlatform is what differs from one to the other.
 type elfPlatform struct {

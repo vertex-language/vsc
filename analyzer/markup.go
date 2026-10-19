@@ -70,10 +70,7 @@ func isComponentName(name string) bool {
 	return unicode.IsUpper(r) || strings.Contains(name, ".")
 }
 
-// ---- components ----
-
-// lowerComponent is a component's call: its attributes are its labeled
-// arguments, and its children its `children:` argument.
+// lowerComponent lowers a component invocation to a function call.
 func (c *checker) lowerComponent(e *ast.MarkupElement, name string, scope *Scope) ast.Expr {
 	at := span(e)
 	fun := c.nameExpr(e.Name, name)
@@ -316,8 +313,6 @@ func (c *checker) componentParams(fun ast.Expr, scope *Scope) componentParams {
 	return nil
 }
 
-// ---- HTML elements ----
-
 // lowerIntrinsic is an HTML element's component.Element call.
 func (c *checker) lowerIntrinsic(e *ast.MarkupElement, tag string, scope *Scope) ast.Expr {
 	at := span(e)
@@ -511,8 +506,6 @@ func (c *checker) attrValue(a *ast.MarkupAttribute) ast.Expr {
 	}
 	return nil
 }
-
-// ---- code and children ----
 
 // codeArg is what `{…}` gives where a function of arity arguments, or
 // (arity < 0) a value, is wanted. For a function, the braces are the
@@ -800,8 +793,6 @@ func editDistance(a, b string) int {
 	}
 	return d[len(a)][len(b)]
 }
-
-// ---- building ----
 
 func span(n ast.Node) ast.Span { return ast.Span{Lo: n.Pos(), Hi: n.End()} }
 

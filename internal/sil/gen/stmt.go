@@ -2488,19 +2488,7 @@ func (g *gen) label(id *ast.Ident) string {
 	return g.text(id)
 }
 
-// forInStmt lowers `for i in a..<b` and `for i in a...b` as the
-// counting loop they are.
-//
-// SILGen does not do this. It emits the desugaring the language
-// defines — `makeIterator()`, then `next()` in a loop until it returns
-// none — and every piece of that is generic stdlib: Range, Collection,
-// IndexingIterator, Optional. None of it exists here, so lowering the
-// desugaring would mean lowering calls to functions that are declared
-// nowhere.
-//
-// What is emitted instead is what `swiftc -O` produces once it has
-// forInBody lowers a for-in's body, which a `where` clause skips for an
-// element it is false of, as `continue` would.
+// forInBody lowers the body of a for-in loop, honoring any 'where' clause filtering.
 func (g *gen) forInBody(s *ast.ForInStmt) {
 	if elem := g.loopCase; elem != nil {
 		g.loopCase = nil

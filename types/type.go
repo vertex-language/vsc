@@ -43,17 +43,11 @@ const (
 	UntypedString
 	UntypedNil
 
-	// Float16 is IEEE binary16, Swift's Float16. BFloat16 is bfloat16 --
-	// Float's sign and exponent with seven bits of fraction -- which
-	// Swift does not have and Vertex does, because a model's weights are
-	// in it. They come last so that no other kind's number moves.
+	// Float16 (IEEE binary16) and BFloat16 (brain floating point) for ML and GPU workloads.
 	Float16
 	BFloat16
 
-	// V128 is sixteen bytes in a vector register, the IR's v128: what the
-	// vector and cryptographic instructions take and give. The bytes are
-	// all it is -- which lanes they are is the operation's business, as it
-	// is the IR's -- and it comes last for the reason the two before it do.
+	// V128 represents a 128-bit vector register value (ir.v128) for SIMD and crypto instructions.
 	V128
 )
 

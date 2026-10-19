@@ -40,9 +40,7 @@ The C++ runtime is not legacy code waiting to be rewritten in Swift; it represen
 ### The Actual Build Sequence
 
 
-```
-
-```
+```text
             ┌──────────────────────────────┐
             │   Host C++ Compiler (Clang)  │
             └──────────────┬───────────────┘
@@ -51,33 +49,29 @@ The C++ runtime is not legacy code waiting to be rewritten in Swift; it represen
                            │
         ┌──────────────────┴──────────────────┐
         ▼                                     ▼
-
-```
-
 ┌───────────────────────┐             ┌───────────────────────┐
 │  Stage 1: `swiftc`    │             │  C++ Runtime Objects  │
 │   Compiler Binary     │             │ (`stdlib/.../runtime`)│
 └───────────┬───────────┘             └───────────┬───────────┘
-│                                     │
-Compiles Swift stdlib                         │
-with `-parse-stdlib`                          │
-│                                     │
-▼                                     │
+            │                                     │
+    Compiles Swift stdlib                         │
+    with `-parse-stdlib`                          │
+            │                                     │
+            ▼                                     │
 ┌───────────────────────┐                         │
 │ Standard Library Objs │                         │
 │  (`stdlib/.../core`)  │                         │
 └───────────┬───────────┘                         │
-│                                     │
-└──────────────────┬──────────────────┘
-│
-Platform Linker
-│
-▼
-┌─────────────────────┐
-│    libswiftCore     │
-│ (.dylib / .so / .dll)│
-└─────────────────────┘
-
+            │                                     │
+            └──────────────────┬──────────────────┘
+                               │
+                        Platform Linker
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │    libswiftCore     │
+                    │ (.dylib / .so / .dll)│
+                    └─────────────────────┘
 ```
 
 1. **Stage 1 Compiler:** Clang compiles the Swift compiler itself (`swiftc`) from LLVM/C++ sources.

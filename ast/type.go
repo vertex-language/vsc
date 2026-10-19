@@ -210,8 +210,6 @@ type MacroExpansionType struct {
 	Trailing []*TrailingClosure
 }
 
-// ---- pieces shared by types and declarations ----
-
 // Param represents a parameter in a function type or declaration parameter list.
 type Param struct {
 	Span

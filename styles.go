@@ -11,12 +11,8 @@ import (
 	"github.com/vertex-language/vsc/vss"
 )
 
-// styleSource is the generated source a package with .vss files carries:
-// its stylesheet, as vss.Source makes it. pkg is the package's name as its
-// Vertex files give it ("" for a package of styles alone), and imports are
-// the paths its Vertex files import. The sheets it comes after are those
-// of the packages its .vss and Vertex files import that have .vss files of
-// their own. It is nil where the folder has no .vss files.
+// styleSource generates synthetic Vertex source for a package's .vss stylesheets.
+// Returns nil if the folder contains no stylesheets.
 func styleSource(dir, pkg string, imports []string, resolve func(path, fromDir string) (string, error)) (*Source, []Diagnostic) {
 	names, _ := filepath.Glob(filepath.Join(dir, "*"+vss.Extension))
 	if len(names) == 0 {
@@ -55,8 +51,7 @@ func styleSource(dir, pkg string, imports []string, resolve func(path, fromDir s
 	if len(files) == 0 || Errors(diags) {
 		return nil, diags
 	}
-	// The imports with styles of their own, each once, and the tokens
-	// each exports.
+	// Collect styling tokens from imported packages that have stylesheets.
 	seen := map[string]bool{}
 	var after []string
 	tokens := map[string]map[string]bool{pkg: vss.Declared(files)}
@@ -76,9 +71,7 @@ func styleSource(dir, pkg string, imports []string, resolve func(path, fromDir s
 			}
 		}
 	}
-	// What the engine would not do with the styles: an unknown property,
-	// one it does not apply yet, a library restyling the document, a token
-	// no package declares.
+	// Validate stylesheet rules, CSS properties, and token references.
 	for _, f := range files {
 		diags = append(diags, attribute(vss.Check(f, pkg == "main", tokens), f.Unit)...)
 	}

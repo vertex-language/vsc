@@ -782,13 +782,7 @@ func (m *mangler) param(p *types.Param) error {
 	return nil
 }
 
-// --- the buffer ---
-//
-// Writing goes through here rather than to a builder because one
-// rewrite is needed: a run of the same standard substitution collapses
-// into a single one with a count, and whether a run is still running
-// is only known when the next thing is written.
-
+// write appends s to the buffer, ending any pending substitution runs.
 func (m *mangler) write(s string) {
 	m.endRun()
 	m.buf = append(m.buf, s...)
@@ -832,8 +826,6 @@ func (m *mangler) endRun() {
 	m.runCount = 0
 	m.subAt = -1
 }
-
-// --- private declarations ---
 
 // Discriminator returns a file-unique discriminator string for private declarations.
 func Discriminator(path string) string {

@@ -38,10 +38,9 @@
 // against the standard library's own one-character module name, which
 // is how Int8 becomes `s4Int8V`.
 //
-// # What is refused
+// # Scope
 //
-// Generics, protocols and existentials, and the mangling of anything
-// local to a function body. Each is refused by name. A symbol that is
-// merely plausible is worse than no symbol: it links, and it links to
-// the wrong thing.
+// Mangling handles top-level and nested declarations, generic types and
+// functions, protocols, existentials, and value witness tables according to the
+// Swift ABI specification.
 package mangle

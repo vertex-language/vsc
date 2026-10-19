@@ -13,20 +13,12 @@ import (
 	"github.com/vertex-language/vsc/timing"
 )
 
-// A packageStream builds the imported packages as the importer finds
-// them, rather than once it has found them all.
+// packageStream incrementally builds imported packages as they are discovered
+// by the importer (via vsc.Options.OnPackage).
 //
-// The importer hands over each package after every package it imports
-// (vsc.Options.OnPackage), so its key -- its source and its imports'
-// surfaces -- can be made then. One the cache has is taken; one it has
-// not goes to the worker processes at once, while the importer reads the
-// rest and the program is checked. A folder's C++ starts compiling as its
-// package is found, too: its bindings are made by then.
-//
-// A build with one package to compile still compiles it in this process
-// once the imports are read, as before: starting a worker for it costs
-// more than it saves, and an edit builds one package. The workers start
-// with the second.
+// Cached artifacts are retrieved immediately; cache misses are dispatched to
+// background worker processes concurrently while remaining imports and C++ bindings
+// are parsed. Single-package builds compile in-process to avoid worker overhead.
 type packageStream struct {
 	c       *common
 	bf      *buildFlags

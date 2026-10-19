@@ -112,8 +112,6 @@ type parser struct {
 	inCoroutine bool
 }
 
-// ---- token access ----
-
 func (p *parser) tok() token.Token { return p.toks[p.i] }
 func (p *parser) kind() token.Kind { return p.toks[p.i].Kind }
 func (p *parser) at(k token.Kind) bool {
@@ -230,8 +228,6 @@ func (p *parser) ident() *ast.Ident {
 	}
 }
 
-// ---- operators ----
-
 // atOper reports whether the current token is an operator of any
 // position whose remaining spelling is s.
 func (p *parser) atOper(s string) bool {
@@ -293,8 +289,6 @@ func (p *parser) takeOperChar() token.Pos {
 	p.next()
 	return pos
 }
-
-// ---- diagnostics ----
 
 // errHere reports an error diagnostic at the current token position.
 func (p *parser) errHere(msg string) {
@@ -380,8 +374,6 @@ func (p *parser) expectIdent() *ast.Ident {
 	return nil
 }
 
-// ---- speculation ----
-
 // mark records everything a speculative parse may change.
 type mark struct {
 	i, split, resyncs, ndiags int
@@ -401,8 +393,6 @@ func (p *parser) reset(m mark) {
 	p.diags = p.diags[:m.ndiags]
 	p.quiet, p.lastErr, p.dead = m.quiet, m.lastErr, m.dead
 }
-
-// ---- recovery ----
 
 var (
 	declFollow  = map[token.Kind]bool{token.SEMI: true, token.RBRACE: true}

@@ -6,17 +6,11 @@ import (
 	"github.com/vertex-language/vsc/token"
 )
 
-// Markup is scanned only in a .vsx file, and only where the file's
-// grammar leaves room for it: a `<` standing where a prefix operator
-// would -- not bound on the left, bound on the right by a name or by
-// `>` -- opens a tag. That is the one place markup and Vertex could
-// collide, and a .vsx file gives up the prefix operator there; a .vs
-// file never sees markup at all. See the RFC, proposed_vsx.md §9.1.
+// Markup scanning for .vsx files (proposed_vsx.md §9.1).
 //
-// Inside markup the scanner keeps a stack of frames, innermost last:
-// the attributes of an opening tag, a closing tag, an element's
-// children, and a `{…}` of code. Code is scanned as everywhere else --
-// and may open markup again -- until the brace that closes it.
+// A '<' character in prefix position followed by a tag name or '>' opens markup.
+// Inside markup, the scanner maintains a state stack of frames: opening tag attributes,
+// closing tags, element children, and embedded code blocks (`{...}`).
 
 type frameKind uint8
 

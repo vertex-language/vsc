@@ -397,18 +397,8 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 	// Pass 4.5: Validate protocol conformances
 	c.checkProtocolConformances(pkgScope)
 
-	// Pass 4.6: Module-scope variables, so that one file's `let` is in
-	// scope in another whatever order the two were read in.
-	//
-	// Only for a file that is declarations and nothing else. A file with
-	// top-level code in it runs that code in the order it is written,
-	// and a variable there is initialized where it is written like any
-	// other statement -- declaring it ahead of them would be saying it
-	// held its value before the line that gives it one. Swift draws the
-	// same line and draws it at the file: top-level code lives in one
-	// file, and a variable anywhere else is order-independent -- down
-	// to its initializer, which may read a variable declared below it
-	// or in a file read later, because Swift initializes each on first use.
+	// Pass 4.6: Declare order-independent module-scope variables across declaration-only files.
+	// Initializers are evaluated lazily on first access.
 	c.declareModuleVars(files, pkgScope)
 
 	// Pass 4.7: Parameter defaults, now that every declaration is in,
@@ -485,15 +475,8 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 	return info, info.Diagnostics
 }
 
-// loadImports declares what the imported modules export.
-//
-// The same passes the program gets, in the same order and over the
-// same kind of input -- an interface is source -- but stopping before
-// the one that checks bodies, because an interface has none. What
-// each pass leaves behind is what a client needs: a struct's fields
-// in declaration order, which is its layout; a class's methods in
-// declaration order, which is its vtable; an enum's cases in
-// declaration order, which are its tags.
+// loadImports processes declarations exported by imported module interfaces,
+// establishing member layouts, vtables, and enum tags without checking bodies.
 func (c *checker) loadImports(imports []Import, scope *Scope) {
 	if len(imports) == 0 {
 		return

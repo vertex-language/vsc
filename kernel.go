@@ -22,33 +22,17 @@ import (
 	"github.com/vertex-language/vsc/token"
 )
 
-// The device compile (proposed_vertex_kernel.md §8): each kernel of a
-// module, and everything it reaches, lowered for the GPU.
-//
-// A kernel is found in the module's lowered SIL by its mark
-// (gen.AttrKernel). What it reaches is found by following its calls: a
-// function of this module, a function of the built-in gpu module (whose
-// SIL the compiler makes from its own copy of gpu's source), another
-// module's @inlinable function (whose body its interface carries, and
-// sil/gen compiles here as public_external), or a gpu intrinsic. Anything else -- the runtime, a heap, I/O -- cannot run on a
-// device, and the kernel is refused with the chain of calls that reached
-// it. This is §5's check, made where every call a kernel makes is known.
-//
-// The functions reached make a module of their own, which lower lowers
-// for the device (lower.Options.Device). Each kernel is then inlined into
-// its entry, its shared storage made (vertex_gpu_shared's size is a
-// constant by then), and the whole lowered to AIR and written as the
-// Metal library that goes in the kernel's descriptor. A kernel AIR
-// cannot express -- a float64 on Apple's GPUs -- has no library, and the
-// runtime runs it on the CPU instead, with a warning here saying so.
+// GPU device compilation:
+// Extracts kernel functions marked with gen.AttrKernel and follows the call graph
+// across the module, the built-in gpu module, and imported @inlinable functions.
+// Prohibited features (heap allocation, I/O, runtime calls) produce diagnostic errors.
+// Reached functions are lowered into a device module, inlined, and translated to
+// Apple Metal AIR or PTX. Kernels unsupported on device fall back to CPU execution.
 
 // compileKernels builds each kernel of m for the devices, returning what
 // lower writes into each kernel's descriptor.
 func compileKernels(m *sil.Module, target ir.Target) (map[string]*lower.KernelImage, []Diagnostic) {
-	// Grid kernels, launched as they are; element kernels, launched as
-	// the grid kernel Map writes for each choice of mapped parameters a
-	// launch in this module makes (<f>$map<mask>, named by the launch's
-	// descriptor builtin).
+	// Collect grid kernels and synthesized element-kernel Map wrappers.
 	type entry struct {
 		name string
 		k    *sil.Func

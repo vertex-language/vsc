@@ -200,8 +200,6 @@ func (p *parser) parseLabeled() ast.Stmt {
 	return &ast.LabeledStmt{Span: p.span(lo), Label: label, Colon: colon, Stmt: st}
 }
 
-// ---- loops ----
-
 func (p *parser) parseForIn() ast.Stmt {
 	lo := p.pos()
 	kw := p.pos()
@@ -261,8 +259,6 @@ func (p *parser) parseRepeatWhile() ast.Stmt {
 	cond := p.parseExpr(0)
 	return &ast.RepeatWhileStmt{Span: p.span(lo), Repeat: kw, Body: body, While: while, Cond: cond}
 }
-
-// ---- branches ----
 
 func (p *parser) parseIf() ast.Stmt {
 	lo := p.pos()
@@ -380,8 +376,6 @@ func (p *parser) parseIfConfigCases() ast.Stmt {
 	return s
 }
 
-// ---- conditions ----
-
 // parseConditions parses a comma-separated ConditionList for if, guard, or while.
 func (p *parser) parseConditions() []ast.Node {
 	var out []ast.Node
@@ -488,8 +482,6 @@ func (p *parser) parseVersion() *ast.VersionLit {
 	return &ast.VersionLit{Span: p.span(lo)}
 }
 
-// ---- do, defer, and control transfer ----
-
 func (p *parser) parseDo() ast.Stmt {
 	lo := p.pos()
 	kw := p.pos()
@@ -555,8 +547,6 @@ func (p *parser) parseReturn() ast.Stmt {
 	}
 	return &ast.ReturnStmt{Span: p.span(lo), Return: kw, X: x}
 }
-
-// ---- compiler control statements ----
 
 // parseIfConfig parses a conditional compilation block (`#if ... #endif`).
 func (p *parser) parseIfConfig(s stop) ast.Stmt {
@@ -744,8 +734,6 @@ func (p *parser) parseDiagnostic() ast.Stmt {
 	s.Span = p.span(lo)
 	return s
 }
-
-// ---- code blocks ----
 
 // parseCodeBlock parses a braced block of statements, skipping bodies if SkipBodies is active.
 func (p *parser) parseCodeBlock() *ast.CodeBlock {

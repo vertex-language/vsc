@@ -1,10 +1,6 @@
-// Command vsc is the Vertex compiler.
+// Command vsc is the command-line driver for the Vertex compiler.
 //
-// It has nothing of its own: everything it does is cli.Run, which is
-// a wrapper over the vsc package, which is the phases composed. Three
-// lines here rather than none because a command is a module's entry
-// point and a library is not, and keeping them apart is what lets a
-// program embed the compiler without embedding the command.
+// The command delegates CLI argument parsing and driver execution to internal/cli.
 package main
 
 import (
@@ -17,12 +13,9 @@ import (
 
 func main() { os.Exit(run()) }
 
-// run is cli.Run, under a CPU profile when VSC_CPUPROFILE names a file
-// to write one to -- for finding where a slow build's time goes.
+// run executes the compiler CLI, enabling optional CPU profiling via VSC_CPUPROFILE.
 func run() int {
-	// A compile allocates fast and keeps little, so collecting at twice
-	// the live heap rather than once trades a little memory for less GC:
-	// 7-15% off a build, measured. GOGC in the environment still decides.
+	// Default GOGC=200 reduces GC overhead for short-lived compiler workloads.
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(200)
 	}
@@ -34,8 +27,7 @@ func run() int {
 			}
 		}
 	}
-	// This is the vsc command, so it may run imported packages in
-	// processes of itself; see cli.Workers.
+	// Allow spawning worker processes for imported package compilation.
 	cli.Workers = true
 	return cli.Run(os.Args[1:], os.Stdout, os.Stderr)
 }

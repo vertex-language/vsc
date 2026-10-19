@@ -574,21 +574,12 @@ func (c *checker) opaqueValue(at ast.Expr, o *types.Opaque, t types.Type) {
 	}
 }
 
-// declareModuleVars declares the module's stored variables, before any
-// body is checked, from files that are declarations and nothing else.
+// declareModuleVars registers module-scoped stored variables across all
+// non-script files before checking function bodies.
 //
-// A module-scope variable is visible to the whole module and not only to
-// what the compiler happened to read after it -- Swift has no ordering
-// rule for a declaration at that scope, and neither do this checker's
-// types and functions, which have had passes of their own all along.
-// Without this, a `let` in one file is out of scope in another the
-// compiler read first, which is a rule about file order and nothing else.
-//
-// Nor does one initializer need the variables it reads declared above
-// it: Swift initializes each of these lazily, on first use, and so does
-// the addressor this compiler gives one. An initializer is checked once
-// the variables it names are, whichever file declares them and wherever
-// in it, so their types are known when it is.
+// Module-scope variables are visible module-wide regardless of source file order.
+// Initializers are evaluated lazily on first use via addressors, allowing
+// cross-variable references without lexical order constraints.
 func (c *checker) declareModuleVars(files []*ast.File, scope *Scope) {
 	var all []*moduleVarDecl
 	byName := map[string][]*moduleVarDecl{}

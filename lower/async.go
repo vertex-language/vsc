@@ -6,42 +6,12 @@ import (
 	"github.com/vertex-language/vsc/types"
 )
 
-// Splitting an async function.
+// Async function lowering and suspension splitting.
 //
-// An async function has no stack: a suspended one has given its thread
-// back, so anything that has to outlive a suspension lives in a frame the
-// task allocator owns, reached through the context register.
-//
-// That makes the function several functions. Control leaves at each
-// suspension by tail calling the callee, and comes back at a funclet the
-// callee's context names, so each stretch between suspensions is compiled
-// as a function of its own. This file works out where the cuts fall and
-// what has to cross them; asyncsplit.go does the cutting.
-//
-// The protocol is Swift's, read off what swiftc emits rather than
-// invented. A call is:
-//
-//	callee := task_alloc(calleeFrameSize)
-//	callee->parent       = myContext
-//	callee->resumeParent = <the funclet to come back to>
-//	tail_call f(callee, args…)
-//
-// and the callee returns by tail calling `callee->resumeParent(callee,
-// results…)`. So a funclet is entered with the *callee's* context, finds
-// its own at the callee's first word, and frees the callee's frame.
-//
-// A callee that may fail answers the same way, with the error last, in
-// the self register, and null there where it did not. That is Swift's
-// too, and it is why a try_apply of an async callee is a suspension like
-// any other: the two edges part at the funclet, on whether the error is
-// null.
-//
-// calleeFrameSize is worked out here for a function this module defines
-// and read at run time for anything else -- another module's, or a
-// function value's -- out of the record beside the callee. See
-// asyncsplit.go.
-//
-// See docs/vertex_swift_async.md for the measurements this rests on.
+// Async functions allocate continuation frames via the task allocator rather than
+// using the machine stack. Each suspension point splits the function into resumption
+// funclets invoked via tail calls, following Swift's async calling convention.
+// Callee frames store parent context and resume pointers.
 
 // A suspension is one point where an async function gives up its thread:
 // a call to another async function, whether or not it may fail.

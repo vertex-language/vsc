@@ -28,9 +28,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "vsc: run builds a program; --emit %s has nothing to run\n", bf.emit)
 		return exitUsage
 	}
-	// Running what was built means running it here, so a target that
-	// is not this machine is a mistake worth catching before the
-	// build rather than after it.
+	// Ensure the build target matches the host machine for execution.
 	if host := vsc.HostName(); bf.target != host {
 		fmt.Fprintf(stderr, "vsc: run needs this machine's target: %q was asked for, this is %q\n",
 			bf.target, host)
@@ -44,10 +42,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	}
 	defer os.RemoveAll(dir)
 
-	// The name carries the platform's extension, since this one is
-	// started rather than merely written: on Windows exec.Command
-	// resolves a path with no extension through %PATHEXT% and finds
-	// nothing.
+	// Format binary name with platform executable suffix (e.g. .exe on Windows).
 	target, err := bf.resolve()
 	if err != nil {
 		fmt.Fprintln(stderr, "vsc:", err)
@@ -75,8 +70,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// splitArgs divides vsc's arguments from the program's at the first
-// bare `--`.
+// splitArgs separates vsc flags from program arguments at the first "--".
 func splitArgs(args []string) (mine, theirs []string) {
 	for i, a := range args {
 		if a == "--" {
