@@ -83,3 +83,5 @@ func main() -> int32 {
     print(page.Html())
     return 0
 }
+// want: <article class="card-dark"><header><i>*</i><h3>Summary</h3></header><div class="body"><div class="banner"><label for="field">Alert</label><span class="badge">!</span></div><button>step=1</button><div class="legacy"><span>Score: 10</span><button>+5</button></div></div></article>
+// want: <article class="card-dark"><header><i>*</i><h3>Summary</h3></header><div class="body"><div class="banner"><label for="field">Alert</label><span class="badge">!</span></div><button>step=3</button><div class="legacy"><span>Score: 15</span><button>+5</button></div></div></article>

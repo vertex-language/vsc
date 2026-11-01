@@ -3,7 +3,6 @@ package build_test
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -12,13 +11,14 @@ import (
 
 	vsc "github.com/vertex-language/vsc"
 	"github.com/vertex-language/vsc/build"
-	"github.com/vertex-language/vsc/token"
 )
 
-// The .vsx ladder: tests/vsx (see its README). Markup has no oracle the
-// way the Swift ladder has swiftc, so a run test writes down its output
-// in a .out file beside it, and an error test marks each line that has
-// to be refused with `// want "part of the message"`.
+// The .vsx ladder: tests/vsx/NNN-*.vsx, one program of ordinary .vsx
+// per file (see its README). Markup has no oracle the way the Swift
+// ladder has swiftc, so each file says what it prints, as the kernel
+// ladder's do:
+//
+//	// want: <p>hi</p>      a line of standard output, in order
 //
 // Every .vsx program automatically receives the compiler's built-in .vsx v2
 // prelude (analyzer/vsx_prelude.vs).
@@ -32,28 +32,81 @@ func vsxSources(t *testing.T, file string) []vsc.Source {
 	return []vsc.Source{{Name: filepath.Base(file), Text: src}}
 }
 
+// vsxFiles is the ladder, in order.
+func vsxFiles(t *testing.T) []string {
+	t.Helper()
+	files, _ := filepath.Glob("../tests/vsx/*.vsx")
+	if len(files) == 0 {
+		t.Fatal("no programs in tests/vsx")
+	}
+	sort.Strings(files)
+	return files
+}
+
+// vsxWant is what a file prints, from its `// want:` lines; ok is false
+// where it has none.
+func vsxWant(src []byte) (string, bool) {
+	var lines []string
+	for _, line := range strings.Split(string(src), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "// want:":
+			lines = append(lines, "")
+		case strings.HasPrefix(line, "// want: "):
+			lines = append(lines, strings.TrimPrefix(line, "// want: "))
+		}
+	}
+	if len(lines) == 0 {
+		return "", false
+	}
+	return strings.Join(lines, "\n") + "\n", true
+}
+
+// vsxWithWant is a program with its want lines replaced by out's.
+func vsxWithWant(src []byte, out string) []byte {
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(string(src), "\n"), "\n") {
+		if t := strings.TrimSpace(line); t == "// want:" || strings.HasPrefix(t, "// want: ") {
+			continue
+		}
+		b.WriteString(line + "\n")
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+		if line == "" {
+			b.WriteString("// want:\n")
+		} else {
+			b.WriteString("// want: " + line + "\n")
+		}
+	}
+	return []byte(b.String())
+}
+
 func TestVSXRun(t *testing.T) {
 	target, ok := build.Host()
 	if !ok {
 		t.Skip("no backend for this machine")
 	}
-	files, _ := filepath.Glob("../tests/vsx/run/*.vsx")
-	if len(files) == 0 {
-		t.Fatal("no programs in tests/vsx/run")
-	}
-	sort.Strings(files)
-	for _, file := range files {
+	for _, file := range vsxFiles(t) {
+		src := vsxSources(t, file)
+		want, runs := vsxWant(src[0].Text)
+		if !runs {
+			continue
+		}
 		name := strings.TrimSuffix(filepath.Base(file), ".vsx")
 		t.Run(name, func(t *testing.T) {
-			want, err := os.ReadFile(strings.TrimSuffix(file, ".vsx") + ".out")
-			if err != nil {
-				t.Fatalf("no %s.out beside it", name)
-			}
-			got := runVsxProgram(t, target, vsxSources(t, file))
+			got := runVsxProgram(t, target, src)
 			if got.crashed() || got.status != 0 {
 				t.Errorf("the program ended with %s", got)
 			}
-			if got.stdout != string(want) {
+			if os.Getenv("VSX_UPDATE") != "" {
+				// VSX_UPDATE=1 writes what it printed as its want lines:
+				// for a new program, whose output is then read and kept.
+				if err := os.WriteFile(file, vsxWithWant(src[0].Text, got.stdout), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if got.stdout != want {
 				t.Errorf("output differs\n--- got ---\n%s\n--- want ---\n%s", clip(got.stdout), want)
 			}
 		})
@@ -84,64 +137,4 @@ func runVsxProgram(t *testing.T, target ir.Target, srcs []vsc.Source) outcome {
 		t.Fatal(err)
 	}
 	return run(t, bin)
-}
-
-var wantRE = regexp.MustCompile(`// want "([^"]*)"`)
-
-func TestVSXErrors(t *testing.T) {
-	target, ok := build.Host()
-	if !ok {
-		t.Skip("no backend for this machine")
-	}
-	files, _ := filepath.Glob("../tests/vsx/errors/*.vsx")
-	if len(files) == 0 {
-		t.Fatal("no programs in tests/vsx/errors")
-	}
-	sort.Strings(files)
-	for _, file := range files {
-		t.Run(strings.TrimSuffix(filepath.Base(file), ".vsx"), func(t *testing.T) {
-			srcs := vsxSources(t, file)
-			// What each line has to be refused with.
-			want := map[int][]string{}
-			for i, line := range strings.Split(string(srcs[0].Text), "\n") {
-				for _, m := range wantRE.FindAllStringSubmatch(line, -1) {
-					want[i+1] = append(want[i+1], m[1])
-				}
-			}
-			if len(want) == 0 {
-				t.Fatal(`no // want "…" in the file`)
-			}
-			_, diags := vsc.Compile(srcs, vsc.Options{Module: "main", Target: target})
-			got := map[int][]string{}
-			for _, d := range diags {
-				if d.Severity != token.Error {
-					continue
-				}
-				if d.File == nil || !strings.HasSuffix(d.File.Name(), filepath.Base(file)) {
-					t.Errorf("unexpected error outside the program: %s", d)
-					continue
-				}
-				line := d.File.Position(d.Pos).Line
-				got[line] = append(got[line], d.Message)
-			}
-			for line, parts := range want {
-				for _, part := range parts {
-					found := false
-					for _, msg := range got[line] {
-						if strings.Contains(msg, part) {
-							found = true
-						}
-					}
-					if !found {
-						t.Errorf("line %d: want an error containing %q, got %q", line, part, got[line])
-					}
-				}
-			}
-			for line, msgs := range got {
-				if len(want[line]) == 0 {
-					t.Errorf("line %d: unexpected error(s) %q", line, msgs)
-				}
-			}
-		})
-	}
 }

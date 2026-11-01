@@ -1,174 +1,83 @@
 // Built-in .vsx v2 prelude: UI types, DOM events/elements, hooks, and
 // element/component lowering targets available in every .vsx compilation unit.
 
-class HTMLElement {
-    var tagName: string = ""
-    var id: string = ""
-    var className: string = ""
-    var textContent: string = ""
-    var innerHTML: string = ""
-    var hidden: bool = false
-    init() {}
-    func focus() {}
-    func blur() {}
-    func click() {}
-}
-
-class HTMLDivElement: HTMLElement {}
-class HTMLSpanElement: HTMLElement {}
-
-class HTMLButtonElement: HTMLElement {
-    var disabled: bool = false
-    var type: string = "button"
-    var value: string = ""
-}
-
-class HTMLInputElement: HTMLElement {
-    var value: string = ""
-    var checked: bool = false
-    var disabled: bool = false
-    var type: string = "text"
-    var name: string = ""
-    var placeholder: string = ""
-    func select() {}
-}
-
-class HTMLTextAreaElement: HTMLElement {
-    var value: string = ""
-    var disabled: bool = false
-    var rows: int = 2
-    var cols: int = 20
-    var placeholder: string = ""
-}
-
-class HTMLSelectElement: HTMLElement {
-    var value: string = ""
-    var selectedIndex: int = 0
-    var disabled: bool = false
-}
-
-class HTMLFormElement: HTMLElement {
-    var action: string = ""
-    var method: string = "get"
-    func submit() {}
-    func reset() {}
-}
-
-class HTMLAnchorElement: HTMLElement {
-    var href: string = ""
-    var target: string = ""
-}
-
-class HTMLImageElement: HTMLElement {
-    var src: string = ""
-    var alt: string = ""
-    var width: int = 0
-    var height: int = 0
-}
-
-class HTMLCanvasElement: HTMLElement {
-    var width: int = 300
-    var height: int = 150
-}
-
-class FormData {
-    var entries: [string: string] = [:]
-    init() {}
-    func get(_ name: string) -> string? { return entries[name] }
-    func set(_ name: string, _ value: string) { entries[name] = value }
-    func has(_ name: string) -> bool { return entries[name] != nil }
-}
-
+/// The events a handler is given, as web/dom has them.
 class Event {
     var Type: string = ""
-    var type: string { return Type }
     var DefaultPrevented: bool = false
-    var defaultPrevented: bool { return DefaultPrevented }
     var PropagationStopped: bool = false
-    var propagationStopped: bool { return PropagationStopped }
-    var target: HTMLElement = HTMLElement()
-    var currentTarget: HTMLElement = HTMLElement()
+    var Bubbles: bool = true
     init() {}
     func PreventDefault() { DefaultPrevented = true }
-    func preventDefault() { DefaultPrevented = true }
     func StopPropagation() { PropagationStopped = true }
-    func stopPropagation() { PropagationStopped = true }
 }
 
-final class MouseEvent: Event {
-    var clientX: float64 = 0
-    var clientY: float64 = 0
-    var pageX: float64 = 0
-    var pageY: float64 = 0
-    var button: int = 0
-    var altKey: bool = false
-    var ctrlKey: bool = false
-    var metaKey: bool = false
-    var shiftKey: bool = false
+class MouseEvent: Event {
+    var X: float32 = 0
+    var Y: float32 = 0
+    var Clicks: int32 = 1
+    var Button: int32 = 0
+    var Pressed: bool = false
+    var Shift: bool = false
+    var Control: bool = false
+    var Alt: bool = false
+    var Meta: bool = false
 }
 
-final class PointerEvent: Event {
-    var pointerId: int = 0
-    var clientX: float64 = 0
-    var clientY: float64 = 0
-    var pressure: float64 = 0
-}
+final class PointerEvent: MouseEvent {}
 
 final class WheelEvent: Event {
-    var deltaX: float64 = 0
-    var deltaY: float64 = 0
+    var X: float32 = 0
+    var Y: float32 = 0
+    var DeltaX: float32 = 0
+    var DeltaY: float32 = 0
+    var Shift: bool = false
+    var Control: bool = false
+    var Alt: bool = false
+    var Meta: bool = false
 }
 
 final class KeyboardEvent: Event {
-    var key: string = ""
-    var code: string = ""
-    var altKey: bool = false
-    var ctrlKey: bool = false
-    var metaKey: bool = false
-    var shiftKey: bool = false
+    var Key: string = ""
+    var Code: string = ""
+    var Shift: bool = false
+    var Control: bool = false
+    var Alt: bool = false
+    var Meta: bool = false
+    var Repeat: bool = false
 }
 
 final class InputEvent: Event {
-    var data: string = ""
-}
-
-final class ChangeEvent: Event {
-    var value: string = ""
+    var Value: string = ""
+    var Data: string = ""
 }
 
 final class SubmitEvent: Event {}
 final class FocusEvent: Event {}
-final class CompositionEvent: Event {
-    var data: string = ""
-}
+final class CompositionEvent: Event {}
 final class DragEvent: Event {}
-final class LayoutEvent: Event {
-    var width: float64 = 0
-    var height: float64 = 0
-}
+final class LayoutEvent: Event {}
 
 func _vsxMakeEvent(_ type: string) -> Event {
     var e: Event
     switch type {
-    case "click", "dblclick", "contextmenu", "mousedown", "mouseup", "mousemove", "mouseenter", "mouseleave":
+    case "click", "dblclick", "contextmenu", "mousedown", "mouseup", "mousemove", "mouseenter", "mouseleave", "mouseover", "mouseout":
         e = MouseEvent()
-    case "pointerdown", "pointerup", "pointermove":
+    case "pointerdown", "pointerup", "pointermove", "pointerenter", "pointerleave", "pointercancel":
         e = PointerEvent()
     case "wheel":
         e = WheelEvent()
-    case "keydown", "keyup":
+    case "keydown", "keyup", "keypress":
         e = KeyboardEvent()
     case "input", "beforeinput":
         e = InputEvent()
-    case "change":
-        e = ChangeEvent()
     case "submit":
         e = SubmitEvent()
     case "focus", "blur":
         e = FocusEvent()
     case "compositionupdate", "compositionstart", "compositionend":
         e = CompositionEvent()
-    case "dragstart", "dragover", "drop", "dragenter", "dragleave", "dragend":
+    case "drag", "dragstart", "dragover", "drop", "dragenter", "dragleave", "dragend":
         e = DragEvent()
     case "layout":
         e = LayoutEvent()
@@ -270,6 +179,7 @@ final class Node: Renderable, ExpressibleByNilLiteral, ExpressibleByStringLitera
             s += " style=\"\(Styles.map { "\($0.0): \($0.1)" }.joined(separator: "; "))\""
         }
         s += ">"
+        if _vsxVoid(Tag) { return s }
         for c in Children { s += c.Html() }
         return s + "</" + Tag + ">"
     }
@@ -291,6 +201,22 @@ final class Node: Renderable, ExpressibleByNilLiteral, ExpressibleByStringLitera
 
 typealias Element = Node
 typealias Children = () -> Node
+typealias HTMLElement = Node
+typealias HTMLInputElement = Node
+typealias HTMLButtonElement = Node
+typealias HTMLDivElement = Node
+typealias HTMLSpanElement = Node
+typealias HTMLFormElement = Node
+
+/// An element that has no end tag and no children: `<br>`, `<input>`.
+func _vsxVoid(_ tag: string) -> bool {
+    switch tag {
+    case "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr":
+        return true
+    default:
+        return false
+    }
+}
 
 func renderToString(_ node: Node) -> string {
     return node.Html()
@@ -447,19 +373,9 @@ protocol Props {}
 struct EmptyProps: Props { init() {} }
 struct EmptyState { init() {} }
 
-struct HTMLAttributes<T>: Props {
-    var id: string = ""
-    var className: string = ""
-    var title: string = ""
-    var role: string = ""
-    var tabIndex: int = 0
-    var hidden: bool = false
-    var style: Style = Style()
-}
-
 final class Ref<T> {
-    var current: T
-    init(_ current: T) {
+    var current: T?
+    init(_ current: T? = nil) {
         self.current = current
     }
 }
@@ -507,7 +423,23 @@ final class _Fiber {
 var _currentFiber: _Fiber? = nil
 var _vsxIdCounter: int = 0
 
-func useState<T>(_ initial: T) -> (T, (T) -> void) {
+/// What useState gives to change its state: `setCount(3)`, or
+/// `setCount { $0 + 1 }` from what it is when the setter runs.
+struct SetState<T> {
+    let cell: _HookCell<T>
+    let fiber: _Fiber?
+
+    func callAsFunction(_ next: T) {
+        cell.value = next
+        if let f = fiber { f.run() }
+    }
+
+    func callAsFunction(_ update: (T) -> T) {
+        callAsFunction(update(cell.value))
+    }
+}
+
+func useState<T>(_ initial: T) -> (T, SetState<T>) {
     if let fiber = _currentFiber {
         let idx = fiber.index
         fiber.index += 1
@@ -515,17 +447,18 @@ func useState<T>(_ initial: T) -> (T, (T) -> void) {
             fiber.hooks.append(_HookCell<T>(initial))
         }
         if let cell = fiber.hooks[idx] as? _HookCell<T> {
-            return (cell.value, { next in
-                cell.value = next
-                fiber.run()
-            })
+            return (cell.value, SetState<T>(cell: cell, fiber: fiber))
         }
     }
     let cell = _HookCell<T>(initial)
-    return (cell.value, { next in cell.value = next })
+    return (cell.value, SetState<T>(cell: cell, fiber: nil))
 }
 
-func useState<T>(_ initial: () -> T) -> (T, (T) -> void) {
+func useState<T>(_ initial: () -> T) -> (T, SetState<T>) {
+    if let fiber = _currentFiber, fiber.index < fiber.hooks.count, let cell = fiber.hooks[fiber.index] as? _HookCell<T> {
+        fiber.index += 1
+        return (cell.value, SetState<T>(cell: cell, fiber: fiber))
+    }
     return useState(initial())
 }
 
@@ -547,7 +480,7 @@ func useReducer<S, A>(_ reducer: @escaping (S, A) -> S, _ initialState: S) -> (S
     return (cell.value, { action in cell.value = reducer(cell.value, action) })
 }
 
-func useRef<T>(_ initial: T) -> Ref<T> {
+func useRef<T>(_ initial: T? = nil) -> Ref<T> {
     if let fiber = _currentFiber {
         let idx = fiber.index
         fiber.index += 1
@@ -561,34 +494,102 @@ func useRef<T>(_ initial: T) -> Ref<T> {
     return Ref<T>(initial)
 }
 
-func useEffect(_ effect: @escaping () -> void, _ deps: [any Equatable] = []) {
-    if let fiber = _currentFiber {
-        if !fiber.mounted {
-            fiber.effects.append(effect)
-        }
-    } else {
-        effect()
+final class _EffectSlot: _HookSlot {
+    var deps: [any Equatable]?
+    var cleanup: (() -> void)? = nil
+    init(_ deps: [any Equatable]?) {
+        self.deps = deps
+        super.init()
     }
 }
 
-func useLayoutEffect(_ effect: @escaping () -> void, _ deps: [any Equatable] = []) {
+final class _MemoSlot<T>: _HookSlot {
+    var value: T
+    var deps: [any Equatable]?
+    init(_ value: T, _ deps: [any Equatable]?) {
+        self.value = value
+        self.deps = deps
+        super.init()
+    }
+}
+
+func _sameDep(_ a: any Equatable, _ b: any Equatable) -> bool {
+    if let x = a as? int, let y = b as? int { return x == y }
+    if let x = a as? string, let y = b as? string { return x == y }
+    if let x = a as? bool, let y = b as? bool { return x == y }
+    if let x = a as? float64, let y = b as? float64 { return x == y }
+    return false
+}
+
+func _depsEqual(_ a: [any Equatable]?, _ b: [any Equatable]?) -> bool {
+    guard let x = a, let y = b else { return false }
+    if x.count != y.count { return false }
+    for i in 0..<x.count {
+        if !_sameDep(x[i], y[i]) { return false }
+    }
+    return true
+}
+
+func _scheduleEffect(_ deps: [any Equatable]?, _ run: @escaping (_EffectSlot) -> void) {
+    guard let fiber = _currentFiber else {
+        run(_EffectSlot(deps))
+        return
+    }
+    let idx = fiber.index
+    fiber.index += 1
+    if idx >= fiber.hooks.count {
+        let slot = _EffectSlot(deps)
+        fiber.hooks.append(slot)
+        fiber.effects.append({ run(slot) })
+        return
+    }
+    if let slot = fiber.hooks[idx] as? _EffectSlot {
+        if _depsEqual(slot.deps, deps) { return }
+        slot.deps = deps
+        fiber.effects.append({
+            if let c = slot.cleanup {
+                slot.cleanup = nil
+                c()
+            }
+            run(slot)
+        })
+    }
+}
+
+func useEffect(_ effect: @escaping () -> void, _ deps: [any Equatable]? = nil) {
+    _scheduleEffect(deps, { _ in effect() })
+}
+
+func useEffect(_ effect: @escaping () -> (() -> void), _ deps: [any Equatable]? = nil) {
+    _scheduleEffect(deps, { slot in slot.cleanup = effect() })
+}
+
+func useLayoutEffect(_ effect: @escaping () -> void, _ deps: [any Equatable]? = nil) {
     useEffect(effect, deps)
 }
 
-func useInsertionEffect(_ effect: @escaping () -> void, _ deps: [any Equatable] = []) {
+func useInsertionEffect(_ effect: @escaping () -> void, _ deps: [any Equatable]? = nil) {
     useEffect(effect, deps)
 }
 
-func useMemo<T>(_ compute: () -> T, _ deps: [any Equatable] = []) -> T {
-    return compute()
+func useMemo<T>(_ compute: () -> T, _ deps: [any Equatable]? = nil) -> T {
+    guard let fiber = _currentFiber else { return compute() }
+    let idx = fiber.index
+    fiber.index += 1
+    if idx < fiber.hooks.count, let slot = fiber.hooks[idx] as? _MemoSlot<T> {
+        if !_depsEqual(slot.deps, deps) {
+            slot.value = compute()
+            slot.deps = deps
+        }
+        return slot.value
+    }
+    let slot = _MemoSlot<T>(compute(), deps)
+    fiber.hooks.append(slot)
+    return slot.value
 }
 
-func useCallback<F>(_ callback: F, _ deps: [any Equatable] = []) -> F {
-    return callback
-}
-
-func useImperativeHandle<T>(_ ref: Ref<T?>, _ create: () -> T, _ deps: [any Equatable] = []) {
-    ref.current = create()
+func useCallback<F>(_ callback: F, _ deps: [any Equatable]? = nil) -> F {
+    return useMemo({ callback }, deps)
 }
 
 func useId() -> string {
@@ -619,37 +620,6 @@ func useDeferredValue<T>(_ value: T) -> T {
     return value
 }
 
-func useSyncExternalStore<T>(_ subscribe: (@escaping () -> void) -> (() -> void), _ getSnapshot: () -> T) -> T {
-    return getSnapshot()
-}
-
-func useOptimistic<T>(_ passthrough: T) -> (T, (T) -> void) {
-    return useState(passthrough)
-}
-
-func useOptimistic<S, A>(_ passthrough: S, _ reducer: @escaping (S, A) -> S) -> (S, (A) -> void) {
-    return useReducer(reducer, passthrough)
-}
-
-func useActionState<S, P>(_ action: @escaping (S, P) -> S, _ initialState: S) -> (S, (P) -> void, bool) {
-    let (state, dispatch) = useReducer(action, initialState)
-    return (state, dispatch, false)
-}
-
-struct FormStatus {
-    var pending: bool = false
-    var data: FormData? = nil
-    var method: string? = nil
-    var action: string? = nil
-    init(pending: bool = false) {
-        self.pending = pending
-    }
-}
-
-func useFormStatus() -> FormStatus {
-    return FormStatus()
-}
-
 final class Context<T> {
     let defaultValue: T
     var _current: T
@@ -658,8 +628,7 @@ final class Context<T> {
         self._current = defaultValue
     }
     func Provider(value: T, children: () -> Node) -> Node {
-        self._current = value
-        return component.Component({
+        return component.Call("Context.Provider", {
             let prev = self._current
             self._current = value
             let out = children()
@@ -787,8 +756,16 @@ enum component {
             })
         }
 
-        static func Ref<V>(_ ref: V) -> Attribute {
+        static func Ref<T>(_ ref: Ref<T>) -> Attribute {
             return Attribute(apply: { _ in })
+        }
+
+        static func Ref<T>(_ setter: SetState<T?>) -> Attribute {
+            return Attribute(apply: { _ in })
+        }
+
+        static func Ref(_ callback: @escaping (Node?) -> void) -> Attribute {
+            return Attribute(apply: { n in callback(n) })
         }
 
         static func Package(_ sheet: string) -> Attribute {
@@ -821,32 +798,38 @@ enum component {
         return Fragment([f()])
     }
 
-    static func Component(_ f: @escaping () -> Node) -> Node {
+    static func Call(_ type: string, _ f: @escaping () -> Node) -> Node {
         let host = Node()
         let fiber = _Fiber(renderFn: f, host: host)
         fiber.run()
         return host
     }
 
-    static func Component<T>(_ f: () -> T) -> T {
+    static func Call<T>(_ type: string, _ f: () -> T) -> T {
         return f()
     }
 
-    static func MountClass<C, P>(_ inst: C, _ props: P, _ mount: (C, P) -> Node) -> Node {
+    static func MountClass<C, P>(_ type: string, _ inst: C, _ props: P, _ mount: (C, P) -> Node) -> Node {
         return mount(inst, props)
     }
 
-    static func Key<K>(_ key: K, _ f: @escaping () -> Node) -> Node {
-        let n = Component(f)
+    static func MountClass<K, C, P>(key: K, _ type: string, _ inst: C, _ props: P, _ mount: (C, P) -> Node) -> Node {
+        let n = mount(inst, props)
         n.Key = "\(key)"
         return n
     }
 
-    static func Key<K, V>(_ key: K, _ f: () -> V) -> V {
+    static func Key<K>(_ key: K, _ type: string, _ f: @escaping () -> Node) -> Node {
+        let n = Call(type, f)
+        n.Key = "\(key)"
+        return n
+    }
+
+    static func Key<K, V>(_ key: K, _ type: string, _ f: () -> V) -> V {
         return f()
     }
 
-    static func Ref<R, V>(_ ref: R, _ node: V) -> V {
+    static func ForwardRef<R, V>(_ ref: R, _ node: V) -> V {
         return node
     }
 

@@ -16,13 +16,13 @@ func Form(store: Store) -> Element {
     let (submits, setSubmits) = useState(0)
     return (
         <form onSubmit={e in
-            e.preventDefault()
+            e.PreventDefault()
             setSubmits(submits + 1)
             if !draft.isEmpty {
                 store.Add(draft)
                 setDraft("")
             }
-            store.Last = e.type + (e.defaultPrevented ? " (prevented)" : "")
+            store.Last = e.Type + (e.DefaultPrevented ? " (prevented)" : "")
         }>
             <input value={draft} onInput={_ in setDraft("eggs")} />
             <button type="reset" onClick={store.Clear}>clear ({submits})</button>
@@ -42,3 +42,5 @@ func main() -> int32 {
     print(store.Todos)
     return 0
 }
+// want: ["milk", "eggs"] submit (prevented)
+// want: []

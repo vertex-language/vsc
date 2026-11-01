@@ -10,6 +10,8 @@ import (
 )
 
 type checker struct {
+	// module is the name of the module being checked.
+	module string
 	// initScopes hold each generic initializer's own type parameters,
 	// for its signature and its body. Not info.Scopes, which the body's
 	// check keys by the same declaration for the scope of its locals.
@@ -266,6 +268,7 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 		implicit:  make(map[ast.Expr]bool),
 		declSites: make(map[Symbol]declSite),
 		modules:   map[string]*Scope{},
+		module:    module,
 	}
 	c.pkgScope = pkgScope
 	c.deferDefaults = true

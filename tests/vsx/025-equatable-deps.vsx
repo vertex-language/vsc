@@ -1,0 +1,30 @@
+// Values of the built-in types as `any Equatable`: what a hook's deps
+// are, compared by value.
+package main
+
+func same(_ a: [any Equatable], _ b: [any Equatable]) -> bool {
+    if a.count != b.count { return false }
+    for i in 0..<a.count {
+        if let x = a[i] as? int, let y = b[i] as? int, x == y { continue }
+        if let x = a[i] as? string, let y = b[i] as? string, x == y { continue }
+        if let x = a[i] as? bool, let y = b[i] as? bool, x == y { continue }
+        if let x = a[i] as? float64, let y = b[i] as? float64, x == y { continue }
+        return false
+    }
+    return true
+}
+
+func main() -> int32 {
+    let n = 3
+    let on = true
+    let deps: [any Equatable] = [n, on, "id", 1.5]
+    print(deps.count)
+    print(same(deps, [3, true, "id", 1.5]))
+    print(same(deps, [3, false, "id", 1.5]))
+    print(same(deps, [3, true, "id"]))
+    return 0
+}
+// want: 4
+// want: true
+// want: false
+// want: false

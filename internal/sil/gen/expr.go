@@ -638,7 +638,7 @@ func (g *gen) member(e *ast.MemberExpr) *sil.Value {
 		return g.funcValue(fs)
 	}
 	// A module-qualified variable -- `main.limit` -- read as its name is.
-	if id, ok := e.X.(*ast.IdentExpr); ok && id.Name != nil && g.info.Uses[id.Name] == nil {
+	if id, ok := e.X.(*ast.IdentExpr); ok && id.Name != nil && g.info.Uses[id.Name] == nil && g.info.ImplicitSelf[e.X] == nil {
 		if sym := g.info.Uses[e.Name]; sym != nil {
 			if v, ok := g.moduleGetterCall(sym); ok {
 				return v
@@ -654,7 +654,7 @@ func (g *gen) member(e *ast.MemberExpr) *sil.Value {
 			}
 		}
 	}
-	if id, ok := e.X.(*ast.IdentExpr); ok && id.Name != nil && g.info.Uses[id.Name] == nil {
+	if id, ok := e.X.(*ast.IdentExpr); ok && id.Name != nil && g.info.Uses[id.Name] == nil && g.info.ImplicitSelf[e.X] == nil {
 		g.refuse(e, "'"+g.text(e.X)+"."+g.text(e.Name)+"', which names something "+
 			"other than a function through a module")
 		return nil

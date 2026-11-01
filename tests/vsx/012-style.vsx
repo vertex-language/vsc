@@ -1,0 +1,16 @@
+// Inline styles: the typed Style, written in any order, numbers as
+// pixels, and a dictionary of custom properties.
+package main
+
+func main() -> int32 {
+    let w = 120
+    print((<div style={Style(padding: 8, color: "red", width: w)}>a</div>).Html())
+    print((<div style={Style(display: "flex", gap: 4, opacity: 0.5)}>b</div>).Html())
+    print((<div style={["--accent": "blue", "margin": "0 auto"]}>c</div>).Html())
+    print((<div style="border: 1px solid">d</div>).Html())
+    return 0
+}
+// want: <div style="color: red; width: 120px; padding: 8px">a</div>
+// want: <div style="display: flex; gap: 4px; opacity: 0.5">b</div>
+// want: <div style="--accent: blue; margin: 0 auto">c</div>
+// want: <div style="border: 1px solid">d</div>

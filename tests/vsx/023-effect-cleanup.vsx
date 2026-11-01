@@ -1,0 +1,38 @@
+// An effect that returns its cleanup: run before the effect runs again.
+// Which useEffect is meant is told by the closure's body.
+package main
+
+var log: [string] = []
+
+func Sub(topic: string) -> Element {
+    let (t, setT) = useState(topic)
+    useEffect({
+        log.append("subscribe \(t)")
+        return { log.append("unsubscribe \(t)") }
+    }, [t])
+    useEffect({ log.append("plain") }, [])
+    return <button id="next" onClick={setT(t + "+")}>{t}</button>
+}
+
+func main() -> int32 {
+    let page = <Sub topic="news" />
+    click(page, "next")
+    click(page, "next")
+    print(log.joined(separator: ", "))
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: subscribe news, plain, unsubscribe news, subscribe news+, unsubscribe news+, subscribe news++
+// want: <button id="next">news++</button>

@@ -1,0 +1,32 @@
+// Context: a value given to everything below a provider, the default
+// outside one, nested providers, and use() deep in the tree.
+package main
+
+let Theme = createContext("light")
+let Lang = createContext("en")
+
+func Label() -> Element {
+    return <span>{use(Theme)}/{use(Lang)}</span>
+}
+
+func Panel() -> Element {
+    return <div><Label /></div>
+}
+
+func main() -> int32 {
+    print((<Label />).Html())
+    let page = (
+        <Theme value="dark">
+            <Panel />
+            <Lang value="fr">
+                <Panel />
+                <Theme value="blue"><Label /></Theme>
+            </Lang>
+            <Label />
+        </Theme>
+    )
+    print(page.Html())
+    return 0
+}
+// want: <span>light/en</span>
+// want: <div><span>dark/en</span></div><div><span>dark/fr</span></div><span>blue/fr</span><span>dark/en</span>

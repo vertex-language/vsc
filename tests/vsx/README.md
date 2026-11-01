@@ -1,24 +1,30 @@
 # tests/vsx
 
-The test ladder for `.vsx` (v2) — Vertex's `.tsx`-inspired declarative UI and markup file format.
+The `.vsx` ladder: one program of ordinary `.vsx` per file, numbered `001`–`040`.
+Each is compiled with the built-in `.vsx` prelude (`analyzer/vsx_prelude.vs`),
+linked, run natively, and its standard output compared with the file's own
+`// want:` lines, as the kernel ladder's files are:
 
-| Folder | What | Checked by |
-| --- | --- | --- |
-| `syntax/` | `.vsx` v2 syntax and component examples (`counter.vsx`, `tasks.vsx`, `async.vsx`). Must parse with no diagnostics and contain markup. | `parser/markup_test.go` (`TestMarkupFiles`) |
-| (in the test) | Snippets of the grammar JSX/TSX and `.vsx` share, compared live with `tsc --jsx react`. | `parser/tsx_oracle_test.go` (`TestTSXOracle`) |
-| `run/` | `.vsx` v2 programs compiled with the built-in `.vsx` prelude (`analyzer/vsx_prelude.vs`), linked, executed natively, and compared with the `.out` file beside each. | `build/vsx_test.go` (`TestVSXRun`) |
-| `errors/` | `.vsx` v2 programs that must be rejected: each line marked `// want "part of the message"` must receive that diagnostic, and no other line may fail. | `build/vsx_test.go` (`TestVSXErrors`) |
-
-```bash
-cd build && go test -v . -run TestVSX
+```vertex
+print((<p>{name}</p>).Html())
+// want: <p>Hello</p>
 ```
 
-## Built-in `.vsx` v2 Prelude (`analyzer/vsx_prelude.vs`)
+```bash
+cd build && go test -run TestVSX .
+cd build && VSX_UPDATE=1 go test -run TestVSXRun/041 .   # write a new program's want lines; read them before keeping them
+```
 
-Every `.vsx` compilation unit automatically receives the built-in `.vsx` v2 prelude:
+Every file also has to parse (`parser/markup_test.go`).
 
-- **Core UI Types**: `Element`, `Node`, `Props`, `Style`, `CSSValue`, `Ref<T>`, `Context<T>`, `Component<P, S>`, `EmptyState`
-- **Built-in Components**: `Fragment`, `Suspense`, `StrictMode`, `Profiler`
-- **Hooks**: `useState`, `useReducer`, `useEffect`, `useLayoutEffect`, `useInsertionEffect`, `useRef`, `useImperativeHandle`, `useMemo`, `useCallback`, `createContext`, `use`, `useContext`, `useId`, `useTransition`, `startTransition`, `useDeferredValue`, `useSyncExternalStore`, `useOptimistic`, `useActionState`, `useFormStatus`
-- **DOM Events & Elements**: `Event`, `MouseEvent`, `KeyboardEvent`, `ChangeEvent`, `PointerEvent`, `FocusEvent`, `FormData`, `HTMLElement`, `HTMLInputElement`, `HTMLButtonElement`, `HTMLDivElement`, `HTMLFormElement`, `HTMLAttributes`
-- **Optional Namespaces**: `ui.*` and `dom.*` resolve to the same built-in symbols for optional explicit qualification.
+| | |
+| --- | --- |
+| 001–006 | elements, components, control flow, handlers, a task list, hooks with a Props struct and a class component |
+| 007–012 | text and escaping, fragments, conditionals (`if`, `switch`, `&&`, `?:`), lists, attributes, inline styles |
+| 013–024 | handlers, `useState`, `useReducer`, context, Props structs, render props, generic components, refs, `useMemo`, `useEffect` and its cleanup, class components |
+| 025–028 | the language under the hooks: `any Equatable` deps, overloads told apart by a closure's body, implicitly unwrapped optionals, a class inheriting a generic class |
+| 029–040 | programs: a task app, SVG, forms, whitespace, composition, `useId`, keyed rows, tabs, `Suspense`, optionals, a cart, a dashboard |
+
+The prelude is what a `.vsx` program runs on where `ui` cannot be found. Where it
+can, the program imports `ui/component` and `web/dom` implicitly and runs on them
+(`vsximports.go`).

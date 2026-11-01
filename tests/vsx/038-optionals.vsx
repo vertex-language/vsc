@@ -1,0 +1,31 @@
+// Optionals in markup: nil renders nothing, a value renders itself, and
+// optional chaining reads through to what is there.
+package main
+
+struct User {
+    var name: string
+    var avatar: string?
+}
+
+func Card(user: User?) -> Element {
+    return (
+        <div>
+            {user?.name ?? "anonymous"}
+            {user?.avatar.map { a in <img src={a} /> }}
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let note: Node? = nil
+    let tip: Node? = <em>tip</em>
+    print((<p>{note}{tip}</p>).Html())
+    print(Card(user: nil).Html())
+    print(Card(user: User(name: "owner", avatar: nil)).Html())
+    print(Card(user: User(name: "guest", avatar: "guest.png")).Html())
+    return 0
+}
+// want: <p><em>tip</em></p>
+// want: <div>anonymous</div>
+// want: <div>owner</div>
+// want: <div>guest<img src="guest.png"></div>

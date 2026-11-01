@@ -1,0 +1,23 @@
+// Children as a function: a list component calling its child for each
+// item, and a render prop with two arguments.
+package main
+
+func Each<T>(items: [T], children: (T) -> Element) -> Element {
+    return <ul>{items.map { children($0) }}</ul>
+}
+
+func Table(rows: [[string]], cell: (int, string) -> Element) -> Element {
+    return (
+        <table>
+            {rows.map { r in <tr>{r.enumerated().map { (i, s) in cell(i, s) }}</tr> }}
+        </table>
+    )
+}
+
+func main() -> int32 {
+    print((<Each<int> items={[1, 2]}>{n in <li>#{n}</li>}</Each>).Html())
+    print((<Table rows={[["a", "b"], ["c", "d"]]} cell={(i, s) in <td className={"c\(i)"}>{s}</td>} />).Html())
+    return 0
+}
+// want: <ul><li>#1</li><li>#2</li></ul>
+// want: <table><tr><td class="c0">a</td><td class="c1">b</td></tr><tr><td class="c0">c</td><td class="c1">d</td></tr></table>

@@ -10,12 +10,12 @@ import (
 	"github.com/vertex-language/vsc/token"
 )
 
-// The RFC's own examples parse, with markup where it is written and
-// nowhere else.
+// Every program of the .vsx ladder parses; one that is there only to parse
+// (it says neither what it prints nor what is refused) has markup in it.
 func TestMarkupFiles(t *testing.T) {
-	files, _ := filepath.Glob("../tests/vsx/syntax/*.vsx")
+	files, _ := filepath.Glob("../tests/vsx/*.vsx")
 	if len(files) == 0 {
-		t.Fatal("no ../tests/vsx/syntax/*.vsx")
+		t.Fatal("no ../tests/vsx/*.vsx")
 	}
 	for _, name := range files {
 		t.Run(filepath.Base(name), func(t *testing.T) {
@@ -27,6 +27,9 @@ func TestMarkupFiles(t *testing.T) {
 			file, diags := ParseFile(f, 0)
 			for _, d := range diags {
 				t.Errorf("%s", d.Print(f))
+			}
+			if strings.Contains(string(src), "// want") {
+				return
 			}
 			elements := 0
 			ast.Inspect(file, func(n ast.Node) bool {

@@ -49,6 +49,8 @@ func (c *checker) checkExpr(expr ast.Expr, expected types.Type, scope *Scope) ty
 		c.info.ImplicitSelf[expr] = synth
 		typ := c.checkExpr(synth, expected, scope)
 		c.info.Types[expr] = typ
+		// `state` is `self.state`: an implicitly unwrapped one too.
+		c.implicit[expr] = c.implicit[synth]
 		return typ
 	}
 	typ := c.evalExpr(expr, expected, scope)
@@ -82,6 +84,11 @@ func (c *checker) unwrapImplicit(expr ast.Expr, t types.Type) types.Type {
 	o, ok := t.(*types.Optional)
 	if !ok || !c.implicit[expr] {
 		return t
+	}
+	if synth, ok := c.info.ImplicitSelf[expr]; ok {
+		// What is lowered is the member of self it stands for.
+		c.info.Unwrapped[synth] = o
+		c.info.Types[synth] = o.Wrapped
 	}
 	c.info.Unwrapped[expr] = o
 	c.info.Types[expr] = o.Wrapped
@@ -1057,6 +1064,17 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 				lhs = c.checkExpr(e.X, ch.sig().Params[0].Type, scope)
 				rhs = c.checkExpr(e.Y, ch.sig().Params[1].Type, scope)
 			}
+		}
+		// An implicitly unwrapped optional is unwrapped where no operator
+		// takes it as the optional it is: `state + 1` with `state: Int!`.
+		// Compared with nil, or given to ?? or an assignment, it stays one.
+		assigning := strings.HasSuffix(opName, "=") && opName != "==" && opName != "!=" && opName != "<=" && opName != ">="
+		if (c.implicit[e.X] || c.implicit[e.Y]) && !isUntypedNil(lhs) && !isUntypedNil(rhs) &&
+			opName != "??" && opName != "===" && opName != "!==" && !assigning &&
+			!c.hasOperator(scope, opName, []ast.Expr{e.X, e.Y}, []types.Type{lhs, rhs}) {
+			lhs = c.unwrapImplicit(e.X, lhs)
+			rhs = c.unwrapImplicit(e.Y, rhs)
+			lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs, scope)
 		}
 		// An array literal compared with or added to an array is an array
 		// of that array's elements: `bytes == [109, 115]` with bytes a
@@ -3177,6 +3195,13 @@ func (c *checker) lookupValue(scope *Scope, name string) Symbol {
 	if scope != nil {
 		if sym := scope.Lookup(name); sym != nil {
 			return sym
+		}
+	}
+	if c.file != nil && strings.HasSuffix(c.file.Name(), ".vsx") {
+		if mod := c.modules["component"]; mod != nil {
+			if sym := mod.Lookup(name); sym != nil {
+				return sym
+			}
 		}
 	}
 	cl, ok := c.currType.(*types.Class)

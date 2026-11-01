@@ -19,3 +19,4 @@ func main() -> int32 {
     print(page.Html())
     return 0
 }
+// want: <main id="top" class="app"><h1>Hello, vsx!</h1><p title="count">3 items</p><input type="checkbox" checked><ul><li>1</li><li>2</li><li>3</li></ul><p>a &lt; b &amp;&amp; c</p></main>

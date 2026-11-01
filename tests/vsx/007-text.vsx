@@ -1,0 +1,23 @@
+// Text in markup: escaped as HTML, numbers as their digits, a Bool as
+// nothing, and an interpolated string as one text.
+package main
+
+func main() -> int32 {
+    let name = "<Red & Blue>"
+    let n = 42
+    let x = 2.5
+    let flag = true
+    print((<p>{name}</p>).Html())
+    print((<p>{n} items, {x} kg</p>).Html())
+    print((<p>a{flag}b</p>).Html())
+    print((<p title={"say \"hi\" & go"}>q</p>).Html())
+    print((<p>{"\(n + 1) next"}</p>).Html())
+    print((<p>&lt;tag&gt; &amp; &quot;x&quot;</p>).Html())
+    return 0
+}
+// want: <p>&lt;Red &amp; Blue&gt;</p>
+// want: <p>42 items, 2.5 kg</p>
+// want: <p>ab</p>
+// want: <p title="say &quot;hi&quot; &amp; go">q</p>
+// want: <p>43 next</p>
+// want: <p>&lt;tag&gt; &amp; &quot;x&quot;</p>

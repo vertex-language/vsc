@@ -1,0 +1,47 @@
+// useEffect: after each render with no deps, once with [], and when a
+// dep changes otherwise.
+package main
+
+var log: [string] = []
+
+func Watch() -> Element {
+    let (a, setA) = useState(0)
+    let (b, setB) = useState(false)
+    useEffect({ log.append("every") })
+    useEffect({ log.append("once") }, [])
+    useEffect({ log.append("a=\(a)") }, [a])
+    useEffect({ log.append("b=\(b)") }, [b])
+    return (
+        <div>
+            <button id="a" onClick={setA(a + 1)}>a</button>
+            <button id="b" onClick={setB(!b)}>b</button>
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let page = <Watch />
+    print(log.joined(separator: " "))
+    log = []
+    click(page, "a")
+    print(log.joined(separator: " "))
+    log = []
+    click(page, "b")
+    print(log.joined(separator: " "))
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: every once a=0 b=false
+// want: every a=1
+// want: every b=true

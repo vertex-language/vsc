@@ -1,0 +1,27 @@
+// Overloads told apart by the closure given: one returning nothing, one
+// returning a function -- as useEffect's two forms are.
+package main
+
+var log: [string] = []
+
+func run(_ f: () -> void) { log.append("void"); f() }
+func run(_ f: () -> (() -> void)) { log.append("returns"); f()() }
+
+func main() -> int32 {
+    var x = 0
+    run({ x += 1 })
+    run({
+        x += 1
+        log.append("two statements")
+    })
+    run({
+        x += 10
+        return { log.append("cleanup \(x)") }
+    })
+    run({ return { log.append("single") } })
+    print(log.joined(separator: ", "))
+    print(x)
+    return 0
+}
+// want: void, void, two statements, returns, cleanup 12, returns, single
+// want: 12

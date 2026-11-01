@@ -1,0 +1,44 @@
+// Form controls: a select, a textarea, radio buttons and labels, each
+// controlled by state.
+package main
+
+func Survey() -> Element {
+    let (color, setColor) = useState("red")
+    let (note, setNote) = useState("hi")
+    let (size, setSize) = useState("m")
+    return (
+        <form>
+            <label htmlFor="c">Color</label>
+            <select id="c" value={color} onChange={_ in setColor("blue")}>
+                <option value="red">red</option>
+                <option value="blue">blue</option>
+            </select>
+            <textarea id="n" value={note} onInput={_ in setNote(note + "!")}></textarea>
+            {["s", "m"].map { s in
+                <label key={s}><input type="radio" name="size" checked={s == size} onChange={_ in setSize(s)} />{s}</label>
+            }}
+            <p>{color} {note} {size}</p>
+        </form>
+    )
+}
+
+func main() -> int32 {
+    let page = <Survey />
+    _ = find(page, "c")!.Fire("change")
+    _ = find(page, "n")!.Fire("input")
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <form><label for="c">Color</label><select id="c" value="blue"><option value="red">red</option><option value="blue">blue</option></select><textarea id="n" value="hi!"></textarea><label><input type="radio" name="size">s</label><label><input type="radio" name="size" checked>m</label><p>blue hi! m</p></form>

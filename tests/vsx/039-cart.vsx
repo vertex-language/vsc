@@ -1,0 +1,84 @@
+// A cart: a reducer over a struct of state, a context giving its
+// dispatch to the rows below, and totals computed from the state.
+package main
+
+struct Item {
+    var name: string
+    var price: int
+    var qty: int
+}
+
+struct Cart {
+    var items: [Item]
+    var coupon: bool = false
+}
+
+enum CartAction {
+    case add(string)
+    case remove(string)
+    case coupon
+}
+
+func cartReducer(_ cart: Cart, _ action: CartAction) -> Cart {
+    var next = cart
+    switch action {
+    case .add(let name):
+        next.items = cart.items.map { i in i.name == name ? Item(name: i.name, price: i.price, qty: i.qty + 1) : i }
+    case .remove(let name):
+        next.items = cart.items.filter { $0.name != name }
+    case .coupon:
+        next.coupon = true
+    }
+    return next
+}
+
+let Dispatch = createContext<((CartAction) -> void)?>(nil)
+
+func Line(item: Item) -> Element {
+    let dispatch = use(Dispatch)!
+    return (
+        <tr>
+            <td>{item.name}</td>
+            <td>{item.qty} x {item.price}</td>
+            <td><button id={"add-" + item.name} onClick={dispatch(.add(item.name))}>+</button></td>
+            <td><button id={"rm-" + item.name} onClick={dispatch(.remove(item.name))}>x</button></td>
+        </tr>
+    )
+}
+
+func Shop() -> Element {
+    let (cart, dispatch) = useReducer(cartReducer, Cart(items: [Item(name: "pen", price: 2, qty: 1), Item(name: "ink", price: 5, qty: 1)]))
+    let total = cart.items.reduce(0) { $0 + $1.price * $1.qty }
+    return (
+        <Dispatch value={dispatch}>
+            <table>{cart.items.map { i in <Line key={i.name} item={i} /> }}</table>
+            <p>total {cart.coupon ? total - 1 : total}</p>
+            <button id="coupon" onClick={dispatch(.coupon)}>coupon</button>
+        </Dispatch>
+    )
+}
+
+func main() -> int32 {
+    let page = <Shop />
+    print(page.Html())
+    click(page, "add-pen")
+    click(page, "add-pen")
+    click(page, "rm-ink")
+    click(page, "coupon")
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <table><tr><td>pen</td><td>1 x 2</td><td><button id="add-pen">+</button></td><td><button id="rm-pen">x</button></td></tr><tr><td>ink</td><td>1 x 5</td><td><button id="add-ink">+</button></td><td><button id="rm-ink">x</button></td></tr></table><p>total 7</p><button id="coupon">coupon</button>
+// want: <table><tr><td>pen</td><td>3 x 2</td><td><button id="add-pen">+</button></td><td><button id="rm-pen">x</button></td></tr></table><p>total 5</p><button id="coupon">coupon</button>

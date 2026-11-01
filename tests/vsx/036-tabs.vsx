@@ -1,0 +1,47 @@
+// Tabs: which panel shows is state; each panel is its own component.
+package main
+
+func Profile(name: string) -> Element { return <section><h2>{name}</h2></section> }
+func Settings(dark: bool) -> Element { return <section><p>dark: {dark ? "yes" : "no"}</p></section> }
+
+func Tabs() -> Element {
+    let (tab, setTab) = useState("profile")
+    return (
+        <div>
+            <nav>
+                {["profile", "settings"].map { t in
+                    <button key={t} id={t} className={t == tab ? "on" : ""} onClick={setTab(t)}>{t}</button>
+                }}
+            </nav>
+            {switch tab {
+            case "profile": <Profile name="Owner" />
+            default: <Settings dark={true} />
+            }}
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let page = <Tabs />
+    print(page.Html())
+    click(page, "settings")
+    print(page.Html())
+    click(page, "profile")
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <div><nav><button id="profile" class="on">profile</button><button id="settings">settings</button></nav><section><h2>Owner</h2></section></div>
+// want: <div><nav><button id="profile">profile</button><button id="settings" class="on">settings</button></nav><section><p>dark: yes</p></section></div>
+// want: <div><nav><button id="profile" class="on">profile</button><button id="settings">settings</button></nav><section><h2>Owner</h2></section></div>

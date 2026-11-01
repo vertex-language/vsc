@@ -1,0 +1,33 @@
+// Components composing components: a layout taking named slots as
+// Nodes, and a dotted name for a namespace of components.
+package main
+
+func Layout(header: Node, sidebar: Node? = nil, children: Node = nil) -> Element {
+    return (
+        <div className="layout">
+            <header>{header}</header>
+            {sidebar != nil && <aside>{sidebar}</aside>}
+            <main>{children}</main>
+        </div>
+    )
+}
+
+enum ui2 {
+    static func Title(text: string) -> Element { return <h1>{text}</h1> }
+    static func Nav(links: [string]) -> Element {
+        return <nav>{links.map { l in <a key={l} href={"/" + l}>{l}</a> }}</nav>
+    }
+}
+
+func main() -> int32 {
+    let page = (
+        <Layout header={<ui2.Title text="Home" />} sidebar={<ui2.Nav links={["a", "b"]} />}>
+            <p>body</p>
+        </Layout>
+    )
+    print(page.Html())
+    print((<Layout header="Bare" />).Html())
+    return 0
+}
+// want: <div class="layout"><header><h1>Home</h1></header><aside><nav><a href="/a">a</a><a href="/b">b</a></nav></aside><main><p>body</p></main></div>
+// want: <div class="layout"><header>Bare</header><main></main></div>

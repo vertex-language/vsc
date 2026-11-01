@@ -1,0 +1,31 @@
+// A component taking a Props struct: defaults, a spread, an attribute
+// after the spread winning over it, and children.
+package main
+
+struct ButtonProps: Props {
+    var label: string
+    var kind: string = "plain"
+    var disabled: bool = false
+    var children: Node = nil
+}
+
+func Button(_ props: ButtonProps) -> Element {
+    return (
+        <button className={"btn " + props.kind} disabled={props.disabled}>
+            {props.label}{props.children}
+        </button>
+    )
+}
+
+func main() -> int32 {
+    let base = ButtonProps(label: "Save", kind: "primary")
+    print((<Button label="Go" />).Html())
+    print((<Button {...base} />).Html())
+    print((<Button {...base} kind="danger" disabled />).Html())
+    print((<Button label="More"><i>+</i></Button>).Html())
+    return 0
+}
+// want: <button class="btn plain">Go</button>
+// want: <button class="btn primary">Save</button>
+// want: <button disabled class="btn danger">Save</button>
+// want: <button class="btn plain">More<i>+</i></button>

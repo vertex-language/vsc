@@ -730,14 +730,19 @@ func (c *fn) classMethod(in *sil.Inst) error {
 	if !ok {
 		return c.fail(ErrUnsupported, in.Op(), "a method on something that is not a class")
 	}
-	rows, ok := c.l.slots[classTableName(formal, cl)]
+	// An imported class's table is in its own module: the call recorded
+	// its rows, under its module's name, so that a class of this module
+	// with the same name is not taken for it.
+	var rows []string
+	ok = false
+	if cl.Pkg != "" {
+		rows, ok = c.l.module.ImportedLayout(cl.Pkg + "." + cl.Name)
+	}
 	if !ok {
-		// An imported class's table is in its own module: the call
-		// recorded its rows.
-		rows, ok = c.l.module.ImportedLayout(cl.Name)
-		if !ok {
-			return c.fail(ErrUnsupported, in.Op(), cl.Name+" has no dispatch table")
-		}
+		rows, ok = c.l.slots[classTableName(formal, cl)]
+	}
+	if !ok {
+		return c.fail(ErrUnsupported, in.Op(), cl.Name+" has no dispatch table")
 	}
 	i := -1
 	for n, m := range rows {

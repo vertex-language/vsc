@@ -1,0 +1,35 @@
+// A class inheriting from a generic class: dispatched through the
+// generic base, its initializer run by the subclass's.
+package main
+
+class Store<T> {
+    var items: [T] = []
+    var name: string
+    init() { name = "store" }
+    func add(_ x: T) { items.append(x) }
+    func describe() -> string { return "\(name): \(items.count)" }
+}
+
+final class Names: Store<string> {
+    override init() {
+        super.init()
+        name = "names"
+    }
+    override func describe() -> string { return super.describe() + " [" + items.joined(separator: ",") + "]" }
+}
+
+final class Plain: Store<int> {}
+
+func main() -> int32 {
+    let n = Names()
+    n.add("a")
+    n.add("b")
+    let s: Store<string> = n
+    print(s.describe())
+    let p = Plain()
+    p.add(1)
+    print(p.describe())
+    return 0
+}
+// want: names: 2 [a,b]
+// want: store: 1

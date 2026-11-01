@@ -1,0 +1,44 @@
+// useRef: a box kept across renders that setting does not render
+// again; and a callback ref, given the element it is on.
+package main
+
+var seen: [string] = []
+
+func Clicks() -> Element {
+    let clicks = useRef(0)
+    let (shown, setShown) = useState(0)
+    return (
+        <div>
+            <p ref={n in seen.append(n?.Tag ?? "nil")}>{shown}</p>
+            <button id="hit" onClick={{ clicks.current = (clicks.current ?? 0) + 1 }}>hit</button>
+            <button id="show" onClick={setShown(clicks.current ?? 0)}>show</button>
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let page = <Clicks />
+    click(page, "hit")
+    click(page, "hit")
+    click(page, "hit")
+    print(page.Html())
+    click(page, "show")
+    print(page.Html())
+    print(seen.joined(separator: ","))
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <div><p>0</p><button id="hit">hit</button><button id="show">show</button></div>
+// want: <div><p>3</p><button id="hit">hit</button><button id="show">show</button></div>
+// want: p,p

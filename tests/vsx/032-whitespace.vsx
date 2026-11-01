@@ -1,0 +1,20 @@
+// Whitespace in markup: lines of text and indentation collapse as JSX
+// collapses them; spaces inside a line stay.
+package main
+
+func main() -> int32 {
+    let name = "World"
+    let page = (
+        <p>
+            Hello,
+            {name}!   How are
+            you?
+            <b> bold </b>
+        </p>
+    )
+    print(page.Html())
+    print((<p>a {name} b</p>).Html())
+    return 0
+}
+// want: <p>Hello,World!   How are you?<b> bold </b></p>
+// want: <p>a World b</p>

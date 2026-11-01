@@ -46,7 +46,7 @@ func App(store: Store, draft: string) -> Element {
     return (
         <main className="app">
             <form onSubmit={e in
-                e.preventDefault()
+                e.PreventDefault()
                 if !draft.isEmpty { store.Add(draft) }
             }>
                 <input placeholder="What needs doing?" value={draft} autoFocus />
@@ -75,3 +75,6 @@ func main() -> int32 {
     print(App(store: store, draft: "").Html())
     return 0
 }
+// want: <main class="app"><form><input placeholder="What needs doing?" value="" autofocus></form><p class="empty">Nothing here.</p></main>
+// want: <main class="app"><form><input placeholder="What needs doing?" value="" autofocus></form><ul><li class="item"><input type="checkbox"><span>buy milk</span></li><li class="item"><input type="checkbox"><span>walk</span></li></ul></main>
+// want: <main class="app"><form><input placeholder="What needs doing?" value="" autofocus></form><ul><li class="item done"><input type="checkbox" checked><span>buy milk</span></li></ul></main>

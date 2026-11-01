@@ -1,0 +1,71 @@
+// A small dashboard: a layout of components, a filtered and sorted
+// table, a search controlled by state, and a summary of what is shown.
+package main
+
+struct Server {
+    var name: string
+    var load: int
+    var up: bool
+}
+
+let servers = [
+    Server(name: "web-1", load: 40, up: true),
+    Server(name: "db-1", load: 90, up: true),
+    Server(name: "web-2", load: 0, up: false),
+]
+
+func Stat(label: string, value: int) -> Element {
+    return <div className="stat"><span>{label}</span><b>{value}</b></div>
+}
+
+func Dashboard() -> Element {
+    let (query, setQuery) = useState("")
+    let (onlyUp, setOnlyUp) = useState(false)
+    let shown = servers
+        .filter { query.isEmpty || $0.name.hasPrefix(query) }
+        .filter { !onlyUp || $0.up }
+        .sorted { $0.load > $1.load }
+    return (
+        <main>
+            <header>
+                <Stat label="shown" value={shown.count} />
+                <Stat label="busy" value={shown.filter { $0.load > 50 }.count} />
+            </header>
+            <input id="q" value={query} onInput={_ in setQuery("web")} />
+            <label><input id="up" type="checkbox" checked={onlyUp} onChange={_ in setOnlyUp(!onlyUp)} />up only</label>
+            <table>
+                {shown.map { s in
+                    <tr key={s.name} className={s.up ? "" : "down"}>
+                        <td>{s.name}</td>
+                        <td style={Style(width: s.load)}>{s.load}%</td>
+                    </tr>
+                }}
+            </table>
+        </main>
+    )
+}
+
+func main() -> int32 {
+    let page = <Dashboard />
+    print(page.Html())
+    _ = find(page, "q")!.Fire("input")
+    print(page.Html())
+    _ = find(page, "up")!.Fire("change")
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <main><header><div class="stat"><span>shown</span><b>3</b></div><div class="stat"><span>busy</span><b>1</b></div></header><input id="q" value=""><label><input id="up" type="checkbox">up only</label><table><tr><td>db-1</td><td style="width: 90px">90%</td></tr><tr><td>web-1</td><td style="width: 40px">40%</td></tr><tr class="down"><td>web-2</td><td style="width: 0px">0%</td></tr></table></main>
+// want: <main><header><div class="stat"><span>shown</span><b>2</b></div><div class="stat"><span>busy</span><b>0</b></div></header><input id="q" value="web"><label><input id="up" type="checkbox">up only</label><table><tr><td>web-1</td><td style="width: 40px">40%</td></tr><tr class="down"><td>web-2</td><td style="width: 0px">0%</td></tr></table></main>
+// want: <main><header><div class="stat"><span>shown</span><b>1</b></div><div class="stat"><span>busy</span><b>0</b></div></header><input id="q" value="web"><label><input id="up" type="checkbox" checked>up only</label><table><tr><td>web-1</td><td style="width: 40px">40%</td></tr></table></main>

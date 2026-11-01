@@ -1,0 +1,20 @@
+// Suspense, StrictMode and Profiler render their children.
+package main
+
+func Body() -> Element { return <p>body</p> }
+
+func main() -> int32 {
+    let page = (
+        <StrictMode>
+            <Suspense fallback={<p>loading</p>}>
+                <Body />
+            </Suspense>
+            <Profiler id="p">
+                <span>profiled</span>
+            </Profiler>
+        </StrictMode>
+    )
+    print(page.Html())
+    return 0
+}
+// want: <p>body</p><span>profiled</span>

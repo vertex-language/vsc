@@ -442,13 +442,27 @@ func (g *gen) callSuperInit(at ast.Node, recv types.Type, sig *types.Signature, 
 	super := cl.Superclass
 	out := *sig
 	out.Results = super
-	alloc := g.initSymbol(super, &out)
-	if alloc == "" || !strings.HasSuffix(alloc, "fC") {
-		g.refuse(at, "this super.init")
-		return false
+	var initializing string
+	if gi, ok := super.(*types.GenericInstance); ok && len(nominalTypeParams(gi.Base)) > 0 && !mentionsTypeParams(gi) && len(g.inits[gi.Base]) > 0 {
+		// A generic superclass's initializer, lowered for the instance
+		// this class inherits from.
+		spec, _, name, ok := g.specializeClassInit(at, gi, sig)
+		if !ok {
+			return false
+		}
+		out = *spec
+		out.Results = super
+		initializing = name
+	} else {
+		alloc := g.initSymbol(super, &out)
+		if alloc == "" || !strings.HasSuffix(alloc, "fC") {
+			g.refuse(at, "this super.init")
+			return false
+		}
+		initializing = alloc[:len(alloc)-1] + "c"
 	}
 	st := lowerType(super)
-	callee := g.m.Func(alloc[:len(alloc)-1] + "c").SetSourceName("init")
+	callee := g.m.Func(initializing).SetSourceName("init")
 	if g.needsType(callee) {
 		for _, p := range out.Params {
 			pt := lowerType(p.Type)
@@ -545,9 +559,23 @@ func (g *gen) inheritedInitBody(recv types.Type, out, super *types.Signature, na
 	superT := cl.Superclass
 	sout := *super
 	sout.Results = superT
-	alloc := g.initSymbol(superT, &sout)
+	var initializing string
+	if gi, ok := superT.(*types.GenericInstance); ok && len(nominalTypeParams(gi.Base)) > 0 && !mentionsTypeParams(gi) && len(g.inits[gi.Base]) > 0 {
+		// Inherited from a generic superclass: its initializer lowered
+		// for the instance this class inherits from.
+		spec, _, name, ok := g.specializeClassInit(nil, gi, super)
+		if !ok {
+			return
+		}
+		sout = *spec
+		sout.Results = superT
+		initializing = name
+	} else {
+		alloc := g.initSymbol(superT, &sout)
+		initializing = alloc[:len(alloc)-1] + "c"
+	}
 	st := lowerType(superT)
-	callee := g.m.Func(alloc[:len(alloc)-1] + "c").SetSourceName("init")
+	callee := g.m.Func(initializing).SetSourceName("init")
 	if g.needsType(callee) {
 		for _, p := range sout.Params {
 			pt := lowerType(p.Type)

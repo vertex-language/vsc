@@ -1,0 +1,33 @@
+// A class component: props given, state set with setState, and render
+// called again; a property read through an implicitly unwrapped one.
+package main
+
+struct ToggleProps {
+    var on: string
+    var off: string
+}
+
+class Toggle: Component<ToggleProps, bool> {
+    init() {
+        super.init()
+        state = false
+    }
+
+    override func render() -> Node {
+        let word = state ? props.on : props.off
+        return <button onClick={{ self.setState(!self.state) }}>{word}</button>
+    }
+}
+
+func main() -> int32 {
+    let page = <div><Toggle on="ON" off="off" /></div>
+    print(page.Html())
+    _ = page.Fire("click")
+    print(page.Html())
+    _ = page.Fire("click")
+    print(page.Html())
+    return 0
+}
+// want: <div><button>off</button></div>
+// want: <div><button>ON</button></div>
+// want: <div><button>off</button></div>

@@ -40,3 +40,7 @@ func main() -> int32 {
     print(v.Html())
     return 0
 }
+// want: <p><i>…</i></p>
+// want: <p><b>ok</b></p>
+// want: <p><em>error 404</em></p>
+// want: <div aria-label="x" data-a="1" class="row done" style="color: red; width: 40px"><p class="empty">Nothing here.</p>yes</div>

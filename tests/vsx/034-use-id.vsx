@@ -1,0 +1,37 @@
+// useId: an id made once for a component and kept across its renders,
+// tying a label to its field.
+package main
+
+func Field(label: string) -> Element {
+    let id = useId()
+    let (n, setN) = useState(0)
+    return (
+        <div>
+            <label htmlFor={id}>{label}</label>
+            <input id={id} />
+            <button id={"b" + label} onClick={setN(n + 1)}>{n}</button>
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let page = <form><Field label="name" /><Field label="mail" /></form>
+    print(page.Html())
+    click(page, "bname")
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <form><div><label for=":r1:">name</label><input id=":r1:"><button id="bname">0</button></div><div><label for=":r2:">mail</label><input id=":r2:"><button id="bmail">0</button></div></form>
+// want: <form><div><label for=":r1:">name</label><input id=":r1:"><button id="bname">1</button></div><div><label for=":r2:">mail</label><input id=":r2:"><button id="bmail">0</button></div></form>

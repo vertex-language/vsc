@@ -57,6 +57,7 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, expected ty
 	}
 	fits = c.byContext(fits)
 	fits = byResult(fits, expected)
+	fits = c.byClosureBodies(fits, args, scope)
 	if len(fits) > 1 {
 		var sigs []*types.Signature
 		for _, f := range fits {
@@ -75,6 +76,135 @@ func (c *checker) resolveOverload(fun ast.Expr, args []*ast.CallArg, expected ty
 	}
 	c.info.Uses[name] = fits[0]
 	return fits[0].Signature()
+}
+
+// byClosureBodies is which of several functions that fit the arguments
+// take each closure written among them as it is written: its body checked
+// against the parameter's function type, quietly. A closure alone has no
+// result type until its context gives one, so `{ x = 1 }` and
+// `{ ...; return { cleanup() } }` both fit `() -> Void` and
+// `() -> () -> Void` by type alone; their bodies tell them apart. All of
+// them where no closure is written, or where none or all of them take it.
+func (c *checker) byClosureBodies(fits []*FuncSymbol, args []*ast.CallArg, scope *Scope) []*FuncSymbol {
+	if len(fits) < 2 {
+		return fits
+	}
+	hasClosure := false
+	for _, a := range args {
+		if _, ok := unparen(a.X).(*ast.ClosureExpr); ok {
+			hasClosure = true
+			break
+		}
+	}
+	if !hasClosure {
+		return fits
+	}
+	var suited, typed []*FuncSymbol
+	for _, f := range fits {
+		params := c.paramsForArgs(f.Signature(), args)
+		if params == nil {
+			continue
+		}
+		takes, allTyped := true, true
+		for i, a := range args {
+			cl, ok := unparen(a.X).(*ast.ClosureExpr)
+			if !ok || params[i] == nil {
+				continue
+			}
+			want := params[i].Type
+			if o, isOpt := want.Underlying().(*types.Optional); isOpt && o.Wrapped != nil {
+				want = o.Wrapped
+			}
+			if _, isFn := want.Underlying().(*types.Signature); !isFn {
+				// A type parameter takes the closure as whatever it is,
+				// which is nothing where its parameters are written
+				// without types: an overload saying what they are is it.
+				allTyped = false
+				continue
+			}
+			quiet := len(c.info.Diagnostics)
+			c.checkExpr(cl, want, scope)
+			clean := len(c.info.Diagnostics) == quiet && !c.missingResult(cl, want)
+			c.info.Diagnostics = c.info.Diagnostics[:quiet]
+			if !clean {
+				takes = false
+				break
+			}
+		}
+		if takes {
+			suited = append(suited, f)
+			if allTyped {
+				typed = append(typed, f)
+			}
+		}
+	}
+	if len(typed) > 0 && len(typed) < len(suited) {
+		suited = typed
+	}
+	if len(suited) == 0 || len(suited) == len(fits) {
+		return fits
+	}
+	return suited
+}
+
+// missingResult reports whether a closure written with statements and no
+// `return` of a value is given where a function returning something other
+// than Void is wanted: its body would fall off the end.
+func (c *checker) missingResult(cl *ast.ClosureExpr, want types.Type) bool {
+	sig, ok := want.Underlying().(*types.Signature)
+	if !ok || sig.Results == nil || isVoidType(sig.Results) {
+		return false
+	}
+	if len(cl.Stmts) == 1 {
+		if _, single := cl.Stmts[0].(*ast.ExprStmt); single {
+			return false
+		}
+	}
+	returns := false
+	for _, st := range cl.Stmts {
+		ast.Inspect(st, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.ClosureExpr, *ast.FuncDecl:
+				return false
+			case *ast.ReturnStmt:
+				if x.X != nil {
+					returns = true
+				}
+			}
+			return !returns
+		})
+	}
+	return !returns
+}
+
+// paramsForArgs is the parameter each argument goes to, as sigFits
+// matches them by label, or nil where they do not fit.
+func (c *checker) paramsForArgs(sig *types.Signature, args []*ast.CallArg) []*types.Param {
+	if sig == nil {
+		return nil
+	}
+	out := make([]*types.Param, len(args))
+	next := 0
+	for _, p := range sig.Params {
+		if p.Variadic {
+			for first := true; next < len(args); first = false {
+				if first && !c.labelFits(args[next], p) || !first && args[next].Label != nil {
+					break
+				}
+				out[next] = p
+				next++
+			}
+			continue
+		}
+		if next < len(args) && c.labelFits(args[next], p) {
+			out[next] = p
+			next++
+		}
+	}
+	if next != len(args) {
+		return nil
+	}
+	return out
 }
 
 // byResult is which of several functions that fit the arguments return
@@ -987,7 +1117,14 @@ func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args [
 			pi++
 		}
 		if pi >= len(params) {
-			break
+			// Nothing left takes it: every parameter after the last one
+			// matched has a default, and none has its label.
+			if arg.Label != nil {
+				c.errorf(arg.Pos(), "extra argument '%s' in call", arg.Label.Text(c.file))
+			} else {
+				c.errorf(arg.Pos(), "extra argument in call")
+			}
+			return out
 		}
 		if !c.labelFits(arg, params[pi]) {
 			c.errorf(call.Pos(), "missing argument for parameter '%s'", paramName(params[pi]))

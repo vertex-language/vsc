@@ -1,0 +1,45 @@
+// useState: a value and a setter, set directly or from what it is; the
+// component renders again with each change.
+package main
+
+var renders = 0
+
+func Counter(start: int) -> Element {
+    renders += 1
+    let (count, setCount) = useState(start)
+    let (label, setLabel) = useState("count")
+    return (
+        <div>
+            <p>{label}: {count}</p>
+            <button id="inc" onClick={setCount(count + 1)}>+</button>
+            <button id="dbl" onClick={setCount { $0 * 2 }}>x2</button>
+            <button id="ren" onClick={setLabel("total")}>rename</button>
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let page = <main><Counter start={3} /></main>
+    print(page.Html())
+    click(page, "inc")
+    click(page, "dbl")
+    click(page, "ren")
+    print(page.Html())
+    print(renders)
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <main><div><p>count: 3</p><button id="inc">+</button><button id="dbl">x2</button><button id="ren">rename</button></div></main>
+// want: <main><div><p>total: 8</p><button id="inc">+</button><button id="dbl">x2</button><button id="ren">rename</button></div></main>
+// want: 4

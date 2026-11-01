@@ -1,0 +1,54 @@
+// useReducer with an enum of actions carrying values.
+package main
+
+enum Action {
+    case add(int)
+    case scale(by: int)
+    case reset
+}
+
+func reduce(_ state: int, _ action: Action) -> int {
+    switch action {
+    case .add(let n): return state + n
+    case .scale(let k): return state * k
+    case .reset: return 0
+    }
+}
+
+func Meter() -> Element {
+    let (v, dispatch) = useReducer(reduce, 1)
+    return (
+        <div>
+            <output>{v}</output>
+            <button id="add" onClick={dispatch(.add(4))}>add</button>
+            <button id="scale" onClick={dispatch(.scale(by: 3))}>scale</button>
+            <button id="reset" onClick={dispatch(.reset)}>reset</button>
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let page = <Meter />
+    click(page, "add")
+    print(page.Html())
+    click(page, "scale")
+    print(page.Html())
+    click(page, "reset")
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <div><output>5</output><button id="add">add</button><button id="scale">scale</button><button id="reset">reset</button></div>
+// want: <div><output>15</output><button id="add">add</button><button id="scale">scale</button><button id="reset">reset</button></div>
+// want: <div><output>0</output><button id="add">add</button><button id="scale">scale</button><button id="reset">reset</button></div>

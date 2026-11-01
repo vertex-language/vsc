@@ -1,0 +1,25 @@
+// Implicitly unwrapped optionals: used as what they wrap in arithmetic,
+// comparisons and member reads, and still optionals beside nil.
+package main
+
+class Box {
+    var n: int! = nil
+    var label: string! = nil
+    init() {}
+}
+
+func main() -> int32 {
+    let b = Box()
+    print(b.n == nil)
+    b.n = 4
+    b.label = "box"
+    print(b.n + 1, b.n * b.n, b.n > 3)
+    print(b.label.count, b.label + "!")
+    let k: int = b.n
+    print(k)
+    return 0
+}
+// want: true
+// want: 5 16 true
+// want: 3 box!
+// want: 4

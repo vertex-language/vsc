@@ -14,7 +14,7 @@ import (
 )
 
 // The markup grammar is JSX as TypeScript parses it in a .tsx file
-// (proposed_vsx.md §6), so TypeScript is the oracle for the part both
+// (docs/vsx.md), so TypeScript is the oracle for the part both
 // grammars share. Each snippet is compiled by tsc with `--jsx react`, the
 // output is run under node with an `h` that records what it is given,
 // and that is compared with the same record made from this parser's

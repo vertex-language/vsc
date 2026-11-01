@@ -1,0 +1,49 @@
+// Conditional markup: if/else and else-if chains, && short-circuit,
+// ternaries, nil-coalescing, and switch over an enum with payloads.
+package main
+
+enum Load {
+    case loading
+    case ready(items: [string])
+    case failed(message: string)
+}
+
+func View(state: Load) -> Element {
+    return (
+        <section>
+            {switch state {
+            case .loading: <p className="spin">loading</p>
+            case .ready(let items): <ul>{items.map { i in <li key={i}>{i}</li> }}</ul>
+            case .failed(let m): <p role="alert">{m}</p>
+            }}
+        </section>
+    )
+}
+
+func Grade(score: int) -> Element {
+    return (
+        <b>
+            {if score >= 90 { "A" } else if score >= 80 { "B" } else { "C" }}
+        </b>
+    )
+}
+
+func main() -> int32 {
+    print(View(state: .loading).Html())
+    print(View(state: .ready(items: ["a", "b"])).Html())
+    print(View(state: .failed(message: "no net")).Html())
+    print((<p>{Grade(score: 95)}{Grade(score: 85)}{Grade(score: 10)}</p>).Html())
+    let user: string? = nil
+    let admin = true
+    print((<p>{user ?? "guest"}{admin && <em>!</em>}{!admin && <em>?</em>}</p>).Html())
+    print((<p>{admin ? <b>on</b> : <i>off</i>}</p>).Html())
+    print((<p>{if user != nil { <span>signed in</span> }}</p>).Html())
+    return 0
+}
+// want: <section><p class="spin">loading</p></section>
+// want: <section><ul><li>a</li><li>b</li></ul></section>
+// want: <section><p role="alert">no net</p></section>
+// want: <p><b>A</b><b>B</b><b>C</b></p>
+// want: <p>guest<em>!</em></p>
+// want: <p><b>on</b></p>
+// want: <p></p>

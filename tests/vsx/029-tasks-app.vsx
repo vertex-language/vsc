@@ -1,0 +1,71 @@
+// A task app: a field controlled by state, a form adding tasks, toggling
+// one, a filter, and a count of what is left.
+package main
+
+struct Task {
+    var id: int
+    var title: string
+    var done: bool
+}
+
+func App() -> Element {
+    let (tasks, setTasks) = useState<[Task]>([])
+    let (draft, setDraft) = useState("")
+    let (filter, setFilter) = useState("all")
+    let shown = tasks.filter { filter == "all" || (filter == "done") == $0.done }
+    return (
+        <main>
+            <form id="form" onSubmit={e in
+                e.PreventDefault()
+                if !draft.isEmpty {
+                    setTasks(tasks + [Task(id: tasks.count + 1, title: draft, done: false)])
+                    setDraft("")
+                }
+            }>
+                <input id="draft" value={draft} onInput={e in setDraft(draft + "x")} />
+            </form>
+            <ul>
+                {shown.map { t in
+                    <li key={t.id} id={"t\(t.id)"} className={t.done ? "done" : ""} onClick={
+                        setTasks(tasks.map { x in x.id == t.id ? Task(id: x.id, title: x.title, done: !x.done) : x })
+                    }>{t.title}</li>
+                }}
+            </ul>
+            <p>{tasks.filter { !$0.done }.count} left</p>
+            <button id="all" onClick={setFilter("all")}>all</button>
+            <button id="done" onClick={setFilter("done")}>done</button>
+            <button id="open" onClick={setFilter("open")}>open</button>
+        </main>
+    )
+}
+
+func main() -> int32 {
+    let page = <App />
+    _ = find(page, "draft")!.Fire("input")
+    _ = find(page, "form")!.Fire("submit")
+    _ = find(page, "draft")!.Fire("input")
+    _ = find(page, "draft")!.Fire("input")
+    _ = find(page, "form")!.Fire("submit")
+    print(page.Html())
+    click(page, "t1")
+    click(page, "done")
+    print(page.Html())
+    click(page, "open")
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <main><form id="form"><input id="draft" value=""></form><ul><li id="t1">x</li><li id="t2">xx</li></ul><p>2 left</p><button id="all">all</button><button id="done">done</button><button id="open">open</button></main>
+// want: <main><form id="form"><input id="draft" value=""></form><ul><li id="t1" class="done">x</li></ul><p>1 left</p><button id="all">all</button><button id="done">done</button><button id="open">open</button></main>
+// want: <main><form id="form"><input id="draft" value=""></form><ul><li id="t2">xx</li></ul><p>1 left</p><button id="all">all</button><button id="done">done</button><button id="open">open</button></main>

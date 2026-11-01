@@ -70,13 +70,25 @@ func (g *gen) genericClassInit(e *ast.CallExpr, t types.Type, sig *types.Signatu
 	if !ok {
 		return nil, false
 	}
-	params := nominalTypeParams(inst.Base)
-	if len(params) == 0 {
+	if len(nominalTypeParams(inst.Base)) == 0 {
 		return nil, false
 	}
-	if len(inst.Args) != len(params) {
-		g.refuse(e, "an initializer of a generic class whose type arguments are not known")
+	out, alloc, _, ok := g.specializeClassInit(e, inst, sig)
+	if !ok {
 		return nil, true
+	}
+	return g.applyInitNamed(e, inst, out, args, alloc), true
+}
+
+// specializeClassInit lowers a generic class's initializer sig for the
+// instance inst, once, and is its signature for the instance and the
+// names of its two entries: the one making an instance, and the one
+// filling one in (which a subclass's super.init runs).
+func (g *gen) specializeClassInit(at ast.Node, inst *types.GenericInstance, sig *types.Signature) (*types.Signature, string, string, bool) {
+	params := nominalTypeParams(inst.Base)
+	if len(inst.Args) != len(params) {
+		g.refuse(at, "an initializer of a generic class whose type arguments are not known")
+		return nil, "", "", false
 	}
 	var decl *ast.InitDecl
 	for _, d := range g.inits[inst.Base] {
@@ -86,8 +98,8 @@ func (g *gen) genericClassInit(e *ast.CallExpr, t types.Type, sig *types.Signatu
 		}
 	}
 	if decl == nil {
-		g.refuse(e, "an initializer of a generic class whose declaration this cannot find")
-		return nil, true
+		g.refuse(at, "an initializer of a generic class whose declaration this cannot find")
+		return nil, "", "", false
 	}
 	subst := make(map[*types.TypeParam]types.Type, len(g.subst)+len(params))
 	for k, v := range g.subst {
@@ -98,15 +110,15 @@ func (g *gen) genericClassInit(e *ast.CallExpr, t types.Type, sig *types.Signatu
 	}
 	specialized, ok := types.Substitute(sig, subst).(*types.Signature)
 	if !ok {
-		g.refuse(e, "an initializer of a generic class whose signature this cannot substitute")
-		return nil, true
+		g.refuse(at, "an initializer of a generic class whose signature this cannot substitute")
+		return nil, "", "", false
 	}
 	named := *specialized
 	named.Results = inst.Base
 	alloc := g.initSymbol(inst.Base, &named)
 	if alloc == "" || !strings.HasSuffix(alloc, "fC") {
-		g.refuse(e, "an initializer of a generic class this compiler cannot name")
-		return nil, true
+		g.refuse(at, "an initializer of a generic class this compiler cannot name")
+		return nil, "", "", false
 	}
 	// The instance's arguments before the allocating entry's suffix, so
 	// the one that fills the instance in is still its name ending in c.
@@ -123,7 +135,7 @@ func (g *gen) genericClassInit(e *ast.CallExpr, t types.Type, sig *types.Signatu
 	out := *specialized
 	out.Results = inst
 	g.emitClassInitSpecialization(decl, inst, &out, alloc, initializing, subst)
-	return g.applyInitNamed(e, inst, &out, args, alloc), true
+	return &out, alloc, initializing, true
 }
 
 // emitClassInitSpecialization lowers a generic class's initializer for one

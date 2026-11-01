@@ -1,0 +1,30 @@
+// Generic components: a type argument written on the tag, and one
+// inferred from what is given.
+package main
+
+enum Size: string {
+    case small = "s"
+    case large = "l"
+}
+
+func Picker<T>(value: T, options: [T], name: (T) -> string) -> Element {
+    return (
+        <select>
+            {options.map { o in <option selected={name(o) == name(value)}>{name(o)}</option> }}
+        </select>
+    )
+}
+
+func Show<T>(_ value: T) -> Element {
+    return <code>{"\(value)"}</code>
+}
+
+func main() -> int32 {
+    print((<Picker<Size> value={.large} options={[.small, .large]} name={s in s.rawValue} />).Html())
+    print((<Picker value={2} options={[1, 2, 3]} name={n in "n\(n)"} />).Html())
+    print(Show(7).Html())
+    return 0
+}
+// want: <select><option>s</option><option selected>l</option></select>
+// want: <select><option>n1</option><option selected>n2</option><option>n3</option></select>
+// want: <code>7</code>

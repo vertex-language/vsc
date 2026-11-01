@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vertex-language/vsc/analyzer"
@@ -61,6 +62,12 @@ func Print(w io.Writer, m Module) error {
 			// conformances an extension there gives.
 			for _, spec := range imp.Paths {
 				text := string(p.file.Slice(spec.Pos(), spec.End()))
+				if spec.Path != nil && len(spec.Path.Segments) == 1 {
+					// An import the compiler supplied: a .vsx file's.
+					if st, ok := spec.Path.Segments[0].(*ast.StringText); ok && st.Synthesized {
+						text = strconv.Quote(st.Synth)
+					}
+				}
 				if text == "" || seen[text] {
 					continue
 				}

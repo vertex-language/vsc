@@ -6,7 +6,7 @@ import (
 	"github.com/vertex-language/vsc/token"
 )
 
-// Markup scanning for .vsx files (proposed_vsx.md §9.1).
+// Markup scanning for .vsx files (docs/vsx.md §2).
 //
 // A '<' character in prefix position followed by a tag name or '>' opens markup.
 // Inside markup, the scanner maintains a state stack of frames: opening tag attributes,

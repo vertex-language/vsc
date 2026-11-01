@@ -125,7 +125,7 @@ func (c *checker) lowerComponent(e *ast.MarkupElement, name string, scope *Scope
 				continue
 			}
 			if label == "ref" && (len(params) == 0 || !params.has("ref")) {
-				refExpr = c.attrValue(a, scope)
+				refExpr = c.refValue(a, scope)
 				continue
 			}
 			if len(params) > 0 && !params.has(label) {
@@ -230,19 +230,37 @@ func (c *checker) lowerComponent(e *ast.MarkupElement, name string, scope *Scope
 func (c *checker) wrapComponentNode(e *ast.MarkupElement, name string, call, keyExpr, refExpr ast.Expr, scope *Scope) ast.Expr {
 	at := span(e)
 	once := &ast.ClosureExpr{Span: at, Lbrace: at.Lo, Rbrace: at.Hi, Stmts: []ast.Stmt{&ast.ExprStmt{Span: at, X: call}}}
-	var node ast.Expr
-	if keyExpr != nil {
-		node = mkCall(mkPath(at, "component", "Key"), at, keyExpr, once)
-	} else {
-		node = mkCall(mkPath(at, "component", "Component"), at, once)
-	}
+	node := c.componentCall(at, name, keyExpr, once)
 	if refExpr != nil {
-		node = mkCall(mkPath(at, "component", "Ref"), at, refExpr, node)
+		node = mkCall(mkPath(at, "component", "ForwardRef"), at, refExpr, node)
 	}
 	if sheet := c.ownStyleSheet(scope); sheet != "" && c.namesImportedComponent(e.Name, name) {
 		return mkCall(mkPath(at, "component", "Styled"), at, mkPath(at, sheet), node)
 	}
 	return node
+}
+
+// componentCall is a component's call as the runtime keeps it:
+// `component.Call("pkg.Card", { Card(…) })`, or with its key,
+// `component.Key(k, "pkg.Card", { Card(…) })`. The name is the
+// component's identity: a place that renders another component next
+// time is a new one there, as in React, whose state does not carry over.
+func (c *checker) componentCall(at ast.Span, name string, keyExpr ast.Expr, once ast.Expr) ast.Expr {
+	id := mkString(c.componentIdentity(name), at)
+	if keyExpr != nil {
+		return mkCall(mkPath(at, "component", "Key"), at, keyExpr, id, once)
+	}
+	return mkCall(mkPath(at, "component", "Call"), at, id, once)
+}
+
+// componentIdentity names a component the same way wherever it is
+// written: through its module, `kit.Card`, or the module being checked's
+// name for its own.
+func (c *checker) componentIdentity(name string) string {
+	if strings.Contains(name, ".") || c.module == "" {
+		return name
+	}
+	return c.module + "." + name
 }
 
 func (c *checker) componentAttrExpr(a *ast.MarkupAttribute, label string, params componentParams, scope *Scope) ast.Expr {
@@ -281,6 +299,11 @@ func (c *checker) isContextValue(fun ast.Expr, scope *Scope) bool {
 // lookupClassComponent returns the Class and Type if fun names a class component.
 func (c *checker) lookupClassComponent(fun ast.Expr, scope *Scope) (*types.Class, types.Type) {
 	if id, ok := fun.(*ast.IdentExpr); ok {
+		// A function of the name is the component, whatever type of the
+		// name a scope further out holds.
+		if _, isFunc := c.lookupValue(scope, id.Name.Synth).(*FuncSymbol); isFunc {
+			return nil, nil
+		}
 		if tn := scope.LookupType(id.Name.Synth); tn != nil && tn.Type() != nil {
 			if cl, ok := tn.Type().Underlying().(*types.Class); ok {
 				return cl, tn.Type()
@@ -408,13 +431,12 @@ func (c *checker) lowerClassComponent(e *ast.MarkupElement, name string, fun ast
 				Stmts:  []ast.Stmt{&ast.ExprStmt{Span: at, X: mountInner}},
 				Rbrace: at.Hi,
 			}
-			mountCall := mkCall(mkPath(at, "component", "MountClass"), at, instCall, propsExpr, mountClosure)
-			if refExpr != nil {
-				mountCall = mkCall(mkPath(at, "component", "Ref"), at, refExpr, mountCall)
-			}
+			mountCall := mkCall(mkPath(at, "component", "MountClass"), at, mkString(c.componentIdentity(name), at), instCall, propsExpr, mountClosure)
 			if keyExpr != nil {
-				once := &ast.ClosureExpr{Span: at, Lbrace: at.Lo, Rbrace: at.Hi, Stmts: []ast.Stmt{&ast.ExprStmt{Span: at, X: mountCall}}}
-				mountCall = mkCall(mkPath(at, "component", "Key"), at, keyExpr, once)
+				mountCall.(*ast.CallExpr).Args.Args = append([]*ast.CallArg{{Span: span(keyExpr), Label: &ast.Ident{Span: span(keyExpr), Synth: "key"}, X: keyExpr}}, mountCall.(*ast.CallExpr).Args.Args...)
+			}
+			if refExpr != nil {
+				mountCall = mkCall(mkPath(at, "component", "ForwardRef"), at, refExpr, mountCall)
 			}
 			return mountCall
 		}
@@ -437,7 +459,7 @@ func (c *checker) lowerClassComponent(e *ast.MarkupElement, name string, fun ast
 				continue
 			}
 			if label == "ref" && !initSigs.has("ref") {
-				refExpr = c.attrValue(attr, scope)
+				refExpr = c.refValue(attr, scope)
 				continue
 			}
 			if x := c.componentAttrExpr(attr, label, initSigs, scope); x != nil {
@@ -546,7 +568,7 @@ func (c *checker) buildPropsStructExpr(e *ast.MarkupElement, compName string, st
 				continue
 			}
 			if label == "ref" && !sigs.has("ref") {
-				refExpr = c.attrValue(a, scope)
+				refExpr = c.refValue(a, scope)
 				continue
 			}
 			if len(sigs) > 0 && !sigs.has(label) {
@@ -895,7 +917,7 @@ func (c *checker) lowerIntrinsic(e *ast.MarkupElement, tag string, scope *Scope)
 				}
 				continue
 			case name == "ref":
-				if v := c.attrValue(a, scope); v != nil {
+				if v := c.refValue(a, scope); v != nil {
 					attrs = append(attrs, attr(a, "Ref", v))
 				}
 			case strings.HasPrefix(name, "on") && len(name) > 2 && unicode.IsUpper(rune(name[2])):
@@ -970,6 +992,21 @@ func (c *checker) attrValue(a *ast.MarkupAttribute, scope *Scope) ast.Expr {
 		return c.codeArg(v, -1, true, scope)
 	}
 	return nil
+}
+
+// refValue is what `ref=…` is given: a ref or a setter (`ref={el}`), or a
+// callback ref (`ref={node in …}`, `ref={{ … }}`), called with the element
+// once it is in the document and with nil when it goes.
+func (c *checker) refValue(a *ast.MarkupAttribute, scope *Scope) ast.Expr {
+	if code, ok := a.Value.(*ast.MarkupCode); ok {
+		if code.Body.Sig != nil {
+			return code.Body
+		}
+		if inner, ok := singleExpr(code.Body).(*ast.ClosureExpr); ok {
+			return c.codeArg(&ast.MarkupCode{Span: code.Span, Body: inner}, 1, true, scope)
+		}
+	}
+	return c.attrValue(a, scope)
 }
 
 // normalizeStyleCall reorders arguments to `Style(...)` to match `struct Style`'s

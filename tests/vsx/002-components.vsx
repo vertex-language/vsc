@@ -26,7 +26,7 @@ enum kit {
 
 func main() -> int32 {
     var pressed = 0
-    let names = ["ann", "bo"]
+    let names = ["red", "blue"]
     let page = (
         <>
             <Card title="Team" wide>
@@ -44,3 +44,5 @@ func main() -> int32 {
     print(pressed)
     return 0
 }
+// want: <section class="card wide"><h2>Team</h2><p>Members:</p><ul><li><b>red</b></li><li><b>blue</b></li></ul></section><button>Go</button>
+// want: 2

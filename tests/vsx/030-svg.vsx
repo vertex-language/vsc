@@ -1,0 +1,19 @@
+// SVG in markup: its elements and attributes as written.
+package main
+
+func Bars(values: [int]) -> Element {
+    return (
+        <svg width="40" height="20" viewBox="0 0 40 20">
+            {values.enumerated().map { (i, v) in
+                <rect key={i} x={i * 10} y={20 - v} width="8" height={v} fill="currentColor" />
+            }}
+            <path d="M0 20 L40 20" stroke="black" />
+        </svg>
+    )
+}
+
+func main() -> int32 {
+    print(Bars(values: [5, 10, 20]).Html())
+    return 0
+}
+// want: <svg width="40" height="20" viewBox="0 0 40 20"><rect x="0" y="15" width="8" height="5" fill="currentColor"></rect><rect x="10" y="10" width="8" height="10" fill="currentColor"></rect><rect x="20" y="0" width="8" height="20" fill="currentColor"></rect><path d="M0 20 L40 20" stroke="black"></path></svg>

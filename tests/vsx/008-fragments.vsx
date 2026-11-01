@@ -1,0 +1,19 @@
+// Fragments: children with no element around them, nested, empty, and
+// arrays of nodes spliced among siblings.
+package main
+
+func Pair(a: string, b: string) -> Element {
+    return <><dt>{a}</dt><dd>{b}</dd></>
+}
+
+func main() -> int32 {
+    let rows = [("k1", "v1"), ("k2", "v2")]
+    print((<dl>{rows.map { r in <Pair a={r.0} b={r.1} /> }}</dl>).Html())
+    print((<div><></><>x</><><><b>deep</b></></></div>).Html())
+    let parts: [Node] = [<i>1</i>, <i>2</i>, "3"]
+    print((<span>{parts}</span>).Html())
+    return 0
+}
+// want: <dl><dt>k1</dt><dd>v1</dd><dt>k2</dt><dd>v2</dd></dl>
+// want: <div>x<b>deep</b></div>
+// want: <span><i>1</i><i>2</i>3</span>

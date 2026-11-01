@@ -1,5 +1,5 @@
 // Package vss reads .vss files: a package's styles, in standard CSS after
-// a header of a `package` line and `import` lines (proposed_vsx.md §7).
+// a header of a `package` line and `import` lines (docs/vss.md).
 //
 //	/* ui/kit/button.vss */
 //	package kit

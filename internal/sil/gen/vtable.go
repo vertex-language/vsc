@@ -52,8 +52,36 @@ func (g *gen) vtables(files []*ast.File) {
 			for _, s := range g.slots(sym.Type()) {
 				t.Entry(s.member, s.impl)
 			}
+			// A generic superclass's instance -- `Base<Int>` under
+			// `class Kid: Base<Int>` -- has its table whether or not the
+			// module makes one itself: a Kid held as a Base<Int> dispatches
+			// through it.
+			for sup := cl.Superclass; sup != nil; {
+				if gi, ok := sup.(*types.GenericInstance); ok && !mentionsTypeParams(gi) {
+					g.instanceTable(gi)
+				}
+				u, ok := sup.Underlying().(*types.Class)
+				if !ok {
+					break
+				}
+				sup = u.Superclass
+			}
 		}
 	}
+}
+
+// mentionsTypeParams reports whether a generic instance's arguments name a
+// type parameter still to be bound.
+func mentionsTypeParams(gi *types.GenericInstance) bool {
+	for _, a := range gi.Args {
+		if len(typeParamsOfType(a)) > 0 {
+			return true
+		}
+		if _, ok := a.(*types.TypeParam); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // classDecls is every class and actor declared in stmts: at the top
@@ -122,12 +150,14 @@ func (g *gen) classMethod(self *sil.Value, member string, t sil.Type) *sil.Value
 		formal = meta.Instance
 	}
 	if cl, ok := formal.Underlying().(*types.Class); ok && cl.Pkg != "" && len(cl.TypeParams) == 0 {
-		if _, known := g.m.ImportedLayout(cl.Name); !known {
+		// Recorded under its module's name too: a class of this module
+		// may have the same name (ui's component.Node beside html.Node).
+		if _, known := g.m.ImportedLayout(cl.Pkg + "." + cl.Name); !known {
 			var rows []string
 			for _, s := range g.slots(formal) {
 				rows = append(rows, s.member)
 			}
-			g.m.ClassLayout(cl.Name, rows)
+			g.m.ClassLayout(cl.Pkg+"."+cl.Name, rows)
 		}
 	}
 	return g.blk.ClassMethod(self, member, t)

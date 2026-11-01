@@ -1,0 +1,26 @@
+// Lists: map with keys, enumerated rows, nested lists, filter, and an
+// empty list's alternative.
+package main
+
+struct Group {
+    var name: string
+    var members: [string]
+}
+
+func main() -> int32 {
+    let groups = [Group(name: "a", members: ["x", "y"]), Group(name: "b", members: [])]
+    let page = (
+        <div>
+            {groups.map { g in
+                <section key={g.name}>
+                    <h3>{g.name}</h3>
+                    {g.members.isEmpty ? <p>none</p> : <ol>{g.members.enumerated().map { (i, m) in <li key={i}>{i + 1}. {m}</li> }}</ol>}
+                </section>
+            }}
+            <ul>{[1, 2, 3, 4, 5].filter { $0 % 2 == 1 }.map { n in <li key={n}>{n}</li> }}</ul>
+        </div>
+    )
+    print(page.Html())
+    return 0
+}
+// want: <div><section><h3>a</h3><ol><li>1. x</li><li>2. y</li></ol></section><section><h3>b</h3><p>none</p></section><ul><li>1</li><li>3</li><li>5</li></ul></div>

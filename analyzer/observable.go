@@ -6,7 +6,7 @@ import (
 )
 
 // observableAttr is the attribute's spelling: `@Observable final class
-// Store { … }` (proposed_vsx.md §5.3).
+// Store { … }` (docs/vsx.md §8.3).
 const observableAttr = "Observable"
 
 // lowerObservables rewrites the @Observable classes among decls, and

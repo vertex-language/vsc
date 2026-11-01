@@ -1,0 +1,48 @@
+// Handlers: a closure taking the event, a statement closure, double
+// braces, and a named function with or without the event.
+package main
+
+var log: [string] = []
+
+func reset() { log.append("reset") }
+func named(_ e: MouseEvent) { log.append("named") }
+
+func main() -> int32 {
+    var n = 0
+    let page = (
+        <div>
+            <button id="a" onClick={e in log.append("a:\(e.Type)")}>a</button>
+            <button id="b" onClick={n += 1}>b</button>
+            <button id="c" onClick={{ n += 10; log.append("c") }}>c</button>
+            <button id="d" onClick={reset}>d</button>
+            <button id="e" onClick={named}>e</button>
+            <form id="f" onSubmit={e in
+                e.PreventDefault()
+                log.append("submit \(e.DefaultPrevented)")
+            }></form>
+        </div>
+    )
+    _ = find(page, "a")!.Fire("click")
+    _ = find(page, "b")!.Fire("click")
+    _ = find(page, "c")!.Fire("click")
+    _ = find(page, "d")!.Fire("click")
+    _ = find(page, "e")!.Fire("click")
+    _ = find(page, "f")!.Fire("submit")
+    print(log.joined(separator: ","))
+    print(n)
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: a:click,c,reset,named,submit true
+// want: 11

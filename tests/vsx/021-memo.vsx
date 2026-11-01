@@ -1,0 +1,44 @@
+// useMemo and useCallback: computed again only when their deps change.
+package main
+
+var computed = 0
+
+func Primes(limit: int) -> Element {
+    let (other, setOther) = useState(0)
+    let (n, setN) = useState(limit)
+    let primes = useMemo({
+        computed += 1
+        return (2...n).filter { p in (2..<p).allSatisfy { p % $0 != 0 } }
+    }, [n])
+    return (
+        <div>
+            <p>{primes.count} primes to {n} ({other})</p>
+            <button id="other" onClick={setOther(other + 1)}>other</button>
+            <button id="more" onClick={setN(n + 10)}>more</button>
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let page = <Primes limit={10} />
+    click(page, "other")
+    click(page, "other")
+    print(page.Html(), computed)
+    click(page, "more")
+    print(page.Html(), computed)
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: <div><p>4 primes to 10 (2)</p><button id="other">other</button><button id="more">more</button></div> 1
+// want: <div><p>8 primes to 20 (2)</p><button id="other">other</button><button id="more">more</button></div> 2

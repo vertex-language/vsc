@@ -1754,7 +1754,10 @@ func (g *gen) staticWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 		}
 	}
 	en, isEnum := enumFor(concrete)
-	if ref == nil && !(isEnum && r.Name == "==" && !hasPayloadCase(en)) {
+	// A built-in type's Equatable and Comparable are its operators, which
+	// are lowered as an expression's are rather than declared as methods.
+	builtinCompare := ref == nil && isBasicValue(concrete) && isComparisonOperator(r.Name) && len(want.Params) == 2
+	if ref == nil && !builtinCompare && !(isEnum && r.Name == "==" && !hasPayloadCase(en)) {
 		return "", false
 	}
 
@@ -1789,6 +1792,12 @@ func (g *gen) staticWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 			g.declareSignature(callee, ref.Method.Sig)
 		}
 		out = g.blk.Apply(g.blk.FunctionRef(callee), rt, vals...)
+	} else if builtinCompare {
+		bit := g.compare(r.Name, vals[0], vals[1], concrete)
+		if bit == nil {
+			return "", false
+		}
+		out = g.blk.Struct(rt, bit)
 	} else {
 		raw := g.blk.Builtin("cmp_eq_"+enumMachine(en), sil.Object(sil.BuiltinInt1), vals[0], vals[1])
 		out = g.blk.Struct(rt, raw)
@@ -1801,6 +1810,16 @@ func (g *gen) staticWitnessThunk(concrete types.Type, p *types.Protocol, r *type
 	}
 	g.blk.Return(out)
 	return name, true
+}
+
+// isComparisonOperator reports whether name is one of Equatable's or
+// Comparable's operators.
+func isComparisonOperator(name string) bool {
+	switch name {
+	case "==", "!=", "<", "<=", ">", ">=":
+		return true
+	}
+	return false
 }
 
 // hasPayloadCase reports whether any case of an enum carries a value.

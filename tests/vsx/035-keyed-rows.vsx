@@ -1,0 +1,46 @@
+// A keyed list driven by state: rows added at the front, moved, and
+// removed, each rendered from its own item.
+package main
+
+struct Row {
+    var id: int
+    var label: string
+}
+
+func Rows() -> Element {
+    let (rows, setRows) = useState<[Row]>([Row(id: 1, label: "one"), Row(id: 2, label: "two")])
+    return (
+        <div>
+            <ul>{rows.map { r in <li key={r.id}>{r.id}:{r.label}</li> }}</ul>
+            <button id="front" onClick={setRows([Row(id: 3, label: "three")] + rows)}>front</button>
+            <button id="flip" onClick={setRows(rows.reversed())}>flip</button>
+            <button id="drop" onClick={setRows(rows.filter { $0.id != 2 })}>drop</button>
+        </div>
+    )
+}
+
+func main() -> int32 {
+    let page = <Rows />
+    click(page, "front")
+    print(find(page, "front")!.Tag, page.Html())
+    click(page, "flip")
+    print(page.Html())
+    click(page, "drop")
+    print(page.Html())
+    return 0
+}
+
+func find(_ n: Node, _ id: string) -> Node? {
+    for (k, v) in n.Attrs where k == "id" && v == id { return n }
+    for c in n.Children {
+        if let f = find(c, id) { return f }
+    }
+    return nil
+}
+
+func click(_ page: Node, _ id: string) {
+    _ = find(page, id)!.Fire("click")
+}
+// want: button <div><ul><li>3:three</li><li>1:one</li><li>2:two</li></ul><button id="front">front</button><button id="flip">flip</button><button id="drop">drop</button></div>
+// want: <div><ul><li>2:two</li><li>1:one</li><li>3:three</li></ul><button id="front">front</button><button id="flip">flip</button><button id="drop">drop</button></div>
+// want: <div><ul><li>1:one</li><li>3:three</li></ul><button id="front">front</button><button id="flip">flip</button><button id="drop">drop</button></div>

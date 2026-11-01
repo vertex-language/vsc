@@ -202,6 +202,12 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	if opts.Stop == Parsed || Errors(diags) {
 		return u, diags
 	}
+	// A .vsx file's implicit imports, where they can be found.
+	resolver := &importer{packages: opts.Packages, pkgPaths: opts.PackagePaths, seen: map[string]bool{}}
+	addVSXImports(u.Files, u.Positions, func(path, dir string) bool {
+		d, err := resolver.folder(path, dir)
+		return err == nil && d != ""
+	})
 	done = timing.Start("imports")
 	imports, pkgs, importDiags := loadImports(u.Files, u.Positions, opts.ImportPaths, opts.PackagePaths, opts.Packages, ifcfg, opts.Target, opts.Summaries, opts.OnPackage)
 	done()
@@ -568,6 +574,10 @@ func importPathText(lit *ast.StringLit, unit *token.File) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// One the compiler supplied, as a .vsx file's implicit imports.
+	if text.Synthesized {
+		return text.Synth, true
+	}
 	return string(unit.Slice(text.Lo, text.Hi)), true
 }
 
@@ -706,7 +716,7 @@ func packageNameOf(files []*ast.File, units []*token.File) string {
 const SourceExtension = ".vs"
 
 // MarkupExtension is the file extension for Vertex with markup (.vsx),
-// which is package source beside .vs files. See proposed_vsx.md.
+// which is package source beside .vs files. See docs/vsx.md.
 const MarkupExtension = ".vsx"
 
 // IsSourceFile reports whether a file name is Vertex source: .vs or .vsx.
@@ -810,6 +820,11 @@ func (l *importer) readFolder(spec *ast.ImportPath, at *ast.ImportDecl, unit *to
 			return ""
 		}
 	}
+
+	addVSXImports(files, units, func(path, from string) bool {
+		d, err := l.folder(path, from)
+		return err == nil && d != "" && filepath.Clean(d) != filepath.Clean(from)
+	})
 
 	name := packageNameOf(files, units)
 	if name != "" {

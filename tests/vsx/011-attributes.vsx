@@ -1,0 +1,19 @@
+// Attributes: bare Boolean ones, true and false, data- and aria-
+// attributes, the className and htmlFor aliases, and spreads.
+package main
+
+func main() -> int32 {
+    let off = false
+    let extra = ["data-x": "1", "title": "t"]
+    print((<input type="checkbox" checked disabled={off} />).Html())
+    print((<button hidden={true} aria-label="close" data-testid="x">x</button>).Html())
+    print((<label htmlFor="f" className="lbl">Name</label>).Html())
+    print((<div {...extra} className="box">s</div>).Html())
+    print((<a href={"/u/\(7)"} target="_blank">u</a>).Html())
+    return 0
+}
+// want: <input type="checkbox" checked>
+// want: <button hidden aria-label="close" data-testid="x">x</button>
+// want: <label for="f" class="lbl">Name</label>
+// want: <div data-x="1" title="t" class="box">s</div>
+// want: <a href="/u/7" target="_blank">u</a>
