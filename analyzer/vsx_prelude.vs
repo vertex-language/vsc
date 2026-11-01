@@ -24,7 +24,14 @@ class MouseEvent: Event {
     var Meta: bool = false
 }
 
-final class PointerEvent: MouseEvent {}
+final class PointerEvent: MouseEvent {
+    var PointerType: string = "mouse"
+    var PointerId: int32 = 1
+    var IsPrimary: bool = true
+    var Pressure: float32 = 0
+    var TiltX: float32 = 0
+    var TiltY: float32 = 0
+}
 
 final class WheelEvent: Event {
     var X: float32 = 0
@@ -55,7 +62,35 @@ final class InputEvent: Event {
 final class SubmitEvent: Event {}
 final class FocusEvent: Event {}
 final class CompositionEvent: Event {}
-final class DragEvent: Event {}
+final class DataTransfer {
+    var DropEffect: string = "none"
+    var EffectAllowed: string = "uninitialized"
+    var Files: [string] = []
+    var Types: [string] = []
+    init() {}
+    func SetData(_ type: string, _ data: string) {}
+    func GetData(_ type: string) -> string { return "" }
+    func ClearData(_ type: string? = nil) {}
+}
+
+final class DragEvent: MouseEvent {
+    var Data: DataTransfer = DataTransfer()
+}
+
+final class ToggleEvent: Event {
+    var OldState: string = ""
+    var NewState: string = ""
+}
+
+final class TransitionEvent: Event {
+    var PropertyName: string = ""
+    var ElapsedTime: float64 = 0
+}
+
+final class AnimationEvent: Event {
+    var AnimationName: string = ""
+    var ElapsedTime: float64 = 0
+}
 final class LayoutEvent: Event {}
 
 func _vsxMakeEvent(_ type: string) -> Event {
@@ -79,6 +114,12 @@ func _vsxMakeEvent(_ type: string) -> Event {
         e = CompositionEvent()
     case "drag", "dragstart", "dragover", "drop", "dragenter", "dragleave", "dragend":
         e = DragEvent()
+    case "toggle", "beforetoggle":
+        e = ToggleEvent()
+    case "transitionrun", "transitionstart", "transitionend", "transitioncancel":
+        e = TransitionEvent()
+    case "animationstart", "animationiteration", "animationend", "animationcancel":
+        e = AnimationEvent()
     case "layout":
         e = LayoutEvent()
     default:
