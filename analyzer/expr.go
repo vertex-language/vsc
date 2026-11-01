@@ -523,6 +523,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 	case *ast.MarkupElement:
 		return c.checkMarkup(e, expected, scope)
 	case *ast.BasicLit:
+		delete(c.info.LiteralInits, e)
 		c.valueOf(e)
 		switch e.Kind {
 		case token.INT_LIT:
@@ -563,6 +564,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 
 	case *ast.StringLit:
+		delete(c.info.LiteralInits, e)
 		c.valueOf(e)
 		for _, seg := range e.Segments {
 			if in, ok := seg.(*ast.Interpolation); ok {

@@ -19,12 +19,16 @@ const (
 	frameCloseTag                  // between `</` and `>`
 	frameChildren                  // between an opening tag's `>` and its `</`
 	frameCode                      // between `{` and its `}`
+	frameTypeArgs                  // between `<Name<` and its matching `>`
 )
 
 type markupFrame struct {
-	kind  frameKind
-	open  int // offset of what opened the frame, for the unterminated report
-	depth int // for frameCode: braces open inside it
+	kind         frameKind
+	open         int  // offset of what opened the frame, for the unterminated report
+	depth        int  // for frameCode: braces open inside it; for frameTypeArgs: nested `<`
+	wantTagName  bool // waiting for the opening tag's own MARKUP_NAME
+	afterTagName bool // immediately after the opening tag's own MARKUP_NAME
+	afterEq      bool // immediately after `=` in an attribute
 }
 
 func (s *scanner) frame() *markupFrame {
@@ -43,12 +47,15 @@ func (s *scanner) pop() { s.frames = s.frames[:len(s.frames)-1] }
 // inMarkup reports whether the cursor is in markup rather than code.
 func (s *scanner) inMarkup() bool {
 	f := s.frame()
-	return f != nil && f.kind != frameCode
+	return f != nil && f.kind != frameCode && f.kind != frameTypeArgs
 }
 
 // opensMarkup reports whether the `<` at the cursor opens a tag.
 func (s *scanner) opensMarkup() bool {
 	if s.mode&ScanMarkup == 0 || s.src[s.off] != '<' {
+		return false
+	}
+	if f := s.frame(); f != nil && f.kind == frameTypeArgs {
 		return false
 	}
 	// Not inside a string's interpolation: `"\(<b/>)"` is not markup.
@@ -76,7 +83,7 @@ func (s *scanner) openMarkup() {
 	start := s.off
 	s.off++
 	s.emit(token.MARKUP_OPEN, start)
-	s.push(frameTag, start)
+	s.frames = append(s.frames, markupFrame{kind: frameTag, open: start, wantTagName: true})
 }
 
 // scanMarkup scans one token of markup in the innermost frame.
@@ -86,10 +93,25 @@ func (s *scanner) scanMarkup() {
 		s.scanChildren()
 		return
 	}
+	// Explicit generic type arguments immediately following the tag name: `<List<string> ...>`.
+	if f.kind == frameTag && f.afterTagName && s.adjacent && s.off < len(s.src) && s.src[s.off] == '<' {
+		f.wantTagName = false
+		f.afterTagName = false
+		f.afterEq = false
+		s.push(frameTypeArgs, s.off)
+		return
+	}
+	wantTagName := f.wantTagName
+	afterEq := f.afterEq
+	f.wantTagName = false
+	f.afterTagName = false
+	f.afterEq = false
+
 	s.skipTrivia()
 	if s.off >= len(s.src) {
 		return
 	}
+	f = s.frame()
 	s.quietTok = false
 	start := s.off
 	c := s.src[s.off]
@@ -118,12 +140,25 @@ func (s *scanner) scanMarkup() {
 	case c == '=' && f.kind == frameTag:
 		s.off++
 		s.emit(token.ASSIGN, start)
+		f.afterEq = true
+	case c == '<' && f.kind == frameTag && afterEq && s.off+1 < len(s.src):
+		r, _ := utf8.DecodeRune(s.src[s.off+1:])
+		if s.src[s.off+1] == '>' || isIdentHead(r) {
+			s.openMarkup()
+			return
+		}
+		s.off++
+		s.errTok(start, s.off, "this character cannot appear in a tag")
+		s.emit(token.ILLEGAL, start)
 	case (c == '"' || c == '\'') && f.kind == frameTag:
 		s.scanMarkupString(c)
 	case isMarkupNameHead(c) || c >= utf8.RuneSelf:
 		r, w := s.rune()
 		if c < utf8.RuneSelf || isIdentHead(r) {
 			s.scanMarkupName()
+			if wantTagName {
+				f.afterTagName = true
+			}
 			return
 		}
 		s.off += w
@@ -152,9 +187,7 @@ func (s *scanner) scanChildren() {
 		if s.off+1 < len(s.src) {
 			r, _ := utf8.DecodeRune(s.src[s.off+1:])
 			if s.src[s.off+1] == '>' || isIdentHead(r) {
-				s.off++
-				s.emit(token.MARKUP_OPEN, start)
-				s.push(frameTag, start)
+				s.openMarkup()
 				return
 			}
 		}
@@ -183,8 +216,7 @@ func (s *scanner) scanChildren() {
 }
 
 // scanMarkupName scans a tag or attribute name: identifier characters,
-// with `-` (data-p), `.` (app.Window) and `:` (class:done) inside it,
-// and `--` after a `:` (style:--kit-accent).
+// with `-` (data-testid), `.` (ui.Suspense) and `:` (xlink:href) inside it.
 func (s *scanner) scanMarkupName() {
 	start := s.off
 	for s.off < len(s.src) {

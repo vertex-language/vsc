@@ -1,17 +1,20 @@
-// counter.vsx
+// counter.vsx — .vsx v2 function component with useState hook
 package main
 
-import "ui/app"
+func Counter(initialCount: int = 0, label: string = "Count") -> Element {
+    let (count, setCount) = useState(initialCount)
 
-func Counter(start: int = 0) -> Node {
-    @State var count = start
-    return <button onClick={count += 1}>Clicked {count} times</button>
+    return (
+        <div className="counter-card">
+            <h3>{label}: {count}</h3>
+            <button onClick={{ setCount(count + 1) }}>Increment</button>
+            <button onClick={{ setCount(0) }} disabled={count == 0}>Reset</button>
+        </div>
+    )
 }
 
-func main() async -> int32 {
-    return await app.Run {
-        <app.Window title="Counter" size={.init(360, 480)}>
-            <Counter start={5} />
-        </app.Window>
-    }
+func main() -> int32 {
+    let view = <Counter initialCount={5} label="Clicks" />
+    print(renderToString(view))
+    return 0
 }

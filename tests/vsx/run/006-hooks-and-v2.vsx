@@ -1,0 +1,85 @@
+// .vsx v2 comprehensive test: useState, useReducer, createContext/use,
+// Props-struct components, class Component<P, S>, component spread,
+// bare element attributes, htmlFor/className aliases, and && short-circuit.
+package main
+
+let ThemeContext = createContext("light")
+
+struct CardProps {
+    var title: string
+    var icon: Node = nil
+    var children: Node = nil
+}
+
+func DataCard(_ props: CardProps) -> Element {
+    let theme = use(ThemeContext)
+    return (
+        <article className={"card-" + theme}>
+            <header>{props.icon}<h3>{props.title}</h3></header>
+            <div className="body">{props.children}</div>
+        </article>
+    )
+}
+
+struct BannerProps {
+    var label: string
+    var urgent: bool = false
+}
+
+func Banner(label: string, urgent: bool = false) -> Element {
+    return (
+        <div className="banner">
+            <label htmlFor="field">{label}</label>
+            {urgent && <span className="badge">!</span>}
+        </div>
+    )
+}
+
+struct CounterClassProps {
+    var title: string
+}
+
+struct CounterClassState {
+    var count: int = 10
+}
+
+class LegacyCounter: Component<CounterClassProps, CounterClassState> {
+    init() {
+        super.init()
+        self.state = CounterClassState(count: 10)
+    }
+
+    override func render() -> Node {
+        return (
+            <div className="legacy">
+                <span>{self.props.title}: {self.state.count}</span>
+                <button onMouseDown={{ self.setState(CounterClassState(count: self.state.count + 5)) }}>+5</button>
+            </div>
+        )
+    }
+}
+
+func Stepper() -> Element {
+    let (n, dispatch) = useReducer({ (state: int, delta: int) -> int in
+        return state + delta
+    }, 1)
+    return <button onClick={{ dispatch(2) }}>step={n}</button>
+}
+
+func main() -> int32 {
+    let spreadProps = BannerProps(label: "Alert", urgent: true)
+    let page = (
+        <ThemeContext value="dark">
+            <DataCard title="Summary" icon=<i>*</i>>
+                <Banner {...spreadProps} />
+                <Stepper />
+                <LegacyCounter title="Score" />
+            </DataCard>
+        </ThemeContext>
+    )
+    print(page.Html())
+    _ = page.Fire("click")
+    _ = page.Fire("mousedown")
+    print(page.Html())
+    return 0
+}

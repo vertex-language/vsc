@@ -1,5 +1,5 @@
-// The RFC's tasks app (§4), with a plain class for the store until
-// @Observable exists: add, toggle and filter, driven by events.
+// Tasks app in .vsx v2: add, toggle and filter, driven by events and
+// rendered with standard .map and key={t.ID}.
 package main
 
 struct Todo {
@@ -33,31 +33,31 @@ final class Store {
     }
 }
 
-func TodoItem(todo: Todo, onToggle: (int) -> void) -> Node {
+func TodoItem(todo: Todo, onToggle: (int) -> void) -> Element {
     return (
-        <li class="item" class:done={todo.Done}>
+        <li className={todo.Done ? "item done" : "item"}>
             <input type="checkbox" checked={todo.Done} onChange={onToggle(todo.ID)} />
             <span>{todo.Title}</span>
         </li>
     )
 }
 
-func App(store: Store, draft: string) -> Node {
+func App(store: Store, draft: string) -> Element {
     return (
-        <main class="app">
+        <main className="app">
             <form onSubmit={e in
-                e.PreventDefault()
+                e.preventDefault()
                 if !draft.isEmpty { store.Add(draft) }
             }>
-                <input placeholder="What needs doing?" value={draft} autofocus />
+                <input placeholder="What needs doing?" value={draft} autoFocus />
             </form>
             {if store.Visible.isEmpty {
-                <p class="empty">Nothing here.</p>
+                <p className="empty">Nothing here.</p>
             } else {
                 <ul>
-                    <For each={store.Visible} key={t in t.ID}>
-                        {t in <TodoItem todo={t} onToggle={store.Toggle} />}
-                    </For>
+                    {store.Visible.map { t in
+                        <TodoItem key={t.ID} todo={t} onToggle={store.Toggle} />
+                    }}
                 </ul>
             }}
         </main>

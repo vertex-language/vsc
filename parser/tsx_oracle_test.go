@@ -33,7 +33,7 @@ var tsxSnippets = []string{
 	`<a href="/x" title='t'>home</a>`,
 	`<input type="checkbox" checked disabled={n} />`,
 	`<app.Window title="T"><Counter start={n} /></app.Window>`,
-	`<li class:done={d} data-p="m" aria-label="x"/>`,
+	`<li xml:lang={d} data-p="m" aria-label="x"/>`,
 	`<>one<i/>two</>`,
 	`<div {...attrs} id="x"/>`,
 	`<Card header={<h2>Hi</h2>}>body</Card>`,
@@ -49,6 +49,8 @@ var tsxSnippets = []string{
 	`<x.y.z a="1" />`,
 	`<T k={n}>{t}</T>`,
 	`<p>{<i>nested</i>}</p>`,
+	`<Card header=<h2>bare</h2>>body</Card>`,
+	`<T<string> k={n}>{t}</T>`,
 	"<p>   leading and trailing   </p>",
 	"<p>\n\n   \n</p>",
 	"<p>a\n\n\nb</p>",
@@ -105,6 +107,9 @@ func recordVSX(t *testing.T, snippet string) string {
 				case *ast.MarkupCode:
 					b.WriteString("=")
 					code(v)
+				case *ast.MarkupElement:
+					b.WriteString("=")
+					elem(v)
 				}
 			}
 		}

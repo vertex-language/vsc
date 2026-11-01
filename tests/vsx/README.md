@@ -1,47 +1,24 @@
 # tests/vsx
 
-The ladder for `.vsx`, Vertex with markup (per the VSX markup RFC specification).
-Markup has no oracle the way the Swift ladder has swiftc, so each test writes
-down what it expects.
+The test ladder for `.vsx` (v2) — Vertex's `.tsx`-inspired declarative UI and markup file format.
 
 | Folder | What | Checked by |
 | --- | --- | --- |
-| `syntax/` | The RFC's own examples. They must parse, with no diagnostics, and hold markup. | `parser/markup_test.go` |
-| (in the test) | Snippets of the grammar JSX and markup share, compared with what `tsc --jsx react` makes of them. | `parser/tsx_oracle_test.go` |
-| `run/` | Programs compiled with `prelude.vs`, run, and compared with the `.out` beside each. | `build/vsx_test.go` (`TestVSXRun`) |
-| `errors/` | Programs that must be refused: each line marked `// want "part of the message"` has to get that error, and no other line may get one. | `build/vsx_test.go` (`TestVSXErrors`) |
+| `syntax/` | `.vsx` v2 syntax and component examples (`counter.vsx`, `tasks.vsx`, `async.vsx`). Must parse with no diagnostics and contain markup. | `parser/markup_test.go` (`TestMarkupFiles`) |
+| (in the test) | Snippets of the grammar JSX/TSX and `.vsx` share, compared live with `tsc --jsx react`. | `parser/tsx_oracle_test.go` (`TestTSXOracle`) |
+| `run/` | `.vsx` v2 programs compiled with the built-in `.vsx` prelude (`analyzer/vsx_prelude.vs`), linked, executed natively, and compared with the `.out` file beside each. | `build/vsx_test.go` (`TestVSXRun`) |
+| `errors/` | `.vsx` v2 programs that must be rejected: each line marked `// want "part of the message"` must receive that diagnostic, and no other line may fail. | `build/vsx_test.go` (`TestVSXErrors`) |
 
 ```bash
-cd build && go test . -run TestVSX
+cd build && go test -v . -run TestVSX
 ```
 
-## `prelude.vs`
+## Built-in `.vsx` v2 Prelude (`analyzer/vsx_prelude.vs`)
 
-Markup is checked in its *check form* (RFC §9.2): an element is rewritten
-as the ordinary calls it means, and those are checked and lowered in its
-place.
+Every `.vsx` compilation unit automatically receives the built-in `.vsx` v2 prelude:
 
-```
-<Card title="T">…</Card>          Card(title: "T", children: { […] })
-<p class="x" onClick={…}>…</p>    component.Element("p", [
-                                      component.Attribute.Static("class", "x"),
-                                      component.Attribute.On("click", dom.MouseEvent.self, { _ in … }),
-                                  ], […])
-<>…</>                            component.Fragment([…])
-```
-
-`component` and `dom` are what `ui/component` and `web/dom` will be
-imported as. Until they exist, `prelude.vs` declares the same API itself:
-it builds a tree of `Node`s, renders it to HTML with `Html()`, and keeps
-each element's handlers so a test can `Fire("click")` them.
-
-Two vsc gaps shape the prelude, and it says where: a cast to a class nested
-in an enum answers false, and a type reached through a typealias in an enum
-is named by the alias. So the event classes are top-level, under the names
-`dom` gives them.
-
-## Numbering
-
-`run/` and `errors/` are numbered separately, in the order they were
-added, one thing per file: elements, components, control flow, handlers,
-the RFC's tasks app; names, props.
+- **Core UI Types**: `Element`, `Node`, `Props`, `Style`, `CSSValue`, `Ref<T>`, `Context<T>`, `Component<P, S>`, `EmptyState`
+- **Built-in Components**: `Fragment`, `Suspense`, `StrictMode`, `Profiler`
+- **Hooks**: `useState`, `useReducer`, `useEffect`, `useLayoutEffect`, `useInsertionEffect`, `useRef`, `useImperativeHandle`, `useMemo`, `useCallback`, `createContext`, `use`, `useContext`, `useId`, `useTransition`, `startTransition`, `useDeferredValue`, `useSyncExternalStore`, `useOptimistic`, `useActionState`, `useFormStatus`
+- **DOM Events & Elements**: `Event`, `MouseEvent`, `KeyboardEvent`, `ChangeEvent`, `PointerEvent`, `FocusEvent`, `FormData`, `HTMLElement`, `HTMLInputElement`, `HTMLButtonElement`, `HTMLDivElement`, `HTMLFormElement`, `HTMLAttributes`
+- **Optional Namespaces**: `ui.*` and `dom.*` resolve to the same built-in symbols for optional explicit qualification.

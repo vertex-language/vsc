@@ -19,6 +19,9 @@ func (p *parser) parseMarkup() *ast.MarkupElement {
 	}
 	if p.at(token.MARKUP_NAME) {
 		el.Name = p.markupName()
+		if p.atLt() && p.glued() {
+			el.TypeArgs = p.parseGenericArgs()
+		}
 	}
 	for !p.at(token.MARKUP_END) && !p.at(token.MARKUP_SELF_CLOSE) && !p.at(token.EOF) {
 		if a := p.parseMarkupAttr(); a != nil {
@@ -96,8 +99,10 @@ func (p *parser) parseMarkupAttr() ast.MarkupAttr {
 				p.next()
 			case p.at(token.LBRACE):
 				a.Value = p.parseMarkupCode()
+			case p.at(token.MARKUP_OPEN):
+				a.Value = p.parseMarkup()
 			default:
-				p.errHere("expected a quoted value or '{' after '='")
+				p.errHere("expected a quoted value, '{', or '<' after '='")
 			}
 		}
 		a.Span = p.span(lo)

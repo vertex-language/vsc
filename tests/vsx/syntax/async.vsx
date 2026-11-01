@@ -1,32 +1,35 @@
+// async.vsx — .vsx v2 generics, switch expressions, spreads, and bare element props
 package main
 
-func Profile(id: Readable<int>) -> Node {
-    let user = Resource { await api.User(id.Value) }
+enum LoadState<T> {
+    case loading
+    case ready(T)
+    case failed(string)
+}
+
+func Profile(state: LoadState<string>, onRetry: () -> void) -> Element {
     return (
         <section>
-            {switch user.State {
-            case .loading:          <Spinner />
-            case .ready(let u):     <UserCard user={u} />
-            case .failed(let e):    <ErrorNote error={e} retry={user.Reload()} />
+            {switch state {
+            case .loading:       <Spinner />
+            case .ready(let u):  <UserCard user={u} />
+            case .failed(let e): <ErrorNote error={e} retry={{ onRetry() }} />
             }}
         </section>
     )
 }
 
-func Chart(series: [float32]) -> Node {
-    return <Canvas class="chart" draw={ctx in
-        for (i, v) in series.enumerated() {
-            ctx.FillRect(.init(float32(i) * 6, 100 - v, 4, v), color: .accent)
-        }
-    } />
+func List<T>(items: [T], renderItem: (T) -> Element) -> Element {
+    return <ul>{items.map { item in renderItem(item) }}</ul>
 }
 
-func Parts(attrs: [string: string], p: Readable<float64>) -> Node {
+func Parts(attrs: [string: string], w: int) -> Element {
     return (
         <>
-            <div {...attrs} style:width={w} style:--progress={p} data-p="main" />
+            <div {...attrs} style={Style(width: "\(w)px", color: "red")} data-p="main" />
             {/* a comment */}
-            <Card header={<h2>Hi</h2>}>body</Card>
+            <Card header=<h2>Hi</h2> badge=<i>new</i>>body</Card>
+            <List<string> items={["a", "b"]} renderItem={s in <li>{s}</li>} />
         </>
     )
 }
@@ -35,5 +38,3 @@ func Generic() -> bool {
     let xs = [3, 1, 2].sorted(by: <)
     return xs.count < 4 && Array<int>().isEmpty
 }
-
-func |> <T, U>(value: T, transform: (T) -> U) -> U { transform(value) }

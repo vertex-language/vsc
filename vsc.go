@@ -223,6 +223,11 @@ func Compile(srcs []Source, opts Options) (*Unit, []Diagnostic) {
 	info, checks := analyzer.CheckModule(opts.Module, u.Files, imports)
 	done()
 	u.Info = info
+	if info.VSXPrelude != nil {
+		u.Files = append(u.Files, info.VSXPrelude)
+		u.Positions = append(u.Positions, info.VSXPrelude.Unit)
+		u.derived++
+	}
 	// Append synthesized declarations for derived conformances.
 	if info.Derived != nil {
 		u.Files = append(u.Files, info.Derived)

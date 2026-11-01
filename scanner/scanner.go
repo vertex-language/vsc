@@ -391,6 +391,17 @@ func (s *scanner) scanOperator() {
 	if left && s.off-start > 1 && (s.src[start] == '!' || s.src[start] == '?') {
 		s.off = start + 1
 	}
+	if f := s.frame(); f != nil && f.kind == frameTypeArgs && (s.src[start] == '<' || s.src[start] == '>') {
+		s.off = start + 1
+		if s.src[start] == '<' {
+			f.depth++
+		} else {
+			f.depth--
+			if f.depth <= 0 {
+				s.pop()
+			}
+		}
+	}
 	text := string(s.src[start:s.off])
 	right := s.rightBound(s.off, left)
 

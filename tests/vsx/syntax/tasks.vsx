@@ -1,74 +1,81 @@
-// tasks.vsx
+// tasks.vsx — .vsx v2 tasks application with hooks, map + key, and conditional rendering
 package main
 
-import "ui/app"
-import "ui/state"
-
-struct Todo: Equatable, Identifiable {
-    let ID: int
-    var Title: string
-    var Done: bool
-}
-
-@Observable @MainActor
-final class Store {
-    var Todos: [Todo] = []
-    var Filter: Filter = .all
-    var nextID = 1
-
-    var Visible: [Todo] {
-        switch Filter {
-        case .all:    return Todos
-        case .active: return Todos.filter { !$0.Done }
-        case .done:   return Todos.filter { $0.Done }
-        }
-    }
-
-    func Add(_ title: string) {
-        Todos.append(Todo(ID: nextID, Title: title, Done: false))
-        nextID += 1
-    }
+struct Todo: Equatable {
+    let id: int
+    var title: string
+    var done: bool
 }
 
 enum Filter: CaseIterable { case all, active, done }
 
-func TodoItem(todo: Readable<Todo>, onToggle: (int) -> void) -> Node {
+func TodoItem(todo: Todo, onToggle: (int) -> void) -> Element {
     return (
-        <li class="item" class:done={todo.Done}>
-            <input type="checkbox" checked={todo.Done} onChange={onToggle(todo.ID)} />
-            <span>{todo.Title}</span>
+        <li className={todo.done ? "item done" : "item"}>
+            <input type="checkbox" checked={todo.done} onChange={{ onToggle(todo.id) }} />
+            <span>{todo.title}</span>
         </li>
     )
 }
 
-func App(store: Store) -> Node {
-    @State var draft = ""
+func App(initialTodos: [Todo] = []) -> Element {
+    let (todos, setTodos) = useState(initialTodos)
+    let (filter, setFilter) = useState(Filter.all)
+    let (draft, setDraft) = useState("")
+
+    let visible: [Todo] = {
+        switch filter {
+        case .all:    return todos
+        case .active: return todos.filter { !$0.done }
+        case .done:   return todos.filter { $0.done }
+        }
+    }()
 
     return (
-        <main class="app">
+        <main className="app">
             <form onSubmit={e in
-                e.PreventDefault()
+                e.preventDefault()
                 if !draft.isEmpty {
-                    store.Add(draft)
-                    draft = ""
+                    let nextId = todos.count + 1
+                    setTodos(todos + [Todo(id: nextId, title: draft, done: false)])
+                    setDraft("")
                 }
             }>
-                <input placeholder="What needs doing?" value={$draft} autofocus />
+                <input
+                    placeholder="What needs doing?"
+                    value={draft}
+                    onChange={e in setDraft(e.target.value)}
+                    autoFocus
+                />
             </form>
 
             <nav>
-                <For each={Filter.allCases}>
-                    {f in <button class:on={store.Filter == f} onClick={store.Filter = f}>{f}</button>}
-                </For>
+                {Filter.allCases.map { f in
+                    <button
+                        key={"\(f)"}
+                        className={filter == f ? "on" : ""}
+                        onClick={{ setFilter(f) }}
+                    >
+                        {f}
+                    </button>
+                }}
             </nav>
 
-            {if store.Visible.isEmpty {
-                <p class="empty">Nothing here.</p>
+            {if visible.isEmpty {
+                <p className="empty">Nothing here.</p>
             } else {
                 <ul>
-                    <For each={store.Visible} key={t in t.ID}>
-                        {t in <TodoItem todo={t} onToggle={store.Toggle} />}
-                    </For>
+                    {visible.map { t in
+                        <TodoItem
+                            key={t.id}
+                            todo={t}
+                            onToggle={id in
+                                setTodos(todos.map { item in
+                                    item.id == id ? Todo(id: item.id, title: item.title, done: !item.done) : item
+                                })
+                            }
+                        />
+                    }}
                 </ul>
             }}
         </main>

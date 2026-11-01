@@ -3,12 +3,12 @@ package main
 
 final class Store { func Toggle(_ id: int) {} }
 
-func TodoItem(title: string, onToggle: (int) -> void) -> Node {
+func TodoItem(title: string, onToggle: (int) -> void) -> Element {
     return <li>{title}</li>
 }
 
-func Card(title: string, children: Children) -> Node {
-    return <section>{title}{children()}</section>
+func Card(title: string, children: Node) -> Element {
+    return <section>{title}{children}</section>
 }
 
 func main() -> int32 {
@@ -16,7 +16,7 @@ func main() -> int32 {
     let b = <TodoItem title={3} onToggle={_ in} /> // want "cannot convert value of type 'Int' to expected argument type 'String'"
     let c = <TodoItem onToggle={_ in} />           // want "<TodoItem> needs 'title'"
     let d = <Card title="t" />                     // want "<Card> needs children"
-    let e = <TodoItem title="x" onToggle={_ in} style:color="red" /> // want "'style:color' is not a parameter name"
+    let e = <TodoItem title="x" onToggle={_ in} data-id="1" /> // want "'data-id' is not a parameter name"
     let store = Store()
     let h = <TodoItem title="x" onToggle={store.Toogle} /> // want "value of type 'Store' has no member 'Toogle'"
     return 0

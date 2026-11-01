@@ -136,7 +136,7 @@ func TestMarkupErrors(t *testing.T) {
 		{`let x = <a></>`, "expected </a>"},
 		{`let x = <></a>`, "a fragment closes with </>"},
 		{`let x = < />`, ""}, // not markup: `<` is not bound on the right
-		{`let x = <a b= />`, "expected a quoted value or '{' after '='"},
+		{`let x = <a b= />`, "expected a quoted value, '{', or '<' after '='"},
 		{`let x = <a b="1" {c} />`, "expected an attribute, '>' or '/>'"},
 	} {
 		_, f, diags := parseVsx(t, c.src)
@@ -159,5 +159,30 @@ func TestNoMarkupInVs(t *testing.T) {
 	file, _ := ParseFile(f, 0)
 	if firstMarkup(file) != nil {
 		t.Errorf("a .vs file parsed markup")
+	}
+}
+
+func TestMarkupGenericTypeArgsAndBareElementAttr(t *testing.T) {
+	file, f, diags := parseVsx(t, `let x = <List<string, [int: Box<bool>]> items={xs} label=<i>bare</i> icon=<>frag</> />`)
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics: %v", diags)
+	}
+	el := firstMarkup(file)
+	if el == nil || el.Name.Text(f) != "List" {
+		t.Fatalf("bad element: %+v", el)
+	}
+	if el.TypeArgs == nil || len(el.TypeArgs.Args) != 2 {
+		t.Fatalf("expected 2 type args on <List<...>>, got %+v", el.TypeArgs)
+	}
+	if len(el.Attrs) != 3 {
+		t.Fatalf("expected 3 attrs, got %d", len(el.Attrs))
+	}
+	lbl := el.Attrs[1].(*ast.MarkupAttribute).Value.(*ast.MarkupElement)
+	if lbl.Name.Text(f) != "i" {
+		t.Errorf("expected bare <i> attribute value, got %+v", lbl)
+	}
+	ico := el.Attrs[2].(*ast.MarkupAttribute).Value.(*ast.MarkupElement)
+	if ico.Name != nil {
+		t.Errorf("expected bare fragment attribute value, got %+v", ico)
 	}
 }

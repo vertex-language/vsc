@@ -408,6 +408,14 @@ func (g *gen) superInit(e *ast.CallExpr, ref *ast.InitRefExpr) (*sil.Value, bool
 	}
 	sig := g.info.Inits[e]
 	if sig == nil {
+		if cl, ok := g.recv.Underlying().(*types.Class); ok && cl.Superclass != nil {
+			if sup, ok := cl.Superclass.Underlying().(*types.Class); ok && len(sup.Inits) == 0 && (e.Args == nil || len(e.Args.Args) == 0) {
+				if g.initDI != nil {
+					g.initDI.superDone = true
+				}
+				return g.void(), true
+			}
+		}
 		g.refuse(e, "a super.init whose arguments do not match one the superclass declares")
 		return nil, true
 	}

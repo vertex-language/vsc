@@ -20,20 +20,16 @@ import (
 // in a .out file beside it, and an error test marks each line that has
 // to be refused with `// want "part of the message"`.
 //
-// Every program is compiled with tests/vsx/prelude.vs, the stand-in for
-// ui/component and web/dom that markup's check form calls.
+// Every .vsx program automatically receives the compiler's built-in .vsx v2
+// prelude (analyzer/vsx_prelude.vs).
 
 func vsxSources(t *testing.T, file string) []vsc.Source {
 	t.Helper()
-	prelude, err := os.ReadFile("../tests/vsx/prelude.vs")
-	if err != nil {
-		t.Fatal(err)
-	}
 	src, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return []vsc.Source{{Name: "prelude.vs", Text: prelude}, {Name: filepath.Base(file), Text: src}}
+	return []vsc.Source{{Name: filepath.Base(file), Text: src}}
 }
 
 func TestVSXRun(t *testing.T) {
@@ -107,7 +103,7 @@ func TestVSXErrors(t *testing.T) {
 			srcs := vsxSources(t, file)
 			// What each line has to be refused with.
 			want := map[int][]string{}
-			for i, line := range strings.Split(string(srcs[1].Text), "\n") {
+			for i, line := range strings.Split(string(srcs[0].Text), "\n") {
 				for _, m := range wantRE.FindAllStringSubmatch(line, -1) {
 					want[i+1] = append(want[i+1], m[1])
 				}

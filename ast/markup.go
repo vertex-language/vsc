@@ -19,6 +19,7 @@ type MarkupElement struct {
 	Span
 	Open        token.Pos    // the `<`
 	Name        *MarkupName  // nil for a fragment
+	TypeArgs    *GenericArgs // explicit generic arguments `<List<string> ...>`
 	Attrs       []MarkupAttr // *MarkupAttribute and *MarkupSpread, in written order
 	SelfClosing bool         // `/>`
 	Children    []MarkupChild
@@ -26,8 +27,8 @@ type MarkupElement struct {
 	Close       token.Pos   // the last `>`
 }
 
-// MarkupName is a tag or attribute name as written: `div`, `app.Window`,
-// `class:done`, `data-p`, `style:--kit-accent`.
+// MarkupName is a tag or attribute name as written: `div`, `ui.Suspense`,
+// `xlink:href`, `data-testid`, `aria-label`.
 type MarkupName struct {
 	Span
 }
@@ -69,11 +70,11 @@ type MarkupString struct {
 	Span
 }
 
-// Value is the string's text without its quotes.
+// Value is the string's text without its quotes, with HTML entities decoded.
 func (s *MarkupString) Value(f *token.File) string {
 	t := f.String(s.Lo, s.Hi)
 	if len(t) >= 2 {
-		return t[1 : len(t)-1]
+		return decodeEntities(t[1 : len(t)-1])
 	}
 	return ""
 }
@@ -170,6 +171,30 @@ func decodeEntities(s string) string {
 			r = '\''
 		case "nbsp":
 			r = '\u00a0'
+		case "copy":
+			r = '\u00a9'
+		case "reg":
+			r = '\u00ae'
+		case "trade":
+			r = '\u2122'
+		case "mdash":
+			r = '\u2014'
+		case "ndash":
+			r = '\u2013'
+		case "rarr":
+			r = '\u2192'
+		case "larr":
+			r = '\u2190'
+		case "hearts":
+			r = '\u2665'
+		case "hellip":
+			r = '\u2026'
+		case "times":
+			r = '\u00d7'
+		case "bull":
+			r = '\u2022'
+		case "middot":
+			r = '\u00b7'
 		default:
 			if strings.HasPrefix(name, "#x") || strings.HasPrefix(name, "#X") {
 				r = parseRune(name[2:], 16)

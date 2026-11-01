@@ -1,10 +1,10 @@
-// `if` and `switch` in braces are expressions whose branches are markup;
-// class:, style: and spreads are single bindings.
+// `if`, `switch`, ternary, and `&&` in braces are expressions whose branches
+// are markup; Style(...) and spreads apply to intrinsic elements.
 package main
 
 enum Load { case loading, ready(string), failed(int) }
 
-func Status(_ s: Load) -> Node {
+func Status(_ s: Load) -> Element {
     return (
         <p>
             {switch s {
@@ -24,9 +24,13 @@ func main() -> int32 {
     let done = true
     let extra = ["data-a": "1", "aria-label": "x"]
     let v = (
-        <div class="row" class:done={done} class:off={!done} style:width={"\(40)px"} style:--kit-accent="red" {...extra}>
+        <div
+            className={done ? "row done" : "row off"}
+            style={Style(width: "\(40)px", color: "red")}
+            {...extra}
+        >
             {if empty.isEmpty {
-                <p class="empty">Nothing here.</p>
+                <p className="empty">Nothing here.</p>
             } else {
                 <ul>{empty.map { <li>{$0}</li> }}</ul>
             }}

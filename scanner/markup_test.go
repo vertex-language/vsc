@@ -48,8 +48,8 @@ func TestMarkupTokens(t *testing.T) {
 			`< MARKUP_NAME(app.Window) MARKUP_NAME(title) = MARKUP_STRING('T') > < MARKUP_NAME(Counter) MARKUP_NAME(start) = { INT_LIT(5) } /> </ MARKUP_NAME(app.Window) >`},
 		{`(<><i/></>)`,
 			`( < > < MARKUP_NAME(i) /> </ > )`},
-		{`<li class:done={d} style:--kit-accent={c} data-p="m"/>`,
-			`< MARKUP_NAME(li) MARKUP_NAME(class:done) = { IDENT(d) } MARKUP_NAME(style:--kit-accent) = { IDENT(c) } MARKUP_NAME(data-p) = MARKUP_STRING("m") />`},
+		{`<svg xlink:href={c} xml:lang={d} data-p="m"/>`,
+			`< MARKUP_NAME(svg) MARKUP_NAME(xlink:href) = { IDENT(c) } MARKUP_NAME(xml:lang) = { IDENT(d) } MARKUP_NAME(data-p) = MARKUP_STRING("m") />`},
 		// Code in markup opens markup again, and braces written in it
 		// are its own.
 		{`<ul>{if a { <li/> } else { f({ 1 }) }}</ul>`,
@@ -63,6 +63,12 @@ func TestMarkupTokens(t *testing.T) {
 			`< MARKUP_NAME(p) > { } </ MARKUP_NAME(p) >`},
 		{`<p>{...attrs}</p>`,
 			`< MARKUP_NAME(p) > { ... IDENT(attrs) } </ MARKUP_NAME(p) >`},
+		{`<List<string> items={xs} />`,
+			`< MARKUP_NAME(List) < IDENT(string) > MARKUP_NAME(items) = { IDENT(xs) } />`},
+		{`<Grid<Box<int>> items={xs}>ok</Grid>`,
+			`< MARKUP_NAME(Grid) < IDENT(Box) < IDENT(int) > > MARKUP_NAME(items) = { IDENT(xs) } > MARKUP_TEXT(ok) </ MARKUP_NAME(Grid) >`},
+		{`<Slot label=<i>bare</i> icon=<>frag</> />`,
+			`< MARKUP_NAME(Slot) MARKUP_NAME(label) = < MARKUP_NAME(i) > MARKUP_TEXT(bare) </ MARKUP_NAME(i) > MARKUP_NAME(icon) = < > MARKUP_TEXT(frag) </ > />`},
 	}
 	for _, c := range cases {
 		got, diags := scanMarkup(t, c.src)

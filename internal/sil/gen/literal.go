@@ -4,6 +4,7 @@ import (
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/internal/sil"
+	"github.com/vertex-language/vsc/token"
 )
 
 // A literal written where a type expressible by it is wanted -- `let m:
@@ -20,17 +21,22 @@ func (g *gen) literalInit(e ast.Expr, li *analyzer.LiteralInit) *sil.Value {
 		g.refuse(e, "a literal whose initializer takes other than one value")
 		return nil
 	}
-	if !isStructType(li.Type) {
+	if !isStructType(li.Type) && !isClass(li.Type) {
 		g.refuse(e, "a literal of a type that is not a struct")
 		return nil
 	}
 	// The literal itself is what the initializer takes: an Int, a String.
 	written := g.typeOf(e)
-	g.info.Types[e] = li.Init.Params[0].Type
-	delete(g.info.LiteralInits, e)
-	raw := g.expr(e)
-	g.info.Types[e] = written
-	g.info.LiteralInits[e] = li
+	var raw *sil.Value
+	if basic, ok := e.(*ast.BasicLit); ok && basic.Kind == token.NIL {
+		raw = g.blk.Tuple(lowerType(li.Init.Params[0].Type))
+	} else {
+		g.info.Types[e] = li.Init.Params[0].Type
+		delete(g.info.LiteralInits, e)
+		raw = g.expr(e)
+		g.info.Types[e] = written
+		g.info.LiteralInits[e] = li
+	}
 	if raw == nil {
 		return nil
 	}

@@ -118,6 +118,9 @@ type Info struct {
 	// source. See derived.go.
 	Derived     *ast.File
 	DerivedText []byte
+	// VSXPrelude is the built-in .vsx v2 prelude synthesized when checking
+	// a module with .vsx files and no external ui/component import.
+	VSXPrelude *ast.File
 
 	// Splats are the closures that take one tuple and name its elements
 	// as their parameters -- `zip(a, b).map { $0 + $1 }` -- by the symbol

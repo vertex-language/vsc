@@ -302,6 +302,8 @@ func CheckModule(module string, files []*ast.File, imports []Import) (*Info, []t
 	}
 
 	// Multi-pass analysis over all compilation units:
+	files = c.loadVSXPrelude(files, pkgScope)
+	c.files = files
 
 	// Pass 1: Precedence groups and custom operators
 	for _, f := range files {

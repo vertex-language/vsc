@@ -1,25 +1,25 @@
 // Components are functions: attributes are labeled arguments, children
-// are a `children:` closure making a fragment, a lone `{t in …}` is a function child, and a
-// dotted name is a namespaced function.
+// are passed as a Node or function child, and a dotted name is a
+// namespaced function.
 package main
 
-func Card(title: string, wide: bool = false, children: Children) -> Node {
+func Card(title: string, wide: bool = false, children: Node = nil) -> Element {
     return (
-        <section class="card" class:wide={wide}>
+        <section className={wide ? "card wide" : "card"}>
             <h2>{title}</h2>
-            {children()}
+            {children}
         </section>
     )
 }
 
-func List<T>(each: [T], children: (T) -> Node) -> Node {
+func List<T>(each: [T], children: (T) -> Element) -> Element {
     return <ul>{each.map { children($0) }}</ul>
 }
 
-func Badge(label: string) -> Node { return <b>{label}</b> }
+func Badge(label: string) -> Element { return <b>{label}</b> }
 
 enum kit {
-    static func Button(label: string, onPress: () -> void) -> Node {
+    static func Button(label: string, onPress: () -> void) -> Element {
         return <button onClick={onPress()}>{label}</button>
     }
 }
@@ -31,7 +31,7 @@ func main() -> int32 {
         <>
             <Card title="Team" wide>
                 <p>Members:</p>
-                <List each={names}>
+                <List<string> each={names}>
                     {n in <li><Badge label={n} /></li>}
                 </List>
             </Card>
