@@ -230,9 +230,11 @@ func (c *checker) lowerComponent(e *ast.MarkupElement, name string, scope *Scope
 func (c *checker) wrapComponentNode(e *ast.MarkupElement, name string, call, keyExpr, refExpr ast.Expr, scope *Scope) ast.Expr {
 	at := span(e)
 	once := &ast.ClosureExpr{Span: at, Lbrace: at.Lo, Rbrace: at.Hi, Stmts: []ast.Stmt{&ast.ExprStmt{Span: at, X: call}}}
-	node := mkCall(mkPath(at, "component", "Component"), at, once)
+	var node ast.Expr
 	if keyExpr != nil {
-		node = mkCall(mkPath(at, "component", "Key"), at, keyExpr, node)
+		node = mkCall(mkPath(at, "component", "Key"), at, keyExpr, once)
+	} else {
+		node = mkCall(mkPath(at, "component", "Component"), at, once)
 	}
 	if refExpr != nil {
 		node = mkCall(mkPath(at, "component", "Ref"), at, refExpr, node)
@@ -411,7 +413,8 @@ func (c *checker) lowerClassComponent(e *ast.MarkupElement, name string, fun ast
 				mountCall = mkCall(mkPath(at, "component", "Ref"), at, refExpr, mountCall)
 			}
 			if keyExpr != nil {
-				mountCall = mkCall(mkPath(at, "component", "Key"), at, keyExpr, mountCall)
+				once := &ast.ClosureExpr{Span: at, Lbrace: at.Lo, Rbrace: at.Hi, Stmts: []ast.Stmt{&ast.ExprStmt{Span: at, X: mountCall}}}
+				mountCall = mkCall(mkPath(at, "component", "Key"), at, keyExpr, once)
 			}
 			return mountCall
 		}
@@ -970,10 +973,11 @@ func (c *checker) attrValue(a *ast.MarkupAttribute, scope *Scope) ast.Expr {
 }
 
 // normalizeStyleCall reorders arguments to `Style(...)` to match `struct Style`'s
-// field declaration order so CSS properties can be written in any order.
+// field declaration order so CSS properties can be written in any order, and wraps
+// non-literal argument expressions in `CSSValue(...)`.
 func (c *checker) normalizeStyleCall(x ast.Expr, scope *Scope) ast.Expr {
 	call, ok := x.(*ast.CallExpr)
-	if !ok || call.Args == nil || len(call.Args.Args) <= 1 || scope == nil {
+	if !ok || call.Args == nil || len(call.Args.Args) == 0 || scope == nil {
 		return x
 	}
 	isStyle := false
@@ -981,14 +985,21 @@ func (c *checker) normalizeStyleCall(x ast.Expr, scope *Scope) ast.Expr {
 	case *ast.IdentExpr:
 		isStyle = fn.Name.Text(c.file) == "Style"
 	case *ast.MemberExpr:
-		if base, ok := fn.X.(*ast.IdentExpr); ok && base.Name.Text(c.file) == "ui" && fn.Name != nil && fn.Name.Text(c.file) == "Style" {
-			isStyle = true
+		if base, ok := fn.X.(*ast.IdentExpr); ok && fn.Name != nil && fn.Name.Text(c.file) == "Style" {
+			bname := base.Name.Text(c.file)
+			isStyle = bname == "ui" || bname == "component"
 		}
 	}
 	if !isStyle {
 		return x
 	}
-	tn := scope.LookupType("Style")
+	var tn *TypeNameSymbol
+	if mod := c.modules["component"]; mod != nil {
+		tn = mod.LookupType("Style")
+	}
+	if tn == nil {
+		tn = scope.LookupType("Style")
+	}
 	if tn == nil || tn.Type() == nil {
 		return x
 	}
@@ -997,16 +1008,48 @@ func (c *checker) normalizeStyleCall(x ast.Expr, scope *Scope) ast.Expr {
 		return x
 	}
 	mw := st.Memberwise()
+	if mw == nil && len(st.Inits) > 0 {
+		mw = st.Inits[0]
+	}
 	if mw == nil {
 		return x
+	}
+	if c.modules["component"] != nil {
+		s := span(call.Fun)
+		call.Fun = mkPath(s, "component", "Style")
 	}
 	for _, a := range call.Args.Args {
 		if a.Label != nil && a.Label.Synth == "" {
 			a.Label.Synth = a.Label.Text(c.file)
 		}
+		if a.X != nil && !c.isDirectStyleLit(a.X) {
+			s := span(a.X)
+			var cssValFn ast.Expr = &ast.IdentExpr{Span: s, Name: &ast.Ident{Span: s, Synth: "CSSValue"}}
+			if c.modules["component"] != nil {
+				cssValFn = mkPath(s, "component", "CSSValue")
+			}
+			a.X = mkCall(cssValFn, s, a.X)
+		}
 	}
 	call.Args.Args = orderCallArgs(call.Args.Args, mw.Params)
 	return call
+}
+
+func (c *checker) isDirectStyleLit(x ast.Expr) bool {
+	switch x := x.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.StringLit:
+		return len(x.Segments) <= 1
+	case *ast.CallExpr:
+		switch fn := x.Fun.(type) {
+		case *ast.IdentExpr:
+			return fn.Name != nil && fn.Name.Text(c.file) == "CSSValue"
+		case *ast.MemberExpr:
+			return fn.Name != nil && fn.Name.Text(c.file) == "CSSValue"
+		}
+	}
+	return false
 }
 
 // codeArg is what `{…}` gives where a function of arity arguments, or

@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"strings"
+
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/parser"
 	"github.com/vertex-language/vsc/token"
@@ -73,10 +75,20 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 		}
 
 		var base types.Type
-		// Check lexical scope first
-		if tn := scope.LookupType(name); tn != nil {
-			base = tn.Type()
-			c.checkHiddenType(t.Pos(), name, tn)
+		// Check lexical scope first. In .vsx files importing ui/component,
+		// unqualified Element is component.Node even if web/dom is also imported.
+		if name == "Element" && c.file != nil && strings.HasSuffix(c.file.Name(), ".vsx") {
+			if mod := c.modules["component"]; mod != nil {
+				if tn := mod.LookupType("Node"); tn != nil {
+					base = tn.Type()
+				}
+			}
+		}
+		if base == nil {
+			if tn := scope.LookupType(name); tn != nil {
+				base = tn.Type()
+				c.checkHiddenType(t.Pos(), name, tn)
+			}
 		}
 		// Check universe builtins
 		if base == nil {

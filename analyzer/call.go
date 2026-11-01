@@ -1055,13 +1055,27 @@ func arity(least, most int, variadic bool) string {
 // inferGenericCall infers type parameters from argument types and returns the specialized signature.
 func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args []*ast.CallArg, scope *Scope) *types.Signature {
 	var want types.Type
+	var explicitArgs *ast.GenericArgs
 	if e != nil {
 		want = c.resultWants[e]
+		if _, isMeta := c.info.Types[e.Fun].(*types.Metatype); !isMeta {
+			switch fn := unparen(e.Fun).(type) {
+			case *ast.IdentExpr:
+				explicitArgs = fn.Args
+			case *ast.MemberExpr:
+				explicitArgs = fn.Args
+			}
+		}
 	}
-	if len(sig.TypeParams) == 0 || len(args) == 0 && want == nil {
+	if len(sig.TypeParams) == 0 || (len(args) == 0 && want == nil && explicitArgs == nil) {
 		return sig
 	}
 	subst := make(map[*types.TypeParam]types.Type, len(sig.TypeParams))
+	if explicitArgs != nil && len(explicitArgs.Args) == len(sig.TypeParams) {
+		for i, tp := range sig.TypeParams {
+			subst[tp] = c.resolveType(explicitArgs.Args[i], scope)
+		}
+	}
 	quiet := len(c.info.Diagnostics)
 	// Each argument against the parameter it is for: past the defaulted
 	// ones the call leaves out, `load(as: T.self)` beside a

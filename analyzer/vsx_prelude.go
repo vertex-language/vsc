@@ -31,10 +31,6 @@ func (c *checker) loadVSXPrelude(files []*ast.File, pkgScope *Scope) []*ast.File
 	if c.modules["dom"] == nil {
 		c.modules["dom"] = pkgScope
 	}
-	if c.modules["component"] != nil {
-		return files
-	}
-
 	declared := map[string]bool{}
 	for _, f := range files {
 		if f.Unit == nil {
@@ -43,6 +39,17 @@ func (c *checker) loadVSXPrelude(files []*ast.File, pkgScope *Scope) []*ast.File
 		for _, n := range topDeclNames(f.Stmts, f.Unit) {
 			declared[n] = true
 		}
+	}
+	if c.modules["component"] != nil {
+		if !declared["Element"] {
+			tf := token.NewFile("<vsx_element.vs>", []byte("typealias Element = component.Node\n"))
+			if parsed, diags := parser.ParseFile(tf, 0); parsed != nil && len(diags) == 0 {
+				parsed.Unit = tf
+				c.info.VSXPrelude = parsed
+				return append(files[:len(files):len(files)], parsed)
+			}
+		}
+		return files
 	}
 	if declared["component"] {
 		return files

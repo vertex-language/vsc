@@ -332,6 +332,10 @@ extension Optional: Renderable where Wrapped: Renderable {
 
 struct CSSValue: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, ExpressibleByFloatLiteral, ExpressibleByNilLiteral {
     var raw: string = ""
+    init(_ value: string) { self.raw = value }
+    init(_ value: int) { self.raw = "\(value)px" }
+    init(_ value: float64) { self.raw = "\(value)" }
+    init(_ value: CSSValue) { self.raw = value.raw }
     init(stringLiteral value: string) { self.raw = value }
     init(integerLiteral value: int) { self.raw = "\(value)px" }
     init(floatLiteral value: float64) { self.raw = "\(value)" }
@@ -832,8 +836,14 @@ enum component {
         return mount(inst, props)
     }
 
-    static func Key<K, V>(_ key: K, _ node: V) -> V {
-        return node
+    static func Key<K>(_ key: K, _ f: @escaping () -> Node) -> Node {
+        let n = Component(f)
+        n.Key = "\(key)"
+        return n
+    }
+
+    static func Key<K, V>(_ key: K, _ f: () -> V) -> V {
+        return f()
     }
 
     static func Ref<R, V>(_ ref: R, _ node: V) -> V {

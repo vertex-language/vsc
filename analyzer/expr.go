@@ -1307,6 +1307,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 			c.resultWants[e] = expected
 		}
+		c.normalizeStyleCall(e, scope)
 		if t, ok := c.optionalSome(e, expected, scope); ok {
 			return t
 		}
