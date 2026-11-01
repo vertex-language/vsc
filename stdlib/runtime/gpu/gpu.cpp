@@ -394,7 +394,7 @@ i32 syncDevice(Device* d);
 // A place in a kernel that asks for workgroup storage, and where in the
 // group's storage its allocation is.
 struct SharedSite {
-  void* key;
+  void* key[2];
   i64 at;
 };
 
@@ -1690,15 +1690,19 @@ void vertex_gpu_barrier() {
 // that constructed the gpu.Shared, which differs for every place in the
 // program. The first work-item to reach a place allocates for it; the
 // rest find it.
+//
+// gpu.Shared's initializer may be inlined or not. Inlined, every place
+// calls here from an address of its own, and the frame above is the
+// kernel's; out of line, every place calls here from the initializer, and
+// the frame above holds the place. The pair of return addresses tells
+// places apart either way.
 void* vertex_gpu_shared(i64 bytes, i64 align) {
   WorkItem* w = current();
   Group* g = w->g;
   if (align < 1) align = 1;
-  // This function's frame record, then the caller's (gpu.Shared's
-  // initializer): the return address it holds is the place.
   void** frame = static_cast<void**>(__builtin_frame_address(0));
   void** up = frame ? static_cast<void**>(frame[0]) : nullptr;
-  void* key = up ? up[1] : __builtin_return_address(0);
+  void* key[2] = {__builtin_return_address(0), up ? up[1] : nullptr};
   constexpr i64 limit = 64 * 1024;
   g->siteLock.lock();
   if (!g->shared) {
@@ -1709,7 +1713,7 @@ void* vertex_gpu_shared(i64 bytes, i64 align) {
   }
   i64 at = -1;
   for (u32 i = 0; i < g->siteCount; i++) {
-    if (g->sites[i].key == key) {
+    if (g->sites[i].key[0] == key[0] && g->sites[i].key[1] == key[1]) {
       at = g->sites[i].at;
       break;
     }
@@ -1722,7 +1726,7 @@ void* vertex_gpu_shared(i64 bytes, i64 align) {
       vertex_pal_abort();
     }
     g->sharedUsed = at + bytes;
-    g->sites[g->siteCount++] = SharedSite{key, at};
+    g->sites[g->siteCount++] = SharedSite{{key[0], key[1]}, at};
   }
   g->siteLock.unlock();
   return g->shared + at;
