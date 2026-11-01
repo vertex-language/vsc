@@ -331,7 +331,13 @@ Device* metal() {
     if (objc::load()) {
       void* pool = objc::poolPush();
       objc::id d = objc::createDevice();
+      if (!d && vertex_pal_getenv("VERTEX_GPU_DEBUG")) say("gpu: Metal has no device for this process\n");
       if (d) {
+        // Set here, as cudaDevice's are: the static initializer above
+        // is not run on every target, and left metalDevice reading as
+        // the CPU (kind 0) with a wave size of 0.
+        metalDevice.kind = KindMetal;
+        metalDevice.waveSize = 32;
         metalDevice.metal = d;
         metalDevice.queue = objc::send<objc::id>(d, "newCommandQueue");
         metalDevice.memory = static_cast<i64>(objc::send<u64>(d, "recommendedMaxWorkingSetSize"));
@@ -1357,17 +1363,24 @@ extern "C" {
 
 // ---- devices ----
 
-void* vertex_gpu_device_cpu() { return &cpuDevice; }
+// The CPU device, its fields set here for the reason metal() gives.
+Device* cpu() {
+  cpuDevice.kind = KindCPU;
+  cpuDevice.waveSize = 1;
+  return &cpuDevice;
+}
+
+void* vertex_gpu_device_cpu() { return cpu(); }
 
 void* vertex_gpu_device_default() {
   const char* want = vertex_pal_getenv("VERTEX_GPU");
-  if (want && same(want, "cpu")) return &cpuDevice;
+  if (want && same(want, "cpu")) return cpu();
   Device* g = gpuDevice();
   if (g) return g;
   if (want && (same(want, "metal") || same(want, "cuda"))) {
     say("gpu: VERTEX_GPU asks for a GPU, and this machine has none; using the CPU\n");
   }
-  return &cpuDevice;
+  return cpu();
 }
 
 i64 vertex_gpu_device_count() { return gpuDevice() ? 2 : 1; }
@@ -1375,7 +1388,7 @@ i64 vertex_gpu_device_count() { return gpuDevice() ? 2 : 1; }
 void* vertex_gpu_device_at(i64 i) {
   Device* g = gpuDevice();
   if (g && i == 0) return g;
-  return &cpuDevice;
+  return cpu();
 }
 
 i64 vertex_gpu_device_kind(void* d) { return static_cast<Device*>(d)->kind; }
