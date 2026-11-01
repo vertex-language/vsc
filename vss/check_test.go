@@ -27,7 +27,7 @@ func TestCheck(t *testing.T) {
 .card {
     colr: red;
     padding: 4px;
-    text-shadow: 0 1px black;
+    clip-path: circle(50%);
     &:hover { bakground: none }
     a:hover { color: blue }
     --local: 1;
@@ -43,7 +43,7 @@ func TestCheck(t *testing.T) {
 	want := []string{
 		"error: only package main styles the document; a library may set custom properties here, not 'color'",
 		"error: unknown property 'colr'; did you mean 'color'?",
-		"warning: the engine does not apply 'text-shadow' yet: it will have no effect",
+		"warning: the engine does not apply 'clip-path' yet: it will have no effect",
 		"error: unknown property 'bakground'; did you mean 'background'?",
 		"error: unknown property 'margn'; did you mean 'margin'?",
 	}
