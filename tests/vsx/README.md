@@ -1,6 +1,6 @@
 # tests/vsx
 
-The `.vsx` ladder: one program of ordinary `.vsx` per file, numbered `001`–`040`.
+The `.vsx` ladder: one program of ordinary `.vsx` per file, numbered `001`–`041`.
 Each is compiled with the built-in `.vsx` prelude (`analyzer/vsx_prelude.vs`),
 linked, run natively, and its standard output compared with the file's own
 `// want:` lines, as the kernel ladder's files are:
@@ -24,7 +24,8 @@ Every file also has to parse (`parser/markup_test.go`).
 | 013–024 | handlers, `useState`, `useReducer`, context, Props structs, render props, generic components, refs, `useMemo`, `useEffect` and its cleanup, class components |
 | 025–028 | the language under the hooks: `any Equatable` deps, overloads told apart by a closure's body, implicitly unwrapped optionals, a class inheriting a generic class |
 | 029–040 | programs: a task app, SVG, forms, whitespace, composition, `useId`, keyed rows, tabs, `Suspense`, optionals, a cart, a dashboard |
+| 041 | a component using a `@MainActor` model, and an optional chain that assigns nothing |
 
 The prelude is what a `.vsx` program runs on where `ui` cannot be found. Where it
-can, the program imports `ui/component` and `web/dom` implicitly and runs on them
+can, the program imports `ui/component`, `web/dom` and `ui/viewport` implicitly and runs on them
 (`vsximports.go`).

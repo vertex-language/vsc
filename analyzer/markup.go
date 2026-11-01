@@ -937,7 +937,13 @@ func (c *checker) lowerIntrinsic(e *ast.MarkupElement, tag string, scope *Scope)
 				}
 				s := span(a.Name)
 				typ := &ast.PostfixSelfExpr{Span: s, X: mkPath(s, "dom", ev.typ), Dot: s.Lo, Self: s.Lo}
-				attrs = append(attrs, attr(a, "On", mkString(ev.event, s), typ, c.codeArg(code, 1, true, scope)))
+				// `onClickCapture` listens as the event comes down to its
+				// target, before the target's own listeners.
+				on := "On"
+				if _, plain := htmlEvents[name]; !plain && strings.HasSuffix(name, "Capture") {
+					on = "OnCapture"
+				}
+				attrs = append(attrs, attr(a, on, mkString(ev.event, s), typ, c.codeArg(code, 1, true, scope)))
 			default:
 				if !htmlAttributeKnown(tag, name) {
 					msg := "<" + tag + "> has no attribute '" + name + "'"

@@ -991,6 +991,7 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				// The superclass is named in the class's own generic
 				// scope: `class Named<T>: Container<T>`.
 				n.Conformances = c.protocolsOf(d.Inherit, inner, &n.Superclass)
+				c.inheritIsolation(d, n)
 				c.memberIsolated = c.info.MainActor[n]
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
 				c.memberIsolated = false

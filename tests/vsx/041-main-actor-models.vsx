@@ -1,0 +1,38 @@
+// A component renders on the UI thread, so it may use a @MainActor model
+// as it is; and an optional chain that finds nothing assigns nothing,
+// and makes no value to assign.
+package main
+
+@MainActor
+final class Store {
+    var stored = "untitled"
+    var Title: string {
+        get { return stored }
+        set { stored = newValue }
+    }
+    init() {}
+}
+
+var made = 0
+
+func label(_ s: string) -> string {
+    made += 1
+    return s
+}
+
+func Header(store: Store) -> Element {
+    return <h1>{store.Title}</h1>
+}
+
+func main() -> int32 {
+    let store = Store()
+    var current: Store? = store
+    current?.Title = label("Notes")
+    print((<Header store={store} />).Html(), made)
+    current = nil
+    current?.Title = label("Lost")
+    print((<Header store={store} />).Html(), made)
+    return 0
+}
+// want: <h1>Notes</h1> 1
+// want: <h1>Notes</h1> 1

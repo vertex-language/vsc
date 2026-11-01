@@ -745,11 +745,38 @@ func (g *gen) computedField(t types.Type, name string) (*types.Field, bool) {
 
 // setterCall lowers an assignment to a computed property via its setter.
 func (g *gen) setterCall(mem *ast.MemberExpr, recv types.Type, f *types.Field, value ast.Expr) {
+	// A class instance's receiver is evaluated first, as Swift orders
+	// it: where it is a step of an optional chain that finds nothing,
+	// `h?.title = make()`, the value is not made at all.
+	if isClass(recv) {
+		self := g.expr(mem.X)
+		if self == nil {
+			return
+		}
+		v := g.rvalue(value)
+		if v == nil {
+			return
+		}
+		g.presetSelf = self
+		defer func() { g.presetSelf = nil }()
+		g.setterCallValue(mem, recv, f, v)
+		return
+	}
 	v := g.rvalue(value)
 	if v == nil {
 		return
 	}
 	g.setterCallValue(mem, recv, f, v)
+}
+
+// setterReceiver is the instance a setter is called on: the one
+// setterCall evaluated already, or mem's receiver, evaluated now.
+func (g *gen) setterReceiver(mem *ast.MemberExpr) *sil.Value {
+	if s := g.presetSelf; s != nil {
+		g.presetSelf = nil
+		return s
+	}
+	return g.expr(mem.X)
 }
 
 // setterCallValue is setterCall over a value already lowered, which
@@ -786,7 +813,7 @@ func (g *gen) setterCallValue(mem *ast.MemberExpr, recv types.Type, f *types.Fie
 	}
 	var self *sil.Value
 	if isClass(recv) {
-		self = g.expr(mem.X)
+		self = g.setterReceiver(mem)
 	} else {
 		self = g.lvalue(mem.X)
 	}
@@ -1175,7 +1202,7 @@ func (g *gen) dynamicGetter(cl *types.Class, f *types.Field, receiver func() *si
 // dynamicSetter writes a computed property of a class with subclasses
 // through the table the instance carries.
 func (g *gen) dynamicSetter(mem *ast.MemberExpr, cl *types.Class, f *types.Field, v *sil.Value) {
-	self := g.expr(mem.X)
+	self := g.setterReceiver(mem)
 	if self == nil {
 		return
 	}

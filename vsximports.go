@@ -9,11 +9,11 @@ import (
 )
 
 // The packages a .vsx file uses without importing them: what its markup
-// lowers to (ui/component) and the events its handlers are given
-// (web/dom). They are imported for it wherever they can be found from
+// lowers to (ui/component), the events its handlers are given (web/dom),
+// and the box other things draw into (ui/viewport, <Viewport>). They are imported for it wherever they can be found from
 // its folder; where they cannot -- a program with no ui to build on --
 // the compiler's own prelude stands in (analyzer/vsx_prelude.vs).
-var vsxImplicitImports = []string{"ui/component", "web/dom"}
+var vsxImplicitImports = []string{"ui/component", "web/dom", "ui/viewport"}
 
 // addVSXImports gives each .vsx file among files the implicit imports it
 // does not write itself and that resolve from its folder.

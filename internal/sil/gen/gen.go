@@ -446,6 +446,9 @@ func linkageOf(a analyzer.Access) sil.Linkage {
 
 // A gen lowers one file.
 type gen struct {
+	// presetSelf is a setter's receiver its caller evaluated before the
+	// value; see setterCall.
+	presetSelf *sil.Value
 	// observing is the property whose willSet or didSet is being
 	// lowered: named alone there, it is written in place.
 	observing string

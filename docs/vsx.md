@@ -17,12 +17,13 @@ This document says what `.vsx` accepts, what it means, and what it runs on. What
 
 ## 1. Files and imports
 
-A `.vsx` file imports two packages without writing them:
+A `.vsx` file imports three packages without writing them:
 
 | Package | Bound as | What it gives |
 | :--- | :--- | :--- |
 | `ui/component` | `component` | what markup lowers to, the hooks, `Mount`, and the names in §1.1 |
 | `web/dom` | `dom` | the events handlers are given (`dom.MouseEvent`, …) |
+| `ui/viewport` | `viewport` | `<Viewport>`, a box something else draws into (§10) |
 
 They are imported where `vsc` can find them from the file's folder. Where it cannot (a program with no `ui` to build on), `vsc` compiles the file against its built-in prelude instead (§9), which has the same names.
 
@@ -35,7 +36,7 @@ A file may still write either import; it is the same import.
 | Types | `Element` (= `Node`), `Node`, `Props`, `EmptyProps`, `EmptyState`, `Style`, `CSSValue`, `Ref<T>`, `Context<T>`, `Component<P, S>`, `SetState<T>`, `Children` (= `() -> Node`) |
 | Element types | `HTMLElement`, `HTMLInputElement`, `HTMLButtonElement`, `HTMLDivElement`, `HTMLSpanElement`, `HTMLFormElement` — all the element node type |
 | Hooks | `useState`, `useReducer`, `useRef`, `useEffect`, `useLayoutEffect`, `useInsertionEffect`, `useMemo`, `useCallback`, `useId`, `useTransition`, `startTransition`, `useDeferredValue`, `createContext`, `use`, `useContext` |
-| Components | `Suspense`, `StrictMode`, `Profiler` |
+| Components | `Suspense`, `StrictMode`, `Profiler`, `Viewport` (`ui` only, §10) |
 | Functions | `Focus`, `Bounds` (`ui` only, §8.4), `renderToString` |
 
 Event types are written through `dom`: `dom.MouseEvent`, `dom.KeyboardEvent`. A plain `.vs` file has none of this: it writes `import "ui/component"` and names `component.Node`.
@@ -273,6 +274,7 @@ func Card(title: string, wide: bool = false, children: Node = nil) -> Element {
 - An attribute is the argument of the parameter of its label; a bare one is `true`. An attribute no parameter has is refused, with the nearest label: `'Card' has no parameter 'titel'; did you mean 'title'?`. A name with `-`, `:` or `.` is refused: `'data-id' is not a parameter name; 'Icon' is a component`.
 - A parameter with no default has to be given: `<Card> needs 'title'`, `<Card> needs children`.
 - A parameter that takes a function is given braces as that function (§3.2).
+- A component renders on the UI thread: a capitalized top-level function in a `.vsx` file that returns `Element` (or `Node`) is `@MainActor`, and may use `@MainActor` types and functions as they are.
 - `{...value}` spreads a struct's fields as the parameters of their names; an attribute written as well wins. Spreading anything but a struct is refused.
 
 ### 5.2 A Props struct
@@ -467,5 +469,69 @@ Where `ui/component` cannot be found, a `.vsx` file is compiled against `vsc`'s 
 - A component renders again, at once, when its state is set; hooks and context behave as §5–§6 say.
 - `Focus` and `Bounds` are not there; a `ref` on a component is not given anything; a class component's `componentDid…`/`componentWillUnmount` are not called.
 - Nothing is unmounted: an effect's cleanup runs only before the effect runs again. A component rendered again by its parent starts with new state.
+- There is no `<Viewport>`.
 
 The `.vsx` test ladder (`tests/vsx`) runs on it.
+
+---
+
+## 10. Viewports
+
+A viewport is a box of the page that something other than markup draws: a web page, a remote desktop, a virtual machine's screen, a canvas, a terminal. The box is an element like any other -- laid out and styled by the page's CSS, keyed, stamped with its package -- and a **source** fills it.
+
+```vertex
+<Viewport source={screen} class="screen" focusable />
+```
+
+| Attribute | |
+| :--- | :--- |
+| `source` | a `viewport.Source`: what draws the box and takes what the user does in it |
+| `class` | the element's class (`"viewport"` if left out) |
+| `live` | drawn every frame (an animation, a video), not only when the source asks |
+| `focusable` | a press in the box gives it the keyboard |
+
+### 10.1 A source
+
+A source is a class inheriting `viewport.Source`. It is `@MainActor`, and so is every subclass. It overrides `Draw`, and what else it takes:
+
+| Method | Called |
+| :--- | :--- |
+| `Draw(_ frame: viewport.Frame) -> [uint8]` | for a frame: `frame.Width` × `frame.Height` device pixels, `frame.Scale` device pixels to the CSS pixel, `frame.Time` in seconds. It answers RGBA pixels, premultiplied, top row first; fewer than `Width × Height × 4` leaves the box as the page painted it. |
+| `Attached(_ handle: viewport.Handle)`, `Detached()` | when its box is in the document, and when it is not |
+| `PointerDown`, `PointerMove`, `PointerUp` `(_ e: dom.PointerEvent, x:, y:)`, `PointerLeave()` | the pointer in the box; `x`, `y` in CSS pixels from its corner |
+| `Wheel(_ e: dom.WheelEvent, x:, y:)` | the wheel over the box |
+| `KeyDown`, `KeyUp` `(_ e: dom.KeyboardEvent)` | keys while the box has the keyboard |
+| `Text(_ e: dom.InputEvent)` | text typed while it has the keyboard: `e.Data` |
+| `Focus(_ focused: bool)` | the box took the keyboard, or lost it |
+
+The events then go on to the elements around the box; a source that takes one calls `e.StopPropagation()` (and `e.PreventDefault()`).
+
+`viewport.Drawing { w, h, t in … }` is a source that only draws.
+
+### 10.2 The handle
+
+| | |
+| :--- | :--- |
+| `Invalidate()` | asks for a frame, from an event or from a task |
+| `Live` | whether it is drawn every frame |
+| `Cursor` | the pointer's shape over the box, as CSS names it (`"pointer"`, `"text"`, …); `""` for the page's |
+| `Focus()` | gives the box the keyboard |
+| `Origin`, `Size` | where the box was last drawn, in CSS pixels |
+
+### 10.3 Drawing
+
+The page is painted when it changes; each frame, the host draws the viewports that want one -- live ones, and ones invalidated since -- at their boxes' sizes, copies their pixels into the frame, and paints what the page puts over the boxes (a toolbar, a label) back on top. `ui/app` is the host, and `componenttest`'s `Pixels()` does the same.
+
+### 10.4 A component built on one: `webview.View`
+
+```vertex
+import "ui/webview"
+
+func Browser() -> Element {
+    let view = useMemo({ webview.WebView() }, [])
+    return <webview.View controller={view} url="https://example.com" class="page" />
+}
+```
+
+`webview.View(url:controller:class:onLoad:)` shows a `webview.WebView`'s page in a viewport: the page laid out at the box's size, clicks, the wheel, keys and typing given to it, its cursor shown over the box, and drawn again when it changes or loads. `url` is navigated to, and again whenever it changes; `controller` is the WebView it shows (one of its own if left out); `onLoad` is given each finished load's `webview.LoadReport`.
+

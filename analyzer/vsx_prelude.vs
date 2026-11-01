@@ -746,6 +746,10 @@ enum component {
             })
         }
 
+        static func OnCapture<E: dom.Event>(_ name: string, _ type: E.Type, _ handler: @escaping (E) -> void) -> Attribute {
+            return On(name, type, handler)
+        }
+
         static func Live<V>(_ name: string, _ f: () -> V) -> Attribute {
             return Value(name, f())
         }

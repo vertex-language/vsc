@@ -48,7 +48,31 @@ func (c *checker) funcIsolated(f *ast.FuncDecl, name string, scope *Scope) bool 
 	if scope != c.pkgScope {
 		return c.currIsolated
 	}
+	if f.Recv == nil && c.isVSXComponent(f, name) {
+		return true
+	}
 	return name == "main" && f.Recv == nil && c.importing == ""
+}
+
+// isVSXComponent reports whether a function is a .vsx file's component:
+// capitalized and returning Element (or Node). A component renders on the
+// UI thread, so it is @MainActor, and may use what is.
+func (c *checker) isVSXComponent(f *ast.FuncDecl, name string) bool {
+	if c.file == nil || !strings.HasSuffix(c.file.Name(), ".vsx") || !isComponentName(name) || strings.Contains(name, ".") {
+		return false
+	}
+	if f.Sig == nil || f.Sig.Result == nil {
+		return false
+	}
+	id, ok := f.Sig.Result.Type.(*ast.IdentType)
+	if !ok || id.Name == nil || id.Args != nil {
+		return false
+	}
+	switch id.Name.Text(c.file) {
+	case "Element", "Node":
+		return true
+	}
+	return false
 }
 
 // markIsolatedVars records @MainActor on the variables a declaration
@@ -178,4 +202,51 @@ func IsolatedField(t types.Type, name string) bool {
 		}
 	}
 	return false
+}
+
+// inheritIsolation gives a class its superclass's isolation, as Swift
+// does: a subclass of a @MainActor class is @MainActor. A @MainActor class
+// whose superclass is not is refused, as Swift refuses it: its overrides
+// would run off the main actor wherever the superclass is used.
+func (c *checker) inheritIsolation(d *ast.ClassDecl, cl *types.Class) {
+	super := classOf(cl.Superclass)
+	if super == nil {
+		return
+	}
+	superIsolated := c.classIsolated(super, map[*types.Class]bool{})
+	switch {
+	case superIsolated:
+		c.info.MainActor[cl] = true
+	case c.info.MainActor[cl] && d.Name != nil:
+		c.errorf(d.Name.Pos(), "main actor-isolated class '%s' has different actor isolation from nonisolated superclass '%s'",
+			d.Name.Text(c.file), super.Name)
+	}
+}
+
+// classIsolated reports whether a class is @MainActor: by its attribute
+// or its superclass's, here; an imported one by its initializers, which a
+// @MainActor class's are.
+func (c *checker) classIsolated(cl *types.Class, seen map[*types.Class]bool) bool {
+	if cl == nil || seen[cl] {
+		return false
+	}
+	seen[cl] = true
+	if c.info.MainActor[cl] {
+		return true
+	}
+	for _, sig := range cl.Inits {
+		if sig != nil && sig.Isolated {
+			return true
+		}
+	}
+	return c.classIsolated(classOf(cl.Superclass), seen)
+}
+
+// classOf is the class a superclass type names, generic or not.
+func classOf(t types.Type) *types.Class {
+	if t == nil {
+		return nil
+	}
+	cl, _ := t.Underlying().(*types.Class)
+	return cl
 }

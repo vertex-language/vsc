@@ -3203,6 +3203,15 @@ func (c *checker) lookupValue(scope *Scope, name string) Symbol {
 				return sym
 			}
 		}
+		// <Viewport>, ui/viewport's element, is the prelude's too; its
+		// types are written through the package (viewport.Source).
+		if name == "Viewport" {
+			if mod := c.modules["viewport"]; mod != nil {
+				if sym := mod.Lookup(name); sym != nil {
+					return sym
+				}
+			}
+		}
 	}
 	cl, ok := c.currType.(*types.Class)
 	if !ok {
