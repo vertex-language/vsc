@@ -25,6 +25,7 @@ Every file also has to parse (`parser/markup_test.go`).
 | 025–028 | the language under the hooks: `any Equatable` deps, overloads told apart by a closure's body, implicitly unwrapped optionals, a class inheriting a generic class |
 | 029–040 | programs: a task app, SVG, forms, whitespace, composition, `useId`, keyed rows, tabs, `Suspense`, optionals, a cart, a dashboard |
 | 041 | a component using a `@MainActor` model, and an optional chain that assigns nothing |
+| 042 | `<Fragment>` spelled out, with and without a key |
 
 The prelude is what a `.vsx` program runs on where `ui` cannot be found. Where it
 can, the program imports `ui/component`, `web/dom` and `ui/viewport` implicitly and runs on them

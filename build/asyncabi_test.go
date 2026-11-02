@@ -131,7 +131,7 @@ func TestAsyncReturnsThroughItsContinuation(t *testing.T) {
 	}
 
 	obj := asyncObject(t, target, `
-public func twice(_ n: int) async -> int { return n * 2 }
+public func twice(n: int) async -> int { return n * 2 }
 `)
 
 	got := runWithDriver(t, target, obj, `
@@ -169,7 +169,7 @@ __asm__(
 void resume(void);
 
 // The Vertex function, by its mangled name: twice(int) async -> int.
-extern void lib_twice(void) __asm__("_$s3lib5twiceyS2iYaF");
+extern void lib_twice(void) __asm__("_$s3lib5twice1nS2i_tYaF");
 
 int main(void) {
     struct Ctx ctx = { 0, resume };
@@ -177,7 +177,7 @@ int main(void) {
     __asm__ volatile(
         "mov x22, %0\n"
         "mov x0, %1\n"
-        "bl  _$s3lib5twiceyS2iYaF\n"
+        "bl  _$s3lib5twice1nS2i_tYaF\n"
         :
         : "r"(&ctx), "r"(21L)
         : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
@@ -211,7 +211,7 @@ func TestAsyncContextIsThreadedThrough(t *testing.T) {
 	// Two ordinary arguments as well as the context, so that a context
 	// placed in the argument sequence by mistake would shift them.
 	obj := asyncObject(t, target, `
-public func combine(_ a: int, _ b: int) async -> int { return a * 100 + b }
+public func combine(a: int, b: int) async -> int { return a * 100 + b }
 `)
 
 	got := runWithDriver(t, target, obj, `
@@ -248,7 +248,7 @@ int main(void) {
         "mov x22, %0\n"
         "mov x0, %1\n"
         "mov x1, %2\n"
-        "bl  _$s3lib7combineyS2i_SitYaF\n"
+        "bl  _$s3lib7combine1a1bS2i_SitYaF\n"
         :
         : "r"(&ctx), "r"(7L), "r"(9L)
         : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
@@ -287,8 +287,8 @@ func TestAsyncSuspensionRunsThrough(t *testing.T) {
 	// x is computed before the await and used after it, so it has to
 	// survive in the frame. y comes back from the call.
 	obj := asyncObject(t, target, `
-func inner(_ n: int) async -> int { return n + 1 }
-public func outer(_ a: int) async -> int {
+func inner(n: int) async -> int { return n + 1 }
+public func outer(a: int) async -> int {
     let x = a * 10
     let y = await inner(a)
     return x + y
@@ -342,7 +342,7 @@ int main(void) {
     __asm__ volatile(
         "mov x22, %0\n"
         "mov x0, %1\n"
-        "bl  _$s3lib5outeryS2iYaF\n"
+        "bl  _$s3lib5outer1aS2i_tYaF\n"
         :
         : "r"(&ctx), "r"(5L)
         : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
@@ -378,10 +378,10 @@ func TestAsyncTwoSuspensionsAndALoop(t *testing.T) {
 	}
 
 	obj := asyncObject(t, target, `
-func inner(_ n: int) async -> int { return n + 1 }
+func inner(n: int) async -> int { return n + 1 }
 
 // Two in a row, with a value carried past both.
-public func twice(_ a: int) async -> int {
+public func twice(a: int) async -> int {
     let base = a * 100
     let p = await inner(a)
     let q = await inner(p)
@@ -390,7 +390,7 @@ public func twice(_ a: int) async -> int {
 
 // An await inside a loop: the total is carried round, and the block the
 // loop comes back to is before the suspension.
-public func summing(_ n: int) async -> int {
+public func summing(n: int) async -> int {
     var total = 0
     var i = 0
     while i < n {
@@ -459,8 +459,8 @@ static long call1(void (*fn)(void), long a) {
     return arrived ? answer : -1;
 }
 
-extern void twice_(void)   __asm__("_$s3lib5twiceyS2iYaF");
-extern void summing_(void) __asm__("_$s3lib7summingyS2iYaF");
+extern void twice_(void)   __asm__("_$s3lib5twice1aS2i_tYaF");
+extern void summing_(void) __asm__("_$s3lib7summing1nS2i_tYaF");
 
 int main(void) {
     // base 300, p = 4, q = 5  ->  309
@@ -503,7 +503,7 @@ struct Bad: Error { var code: int }
 
 // Fails for a negative argument and answers for the rest, so one
 // function covers both paths through the same continuation.
-public func checked(_ n: int) async throws -> int {
+public func checked(n: int) async throws -> int {
     if n < 0 { throw Bad(code: n) }
     return n + 1
 }
@@ -573,7 +573,7 @@ static void call1(long a) {
     __asm__ volatile(
         "mov x22, %0\n"
         "mov x0, %1\n"
-        "bl  _$s3lib7checkedyS2iYaKF\n"
+        "bl  _$s3lib7checked1nS2i_tYaKF\n"
         :
         : "r"(&ctx), "r"(a)
         : CLOBBERS

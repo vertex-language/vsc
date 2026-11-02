@@ -36,7 +36,7 @@ func TestFarBranchRuns(t *testing.T) {
 
 	const groups, stmts = 400, 300 // about 12 bytes a statement: 1.4MB
 	var src strings.Builder
-	src.WriteString("func work(_ x: Int) -> Int {\n    var t = x\n    if x >= 0 {\n")
+	src.WriteString("func work(x: Int) -> Int {\n    var t = x\n    if x >= 0 {\n")
 	for g := 0; g < groups; g++ {
 		fmt.Fprintf(&src, "        if t & %d == 0 {\n", 1<<(g%5))
 		for s := 0; s < stmts; s++ {

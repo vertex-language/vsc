@@ -398,3 +398,123 @@ func use() -> int32 { return get() }
 		t.Error("a receiver method was callable as a free function")
 	}
 }
+
+// checkVertex compiles one file of a program as far as type checking, and
+// answers what it reports.
+func checkVertex(t *testing.T, name, src string, roots ...string) string {
+	t.Helper()
+	_, diags := vsc.Compile([]vsc.Source{{Name: name, Text: []byte(src)}},
+		vsc.Options{Module: "main", Target: ir.AArch64MacOS, Stop: vsc.Checked, PackagePaths: roots})
+	var b strings.Builder
+	for _, d := range diags {
+		b.WriteString(d.String() + "\n")
+	}
+	return b.String()
+}
+
+// A global marked @MainActor is initialized there, in a file of declarations
+// as at the top of a program.
+func TestMainActorGlobalInitializer(t *testing.T) {
+	const lib = "@MainActor public class Bytes { public init() {} }\n"
+	if got := checkVertex(t, "lib.vs", lib+"@MainActor public let bytes = Bytes()\n"); got != "" {
+		t.Errorf("marked: %s", got)
+	}
+	if got := checkVertex(t, "lib.vs", lib+"public let bytes = Bytes()\n"); !strings.Contains(got, "main actor-isolated initializer") {
+		t.Errorf("not marked: want it refused, got %q", got)
+	}
+}
+
+// A method named and not called has no members.
+func TestMemberOfUncalledMethod(t *testing.T) {
+	const src = "struct P { var Y = 1 }\nstruct V { func Offset() -> P { return P() } }\nfunc f(v: V) -> int { return v.Offset.Y }\n"
+	if got := checkVertex(t, "lib.vs", src); !strings.Contains(got, "has no member 'Y'") {
+		t.Errorf("got %q", got)
+	}
+}
+
+// vsxRoot is a package root with a ui/component of the shape a .vsx program
+// lowers to, and a Fragment of another kind beside it, as web/layout has.
+func vsxRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for name, text := range map[string]string{
+		"ui/component/c.vs": `public protocol Renderable {}
+public final class Node: Renderable { public init() {} }
+public struct Style { public var color = ""; public init(color: string) { self.color = color } }
+public struct Ref { public init(id: int) {} }
+public struct OnlyHere { public init() {} }
+public func Fragment(children: [any Renderable]) -> Node { return Node() }
+`,
+		"other/o.vs": "public struct Fragment { public init(a: int) {} }\n",
+	} {
+		file := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// In a .vsx file a type the program declares is the one it means, over
+// ui/component's of that name.
+func TestVSXProgramTypeOverComponents(t *testing.T) {
+	const src = `package main
+struct Style { var mine = 1 }
+struct Ref { var mine = 2 }
+func main() -> int32 {
+    let s: Style = Style(mine: 3)
+    let r = Ref(mine: 4)
+    _ = component.OnlyHere()
+    print(s.mine, r.mine)
+    return 0
+}
+`
+	if got := checkVertex(t, "main.vsx", src, vsxRoot(t)); got != "" {
+		t.Error(got)
+	}
+}
+
+// `<Fragment>` is `<>` spelled out, whatever else an import calls Fragment.
+func TestVSXFragmentTag(t *testing.T) {
+	const src = `package main
+import "other"
+func main() -> int32 {
+    let page = <Fragment></Fragment>
+    _ = component.OnlyHere()
+    _ = page
+    return 0
+}
+`
+	if got := checkVertex(t, "main.vsx", src, vsxRoot(t)); got != "" {
+		t.Error(got)
+	}
+	const attrs = "package main\nfunc main() -> int32 {\n    let page = <Fragment id=\"a\"></Fragment>\n    _ = page\n    return 0\n}\n"
+	if got := checkVertex(t, "main.vsx", attrs, vsxRoot(t)); !strings.Contains(got, "takes only a key") {
+		t.Errorf("an attribute: got %q", got)
+	}
+}
+
+// An element's handler is one the engine fires, or it is refused rather than
+// silently never running. A component's parameter of that name is its own.
+func TestVSXRefusesEventsNeverDispatched(t *testing.T) {
+	for _, name := range []string{"onLoad", "onError", "onPlay", "onPause", "onEnded", "onKeyPress", "onLayout", "onLoadCapture"} {
+		src := "package main\nfunc main() -> int32 {\n    let a = <img " + name + "={ e in print(1) } />\n    print(a.Html())\n    return 0\n}\n"
+		if got := checkVertex(t, "main.vsx", src); !strings.Contains(got, "has no event '"+name+"'") {
+			t.Errorf("%s: got %q", name, got)
+		}
+	}
+	const own = `package main
+func Pic(onLoad: () -> void) -> Node { return <img /> }
+func main() -> int32 {
+    let a = <div onClick={ e in print(1) } onClickCapture={ e in print(2) } onKeyDown={ e in print(3) }><Pic onLoad={ print(4) } /></div>
+    print(a.Html())
+    return 0
+}
+`
+	if got := checkVertex(t, "main.vsx", own); got != "" {
+		t.Error(got)
+	}
+}

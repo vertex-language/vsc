@@ -44,10 +44,48 @@ func (c *checker) lowerMarkup(e *ast.MarkupElement, scope *Scope) ast.Expr {
 		return mkCall(mkPath(at, "component", "Fragment"), at, mkArray(c.markupChildren(e.Children, scope), at))
 	}
 	name := e.Name.Text(c.file)
+	// `<Fragment>` is `<>` spelled out, taking a key as `<>` can't, unless
+	// the program has a Fragment of its own.
+	if name == "Fragment" && !c.fragmentOwn(scope) {
+		return c.lowerFragment(e, scope)
+	}
 	if isComponentName(name) {
 		return c.lowerComponent(e, name, scope)
 	}
 	return c.lowerIntrinsic(e, name, scope)
+}
+
+// fragmentOwn reports whether Fragment here is the program's, a declaration
+// of its own or the prelude's, not a name that came in with an import
+// (web/layout has a Fragment of another kind).
+func (c *checker) fragmentOwn(scope *Scope) bool {
+	sym := scope.Lookup("Fragment")
+	if sym == nil {
+		return false
+	}
+	_, imported := c.info.Imported[sym]
+	return !imported
+}
+
+// lowerFragment is `<Fragment>…</Fragment>`: its children with no element
+// around them.
+func (c *checker) lowerFragment(e *ast.MarkupElement, scope *Scope) ast.Expr {
+	at := span(e)
+	frag := mkCall(mkPath(at, "component", "Fragment"), at, mkArray(c.markupChildren(e.Children, scope), at))
+	var keyExpr ast.Expr
+	for _, attr := range e.Attrs {
+		a, ok := attr.(*ast.MarkupAttribute)
+		if !ok || a.Name.Text(c.file) != "key" {
+			c.errorf(attr.Pos(), "<Fragment> takes only a key")
+			continue
+		}
+		keyExpr = c.attrValue(a, scope)
+	}
+	if keyExpr == nil {
+		return frag
+	}
+	once := &ast.ClosureExpr{Span: at, Lbrace: at.Lo, Rbrace: at.Hi, Stmts: []ast.Stmt{&ast.ExprStmt{Span: at, X: frag}}}
+	return c.componentCall(at, "Fragment", keyExpr, once)
 }
 
 // isComponentName reports whether a tag names a component rather than an
@@ -1027,7 +1065,8 @@ func (c *checker) normalizeStyleCall(x ast.Expr, scope *Scope) ast.Expr {
 	isStyle := false
 	switch fn := call.Fun.(type) {
 	case *ast.IdentExpr:
-		isStyle = fn.Name.Text(c.file) == "Style"
+		// A Style the program declares is its own, made as it says.
+		isStyle = fn.Name.Text(c.file) == "Style" && !c.programStyle
 	case *ast.MemberExpr:
 		if base, ok := fn.X.(*ast.IdentExpr); ok && fn.Name != nil && fn.Name.Text(c.file) == "Style" {
 			bname := base.Name.Text(c.file)

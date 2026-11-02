@@ -1,0 +1,12 @@
+// `<Fragment>` spelled out, with and without a key.
+package main
+
+func main() -> int32 {
+    let page = <Fragment><b>a</b><i>b</i></Fragment>
+    print(page.Html())
+    let keyed = <div>{[1, 2].map { n in <Fragment key={n}><i>{n}</i></Fragment> }}</div>
+    print(keyed.Html())
+    return 0
+}
+// want: <b>a</b><i>b</i>
+// want: <div><i>1</i><i>2</i></div>

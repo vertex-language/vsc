@@ -201,16 +201,15 @@ A value given in braces sets the attribute this way:
 | `onClick` `onDoubleClick` `onContextMenu` `onMouseDown` `onMouseUp` `onMouseMove` `onMouseEnter` `onMouseLeave` `onMouseOver` `onMouseOut` | `click` `dblclick` `contextmenu` `mousedown` … | `dom.MouseEvent` |
 | `onPointerDown` `onPointerUp` `onPointerMove` `onPointerEnter` `onPointerLeave` `onPointerCancel` | `pointerdown` … | `dom.PointerEvent` |
 | `onWheel` | `wheel` | `dom.WheelEvent` |
-| `onKeyDown` `onKeyUp` `onKeyPress` | `keydown` `keyup` `keypress` | `dom.KeyboardEvent` |
+| `onKeyDown` `onKeyUp` | `keydown` `keyup` | `dom.KeyboardEvent` |
 | `onInput` `onBeforeInput` | `input` `beforeinput` | `dom.InputEvent` |
 | `onSubmit` | `submit` | `dom.SubmitEvent` |
 | `onFocus` `onBlur` | `focus` `blur` | `dom.FocusEvent` |
 | `onCompositionStart` `onCompositionUpdate` `onCompositionEnd` | `compositionstart` … | `dom.CompositionEvent` |
 | `onDrag` `onDragStart` `onDragOver` `onDragEnter` `onDragLeave` `onDragEnd` `onDrop` | `drag` … | `dom.DragEvent` |
-| `onLayout` | `layout` | `dom.LayoutEvent` |
-| `onChange` `onReset` `onInvalid` `onScroll` `onToggle` `onClose` `onCancel` `onTransitionEnd` `onAnimationStart` `onAnimationEnd` `onAnimationIteration` `onLoad` `onError` `onPlay` `onPause` `onEnded` | the lowercase name | `dom.Event` |
+| `onChange` `onReset` `onInvalid` `onScroll` `onToggle` `onClose` `onCancel` `onTransitionEnd` `onAnimationStart` `onAnimationEnd` `onAnimationIteration` | the lowercase name | `dom.Event` |
 
-Any of them with `Capture` after it (`onClickCapture`) is the same event. An unknown `on…` name is refused with the nearest one; a handler written as a string is refused.
+Any of them with `Capture` after it (`onClickCapture`) is the same event, heard on its way down. `onLoad`, `onError`, `onPlay`, `onPause`, `onEnded`, `onKeyPress` and `onLayout` are refused on an element until the engine dispatches them. An unknown `on…` name is refused with the nearest one; a handler written as a string is refused.
 
 What every event has: `Type`, `DefaultPrevented`, `Bubbles`, `PreventDefault()`, `StopPropagation()`.
 

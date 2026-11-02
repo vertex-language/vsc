@@ -660,7 +660,12 @@ func (c *checker) declareModuleVar(v *moduleVarDecl, byName map[string][]*module
 	}
 	prev := c.file
 	c.file = v.file
+	// A variable marked @MainActor is initialized there, so its initializer
+	// may call what is isolated to it.
+	prevIsolated := c.currIsolated
+	c.currIsolated = c.currIsolated || c.hasAttr(v.decl.Attrs, mainActorAttr)
 	c.checkStored(v.binding, v.decl.Kind == token.LET, scope)
+	c.currIsolated = prevIsolated
 	c.markIsolatedVars(v.decl)
 	c.file = prev
 	v.checking, v.done = false, true

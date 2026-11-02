@@ -125,6 +125,11 @@ type checker struct {
 	// memberIsolated is whether the members being read belong to a
 	// @MainActor type, which makes each of them @MainActor.
 	memberIsolated bool
+	// programStyle is whether a .vsx program declares a Style of its own.
+	programStyle bool
+	// memberSelf is the type whose members are being read, for what `self`
+	// is in a lazy property's value.
+	memberSelf types.Type
 	// assigning is the member being written by the assignment under
 	// check, whose read rules do not apply to it.
 	assigning ast.Expr
@@ -817,6 +822,10 @@ type pendingField struct {
 	file    *token.File
 	// isolated: the type is @MainActor, so its default runs there.
 	isolated bool
+	// self is what `self` is in the default, a lazy property's; nil elsewhere.
+	self types.Type
+	// storage is a lazy property's optional, typed from its value's type.
+	storage *types.Field
 }
 
 // checkPendingFields types each queued stored property by its default,
@@ -826,12 +835,19 @@ func (c *checker) checkPendingFields() {
 	prev := c.file
 	for _, p := range c.pendingFields {
 		c.file = p.file
-		prevIsolated := c.currIsolated
+		prevIsolated, prevType := c.currIsolated, c.currType
 		c.currIsolated = p.isolated
+		if p.self != nil {
+			c.currType = p.self
+		}
 		t := c.checkExpr(p.binding.Value, nil, p.scope)
-		c.currIsolated = prevIsolated
+		c.currIsolated, c.currType = prevIsolated, prevType
 		if p.field != nil {
 			p.field.Type = t
+		}
+		if p.storage != nil {
+			p.storage.Type = &types.Optional{Wrapped: t}
+			c.info.Types[c.info.FieldDefaults[p.storage]] = p.storage.Type
 		}
 		if id, ok := p.pat.(*ast.IdentPattern); ok && id.Name != nil {
 			if v, ok := c.info.Defs[id.Name].(*VarSymbol); ok {

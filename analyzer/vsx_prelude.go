@@ -40,6 +40,7 @@ func (c *checker) loadVSXPrelude(files []*ast.File, pkgScope *Scope) []*ast.File
 			declared[n] = true
 		}
 	}
+	c.programStyle = declared["Style"]
 	if c.modules["component"] != nil {
 		if !declared["Element"] {
 			tf := token.NewFile("<vsx_element.vs>", []byte("typealias Element = component.Node\n"))

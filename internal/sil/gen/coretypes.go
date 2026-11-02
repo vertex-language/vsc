@@ -123,7 +123,9 @@ func (g *gen) coreTypeMember(mem ast.Node, recv types.Type) bool {
 	if sub, ok := mem.(*ast.SubscriptDecl); ok {
 		return g.coreSubscript(sub, recv, wanted)
 	}
-	if !g.coreOwnType(recv) {
+	// A built-in's method is lowered here too where only a witness asks for
+	// it: `any Hashable` holding a Bool.
+	if _, isFunc := mem.(*ast.FuncDecl); !g.coreOwnType(recv) && !(isFunc && g.coreBuiltinValue(recv)) {
 		return false
 	}
 	switch m := mem.(type) {
@@ -132,12 +134,15 @@ func (g *gen) coreTypeMember(mem ast.Node, recv types.Type) bool {
 		if sym == nil {
 			return false
 		}
+		// A built-in's extension member is named for the core, its module.
+		g.memberOf = g.extensionMemberModule(recv, m)
 		name := g.methodSymbol(&analyzer.MethodRef{Recv: recv,
 			Method: &types.Method{Name: sym.Name(), Sig: sym.Signature(), IsStatic: isStaticDecl(m.Mods)}})
+		g.memberOf = ""
 		if !wanted(name) {
 			return false
 		}
-		g.function(m, recv)
+		g.functionNamed(m, recv, name)
 		return true
 	case *ast.InitDecl:
 		sig := g.initSignature(m, recv)

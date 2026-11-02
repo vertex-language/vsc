@@ -5,6 +5,7 @@ import (
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/internal/sil"
 	"github.com/vertex-language/vsc/token"
+	"github.com/vertex-language/vsc/types"
 )
 
 // A literal written where a type expressible by it is wanted -- `let m:
@@ -52,7 +53,18 @@ func (g *gen) literalInit(e ast.Expr, li *analyzer.LiteralInit) *sil.Value {
 		return nil
 	}
 	ref := g.initRef(li.Type, &out, name)
-	v := g.blk.Apply(ref, lowerType(li.Type), raw, g.blk.Metatype(lowerType(li.Type)))
+	// An imported class's initializer takes the class's metadata, as in
+	// applyInitNamed.
+	meta := g.blk.Metatype(lowerType(li.Type))
+	if _, specialized := li.Type.(*types.GenericInstance); isClass(li.Type) && g.importedType(li.Type) && !specialized {
+		m, ok := g.classMetatype(li.Type)
+		if !ok {
+			g.refuse(e, "a literal of a class whose metadata cannot be named")
+			return nil
+		}
+		meta = m
+	}
+	v := g.blk.Apply(ref, lowerType(li.Type), raw, meta)
 	if _, isOpt := optionalOf(written); isOpt {
 		v = g.optionalFor(e, v, li.Type, written)
 	}

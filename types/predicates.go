@@ -373,7 +373,8 @@ func AssignableTo(from, to Type) bool {
 	}
 	// A tuple is one of the same elements with labels added or taken
 	// away: (x: Int, y: Int) and (Int, Int) are each other's, as in
-	// Swift. Labels both written must agree.
+	// Swift. Labels both written must agree. An element may be a subclass
+	// of the other's class.
 	if ft, ok := from.(*Tuple); ok {
 		if tt, ok := to.(*Tuple); ok && len(ft.Elements) == len(tt.Elements) && len(ft.Elements) > 1 {
 			for i, el := range ft.Elements {
@@ -381,7 +382,7 @@ func AssignableTo(from, to Type) bool {
 				if el.Name != "" && other.Name != "" && el.Name != other.Name {
 					return false
 				}
-				if !Identical(el.Type, other.Type) {
+				if !Identical(el.Type, other.Type) && !subclassOf(el.Type, other.Type) {
 					return false
 				}
 			}
@@ -738,4 +739,15 @@ func OwnInstance(g *GenericInstance, bare Type) bool {
 // the one an interface of it describes.
 func samePkg(x, y string) bool {
 	return x == "" || y == "" || x == y
+}
+
+// subclassOf reports whether from is a class that inherits from the class to.
+func subclassOf(from, to Type) bool {
+	if _, ok := from.Underlying().(*Class); !ok {
+		return false
+	}
+	if _, ok := to.Underlying().(*Class); !ok {
+		return false
+	}
+	return AssignableTo(from, to)
 }

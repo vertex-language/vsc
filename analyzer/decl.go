@@ -37,6 +37,20 @@ func pointerType(name string, elem types.Type) (types.Type, bool) {
 	return nil, false
 }
 
+// isOwnType reports whether name is a type of the module being checked,
+// not one it imports or the language's own.
+func (c *checker) isOwnType(name string, scope *Scope) bool {
+	tn := scope.LookupType(name)
+	if tn == nil {
+		return false
+	}
+	if _, imported := c.info.Imported[tn]; imported {
+		return false
+	}
+	core := c.modules["Swift"]
+	return core == nil || core.LookupType(name) != tn
+}
+
 func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type {
 	switch t := astType.(type) {
 	// `Self` is the protocol's stand-in for its conformer inside a
@@ -75,10 +89,11 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 		}
 
 		var base types.Type
-		// Check lexical scope first. In .vsx files importing ui/component,
-		// unqualified Element is component.Node even if web/dom is also imported,
-		// and UI types from ui/component are accessible unqualified.
-		if c.file != nil && strings.HasSuffix(c.file.Name(), ".vsx") {
+		// A type the program declares is the one it means. After it, in .vsx
+		// files importing ui/component, unqualified Element is component.Node
+		// even if web/dom is also imported, and UI types from ui/component are
+		// accessible unqualified.
+		if c.file != nil && strings.HasSuffix(c.file.Name(), ".vsx") && !c.isOwnType(name, scope) {
 			if mod := c.modules["component"]; mod != nil {
 				if name == "Element" {
 					if tn := mod.LookupType("Node"); tn != nil {
@@ -742,7 +757,7 @@ func (c *checker) storedField(b *ast.PatternBinding, isConst bool, typeScope *Sc
 		c.info.FieldDefaults[f] = b.Value
 	}
 	if pending {
-		c.pendingFields = append(c.pendingFields, pendingField{binding: b, pat: pat, field: f, scope: typeScope, file: c.file, isolated: c.memberIsolated})
+		c.pendingFields = append(c.pendingFields, pendingField{binding: b, pat: pat, field: f, scope: typeScope, file: c.file, isolated: c.memberIsolated, self: c.currType})
 	}
 	// A `var` of an optional type with no value starts as nil, and the
 	// memberwise initializer may leave it out.
@@ -975,7 +990,9 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
 				c.memberIsolated = c.info.MainActor[n]
+				c.memberSelf = n
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
+				c.memberSelf = nil
 				n.BodyInits = len(n.Inits)
 				for _, m := range d.Body.Members {
 					if _, ok := m.(*ast.DeinitDecl); ok {
@@ -994,7 +1011,9 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n.Conformances = c.protocolsOf(d.Inherit, inner, &n.Superclass)
 				c.inheritIsolation(d, n)
 				c.memberIsolated = c.info.MainActor[n]
+				c.memberSelf = n
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
+				c.memberSelf = nil
 				c.memberIsolated = false
 			}
 
@@ -1003,7 +1022,9 @@ func (c *checker) resolveTypeMembers(decls []ast.Decl, scope *Scope) {
 				n := t.(*types.Class)
 				n.TypeParams = params
 				n.Conformances = c.protocolsOf(d.Inherit, scope, nil)
+				c.memberSelf = n
 				c.readMembers(d.Body, inner, &n.Fields, &n.Methods, nil, &n.Inits, &n.Computed, &n.Statics, &n.Subscripts)
+				c.memberSelf = nil
 			}
 
 		case *ast.EnumDecl:
@@ -1116,7 +1137,13 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 			isConst := m.Kind == token.LET
 			static := isStatic(m.Mods)
 			for _, b := range m.Bindings {
+				// A lazy one runs when first read, when there is a self.
+				prevType := c.currType
+				if c.hasModifier(m.Mods, "lazy") && c.memberSelf != nil {
+					c.currType = c.memberSelf
+				}
 				got := c.storedField(b, isConst, typeScope)
+				c.currType = prevType
 				for _, f := range got {
 					f.Exported = exported(c.accessOf(m.Mods))
 					f.Isolated = c.declIsolated(m.Attrs, m.Mods)
@@ -1186,6 +1213,9 @@ func (c *checker) readMembers(body *ast.MemberBlock, typeScope *Scope, fields *[
 					}
 					f.IsComputed, f.HasSetter, f.HasDefault = true, true, false
 					f.LazyStorage = storage.Name
+					if n := len(c.pendingFields); n > 0 && c.pendingFields[n-1].field == f {
+						c.pendingFields[n-1].storage = storage
+					}
 					*fields = append(*fields, storage)
 					*computed = append(*computed, f)
 				default:

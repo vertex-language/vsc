@@ -61,13 +61,13 @@ int32_t hidden(int32_t x) { return x; }
 		"public enum Flag {",
 		"public static let write: uint32 = 2",
 		"public let limit: int64 = 1048576",
-		"public func classify(_ c: Code, _ why: string, _ out: UnsafeMutablePointer<uint8>?) -> int32 {",
+		"public func classify(c: Code, why: string, out: UnsafeMutablePointer<uint8>?) -> int32 {",
 		"(c.rawValue, why, why.utf8.count, out)",
-		"public func scale(_ x: float64) -> float64",
+		"public func scale(x: float64) -> float64",
 		"public enum detail {",
 		"public static func reset()",
 		// [[noreturn]] is Never, as ClangImporter imports it.
-		"public func quit(_ code: int32) -> Never {\n    __vs_",
+		"public func quit(code: int32) -> Never {\n    __vs_",
 		") -> Never\n",
 	} {
 		if !strings.Contains(string(vs), want) {

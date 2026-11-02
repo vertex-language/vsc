@@ -168,6 +168,16 @@ func typeLiteralMeta(t types.Type) (*types.Metatype, bool) {
 		if kok && vok {
 			return &types.Metatype{Instance: &types.Dictionary{Key: k.Instance, Value: v.Instance}}, true
 		}
+	case *types.Tuple:
+		elems := make([]*types.TupleElement, 0, len(u.Elements))
+		for _, el := range u.Elements {
+			m, ok := typeLiteralMeta(el.Type)
+			if !ok {
+				return nil, false
+			}
+			elems = append(elems, &types.TupleElement{Name: el.Name, Type: m.Instance})
+		}
+		return &types.Metatype{Instance: &types.Tuple{Elements: elems}}, len(elems) > 0
 	}
 	return nil, false
 }
@@ -1054,6 +1064,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 		}
 		ownL, ownR := lhs, rhs
 		lhs, rhs = c.reconcileLiterals(e.X, lhs, e.Y, rhs, scope)
+		lhs, rhs = c.nilBesideValue(scope, opName, e, lhs, rhs)
 		// A literal read as the other operand's type where no operator
 		// takes two of those is its own type again, where one takes that:
 		// `"set " + name.dropFirst(4)` is a String and a Substring.
@@ -1124,9 +1135,9 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 			}
 			return types.Typ[types.Bool]
 		case "==", "!=", "<", "<=", ">", ">=":
-			if (opName == "==" || opName == "!=") &&
-				(isUntypedNil(lhs) && isOptionalType(rhs) ||
-					isUntypedNil(rhs) && isOptionalType(lhs)) {
+			// nil beside a value promotes the value to an optional, which is
+			// never empty if it wasn't one; see neverEmpty in SIL gen.
+			if (opName == "==" || opName == "!=") && isUntypedNil(lhs) != isUntypedNil(rhs) {
 				return types.Typ[types.Bool]
 			}
 			if opName == "==" || opName == "!=" {
@@ -2763,6 +2774,28 @@ func (c *checker) moduleMemberValue(e *ast.MemberExpr, scope *Scope) (types.Type
 		return &types.Metatype{Instance: instance}, true
 	}
 	return sym.Type(), true
+}
+
+// nilBesideValue reads `nil` as the type of the value beside it where the
+// type is expressible by nil and an operator takes two of it: `own == nil` is
+// own's `==` given the value its literal makes. Where none does, nil stays nil.
+func (c *checker) nilBesideValue(scope *Scope, op string, e *ast.BinaryExpr, lhs, rhs types.Type) (types.Type, types.Type) {
+	takesTwo := func(t types.Type) bool {
+		xs, operands := []ast.Expr{e.X, e.Y}, []types.Type{t, t}
+		if c.hasOperator(scope, op, xs, operands) {
+			return true
+		}
+		// A `!=` an Equatable type has from its `==`.
+		p, ok := c.coreProtocol("Equatable")
+		return ok && op == "!=" && c.conformsTo(t.Underlying(), p) && c.hasOperator(scope, "==", xs, operands)
+	}
+	switch {
+	case isUntypedNil(rhs) && !isUntypedNil(lhs) && !isOptionalType(lhs) && takesTwo(lhs):
+		rhs = c.checkExpr(e.Y, lhs, scope)
+	case isUntypedNil(lhs) && !isUntypedNil(rhs) && !isOptionalType(rhs) && takesTwo(rhs):
+		lhs = c.checkExpr(e.X, rhs, scope)
+	}
+	return lhs, rhs
 }
 
 // isUntypedNil reports whether t is types.UntypedNil.

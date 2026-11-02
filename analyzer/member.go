@@ -549,6 +549,9 @@ func (c *checker) membersKnown(t types.Type) bool {
 		return true
 	case *types.Pointer:
 		return true
+	// A function has none: `v.Offset.Y` with Offset a method not called.
+	case *types.Signature:
+		return true
 	// A String's and a collection's members are the ones core and the
 	// runtime give them, all of which the lookup knows: anything else is
 	// not there, and saying so here is better than a call that checks and

@@ -113,6 +113,46 @@ func TestCheckReportsErrors(t *testing.T) {
 	}
 }
 
+// TestCheckReportsWhatABuildDoes: an error that only SIL generation can see
+// is vsc check's to report too, not vsc build's alone.
+func TestCheckReportsWhatABuildDoes(t *testing.T) {
+	hosted(t)
+	path := write(t, "box.vs", "struct Box { var Clip: int32 = 0 }\nextension Box { func narrow() { Clip = 3 } }\n")
+	code, _, stderr := run(t, "check", path)
+	if code != 1 || !strings.Contains(stderr, "cannot assign to 'Clip'") {
+		t.Errorf("exit = %d, want 1 and the assignment refused; stderr:\n%s", code, stderr)
+	}
+}
+
+// TestCheckReadsImportedPackages: a package of the program's own module is
+// checked through the program that imports it.
+func TestCheckReadsImportedPackages(t *testing.T) {
+	hosted(t)
+	root := t.TempDir()
+	for name, text := range map[string]string{
+		"vs.mod":        "module chk\n",
+		"a/a.vs":        "public func Rad(v: float32) -> float32 { return v * 3.0 / 180.0 }\n",
+		"cmd/m/main.vs": "import \"chk/a\"\nprint(a.Rad(v: 1))\n",
+		"b/b.vs":        "public func Bad() -> int { return \"no\" }\n",
+		"cmd/n/main.vs": "import \"chk/b\"\nprint(1)\n",
+	} {
+		file := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, _, stderr := run(t, "check", filepath.Join(root, "cmd", "m")); code != 0 {
+		t.Errorf("a good package: exit = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	code, _, stderr := run(t, "check", filepath.Join(root, "cmd", "n"))
+	if code != 1 || !strings.Contains(stderr, "b.vs:1:") {
+		t.Errorf("a bad package: exit = %d, want 1 and b.vs's error; stderr:\n%s", code, stderr)
+	}
+}
+
 // TestBuildAndRunTheProgram: the artifact is executable without a
 // chmod, and it computes what the source says.
 func TestBuildAndRunTheProgram(t *testing.T) {

@@ -460,9 +460,10 @@ func (p *parser) tooDeep() bool {
 }
 
 // IsVertexFile reports whether a source file is Vertex, .vs or .vsx,
-// rather than Swift.
+// rather than Swift. A file the compiler makes itself is named in angle
+// brackets: <vsx_prelude.vs>.
 func IsVertexFile(name string) bool {
-	return strings.HasSuffix(name, ".vs") || IsMarkupFile(name)
+	return strings.HasSuffix(strings.TrimSuffix(name, ">"), ".vs") || IsMarkupFile(name)
 }
 
 // IsMarkupFile reports whether a source file is a .vsx file: Vertex with

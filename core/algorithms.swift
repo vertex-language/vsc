@@ -778,6 +778,29 @@ extension ArraySlice {
     }
 }
 
+extension ArraySlice where Element: _ArrayProtocol {
+    // What joined() on an array of these is.
+    func joined() -> [Element.Element] {
+        var out: [Element.Element] = []
+        for xs in self { out.append(contentsOf: xs._elements) }
+        return out
+    }
+}
+
+extension ArraySlice where Element == String {
+    // What joined(separator:) on an array of these is.
+    func joined(separator: String = "") -> String {
+        var out = ""
+        var first = true
+        for s in self {
+            if !first { out += separator }
+            out += s
+            first = false
+        }
+        return out
+    }
+}
+
 extension ArraySlice: CustomStringConvertible, CustomDebugStringConvertible {
     var description: String { return "\(Array(self))" }
     var debugDescription: String { return "ArraySlice(\(Array(self)))" }
@@ -1364,6 +1387,18 @@ extension _UnicodeScalarView {
     }
 }
 
+extension _UnicodeScalarView {
+    // Whether a scalar is scalar; whether predicate holds of one.
+    func contains(_ scalar: UnicodeScalar) -> Bool {
+        for s in self { if s == scalar { return true } }
+        return false
+    }
+    func contains(where predicate: (UnicodeScalar) -> Bool) -> Bool {
+        for s in self { if predicate(s) { return true } }
+        return false
+    }
+}
+
 extension _UnicodeScalarView: CustomStringConvertible, CustomDebugStringConvertible {
     var description: String { return _string }
     var debugDescription: String { return _string.debugDescription }
@@ -1409,6 +1444,18 @@ extension _UTF16Iterator: IteratorProtocol {
         let w = v - 0x10000
         _trail = UInt16(0xDC00 + (w & 0x3FF))
         return UInt16(0xD800 + (w >> 10))
+    }
+}
+
+extension _UTF16View {
+    // Whether a unit is unit; whether predicate holds of one.
+    func contains(_ unit: UInt16) -> Bool {
+        for u in self { if u == unit { return true } }
+        return false
+    }
+    func contains(where predicate: (UInt16) -> Bool) -> Bool {
+        for u in self { if predicate(u) { return true } }
+        return false
     }
 }
 
@@ -4203,6 +4250,23 @@ func _vertexTaskPreferenceSwap(_ proxy: UInt64) -> UInt64
 
 @_silgen_name("vertex_task_preference_inherited")
 func _vertexTaskPreferenceInherited() -> UInt64
+
+// What a builtin is as any Hashable. As a Set's element or a Dictionary's key
+// it is hashed directly; this is the witness for one held as an existential.
+extension Int { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension Int8 { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension Int16 { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension Int32 { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension Int64 { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension UInt { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension UInt8 { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension UInt16 { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension UInt32 { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension UInt64 { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension Float { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension Double { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension Bool { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
+extension String { func hash(into hasher: inout Hasher) { hasher.combine(self) } }
 
 // See ObjectIdentifier in core.swift.
 extension ObjectIdentifier {

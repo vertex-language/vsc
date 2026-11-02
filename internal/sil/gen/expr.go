@@ -2253,6 +2253,9 @@ func (g *gen) binary(e *ast.BinaryExpr) *sil.Value {
 		return g.derivedOperator(e, d)
 	}
 	if sym == nil {
+		if v, handled := g.neverEmpty(e, g.text(e.Op)); handled {
+			return v
+		}
 		if v, handled := g.identity(e, g.text(e.Op)); handled {
 			return v
 		}

@@ -1,6 +1,8 @@
 package gen
 
 import (
+	"slices"
+
 	"github.com/vertex-language/vsc/analyzer"
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/core"
@@ -191,9 +193,24 @@ func (g *gen) relabel(v *sil.Value, from, to types.Type) (*sil.Value, bool) {
 	for i, el := range tt.Elements {
 		elems[i] = lowerType(el.Type)
 	}
-	parts := g.blk.DestructureTuple(g.consume(v), elems...)
+	// Elements are of the types the source's are, until each is converted:
+	// a subclass in a tuple goes to its superclass's place by upcast.
+	fromElems := make([]sil.Type, len(ft.Elements))
+	for i, el := range ft.Elements {
+		fromElems[i] = lowerType(el.Type)
+	}
+	// What comes back is held as v was: for the statement, or for the caller.
+	pending := v.Ownership() == sil.Guaranteed || g.pendingDestroy(v)
+	parts := slices.Clone(g.blk.DestructureTuple(g.consume(v), fromElems...))
+	for i, el := range ft.Elements {
+		if !types.Identical(el.Type, tt.Elements[i].Type) {
+			parts[i] = g.upcast(parts[i], tt.Elements[i].Type)
+		}
+	}
 	out := g.blk.Tuple(lowerType(tt), parts...)
-	g.destroyLater(out)
+	if pending {
+		g.destroyLater(out)
+	}
 	return out, true
 }
 
@@ -476,6 +493,33 @@ func (g *gen) optionalComparison(e *ast.BinaryExpr, op string) (*sil.Value, bool
 		return g.halfOptional(e, y, x, yOpt, op, true), true
 	}
 	return nil, false
+}
+
+// neverEmpty lowers a value that isn't optional compared with nil, as Swift
+// has it: the value is promoted to an optional, which is not empty, so the
+// answer is known once the value has been evaluated.
+func (g *gen) neverEmpty(e *ast.BinaryExpr, op string) (*sil.Value, bool) {
+	if op != "==" && op != "!=" {
+		return nil, false
+	}
+	x, y := g.fold(e.X), g.fold(e.Y)
+	subject := x
+	if isNilLiteral(x) {
+		subject = y
+	} else if !isNilLiteral(y) {
+		return nil, false
+	}
+	if _, isOpt := optionalOf(g.typeOf(subject)); isOpt || isNilLiteral(subject) {
+		return nil, false
+	}
+	if g.expr(subject) == nil {
+		return nil, true
+	}
+	answer := int64(0)
+	if op == "!=" {
+		answer = -1
+	}
+	return g.boolOf(g.blk.IntegerLiteral(sil.Object(sil.BuiltinInt1), answer)), true
 }
 
 // comparable reports whether an optional's payload can take part in a

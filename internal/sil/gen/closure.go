@@ -676,16 +676,17 @@ func (g *gen) nestedFunc(d *ast.FuncDecl) {
 		loops   []loop
 		pending string
 		recv    types.Type
+		self    *local
 		throws  bool
 		catches []catchTarget
 		tryBang bool
 		tryCall *ast.CallExpr
-	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv,
+	}{g.fn, g.entry, g.blk, g.scopes, g.locals, g.loops, g.pending, g.recv, g.self,
 		g.throws, g.catches, g.tryBang, g.tryCall}
 	defer func() {
 		g.fn, g.entry, g.blk = outer.fn, outer.entry, outer.blk
 		g.scopes, g.locals = outer.scopes, outer.locals
-		g.loops, g.pending, g.recv = outer.loops, outer.pending, outer.recv
+		g.loops, g.pending, g.recv, g.self = outer.loops, outer.pending, outer.recv, outer.self
 		g.throws, g.catches, g.tryBang, g.tryCall = outer.throws, outer.catches, outer.tryBang, outer.tryCall
 	}()
 
