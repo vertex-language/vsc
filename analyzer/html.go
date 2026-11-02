@@ -182,8 +182,7 @@ var htmlGlobalAttributes = map[string]bool{
 // htmlEvents are the event attributes markup takes, by the name written,
 // with the DOM event's name and the type of event its handler is given. Only
 // what the engine dispatches is here: one it never fires would be a handler
-// that silently never runs, so onLoad, onError, onPlay, onPause, onEnded,
-// onKeyPress and onLayout join when it does (vsx_ui_web_TODO.md).
+// that silently never runs.
 var htmlEvents = map[string]struct{ event, typ string }{
 	"onClick":              {"click", "MouseEvent"},
 	"onDoubleClick":        {"dblclick", "MouseEvent"},
@@ -204,6 +203,13 @@ var htmlEvents = map[string]struct{ event, typ string }{
 	"onWheel":              {"wheel", "WheelEvent"},
 	"onKeyDown":            {"keydown", "KeyboardEvent"},
 	"onKeyUp":              {"keyup", "KeyboardEvent"},
+	"onKeyPress":           {"keypress", "KeyboardEvent"},
+	"onLoad":               {"load", "Event"},
+	"onError":              {"error", "Event"},
+	"onPlay":               {"play", "Event"},
+	"onPause":              {"pause", "Event"},
+	"onEnded":              {"ended", "Event"},
+	"onLayout":             {"layout", "LayoutEvent"},
 	"onInput":              {"input", "InputEvent"},
 	"onBeforeInput":        {"beforeinput", "InputEvent"},
 	"onChange":             {"change", "Event"},

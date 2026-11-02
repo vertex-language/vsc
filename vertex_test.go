@@ -500,11 +500,21 @@ func main() -> int32 {
 // An element's handler is one the engine fires, or it is refused rather than
 // silently never running. A component's parameter of that name is its own.
 func TestVSXRefusesEventsNeverDispatched(t *testing.T) {
-	for _, name := range []string{"onLoad", "onError", "onPlay", "onPause", "onEnded", "onKeyPress", "onLayout", "onLoadCapture"} {
+	for _, name := range []string{"onLod", "onFinished", "onLoadCaptured"} {
 		src := "package main\nfunc main() -> int32 {\n    let a = <img " + name + "={ e in print(1) } />\n    print(a.Html())\n    return 0\n}\n"
 		if got := checkVertex(t, "main.vsx", src); !strings.Contains(got, "has no event '"+name+"'") {
 			t.Errorf("%s: got %q", name, got)
 		}
+	}
+	for _, name := range []string{"onLoad", "onError", "onPlay", "onPause", "onEnded", "onKeyPress", "onLayout", "onLoadCapture"} {
+		src := "package main\nfunc main() -> int32 {\n    let a = <img " + name + "={ e in print(1) } />\n    print(a.Html())\n    return 0\n}\n"
+		if got := checkVertex(t, "main.vsx", src); got != "" {
+			t.Errorf("%s: got %q", name, got)
+		}
+	}
+	const fields = "package main\nfunc main() -> int32 {\n    let a = <div onLayout={ e in print(e.Width, e.Height, e.X, e.Y) } onKeyPress={ e in print(e.Key) } onPlay={ e in print(e.Type) } />\n    print(a.Html())\n    return 0\n}\n"
+	if got := checkVertex(t, "main.vsx", fields); got != "" {
+		t.Errorf("what the events carry: %s", got)
 	}
 	const own = `package main
 func Pic(onLoad: () -> void) -> Node { return <img /> }

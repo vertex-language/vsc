@@ -91,7 +91,12 @@ final class AnimationEvent: Event {
     var AnimationName: string = ""
     var ElapsedTime: float64 = 0
 }
-final class LayoutEvent: Event {}
+final class LayoutEvent: Event {
+    var X: float32 = 0
+    var Y: float32 = 0
+    var Width: float32 = 0
+    var Height: float32 = 0
+}
 
 func _vsxMakeEvent(type: string) -> Event {
     var e: Event
