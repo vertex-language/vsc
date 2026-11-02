@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 720" width="720" height="720">
+  <defs><clipPath id="ring"><circle cx="360" cy="360" r="228.00"/></clipPath></defs>
+  <g clip-path="url(#ring)" fill="none" stroke="#141413" stroke-width="27.00" stroke-linejoin="round" stroke-linecap="butt">
+    <polyline points="257.39,78.09 360.00,236.00 462.61,78.09"/>
+    <polyline points="486.79,88.11 447.68,272.32 631.89,233.21"/>
+    <polyline points="641.91,257.39 484.00,360.00 641.91,462.61"/>
+    <polyline points="631.89,486.79 447.68,447.68 486.79,631.89"/>
+    <polyline points="462.61,641.91 360.00,484.00 257.39,641.91"/>
+    <polyline points="233.21,631.89 272.32,447.68 88.11,486.79"/>
+    <polyline points="78.09,462.61 236.00,360.00 78.09,257.39"/>
+    <polyline points="88.11,233.21 272.32,272.32 233.21,88.11"/>
+  </g>
+</svg>
