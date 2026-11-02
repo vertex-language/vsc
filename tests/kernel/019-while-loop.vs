@@ -1,7 +1,7 @@
 // A while loop whose trip count differs per work-item.
 import "gpu"
 
-func collatz(_ y: gpu.MutableSpan<int32>) kernel {
+func collatz(y: gpu.MutableSpan<int32>) kernel {
     var n = y[gpu.Index.x]
     var steps: int32 = 0
     while n != 1 {

@@ -1,7 +1,7 @@
 // Float arithmetic and comparisons, on values every device rounds alike.
 import "gpu"
 
-func lerp(_ a: float32, _ b: float32, _ y: gpu.MutableSpan<float32>) kernel {
+func lerp(a: float32, b: float32, y: gpu.MutableSpan<float32>) kernel {
     let i = gpu.Index.x
     let t = float32(i) / 4
     let v = a + (b - a) * t

@@ -1,7 +1,7 @@
 // A for loop over a range inside a kernel.
 import "gpu"
 
-func triangle(_ y: gpu.MutableSpan<int>) kernel {
+func triangle(y: gpu.MutableSpan<int>) kernel {
     let n = gpu.Index.x
     var sum = 0
     for k in 0...n {

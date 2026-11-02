@@ -110,6 +110,12 @@ add(1, 2)                          // the same call
 
 A label is required only when leaving it out would make the call ambiguous.
 
+Because any argument can be passed by position, Vertex has no `_` label.
+`func add(_ a: int32, _ b: int32)` in a `.vs` or `.vsx` file is an error
+(`expected parameter name, found '_'`): write `func add(a: int32, b: int32)`.
+`_` is accepted only in `.swift` files, the Swift-compatible layer vsc
+compiles for testing and interop, where labels keep Swift's rules.
+
 ### Enums and matching
 
 ```swift
@@ -118,7 +124,7 @@ enum Shape {
     case rect(w: float64, h: float64)
 }
 
-func area(_ s: Shape) -> float64 {
+func area(s: Shape) -> float64 {
     switch s {
     case .circle(let r): return 3.14159 * r * r
     case .rect(let w, let h): return w * h
@@ -132,7 +138,7 @@ func area(_ s: Shape) -> float64 {
 executor, which is linked into every program:
 
 ```swift
-func work(_ n: int) async -> int { return n * n }
+func work(n: int) async -> int { return n * n }
 
 async let a = work(3)
 async let b = work(4)
@@ -189,7 +195,7 @@ built into the compiler, so there's nothing to install.
 import "gpu"
 
 // A grid kernel: one call per work-item.
-func saxpy(_ a: float32, _ x: gpu.Span<float32>, _ y: gpu.MutableSpan<float32>) kernel {
+func saxpy(a: float32, x: gpu.Span<float32>, y: gpu.MutableSpan<float32>) kernel {
     let i = gpu.Index.x
     if i < y.count {
         y[i] = a * x[i] + y[i]
@@ -197,19 +203,19 @@ func saxpy(_ a: float32, _ x: gpu.Span<float32>, _ y: gpu.MutableSpan<float32>) 
 }
 
 // An element kernel: one output element per call.
-func gelu(_ x: float32) kernel -> float32 {
+func gelu(x: float32) kernel -> float32 {
     let t = 0.7978845608 * (x + 0.044715 * x * x * x)
     return 0.5 * x * (1 + tanh(t))
 }
 
 // An ordinary function: compiled for the device because a kernel calls it.
-func tanh(_ t: float32) -> float32 {
+func tanh(t: float32) -> float32 {
     let t2 = t * t
     return t * (27 + t2) / (27 + 9 * t2)
 }
 
 // A group reduction: shared storage and barriers, then one wave in registers.
-func sum(_ x: gpu.Span<float32>, _ out: gpu.MutableSpan<float32>) kernel {
+func sum(x: gpu.Span<float32>, out: gpu.MutableSpan<float32>) kernel {
     let partial = gpu.Shared<float32>(count: 256)
     let me = gpu.LocalIndex.x
     let i = gpu.Index.x
@@ -232,7 +238,7 @@ func sum(_ x: gpu.Span<float32>, _ out: gpu.MutableSpan<float32>) kernel {
 }
 
 // A generic kernel: built for each element type it is launched with.
-func scale<T: Numeric>(_ y: gpu.MutableSpan<T>, _ k: T) kernel {
+func scale<T: Numeric>(y: gpu.MutableSpan<T>, k: T) kernel {
     let i = gpu.Index.x
     if i < y.count {
         y[i] = y[i] * k
@@ -488,7 +494,7 @@ export double sumOfSquares(const double* xs, int64_t n) noexcept {
 
 ```swift
 // shape/shape.vs
-public func TotalArea(_ circles: [Circle]) -> float64 {
+public func TotalArea(circles: [Circle]) -> float64 {
     let radii = circles.map { $0.Radius }
     return radii.withUnsafeBufferPointer { sumOfSquares($0.baseAddress, int64($0.count)) } * 3.141592653589793
 }
@@ -695,7 +701,7 @@ func main() {
 		os.Exit(1)
 	}
 	src := []byte(`
-func add(_ a: int32, _ b: int32) -> int32 { a + b }
+func add(a: int32, b: int32) -> int32 { a + b }
 print(add(40, 2))
 `)
 	unit, diags := vsc.Compile([]vsc.Source{{Name: "main.vs", Text: src}},

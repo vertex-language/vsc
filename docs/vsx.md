@@ -288,7 +288,7 @@ struct ButtonProps: Props {
     var children: Node = nil
 }
 
-func Button(_ props: ButtonProps) -> Element {
+func Button(props: ButtonProps) -> Element {
     return <button className={"btn " + props.kind}>{props.label}{props.children}</button>
 }
 
@@ -496,13 +496,13 @@ A source is a class inheriting `viewport.Source`. It is `@MainActor`, and so is 
 
 | Method | Called |
 | :--- | :--- |
-| `Draw(_ frame: viewport.Frame) -> [uint8]` | for a frame: `frame.Width` × `frame.Height` device pixels, `frame.Scale` device pixels to the CSS pixel, `frame.Time` in seconds. It answers RGBA pixels, premultiplied, top row first; fewer than `Width × Height × 4` leaves the box as the page painted it. |
-| `Attached(_ handle: viewport.Handle)`, `Detached()` | when its box is in the document, and when it is not |
-| `PointerDown`, `PointerMove`, `PointerUp` `(_ e: dom.PointerEvent, x:, y:)`, `PointerLeave()` | the pointer in the box; `x`, `y` in CSS pixels from its corner |
-| `Wheel(_ e: dom.WheelEvent, x:, y:)` | the wheel over the box |
-| `KeyDown`, `KeyUp` `(_ e: dom.KeyboardEvent)` | keys while the box has the keyboard |
-| `Text(_ e: dom.InputEvent)` | text typed while it has the keyboard: `e.Data` |
-| `Focus(_ focused: bool)` | the box took the keyboard, or lost it |
+| `Draw(frame: viewport.Frame) -> [uint8]` | for a frame: `frame.Width` × `frame.Height` device pixels, `frame.Scale` device pixels to the CSS pixel, `frame.Time` in seconds. It answers RGBA pixels, premultiplied, top row first; fewer than `Width × Height × 4` leaves the box as the page painted it. |
+| `Attached(handle: viewport.Handle)`, `Detached()` | when its box is in the document, and when it is not |
+| `PointerDown`, `PointerMove`, `PointerUp` `(e: dom.PointerEvent, x:, y:)`, `PointerLeave()` | the pointer in the box; `x`, `y` in CSS pixels from its corner |
+| `Wheel(e: dom.WheelEvent, x:, y:)` | the wheel over the box |
+| `KeyDown`, `KeyUp` `(e: dom.KeyboardEvent)` | keys while the box has the keyboard |
+| `Text(e: dom.InputEvent)` | text typed while it has the keyboard: `e.Data` |
+| `Focus(focused: bool)` | the box took the keyboard, or lost it |
 
 The events then go on to the elements around the box; a source that takes one calls `e.StopPropagation()` (and `e.PreventDefault()`).
 

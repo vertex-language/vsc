@@ -1,7 +1,7 @@
 // Every work-item writes its own element, found by gpu.Index.x.
 import "gpu"
 
-func fill(_ y: gpu.MutableSpan<int32>) kernel {
+func fill(y: gpu.MutableSpan<int32>) kernel {
     y[gpu.Index.x] = 1
 }
 

@@ -1637,6 +1637,12 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
 					return initResult(inst, sig)
 				}
+				if sig := c.lastSoleInitializer(st.Inits, len(args)); sig != nil {
+					c.info.Inits[e] = sig
+					c.checkImportedInit(e, inst, sig)
+					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+					return initResult(inst, sig)
+				}
 				if len(st.Inits) > 0 {
 					c.typeErrorf(e.Pos(),
 						"no initializer of '%s' takes these arguments", inst)
@@ -1648,6 +1654,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					func() *types.Signature { return c.soleInitializerOfArity(en.Inits, len(args)) },
 					func() *types.Signature { return c.pickInitializerByType(en.Inits, args, scope) },
 					func() *types.Signature { return c.pickInitializerFitting(en.Inits, args, scope) },
+					func() *types.Signature { return c.lastSoleInitializer(en.Inits, len(args)) },
 				} {
 					if sig := pick(); sig != nil {
 						c.info.Inits[e] = sig
@@ -1670,6 +1677,11 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					return initResult(inst, sig)
 				}
 				if sig := c.pickInitializerFitting(cl.Inits, args, scope); sig != nil {
+					c.info.Inits[e] = sig
+					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
+					return initResult(inst, sig)
+				}
+				if sig := c.lastSoleInitializer(cl.Inits, len(args)); sig != nil {
 					c.info.Inits[e] = sig
 					c.checkCallArguments(e, initializerFor(inst, sig), args, scope)
 					return initResult(inst, sig)
@@ -1717,7 +1729,7 @@ func (c *checker) evalExpr(expr ast.Expr, expected types.Type, scope *Scope) typ
 					}
 					sig := c.pickInitializer(cl.Inits, args)
 					if sig == nil {
-						sig = c.soleInitializerOfArity(cl.Inits, len(args))
+						sig = soleOfArity(cl.Inits, len(args))
 					}
 					if sig == nil {
 						continue
@@ -2668,7 +2680,29 @@ func (c *checker) labelsFit(sig *types.Signature, args []*ast.CallArg) bool {
 }
 
 // soleInitializerOfArity returns the sole initializer taking n arguments, or nil.
+// In Vertex, where every argument may go by position, it is asked only
+// after the pickers that look at types (lastSoleInitializer): one of the
+// right arity whose types don't fit is not the call (`Ipv4(bytes)` is
+// `init(b: [uint8], at: int = 0)`, not `init(value: uint32)`).
 func (c *checker) soleInitializerOfArity(inits []*types.Signature, n int) *types.Signature {
+	if c.vertexFile() {
+		return nil
+	}
+	return soleOfArity(inits, n)
+}
+
+// lastSoleInitializer is soleInitializerOfArity where Vertex asks it, once
+// nothing else took the arguments: `Stop(color: c, position: 0)` is
+// `init(color:at position:)` by its parameters' names.
+func (c *checker) lastSoleInitializer(inits []*types.Signature, n int) *types.Signature {
+	if !c.vertexFile() {
+		return nil
+	}
+	return soleOfArity(inits, n)
+}
+
+// soleOfArity is the one of inits taking n arguments, or nil.
+func soleOfArity(inits []*types.Signature, n int) *types.Signature {
 	var found *types.Signature
 	for _, sig := range inits {
 		if sig == nil || len(sig.Params) != n {

@@ -3,7 +3,7 @@
 // work-items as fibers on one thread, so this is fast there too.
 import "gpu"
 
-func rotate(_ y: gpu.MutableSpan<int32>) kernel {
+func rotate(y: gpu.MutableSpan<int32>) kernel {
     let tile = gpu.Shared<int32>(count: 1024)
     let me = gpu.LocalIndex.x
     var v = int32(gpu.Index.x)

@@ -175,21 +175,21 @@ func main() -> Int32 { return 0 }
 func TestInlinableRunsInAnotherModulesKernel(t *testing.T) {
 	root := t.TempDir()
 	writePackage(t, filepath.Join(root, "acc", "ops"), "ops", `
-@inlinable public func twice(_ x: Float) -> Float { return x + x }
-public func plain(_ x: Float) -> Float { return x }
+@inlinable public func twice(x: Float) -> Float { return x + x }
+public func plain(x: Float) -> Float { return x }
 public struct Pair {
     public let a: Float
     public let b: Float
     @inlinable public init(a: Float, b: Float) { self.a = a; self.b = b }
     @inlinable public func sum() -> Float { return a + b }
 }
-@inlinable public func viaPlain(_ x: Float) -> Float { return plain(x) }
+@inlinable public func viaPlain(x: Float) -> Float { return plain(x) }
 `)
 	opts := vsc.Options{PackagePaths: []string{root}, Packages: &fakePackages{}}
 	_, diags := compile(t, `
 import "gpu"
 import "acc/ops"
-func k(_ y: gpu.MutableSpan<float32>) kernel { y[gpu.Index.x] = ops.twice(ops.Pair(a: y[gpu.Index.x], b: 1).sum()) }
+func k(y: gpu.MutableSpan<float32>) kernel { y[gpu.Index.x] = ops.twice(ops.Pair(a: y[gpu.Index.x], b: 1).sum()) }
 func main() -> Int32 { return Int32(ops.twice(1) + ops.Pair(a: 1, b: 2).sum()) }
 `, opts)
 	for _, d := range diags {
@@ -200,7 +200,7 @@ func main() -> Int32 { return Int32(ops.twice(1) + ops.Pair(a: 1, b: 2).sum()) }
 	_, diags = compile(t, `
 import "gpu"
 import "acc/ops"
-func k(_ y: gpu.MutableSpan<float32>) kernel { y[gpu.Index.x] = ops.viaPlain(y[gpu.Index.x]) }
+func k(y: gpu.MutableSpan<float32>) kernel { y[gpu.Index.x] = ops.viaPlain(y[gpu.Index.x]) }
 func main() -> Int32 { return 0 }
 `, opts)
 	var msg string
@@ -217,11 +217,11 @@ func main() -> Int32 { return 0 }
 // which is the client's to compile.
 func TestInterfaceKeepsInlinableBodies(t *testing.T) {
 	u, diags := compile(t, `
-@inlinable public func twice(_ x: Int32) -> Int32 { return x + x }
-public func hidden(_ x: Int32) -> Int32 { return x * 3 }
+@inlinable public func twice(x: Int32) -> Int32 { return x + x }
+public func hidden(x: Int32) -> Int32 { return x * 3 }
 public struct Box {
     public let v: Int32
-    @inlinable public init(_ v: Int32) { self.v = v }
+    @inlinable public init(v: Int32) { self.v = v }
     public init(other: Int32) { self.v = other * 5 }
     @inlinable public func doubled() -> Int32 { return v * 2 }
 }
@@ -234,11 +234,11 @@ public struct Box {
 		t.Fatal(err)
 	}
 	out := b.String()
-	if !strings.Contains(out, "@inlinable public func twice(_ x: Int32) -> Int32 { return x + x }") {
+	if !strings.Contains(out, "@inlinable public func twice(x: Int32) -> Int32 { return x + x }") {
 		t.Errorf("the inlinable body is missing:\n%s", out)
 	}
 	for _, want := range []string{
-		"@inlinable public init(_ v: Int32) { self.v = v }",
+		"@inlinable public init(v: Int32) { self.v = v }",
 		"@inlinable public func doubled() -> Int32 { return v * 2 }",
 	} {
 		if !strings.Contains(out, want) {
@@ -260,10 +260,10 @@ func TestGenericKernelFromAnotherModule(t *testing.T) {
 	root := t.TempDir()
 	writePackage(t, filepath.Join(root, "acc", "ops"), "ops", `
 import "gpu"
-public protocol Scalable: Numeric { static func Twice(_ x: Self) -> Self }
-extension float32: Scalable { @inlinable public static func Twice(_ x: float32) -> float32 { return x + x } }
-@inlinable public func _k<T: Scalable>(_ y: gpu.MutableSpan<T>, _ a: T) kernel { y[gpu.Index.x] = T.Twice(y[gpu.Index.x]) * a }
-@inlinable public func Apply<T: Scalable>(_ b: gpu.Buffer<T>, _ a: T) async throws { try await _k.Launch(b, a, over: b.count) }
+public protocol Scalable: Numeric { static func Twice(x: Self) -> Self }
+extension float32: Scalable { @inlinable public static func Twice(x: float32) -> float32 { return x + x } }
+@inlinable public func _k<T: Scalable>(y: gpu.MutableSpan<T>, a: T) kernel { y[gpu.Index.x] = T.Twice(y[gpu.Index.x]) * a }
+@inlinable public func Apply<T: Scalable>(b: gpu.Buffer<T>, a: T) async throws { try await _k.Launch(b, a, over: b.count) }
 `)
 	_, diags := compile(t, `
 import "gpu"
@@ -321,7 +321,7 @@ public struct Circle {
     public var r: Int32
     public init(r: Int32) { self.r = r }
 }
-public func area(_ c: Circle) -> Int32 { return 3 * c.r * c.r + helper() }
+public func area(c: Circle) -> Int32 { return 3 * c.r * c.r + helper() }
 package func shared() -> Int32 { return 1 }
 func helper() -> Int32 { return 0 }
 struct Hidden {}
@@ -377,13 +377,13 @@ func TestInterfaceQualifiesImportedTypes(t *testing.T) {
 	for _, tc := range []struct{ src, want string }{
 		{`
 import "lib/b"
-public func use(_ x: b.Addr) -> Int32 { return 0 }
-`, "public func use(_ x: b.Addr) -> int32"},
+public func use(x: b.Addr) -> Int32 { return 0 }
+`, "public func use(x: b.Addr) -> int32"},
 		{`
 import "lib/a"
 import "lib/b"
-public func both(_ x: a.Addr, _ y: b.Addr?) -> Int32 { return 0 }
-`, "public func both(_ x: a.Addr, _ y: b.Addr?) -> int32"},
+public func both(x: a.Addr, y: b.Addr?) -> Int32 { return 0 }
+`, "public func both(x: a.Addr, y: b.Addr?) -> int32"},
 	} {
 		u, diags := compile(t, tc.src, vsc.Options{Module: "c", Stop: vsc.Checked, PackagePaths: []string{root}, Packages: &fakePackages{}})
 		for _, d := range diags {

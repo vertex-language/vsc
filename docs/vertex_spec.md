@@ -165,6 +165,7 @@ add(1, 2)         // Omitted labels
   2. Fallback to positional resolution if exact label matching fails.
   3. Compile error if positional resolution produces multiple candidate overloads.
 - **Mandatory Labels**: Required when disambiguating overloads, passing non-default arguments in short argument lists, or terminating variadic parameter lists.
+- **No `_` label**: since any argument may be passed by position, a parameter is declared `name: T`. `_ name: T` in a `.vs` or `.vsx` file is a parse error, `expected parameter name, found '_'`. Only `.swift` files, compiled by vsc's Swift-compatible layer for testing and interop, accept `_` and keep Swift's label rules.
 
 ---
 

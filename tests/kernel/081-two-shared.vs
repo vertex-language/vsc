@@ -3,7 +3,7 @@
 // one place and were the same storage, so b's writes landed in a.
 import "gpu"
 
-func two(_ y: gpu.MutableSpan<int32>) kernel {
+func two(y: gpu.MutableSpan<int32>) kernel {
     let a = gpu.Shared<int32>(count: 64)
     let b = gpu.Shared<int32>(count: 64)
     let me = gpu.LocalIndex.x

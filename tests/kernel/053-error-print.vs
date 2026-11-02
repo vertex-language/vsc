@@ -1,11 +1,11 @@
 // A kernel cannot print: refused where it is compiled, with the chain.
 import "gpu"
 
-func log(_ v: int32) {
+func log(v: int32) {
     print(v)
 }
 
-func noisy(_ y: gpu.MutableSpan<int32>) kernel {
+func noisy(y: gpu.MutableSpan<int32>) kernel {
     log(y[gpu.Index.x])
 }
 print("never built")

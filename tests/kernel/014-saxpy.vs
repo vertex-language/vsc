@@ -1,7 +1,7 @@
 // saxpy, the first kernel of proposed_vertex_kernel.md.
 import "gpu"
 
-func saxpy(_ a: float32, _ x: gpu.Span<float32>, _ y: gpu.MutableSpan<float32>) kernel {
+func saxpy(a: float32, x: gpu.Span<float32>, y: gpu.MutableSpan<float32>) kernel {
     let i = gpu.Index.x
     if i < y.count {
         y[i] = a * x[i] + y[i]

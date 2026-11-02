@@ -1,7 +1,7 @@
 // Wave.Sum, then one atomic per wave: a total that does not depend on how wide a wave is.
 import "gpu"
 
-func total(_ x: gpu.Span<int32>, _ out: gpu.MutableSpan<int32>) kernel {
+func total(x: gpu.Span<int32>, out: gpu.MutableSpan<int32>) kernel {
     let s = gpu.Wave.Sum(x[gpu.Index.x])
     if gpu.Wave.Lane == 0 {
         _ = gpu.Atomic.Add(out.Address(0), s)

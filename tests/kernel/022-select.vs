@@ -1,13 +1,13 @@
 // The conditional operator, and if/else as a value's choice.
 import "gpu"
 
-func relu(_ y: gpu.MutableSpan<float32>) kernel {
+func relu(y: gpu.MutableSpan<float32>) kernel {
     let i = gpu.Index.x
     let v = y[i]
     y[i] = v > 0 ? v : 0
 }
 
-func sign(_ y: gpu.MutableSpan<int32>) kernel {
+func sign(y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     var s: int32 = 0
     if y[i] > 0 {

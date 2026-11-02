@@ -15,7 +15,7 @@ final class Store {
 
 var made = 0
 
-func label(_ s: string) -> string {
+func label(s: string) -> string {
     made += 1
     return s
 }

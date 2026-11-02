@@ -1,7 +1,7 @@
 // A workgroup size chosen by the launch: LocalIndex, GroupIndex, GroupSize.
 import "gpu"
 
-func ids(_ local: gpu.MutableSpan<int32>, _ group: gpu.MutableSpan<int32>, _ size: gpu.MutableSpan<int32>) kernel {
+func ids(local: gpu.MutableSpan<int32>, group: gpu.MutableSpan<int32>, size: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     local[i] = int32(gpu.LocalIndex.x)
     group[i] = int32(gpu.GroupIndex.x)

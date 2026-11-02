@@ -1,7 +1,7 @@
 // A plain value where a buffer could go is the same for every element.
 import "gpu"
 
-func lerp(_ a: float32, _ b: float32, _ t: float32) kernel -> float32 {
+func lerp(a: float32, b: float32, t: float32) kernel -> float32 {
     return a + (b - a) * t
 }
 

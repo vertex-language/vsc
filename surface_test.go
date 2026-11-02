@@ -28,7 +28,7 @@ func TestSurface(t *testing.T) {
 
 struct Point { var x: int }
 
-public func area(_ p: Point) -> int {
+public func area(p: Point) -> int {
     return p.x * 2
 }
 
@@ -46,7 +46,7 @@ func (p: borrowing Point) thrice() -> int {
 
 struct Point { var x: int }
 
-public func area(_ p: Point) -> int {
+public func area(p: Point) -> int {
     let y = p.x
     return y * 3
 }
@@ -64,7 +64,7 @@ func (p: borrowing Point) thrice() -> int {
 
 struct Point { var x: int }
 
-public func area(_ p: Point) -> int {
+public func area(p: Point) -> int {
     return p.x * 2
 }
 
@@ -89,7 +89,7 @@ func (p: borrowing Point) thrice() -> int {
 
 struct Point { var x: int; var y: int }
 
-public func area(_ p: Point) -> int {
+public func area(p: Point) -> int {
     return p.x * 2
 }
 
@@ -106,7 +106,7 @@ func (p: borrowing Point) thrice() -> int {
 
 struct Point { var x: int }
 
-public func area(_ p: Point, scale: int = 2) -> int {
+public func area(p: Point, scale: int = 2) -> int {
     return p.x * 2
 }
 
@@ -131,8 +131,8 @@ func (p: borrowing Point) thrice() -> int {
 func TestSurfaceKeepsWhatClientsCompile(t *testing.T) {
 	for _, c := range []struct{ name, a, b string }{
 		{"a generic function",
-			"func f<T>(_ x: T) -> T { return x }\n",
-			"func f<T>(_ x: T) -> T { let y = x; return y }\n"},
+			"func f<T>(x: T) -> T { return x }\n",
+			"func f<T>(x: T) -> T { let y = x; return y }\n"},
 		{"an @inlinable function",
 			"@inlinable public func f() -> int { return 1 }\n",
 			"@inlinable public func f() -> int { return 2 }\n"},
@@ -140,8 +140,8 @@ func TestSurfaceKeepsWhatClientsCompile(t *testing.T) {
 			"struct Box<T> { var v: T\n func get() -> T { return v } }\n",
 			"struct Box<T> { var v: T\n func get() -> T { let w = v; return w } }\n"},
 		{"a generic method of a non-generic type",
-			"struct S { func f<T>(_ x: T) -> T { return x } }\n",
-			"struct S { func f<T>(_ x: T) -> T { let y = x; return y } }\n"},
+			"struct S { func f<T>(x: T) -> T { return x } }\n",
+			"struct S { func f<T>(x: T) -> T { let y = x; return y } }\n"},
 		{"an extension of a type declared elsewhere, which may be generic",
 			"extension Array { func first2() -> int { return 1 } }\n",
 			"extension Array { func first2() -> int { return 2 } }\n"},
@@ -161,7 +161,7 @@ func TestSurfaceKeepsWhatClientsCompile(t *testing.T) {
 // A line added to a body moves every position after it. That matters only
 // where a body a client compiles, or a #line, follows in the same file.
 func TestSurfacePositions(t *testing.T) {
-	const tail = "func g<T>(_ x: T) -> T { return x }\n"
+	const tail = "func g<T>(x: T) -> T { return x }\n"
 	one := "package p\nfunc f() -> int {\n    return 1\n}\n"
 	two := "package p\nfunc f() -> int {\n    let a = 1\n    return a\n}\n"
 	if surfaceOf(t, one) != surfaceOf(t, two) {
@@ -185,12 +185,12 @@ func TestPrune(t *testing.T) {
 
 struct Point { var x: int }
 
-public func area(_ p: Point) -> int {
+public func area(p: Point) -> int {
     let s = "a } b"   // a brace in a string
     return p.x * 2
 }
 
-func g<T>(_ x: T) -> T {
+func g<T>(x: T) -> T {
     precondition(true)
     return x
 }

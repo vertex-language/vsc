@@ -2,7 +2,7 @@
 // 32-bit word holding the half, so neighbours sharing a word both land.
 import "gpu"
 
-func add(_ a: gpu.MutableSpan<float16>, _ b: gpu.MutableSpan<bfloat16>, _ n: int) kernel {
+func add(a: gpu.MutableSpan<float16>, b: gpu.MutableSpan<bfloat16>, n: int) kernel {
     let i = gpu.Index.x
     _ = gpu.Atomic.Add(a.Address(i % n), 0.5)
     _ = gpu.Atomic.Add(b.Address(i % n), 1)

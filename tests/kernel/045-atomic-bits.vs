@@ -1,7 +1,7 @@
 // Atomic or, and, xor and exchange.
 import "gpu"
 
-func bits(_ out: gpu.MutableSpan<int32>) kernel {
+func bits(out: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     _ = gpu.Atomic.Or(out.Address(0), int32(1) << int32(i))
     _ = gpu.Atomic.And(out.Address(1), ~(int32(1) << int32(i)))

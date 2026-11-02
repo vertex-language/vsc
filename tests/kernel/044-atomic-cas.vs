@@ -1,7 +1,7 @@
 // Compare-and-exchange: exactly one work-item claims the slot.
 import "gpu"
 
-func claim(_ slot: gpu.MutableSpan<int32>, _ wins: gpu.MutableSpan<int32>) kernel {
+func claim(slot: gpu.MutableSpan<int32>, wins: gpu.MutableSpan<int32>) kernel {
     let me = int32(gpu.Index.x) + 1
     let was = gpu.Atomic.CompareExchange(slot.Address(0), expected: 0, desired: me)
     if was == 0 {

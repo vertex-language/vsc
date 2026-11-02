@@ -39,7 +39,7 @@ func (g *gen) arguments(e *ast.CallExpr, sig *types.Signature) ([]*sil.Value, bo
 	defer func() { g.release(held) }()
 	next := 0
 	for i, p := range sig.Params {
-		if next < len(args) && g.argFits(args[next], p) && !(p.HasDefault && closureSkips(args[next], p)) {
+		if next < len(args) && g.argFits(args[next], p) && !(p.HasDefault && closureSkips(args[next], p)) && !g.passesDefault(args[next], p) {
 			v := g.expr(args[next].X)
 			if v == nil {
 				return nil, false
@@ -151,7 +151,9 @@ func (g *gen) argFits(a *ast.CallArg, p *types.Param) bool {
 		label = ""
 	}
 	if a.Label == nil {
-		if label == "" {
+		// In Vertex a `name: T` parameter is passed by position too, as
+		// the analyzer matched it.
+		if label == "" || p.Positional {
 			return true
 		}
 		if _, ok := unparen(a.X).(*ast.ClosureExpr); ok && p.Type != nil {
@@ -162,6 +164,20 @@ func (g *gen) argFits(a *ast.CallArg, p *types.Param) bool {
 		return false
 	}
 	return written == label
+}
+
+// passesDefault reports whether an argument without a label goes past a
+// defaulted Vertex parameter, its type not fitting, as the analyzer
+// matched it.
+func (g *gen) passesDefault(a *ast.CallArg, p *types.Param) bool {
+	if a.Label != nil || !p.Positional || !p.HasDefault || analyzer.TakesContextType(a.X) || mentionsTypeParam(p.Type) {
+		return false
+	}
+	t := g.typeOf(a.X)
+	if t == nil || mentionsTypeParam(t) {
+		return false
+	}
+	return !types.AssignableTo(t, g.substituted(p.Type))
 }
 
 // closureSkips reports whether an unlabelled closure passes over a

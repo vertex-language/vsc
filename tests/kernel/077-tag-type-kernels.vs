@@ -16,7 +16,7 @@ struct Wide: Format {
     static func Size() -> int { return 5 }
 }
 
-func scaled<F: Format>(_ f: F, _ y: gpu.MutableSpan<int32>) kernel {
+func scaled<F: Format>(f: F, y: gpu.MutableSpan<int32>) kernel {
     y[gpu.Index.x] = int32(F.Size() * gpu.Index.x)
 }
 

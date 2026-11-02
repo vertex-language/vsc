@@ -109,6 +109,7 @@ func substitute(t Type, subst map[*TypeParam]Type, seen map[Type]bool) Type {
 			params[i] = &Param{
 				Name:        p.Name,
 				Label:       p.Label,
+				Positional:  p.Positional,
 				Type:        newTyp,
 				Ownership:   p.Ownership,
 				Variadic:    p.Variadic,

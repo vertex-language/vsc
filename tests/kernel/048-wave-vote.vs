@@ -1,7 +1,7 @@
 // Wave votes: Any and All over a condition every lane agrees on.
 import "gpu"
 
-func vote(_ out: gpu.MutableSpan<int32>) kernel {
+func vote(out: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     let even = i % 2 == 0
     let a = gpu.Wave.Any(i >= 0)

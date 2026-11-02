@@ -1,7 +1,7 @@
 // Atomic min and max over every element.
 import "gpu"
 
-func extremes(_ x: gpu.Span<int32>, _ out: gpu.MutableSpan<int32>) kernel {
+func extremes(x: gpu.Span<int32>, out: gpu.MutableSpan<int32>) kernel {
     let v = x[gpu.Index.x]
     _ = gpu.Atomic.Min(out.Address(0), v)
     _ = gpu.Atomic.Max(out.Address(1), v)

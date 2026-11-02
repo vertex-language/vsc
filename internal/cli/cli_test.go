@@ -13,7 +13,7 @@ import (
 )
 
 const program = `
-func fib(_ n: Int32) -> Int32 {
+func fib(n: Int32) -> Int32 {
     if n < 2 { return n }
     return fib(n - 1) + fib(n - 2)
 }

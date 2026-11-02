@@ -68,9 +68,9 @@ final class DataTransfer {
     var Files: [string] = []
     var Types: [string] = []
     init() {}
-    func SetData(_ type: string, _ data: string) {}
-    func GetData(_ type: string) -> string { return "" }
-    func ClearData(_ type: string? = nil) {}
+    func SetData(type: string, data: string) {}
+    func GetData(type: string) -> string { return "" }
+    func ClearData(type: string? = nil) {}
 }
 
 final class DragEvent: MouseEvent {
@@ -93,7 +93,7 @@ final class AnimationEvent: Event {
 }
 final class LayoutEvent: Event {}
 
-func _vsxMakeEvent(_ type: string) -> Event {
+func _vsxMakeEvent(type: string) -> Event {
     var e: Event
     switch type {
     case "click", "dblclick", "contextmenu", "mousedown", "mouseup", "mousemove", "mouseenter", "mouseleave", "mouseover", "mouseout":
@@ -163,7 +163,7 @@ final class Node: Renderable, ExpressibleByNilLiteral, ExpressibleByStringLitera
         self.init()
     }
 
-    func syncFrom(_ other: Node) {
+    func syncFrom(other: Node) {
         self.Tag = other.Tag
         self.Text = other.Text
         self.Key = other.Key
@@ -174,7 +174,7 @@ final class Node: Renderable, ExpressibleByNilLiteral, ExpressibleByStringLitera
         self.Children = other.Children
     }
 
-    func setAttr(_ name: string, _ val: string) {
+    func setAttr(name: string, val: string) {
         for i in 0..<Attrs.count {
             if Attrs[i].0 == name {
                 Attrs[i] = (name, val)
@@ -184,7 +184,7 @@ final class Node: Renderable, ExpressibleByNilLiteral, ExpressibleByStringLitera
         Attrs.append((name, val))
     }
 
-    func removeAttr(_ name: string) {
+    func removeAttr(name: string) {
         var next: [(string, string)] = []
         for a in Attrs {
             if a.0 != name { next.append(a) }
@@ -192,7 +192,7 @@ final class Node: Renderable, ExpressibleByNilLiteral, ExpressibleByStringLitera
         Attrs = next
     }
 
-    func setStyle(_ prop: string, _ val: string) {
+    func setStyle(prop: string, val: string) {
         for i in 0..<Styles.count {
             if Styles[i].0 == prop {
                 Styles[i] = (prop, val)
@@ -227,7 +227,7 @@ final class Node: Renderable, ExpressibleByNilLiteral, ExpressibleByStringLitera
 
     func html() -> string { return Html() }
 
-    func Fire(_ type: string) -> bool {
+    func Fire(type: string) -> bool {
         for (t, h) in Handlers where t == type {
             let e = _vsxMakeEvent(type)
             h(e)
@@ -237,7 +237,7 @@ final class Node: Renderable, ExpressibleByNilLiteral, ExpressibleByStringLitera
         return false
     }
 
-    func fire(_ type: string) -> bool { return Fire(type) }
+    func fire(type: string) -> bool { return Fire(type) }
 }
 
 typealias Element = Node
@@ -250,7 +250,7 @@ typealias HTMLSpanElement = Node
 typealias HTMLFormElement = Node
 
 /// An element that has no end tag and no children: `<br>`, `<input>`.
-func _vsxVoid(_ tag: string) -> bool {
+func _vsxVoid(tag: string) -> bool {
     switch tag {
     case "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr":
         return true
@@ -259,11 +259,11 @@ func _vsxVoid(_ tag: string) -> bool {
     }
 }
 
-func renderToString(_ node: Node) -> string {
+func renderToString(node: Node) -> string {
     return node.Html()
 }
 
-func _vsxEscape(_ s: string) -> string {
+func _vsxEscape(s: string) -> string {
     var out = ""
     for ch in s {
         switch ch {
@@ -277,7 +277,7 @@ func _vsxEscape(_ s: string) -> string {
     return out
 }
 
-func _vsxTextNode(_ s: string) -> Node {
+func _vsxTextNode(s: string) -> Node {
     let n = Node()
     n.Text = s
     return n
@@ -299,10 +299,10 @@ extension Optional: Renderable where Wrapped: Renderable {
 
 struct CSSValue: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, ExpressibleByFloatLiteral, ExpressibleByNilLiteral {
     var raw: string = ""
-    init(_ value: string) { self.raw = value }
-    init(_ value: int) { self.raw = "\(value)px" }
-    init(_ value: float64) { self.raw = "\(value)" }
-    init(_ value: CSSValue) { self.raw = value.raw }
+    init(value: string) { self.raw = value }
+    init(value: int) { self.raw = "\(value)px" }
+    init(value: float64) { self.raw = "\(value)" }
+    init(value: CSSValue) { self.raw = value.raw }
     init(stringLiteral value: string) { self.raw = value }
     init(integerLiteral value: int) { self.raw = "\(value)px" }
     init(floatLiteral value: float64) { self.raw = "\(value)" }
@@ -358,7 +358,7 @@ struct Style {
 
     func pairs() -> [(string, string)] {
         var out: [(string, string)] = []
-        func add(_ k: string, _ v: CSSValue) {
+        func add(k: string, v: CSSValue) {
             if !v.raw.isEmpty { out.append((k, v.raw)) }
         }
         add("color", color)
@@ -416,7 +416,7 @@ struct EmptyState { init() {} }
 
 final class Ref<T> {
     var current: T?
-    init(_ current: T? = nil) {
+    init(current: T? = nil) {
         self.current = current
     }
 }
@@ -427,7 +427,7 @@ class _HookSlot {
 
 final class _HookCell<T>: _HookSlot {
     var value: T
-    init(_ value: T) {
+    init(value: T) {
         self.value = value
         super.init()
     }
@@ -470,17 +470,17 @@ struct SetState<T> {
     let cell: _HookCell<T>
     let fiber: _Fiber?
 
-    func callAsFunction(_ next: T) {
+    func callAsFunction(next: T) {
         cell.value = next
         if let f = fiber { f.run() }
     }
 
-    func callAsFunction(_ update: (T) -> T) {
+    func callAsFunction(update: (T) -> T) {
         callAsFunction(update(cell.value))
     }
 }
 
-func useState<T>(_ initial: T) -> (T, SetState<T>) {
+func useState<T>(initial: T) -> (T, SetState<T>) {
     if let fiber = _currentFiber {
         let idx = fiber.index
         fiber.index += 1
@@ -495,7 +495,7 @@ func useState<T>(_ initial: T) -> (T, SetState<T>) {
     return (cell.value, SetState<T>(cell: cell, fiber: nil))
 }
 
-func useState<T>(_ initial: () -> T) -> (T, SetState<T>) {
+func useState<T>(initial: () -> T) -> (T, SetState<T>) {
     if let fiber = _currentFiber, fiber.index < fiber.hooks.count, let cell = fiber.hooks[fiber.index] as? _HookCell<T> {
         fiber.index += 1
         return (cell.value, SetState<T>(cell: cell, fiber: fiber))
@@ -503,7 +503,7 @@ func useState<T>(_ initial: () -> T) -> (T, SetState<T>) {
     return useState(initial())
 }
 
-func useReducer<S, A>(_ reducer: @escaping (S, A) -> S, _ initialState: S) -> (S, (A) -> void) {
+func useReducer<S, A>(reducer: @escaping (S, A) -> S, initialState: S) -> (S, (A) -> void) {
     if let fiber = _currentFiber {
         let idx = fiber.index
         fiber.index += 1
@@ -521,7 +521,7 @@ func useReducer<S, A>(_ reducer: @escaping (S, A) -> S, _ initialState: S) -> (S
     return (cell.value, { action in cell.value = reducer(cell.value, action) })
 }
 
-func useRef<T>(_ initial: T? = nil) -> Ref<T> {
+func useRef<T>(initial: T? = nil) -> Ref<T> {
     if let fiber = _currentFiber {
         let idx = fiber.index
         fiber.index += 1
@@ -538,7 +538,7 @@ func useRef<T>(_ initial: T? = nil) -> Ref<T> {
 final class _EffectSlot: _HookSlot {
     var deps: [any Equatable]?
     var cleanup: (() -> void)? = nil
-    init(_ deps: [any Equatable]?) {
+    init(deps: [any Equatable]?) {
         self.deps = deps
         super.init()
     }
@@ -547,14 +547,14 @@ final class _EffectSlot: _HookSlot {
 final class _MemoSlot<T>: _HookSlot {
     var value: T
     var deps: [any Equatable]?
-    init(_ value: T, _ deps: [any Equatable]?) {
+    init(value: T, deps: [any Equatable]?) {
         self.value = value
         self.deps = deps
         super.init()
     }
 }
 
-func _sameDep(_ a: any Equatable, _ b: any Equatable) -> bool {
+func _sameDep(a: any Equatable, b: any Equatable) -> bool {
     if let x = a as? int, let y = b as? int { return x == y }
     if let x = a as? string, let y = b as? string { return x == y }
     if let x = a as? bool, let y = b as? bool { return x == y }
@@ -562,7 +562,7 @@ func _sameDep(_ a: any Equatable, _ b: any Equatable) -> bool {
     return false
 }
 
-func _depsEqual(_ a: [any Equatable]?, _ b: [any Equatable]?) -> bool {
+func _depsEqual(a: [any Equatable]?, b: [any Equatable]?) -> bool {
     guard let x = a, let y = b else { return false }
     if x.count != y.count { return false }
     for i in 0..<x.count {
@@ -571,7 +571,7 @@ func _depsEqual(_ a: [any Equatable]?, _ b: [any Equatable]?) -> bool {
     return true
 }
 
-func _scheduleEffect(_ deps: [any Equatable]?, _ run: @escaping (_EffectSlot) -> void) {
+func _scheduleEffect(deps: [any Equatable]?, run: @escaping (_EffectSlot) -> void) {
     guard let fiber = _currentFiber else {
         run(_EffectSlot(deps))
         return
@@ -597,23 +597,23 @@ func _scheduleEffect(_ deps: [any Equatable]?, _ run: @escaping (_EffectSlot) ->
     }
 }
 
-func useEffect(_ effect: @escaping () -> void, _ deps: [any Equatable]? = nil) {
+func useEffect(effect: @escaping () -> void, deps: [any Equatable]? = nil) {
     _scheduleEffect(deps, { _ in effect() })
 }
 
-func useEffect(_ effect: @escaping () -> (() -> void), _ deps: [any Equatable]? = nil) {
+func useEffect(effect: @escaping () -> (() -> void), deps: [any Equatable]? = nil) {
     _scheduleEffect(deps, { slot in slot.cleanup = effect() })
 }
 
-func useLayoutEffect(_ effect: @escaping () -> void, _ deps: [any Equatable]? = nil) {
+func useLayoutEffect(effect: @escaping () -> void, deps: [any Equatable]? = nil) {
     useEffect(effect, deps)
 }
 
-func useInsertionEffect(_ effect: @escaping () -> void, _ deps: [any Equatable]? = nil) {
+func useInsertionEffect(effect: @escaping () -> void, deps: [any Equatable]? = nil) {
     useEffect(effect, deps)
 }
 
-func useMemo<T>(_ compute: () -> T, _ deps: [any Equatable]? = nil) -> T {
+func useMemo<T>(compute: () -> T, deps: [any Equatable]? = nil) -> T {
     guard let fiber = _currentFiber else { return compute() }
     let idx = fiber.index
     fiber.index += 1
@@ -629,7 +629,7 @@ func useMemo<T>(_ compute: () -> T, _ deps: [any Equatable]? = nil) -> T {
     return slot.value
 }
 
-func useCallback<F>(_ callback: F, _ deps: [any Equatable]? = nil) -> F {
+func useCallback<F>(callback: F, deps: [any Equatable]? = nil) -> F {
     return useMemo({ callback }, deps)
 }
 
@@ -653,18 +653,18 @@ func useTransition() -> (bool, (@escaping () -> void) -> void) {
     return (false, { scope in scope() })
 }
 
-func startTransition(_ scope: () -> void) {
+func startTransition(scope: () -> void) {
     scope()
 }
 
-func useDeferredValue<T>(_ value: T) -> T {
+func useDeferredValue<T>(value: T) -> T {
     return value
 }
 
 final class Context<T> {
     let defaultValue: T
     var _current: T
-    init(_ defaultValue: T) {
+    init(defaultValue: T) {
         self.defaultValue = defaultValue
         self._current = defaultValue
     }
@@ -679,15 +679,15 @@ final class Context<T> {
     }
 }
 
-func createContext<T>(_ defaultValue: T) -> Context<T> {
+func createContext<T>(defaultValue: T) -> Context<T> {
     return Context<T>(defaultValue)
 }
 
-func useContext<T>(_ ctx: Context<T>) -> T {
+func useContext<T>(ctx: Context<T>) -> T {
     return ctx._current
 }
 
-func use<T>(_ ctx: Context<T>) -> T {
+func use<T>(ctx: Context<T>) -> T {
     return ctx._current
 }
 
@@ -697,7 +697,7 @@ class Component<P, S> {
     var _host: Node? = nil
     var _renderFn: (() -> Node)? = nil
 
-    func _mount(_ props: P, _ renderFn: @escaping () -> Node) -> Node {
+    func _mount(props: P, renderFn: @escaping () -> Node) -> Node {
         self.props = props
         self._renderFn = renderFn
         let host = Node()
@@ -706,7 +706,7 @@ class Component<P, S> {
         return host
     }
 
-    func setState(_ next: S) {
+    func setState(next: S) {
         self.state = next
         if let h = _host {
             if let r = _renderFn {
@@ -741,7 +741,7 @@ enum component {
     struct Attribute {
         let apply: (Node) -> void
 
-        static func Static(_ name: string, _ value: string) -> Attribute {
+        static func Static(name: string, value: string) -> Attribute {
             return Attribute(apply: { n in
                 if name == "class" || name == "className" {
                     if !value.isEmpty { n.Classes.append(value) }
@@ -751,7 +751,7 @@ enum component {
             })
         }
 
-        static func Value<V>(_ name: string, _ value: V) -> Attribute {
+        static func Value<V>(name: string, value: V) -> Attribute {
             return Attribute(apply: { n in
                 if let b = value as? bool {
                     if b {
@@ -778,7 +778,7 @@ enum component {
             })
         }
 
-        static func On<E: dom.Event>(_ name: string, _ type: E.Type, _ handler: @escaping (E) -> void) -> Attribute {
+        static func On<E: dom.Event>(name: string, type: E.Type, handler: @escaping (E) -> void) -> Attribute {
             return Attribute(apply: { n in
                 n.Handlers.append((name, { _ in
                     let e = _vsxMakeEvent(name)
@@ -787,37 +787,37 @@ enum component {
             })
         }
 
-        static func OnCapture<E: dom.Event>(_ name: string, _ type: E.Type, _ handler: @escaping (E) -> void) -> Attribute {
+        static func OnCapture<E: dom.Event>(name: string, type: E.Type, handler: @escaping (E) -> void) -> Attribute {
             return On(name, type, handler)
         }
 
-        static func Live<V>(_ name: string, _ f: () -> V) -> Attribute {
+        static func Live<V>(name: string, f: () -> V) -> Attribute {
             return Value(name, f())
         }
 
-        static func Key<V>(_ key: V) -> Attribute {
+        static func Key<V>(key: V) -> Attribute {
             return Attribute(apply: { n in
                 n.Key = "\(key)"
             })
         }
 
-        static func Ref<T>(_ ref: Ref<T>) -> Attribute {
+        static func Ref<T>(ref: Ref<T>) -> Attribute {
             return Attribute(apply: { _ in })
         }
 
-        static func Ref<T>(_ setter: SetState<T?>) -> Attribute {
+        static func Ref<T>(setter: SetState<T?>) -> Attribute {
             return Attribute(apply: { _ in })
         }
 
-        static func Ref(_ callback: @escaping (Node?) -> void) -> Attribute {
+        static func Ref(callback: @escaping (Node?) -> void) -> Attribute {
             return Attribute(apply: { n in callback(n) })
         }
 
-        static func Package(_ sheet: string) -> Attribute {
+        static func Package(sheet: string) -> Attribute {
             return Attribute(apply: { _ in })
         }
 
-        static func Spread(_ attrs: [string: string]) -> Attribute {
+        static func Spread(attrs: [string: string]) -> Attribute {
             return Attribute(apply: { n in
                 for k in attrs.keys.sorted() {
                     let v = attrs[k]!
@@ -831,7 +831,7 @@ enum component {
         }
     }
 
-    static func Element(_ tag: string, _ attributes: [Attribute], _ children: [any Renderable]) -> Node {
+    static func Element(tag: string, attributes: [Attribute], children: [any Renderable]) -> Node {
         let n = Node()
         n.Tag = tag
         for a in attributes { a.apply(n) }
@@ -839,64 +839,64 @@ enum component {
         return n
     }
 
-    static func Live<V: Renderable>(_ f: () -> V) -> Node {
+    static func Live<V: Renderable>(f: () -> V) -> Node {
         return Fragment([f()])
     }
 
-    static func Call(_ type: string, _ f: @escaping () -> Node) -> Node {
+    static func Call(type: string, f: @escaping () -> Node) -> Node {
         let host = Node()
         let fiber = _Fiber(renderFn: f, host: host)
         fiber.run()
         return host
     }
 
-    static func Call<T>(_ type: string, _ f: () -> T) -> T {
+    static func Call<T>(type: string, f: () -> T) -> T {
         return f()
     }
 
-    static func MountClass<C, P>(_ type: string, _ inst: C, _ props: P, _ mount: (C, P) -> Node) -> Node {
+    static func MountClass<C, P>(type: string, inst: C, props: P, mount: (C, P) -> Node) -> Node {
         return mount(inst, props)
     }
 
-    static func MountClass<K, C, P>(key: K, _ type: string, _ inst: C, _ props: P, _ mount: (C, P) -> Node) -> Node {
+    static func MountClass<K, C, P>(key: K, type: string, inst: C, props: P, mount: (C, P) -> Node) -> Node {
         let n = mount(inst, props)
         n.Key = "\(key)"
         return n
     }
 
-    static func Key<K>(_ key: K, _ type: string, _ f: @escaping () -> Node) -> Node {
+    static func Key<K>(key: K, type: string, f: @escaping () -> Node) -> Node {
         let n = Call(type, f)
         n.Key = "\(key)"
         return n
     }
 
-    static func Key<K, V>(_ key: K, _ type: string, _ f: () -> V) -> V {
+    static func Key<K, V>(key: K, type: string, f: () -> V) -> V {
         return f()
     }
 
-    static func ForwardRef<R, V>(_ ref: R, _ node: V) -> V {
+    static func ForwardRef<R, V>(ref: R, node: V) -> V {
         return node
     }
 
-    static func Styled(_ sheet: string, _ node: Node) -> Node {
+    static func Styled(sheet: string, node: Node) -> Node {
         return node
     }
 
-    static func Fragment(_ children: [any Renderable]) -> Node {
+    static func Fragment(children: [any Renderable]) -> Node {
         let n = Node()
         for c in children { n.Children += c.Nodes() }
         return n
     }
 }
 
-func _vsx(_ tag: string, _ attributes: [component.Attribute], _ children: [any Renderable]) -> Node {
+func _vsx(tag: string, attributes: [component.Attribute], children: [any Renderable]) -> Node {
     return component.Element(tag, attributes, children)
 }
 
-func _vsxs(_ tag: string, _ attributes: [component.Attribute], _ children: [any Renderable]) -> Node {
+func _vsxs(tag: string, attributes: [component.Attribute], children: [any Renderable]) -> Node {
     return component.Element(tag, attributes, children)
 }
 
-func _Fragment(_ children: [any Renderable]) -> Node {
+func _Fragment(children: [any Renderable]) -> Node {
     return component.Fragment(children)
 }

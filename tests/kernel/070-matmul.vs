@@ -1,7 +1,7 @@
 // A program: matrix multiply over a 2D grid, one work-item per output element.
 import "gpu"
 
-func matmul(_ a: gpu.Span<float32>, _ b: gpu.Span<float32>, _ c: gpu.MutableSpan<float32>, n: int) kernel {
+func matmul(a: gpu.Span<float32>, b: gpu.Span<float32>, c: gpu.MutableSpan<float32>, n: int) kernel {
     let col = gpu.Index.x
     let row = gpu.Index.y
     if row >= n || col >= n {

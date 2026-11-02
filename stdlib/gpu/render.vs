@@ -9,38 +9,38 @@ package gpu
 // vertex formats) are passed as Metal numbers them; gpu/raster maps GL's
 // and its own to them.
 
-@_silgen_name("vertex_gpu_texture_create") func _textureCreate(_ d: UnsafeMutableRawPointer, _ kind: int, _ format: int, _ w: int, _ h: int, _ levels: int) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_texture_release") func _textureRelease(_ t: UnsafeMutableRawPointer)
-@_silgen_name("vertex_gpu_texture_write") func _textureWrite(_ t: UnsafeMutableRawPointer, _ level: int, _ slice: int, _ x: int, _ y: int, _ w: int, _ h: int, _ bytes: UnsafeRawPointer, _ bytesPerRow: int)
-@_silgen_name("vertex_gpu_texture_read") func _textureRead(_ t: UnsafeMutableRawPointer, _ level: int, _ slice: int, _ x: int, _ y: int, _ w: int, _ h: int, _ bytes: UnsafeMutableRawPointer, _ bytesPerRow: int)
-@_silgen_name("vertex_gpu_library_source") func _librarySource(_ d: UnsafeMutableRawPointer, _ src: UnsafePointer<uint8>, _ n: int, _ err: UnsafeMutablePointer<uint8>, _ cap: int) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_library_function") func _libraryFunction(_ lib: UnsafeMutableRawPointer, _ name: UnsafePointer<uint8>, _ n: int) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_object_release") func _objectRelease(_ o: UnsafeMutableRawPointer)
-@_silgen_name("vertex_gpu_render_pipeline") func _renderPipeline(_ d: UnsafeMutableRawPointer, _ v: UnsafeMutableRawPointer, _ f: UnsafeMutableRawPointer, _ desc: UnsafePointer<int>, _ err: UnsafeMutablePointer<uint8>, _ cap: int) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_depth_stencil_state") func _depthStencilState(_ d: UnsafeMutableRawPointer, _ desc: UnsafePointer<int>) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_sampler_state") func _samplerState(_ d: UnsafeMutableRawPointer, _ desc: UnsafePointer<int>, _ lods: UnsafePointer<float32>) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_render_begin") func _renderBegin(_ d: UnsafeMutableRawPointer, _ color: UnsafeMutableRawPointer?, _ level: int, _ slice: int, _ colorLoad: int, _ clear: UnsafePointer<float32>, _ depth: UnsafeMutableRawPointer?, _ depthLoad: int, _ clearDepth: float32, _ stencilLoad: int, _ clearStencil: int) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_render_end") func _renderEnd(_ e: UnsafeMutableRawPointer)
-@_silgen_name("vertex_gpu_render_set_pipeline") func _renderSetPipeline(_ e: UnsafeMutableRawPointer, _ p: UnsafeMutableRawPointer)
-@_silgen_name("vertex_gpu_render_set_depth_stencil") func _renderSetDepthStencil(_ e: UnsafeMutableRawPointer, _ s: UnsafeMutableRawPointer, _ front: int, _ back: int)
-@_silgen_name("vertex_gpu_render_set_viewport") func _renderSetViewport(_ e: UnsafeMutableRawPointer, _ x: float32, _ y: float32, _ w: float32, _ h: float32, _ n: float32, _ f: float32)
-@_silgen_name("vertex_gpu_render_set_scissor") func _renderSetScissor(_ e: UnsafeMutableRawPointer, _ x: int, _ y: int, _ w: int, _ h: int)
-@_silgen_name("vertex_gpu_render_set_raster") func _renderSetRaster(_ e: UnsafeMutableRawPointer, _ cull: int, _ winding: int, _ bias: float32, _ slope: float32)
-@_silgen_name("vertex_gpu_render_set_blend_color") func _renderSetBlendColor(_ e: UnsafeMutableRawPointer, _ r: float32, _ g: float32, _ b: float32, _ a: float32)
-@_silgen_name("vertex_gpu_render_set_bytes") func _renderSetBytes(_ e: UnsafeMutableRawPointer, _ stage: int, _ p: UnsafeRawPointer, _ n: int, _ index: int)
-@_silgen_name("vertex_gpu_render_set_texture") func _renderSetTexture(_ e: UnsafeMutableRawPointer, _ stage: int, _ t: UnsafeMutableRawPointer?, _ index: int)
-@_silgen_name("vertex_gpu_render_set_sampler") func _renderSetSampler(_ e: UnsafeMutableRawPointer, _ stage: int, _ s: UnsafeMutableRawPointer, _ index: int)
-@_silgen_name("vertex_gpu_render_draw") func _renderDraw(_ e: UnsafeMutableRawPointer, _ prim: int, _ start: int, _ count: int, _ instances: int)
-@_silgen_name("vertex_gpu_render_draw_indexed") func _renderDrawIndexed(_ e: UnsafeMutableRawPointer, _ prim: int, _ count: int, _ indexSize: int, _ indices: UnsafeRawPointer, _ n: int, _ instances: int)
-@_silgen_name("vertex_gpu_render_set_buffer") func _renderSetBuffer(_ e: UnsafeMutableRawPointer, _ stage: int, _ b: UnsafeMutableRawPointer, _ offset: int, _ index: int)
-@_silgen_name("vertex_gpu_render_draw_indexed_buffer") func _renderDrawIndexedBuffer(_ e: UnsafeMutableRawPointer, _ prim: int, _ count: int, _ indexSize: int, _ b: UnsafeMutableRawPointer, _ offset: int, _ instances: int)
-@_silgen_name("vertex_gpu_render_commit") func _renderCommit(_ d: UnsafeMutableRawPointer, _ wait: int) -> int32
-@_silgen_name("vertex_gpu_texture_upload") func _textureUpload(_ t: UnsafeMutableRawPointer, _ level: int, _ slice: int, _ x: int, _ y: int, _ w: int, _ h: int, _ bytes: UnsafeRawPointer, _ bytesPerRow: int)
-@_silgen_name("vertex_gpu_layer_attach") func _layerAttach(_ d: UnsafeMutableRawPointer, _ view: UnsafeMutableRawPointer, _ w: int, _ h: int, _ scale: float64) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_layer_resize") func _layerResize(_ l: UnsafeMutableRawPointer, _ w: int, _ h: int, _ scale: float64)
-@_silgen_name("vertex_gpu_layer_present") func _layerPresent(_ l: UnsafeMutableRawPointer, _ scene: UnsafeMutableRawPointer, _ overlay: UnsafeMutableRawPointer?, _ params: UnsafePointer<float32>) -> int32
-@_silgen_name("vertex_gpu_layer_release") func _layerRelease(_ l: UnsafeMutableRawPointer)
-@_silgen_name("vertex_gpu_layer_capture") func _layerCapture(_ l: UnsafeMutableRawPointer, _ scene: UnsafeMutableRawPointer, _ overlay: UnsafeMutableRawPointer?, _ params: UnsafePointer<float32>, _ into: UnsafeMutableRawPointer) -> int32
+@_silgen_name("vertex_gpu_texture_create") func _textureCreate(d: UnsafeMutableRawPointer, kind: int, format: int, w: int, h: int, levels: int) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_texture_release") func _textureRelease(t: UnsafeMutableRawPointer)
+@_silgen_name("vertex_gpu_texture_write") func _textureWrite(t: UnsafeMutableRawPointer, level: int, slice: int, x: int, y: int, w: int, h: int, bytes: UnsafeRawPointer, bytesPerRow: int)
+@_silgen_name("vertex_gpu_texture_read") func _textureRead(t: UnsafeMutableRawPointer, level: int, slice: int, x: int, y: int, w: int, h: int, bytes: UnsafeMutableRawPointer, bytesPerRow: int)
+@_silgen_name("vertex_gpu_library_source") func _librarySource(d: UnsafeMutableRawPointer, src: UnsafePointer<uint8>, n: int, err: UnsafeMutablePointer<uint8>, cap: int) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_library_function") func _libraryFunction(lib: UnsafeMutableRawPointer, name: UnsafePointer<uint8>, n: int) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_object_release") func _objectRelease(o: UnsafeMutableRawPointer)
+@_silgen_name("vertex_gpu_render_pipeline") func _renderPipeline(d: UnsafeMutableRawPointer, v: UnsafeMutableRawPointer, f: UnsafeMutableRawPointer, desc: UnsafePointer<int>, err: UnsafeMutablePointer<uint8>, cap: int) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_depth_stencil_state") func _depthStencilState(d: UnsafeMutableRawPointer, desc: UnsafePointer<int>) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_sampler_state") func _samplerState(d: UnsafeMutableRawPointer, desc: UnsafePointer<int>, lods: UnsafePointer<float32>) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_render_begin") func _renderBegin(d: UnsafeMutableRawPointer, color: UnsafeMutableRawPointer?, level: int, slice: int, colorLoad: int, clear: UnsafePointer<float32>, depth: UnsafeMutableRawPointer?, depthLoad: int, clearDepth: float32, stencilLoad: int, clearStencil: int) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_render_end") func _renderEnd(e: UnsafeMutableRawPointer)
+@_silgen_name("vertex_gpu_render_set_pipeline") func _renderSetPipeline(e: UnsafeMutableRawPointer, p: UnsafeMutableRawPointer)
+@_silgen_name("vertex_gpu_render_set_depth_stencil") func _renderSetDepthStencil(e: UnsafeMutableRawPointer, s: UnsafeMutableRawPointer, front: int, back: int)
+@_silgen_name("vertex_gpu_render_set_viewport") func _renderSetViewport(e: UnsafeMutableRawPointer, x: float32, y: float32, w: float32, h: float32, n: float32, f: float32)
+@_silgen_name("vertex_gpu_render_set_scissor") func _renderSetScissor(e: UnsafeMutableRawPointer, x: int, y: int, w: int, h: int)
+@_silgen_name("vertex_gpu_render_set_raster") func _renderSetRaster(e: UnsafeMutableRawPointer, cull: int, winding: int, bias: float32, slope: float32)
+@_silgen_name("vertex_gpu_render_set_blend_color") func _renderSetBlendColor(e: UnsafeMutableRawPointer, r: float32, g: float32, b: float32, a: float32)
+@_silgen_name("vertex_gpu_render_set_bytes") func _renderSetBytes(e: UnsafeMutableRawPointer, stage: int, p: UnsafeRawPointer, n: int, index: int)
+@_silgen_name("vertex_gpu_render_set_texture") func _renderSetTexture(e: UnsafeMutableRawPointer, stage: int, t: UnsafeMutableRawPointer?, index: int)
+@_silgen_name("vertex_gpu_render_set_sampler") func _renderSetSampler(e: UnsafeMutableRawPointer, stage: int, s: UnsafeMutableRawPointer, index: int)
+@_silgen_name("vertex_gpu_render_draw") func _renderDraw(e: UnsafeMutableRawPointer, prim: int, start: int, count: int, instances: int)
+@_silgen_name("vertex_gpu_render_draw_indexed") func _renderDrawIndexed(e: UnsafeMutableRawPointer, prim: int, count: int, indexSize: int, indices: UnsafeRawPointer, n: int, instances: int)
+@_silgen_name("vertex_gpu_render_set_buffer") func _renderSetBuffer(e: UnsafeMutableRawPointer, stage: int, b: UnsafeMutableRawPointer, offset: int, index: int)
+@_silgen_name("vertex_gpu_render_draw_indexed_buffer") func _renderDrawIndexedBuffer(e: UnsafeMutableRawPointer, prim: int, count: int, indexSize: int, b: UnsafeMutableRawPointer, offset: int, instances: int)
+@_silgen_name("vertex_gpu_render_commit") func _renderCommit(d: UnsafeMutableRawPointer, wait: int) -> int32
+@_silgen_name("vertex_gpu_texture_upload") func _textureUpload(t: UnsafeMutableRawPointer, level: int, slice: int, x: int, y: int, w: int, h: int, bytes: UnsafeRawPointer, bytesPerRow: int)
+@_silgen_name("vertex_gpu_layer_attach") func _layerAttach(d: UnsafeMutableRawPointer, view: UnsafeMutableRawPointer, w: int, h: int, scale: float64) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_layer_resize") func _layerResize(l: UnsafeMutableRawPointer, w: int, h: int, scale: float64)
+@_silgen_name("vertex_gpu_layer_present") func _layerPresent(l: UnsafeMutableRawPointer, scene: UnsafeMutableRawPointer, overlay: UnsafeMutableRawPointer?, params: UnsafePointer<float32>) -> int32
+@_silgen_name("vertex_gpu_layer_release") func _layerRelease(l: UnsafeMutableRawPointer)
+@_silgen_name("vertex_gpu_layer_capture") func _layerCapture(l: UnsafeMutableRawPointer, scene: UnsafeMutableRawPointer, overlay: UnsafeMutableRawPointer?, params: UnsafePointer<float32>, into: UnsafeMutableRawPointer) -> int32
 
 /// RenderError is what making a rendering object can fail with.
 public enum RenderError: Error {
@@ -176,7 +176,7 @@ public final class Layer {
 
     /// Present shows a frame; false when the window had no drawable to give.
     @discardableResult
-    public func Present(_ scene: Texture, overlay: Texture? = nil, backdrop: Backdrop? = nil) -> bool {
+    public func Present(scene: Texture, overlay: Texture? = nil, backdrop: Backdrop? = nil) -> bool {
         let params = parameters(overlay != nil, backdrop)
         let rc = params.withUnsafeBufferPointer { p in _layerPresent(_h, scene._h, overlay?._h, p.baseAddress!) }
         return rc == 0
@@ -184,7 +184,7 @@ public final class Layer {
 
     /// Capture is what Present would show, read back: RGBA, top row first,
     /// Width × Height (a screenshot of the window). Nil off Metal.
-    public func Capture(_ scene: Texture, overlay: Texture? = nil, backdrop: Backdrop? = nil) -> [uint8]? {
+    public func Capture(scene: Texture, overlay: Texture? = nil, backdrop: Backdrop? = nil) -> [uint8]? {
         guard let into = Texture.Create(device: device, width: Width, height: Height, format: .rgba8) else { return nil }
         let params = parameters(overlay != nil, backdrop)
         let rc = params.withUnsafeBufferPointer { p in _layerCapture(_h, scene._h, overlay?._h, p.baseAddress!, into._h) }
@@ -194,7 +194,7 @@ public final class Layer {
         return out
     }
 
-    func parameters(_ overlay: bool, _ backdrop: Backdrop?) -> [float32] {
+    func parameters(overlay: bool, backdrop: Backdrop?) -> [float32] {
         let b = backdrop ?? Backdrop(x: 0, y: 0, width: 0, height: 0, radius: 0, strength: 0)
         return [b.X, b.Y, b.Width, b.Height, b.Radius, b.Strength, overlay ? 1 : 0, 0, float32(Width), float32(Height), 0, 0]
     }
@@ -231,7 +231,7 @@ public final class Library {
     }
 
     /// The function of this name.
-    public func Function(_ name: string) throws -> ShaderFunction {
+    public func Function(name: string) throws -> ShaderFunction {
         let n = Array(name.utf8)
         var made: UnsafeMutableRawPointer? = nil
         n.withUnsafeBufferPointer { p in made = _libraryFunction(_h, p.baseAddress!, n.count) }
@@ -308,7 +308,7 @@ public struct VertexLayout {
 public final class RenderPipeline {
     public let _h: UnsafeMutableRawPointer
 
-    public init(device: Device, vertex: ShaderFunction, fragment: ShaderFunction, _ d: PipelineDescriptor) throws {
+    public init(device: Device, vertex: ShaderFunction, fragment: ShaderFunction, d: PipelineDescriptor) throws {
         var desc: [int] = [d.Color == nil ? -1 : d.Color!.code, d.DepthStencil ? 2 : -1, d.Blending ? 1 : 0,
                            d.RGBOperation, d.AlphaOperation, d.SourceRGB, d.DestinationRGB, d.SourceAlpha, d.DestinationAlpha,
                            d.WriteMask, d.Attributes.count]
@@ -428,8 +428,8 @@ public final class RenderPass {
         _renderEnd(_h)
     }
 
-    public func SetPipeline(_ p: RenderPipeline) { _renderSetPipeline(_h, p._h) }
-    public func SetDepthStencil(_ s: DepthStencilState, front: int, back: int) { _renderSetDepthStencil(_h, s._h, front, back) }
+    public func SetPipeline(p: RenderPipeline) { _renderSetPipeline(_h, p._h) }
+    public func SetDepthStencil(s: DepthStencilState, front: int, back: int) { _renderSetDepthStencil(_h, s._h, front, back) }
     /// In pixels from the target's top-left corner, with the depth range.
     public func SetViewport(x: float32, y: float32, width: float32, height: float32, near: float32, far: float32) {
         _renderSetViewport(_h, x, y, width, height, near, far)
@@ -439,16 +439,16 @@ public final class RenderPass {
     public func SetRaster(cull: int, counterClockwise: bool, bias: float32, slope: float32) {
         _renderSetRaster(_h, cull, counterClockwise ? 1 : 0, bias, slope)
     }
-    public func SetBlendColor(_ r: float32, _ g: float32, _ b: float32, _ a: float32) { _renderSetBlendColor(_h, r, g, b, a) }
+    public func SetBlendColor(r: float32, g: float32, b: float32, a: float32) { _renderSetBlendColor(_h, r, g, b, a) }
     /// Bytes for a buffer slot of the vertex (fragment: false) or fragment stage.
-    public func SetBytes(fragment: bool, _ p: UnsafeRawPointer, count: int, index: int) { _renderSetBytes(_h, fragment ? 1 : 0, p, count, index) }
+    public func SetBytes(fragment: bool, p: UnsafeRawPointer, count: int, index: int) { _renderSetBytes(_h, fragment ? 1 : 0, p, count, index) }
     /// A device buffer's bytes from `offset` for a buffer slot: vertices
     /// sent once and drawn many times.
-    public func SetBuffer(fragment: bool, _ b: Buffer<uint8>, offset: int, index: int) {
+    public func SetBuffer(fragment: bool, b: Buffer<uint8>, offset: int, index: int) {
         _renderSetBuffer(_h, fragment ? 1 : 0, b._memory._h, b._offset + offset, index)
     }
-    public func SetTexture(fragment: bool, _ t: Texture?, index: int) { _renderSetTexture(_h, fragment ? 1 : 0, t?._h, index) }
-    public func SetSampler(fragment: bool, _ s: SamplerState, index: int) { _renderSetSampler(_h, fragment ? 1 : 0, s._h, index) }
+    public func SetTexture(fragment: bool, t: Texture?, index: int) { _renderSetTexture(_h, fragment ? 1 : 0, t?._h, index) }
+    public func SetSampler(fragment: bool, s: SamplerState, index: int) { _renderSetSampler(_h, fragment ? 1 : 0, s._h, index) }
     /// primitive: 0 points, 1 lines, 2 line strip, 3 triangles, 4 triangle strip.
     public func Draw(primitive: int, start: int, count: int, instances: int) { _renderDraw(_h, primitive, start, count, instances) }
     /// Indexed by 2- or 4-byte indices, from host memory.

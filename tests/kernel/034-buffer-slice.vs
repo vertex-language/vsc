@@ -1,7 +1,7 @@
 // A slice of a buffer, launched on: the kernel sees only the view.
 import "gpu"
 
-func mark(_ y: gpu.MutableSpan<int32>) kernel {
+func mark(y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     y[i] = int32(100 + i + y.count)
 }

@@ -192,6 +192,7 @@ func (c *checker) resolveTypeUncached(astType ast.Type, scope *Scope) types.Type
 			params[i] = &types.Param{
 				Name:        name,
 				Label:       label,
+				Positional:  p.Name == nil && label != "_" && c.vertexFile(),
 				Type:        c.resolveType(p.Type, scope),
 				Ownership:   ownership,
 				Variadic:    p.Ellipsis != token.NoPos,
@@ -1477,6 +1478,7 @@ func (c *checker) buildFuncSig(sig *ast.FuncSig, scope *Scope) *types.Signature 
 			params[i] = &types.Param{
 				Name:        name,
 				Label:       label,
+				Positional:  p.Name == nil && label != "_" && c.vertexFile(),
 				Type:        pt,
 				Ownership:   ownership,
 				Variadic:    p.Ellipsis != token.NoPos,

@@ -1,7 +1,7 @@
 // uint32, including values past int32's range.
 import "gpu"
 
-func double(_ y: gpu.MutableSpan<uint32>) kernel {
+func double(y: gpu.MutableSpan<uint32>) kernel {
     let i = gpu.Index.x
     y[i] = y[i] &* 2
 }

@@ -19,7 +19,7 @@ import (
 // its capitalised counterpart are one type, so a program may mix them.
 func TestLowercasePrimitives(t *testing.T) {
 	const src = `
-func widen(_ a: int32, _ b: Int32) -> int64 {
+func widen(a: int32, b: Int32) -> int64 {
     let ok: bool = a < b
     return ok ? int64(1) : Int64(0)
 }
@@ -44,8 +44,8 @@ func use() -> int32 {
     return int32(a) + int32(int8(4)) + int32(uint16(6)) + int32(int(9))
 }
 
-func widen(_ n: int32) -> double { return double(n) }
-func narrowFloat(_ n: int32) -> float { return float(n) }
+func widen(n: int32) -> double { return double(n) }
+func narrowFloat(n: int32) -> float { return float(n) }
 `
 	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
 		for _, d := range diags {
@@ -59,7 +59,7 @@ func narrowFloat(_ n: int32) -> float { return float(n) }
 func TestOptionalLabels(t *testing.T) {
 	const src = `
 func addUp(a: int32, b: int32) -> int32 { return a + b }
-func mulBy(_ x: int32, _ y: int32) -> int32 { return x * y }
+func mulBy(x: int32, y: int32) -> int32 { return x * y }
 
 func use() -> int32 {
     return addUp(1, 2) + addUp(a: 1, b: 2) + mulBy(1, 2) + mulBy(x: 1, y: 2)
@@ -115,14 +115,14 @@ func use() -> int32 { return label(a: 1) + label(b: 2) }
 // refused at lowering. A `kernel` is lowered for a device now, and
 // needs `import "gpu"` to be one.
 func TestExecModifierRefused(t *testing.T) {
-	src := "func f(_ a: float32) graph -> float32 { return a }"
+	src := "func f(a: float32) graph -> float32 { return a }"
 	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
 		t.Errorf("graph did not typecheck: %v", diags)
 	}
 	if _, diags := compile(t, src, vsc.Options{}); !vsc.Errors(diags) {
 		t.Errorf("graph was lowered as an ordinary function")
 	}
-	src = "func f(_ a: float32) kernel -> float32 { return a }"
+	src = "func f(a: float32) kernel -> float32 { return a }"
 	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); !vsc.Errors(diags) {
 		t.Errorf("a kernel without import \"gpu\" typechecked")
 	}
@@ -133,7 +133,7 @@ func TestExecModifierRefused(t *testing.T) {
 // is the modifier and `kernel` anywhere else is a name.
 func TestExecWordsStayIdentifiers(t *testing.T) {
 	const src = `
-func kernel(_ graph: int32) -> int32 {
+func kernel(graph: int32) -> int32 {
     let kernel: int32 = graph
     return kernel
 }
@@ -174,7 +174,7 @@ func TestFolderImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(pkg, "area.vs"),
-		"package geometry\n\npublic func area(_ w: int32, _ h: int32) -> int32 { return w * h }\n")
+		"package geometry\n\npublic func area(w: int32, h: int32) -> int32 { return w * h }\n")
 	main := filepath.Join(dir, "main.vs")
 	write(t, main, "import \"./geometry\"\n\nfunc main() -> int32 { return geometry.area(6, 7) }\n")
 
@@ -215,7 +215,7 @@ func TestAssignImportedGlobal(t *testing.T) {
 public var Hook: ((int32) -> int32)? = nil
 public var Count: int32 = 0
 
-public func Run(_ v: int32) -> int32 {
+public func Run(v: int32) -> int32 {
     if let h = Hook { return h(v) }
     return -1
 }

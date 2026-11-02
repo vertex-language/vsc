@@ -1,7 +1,7 @@
 // A float32 passed by value: the same for every work-item.
 import "gpu"
 
-func scale(_ a: float32, _ y: gpu.MutableSpan<float32>) kernel {
+func scale(a: float32, y: gpu.MutableSpan<float32>) kernel {
     let i = gpu.Index.x
     y[i] = y[i] * a
 }

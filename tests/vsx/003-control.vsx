@@ -4,7 +4,7 @@ package main
 
 enum Load { case loading, ready(string), failed(int) }
 
-func Status(_ s: Load) -> Element {
+func Status(s: Load) -> Element {
     return (
         <p>
             {switch s {

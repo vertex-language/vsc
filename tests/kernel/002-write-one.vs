@@ -1,7 +1,7 @@
 // One work-item writes one element.
 import "gpu"
 
-func seven(_ y: gpu.MutableSpan<int32>) kernel {
+func seven(y: gpu.MutableSpan<int32>) kernel {
     y[0] = 7
 }
 

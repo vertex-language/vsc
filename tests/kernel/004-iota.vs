@@ -1,7 +1,7 @@
 // The index as a value: each element is where it is.
 import "gpu"
 
-func iota(_ y: gpu.MutableSpan<float32>) kernel {
+func iota(y: gpu.MutableSpan<float32>) kernel {
     let i = gpu.Index.x
     y[i] = float32(i)
 }

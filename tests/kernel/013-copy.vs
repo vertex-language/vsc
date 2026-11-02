@@ -1,7 +1,7 @@
 // Two buffers: read one, write the other.
 import "gpu"
 
-func copy(_ x: gpu.Span<float32>, _ y: gpu.MutableSpan<float32>) kernel {
+func copy(x: gpu.Span<float32>, y: gpu.MutableSpan<float32>) kernel {
     let i = gpu.Index.x
     y[i] = x[i]
 }

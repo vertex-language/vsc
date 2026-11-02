@@ -6,7 +6,7 @@ class Store<T> {
     var items: [T] = []
     var name: string
     init() { name = "store" }
-    func add(_ x: T) { items.append(x) }
+    func add(x: T) { items.append(x) }
     func describe() -> string { return "\(name): \(items.count)" }
 }
 

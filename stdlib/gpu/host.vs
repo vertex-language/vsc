@@ -9,26 +9,26 @@ package gpu
 @_silgen_name("vertex_gpu_device_default") func _deviceDefault() -> UnsafeMutableRawPointer
 @_silgen_name("vertex_gpu_device_cpu") func _deviceCPU() -> UnsafeMutableRawPointer
 @_silgen_name("vertex_gpu_device_count") func _deviceCount() -> int
-@_silgen_name("vertex_gpu_device_at") func _deviceAt(_ i: int) -> UnsafeMutableRawPointer
-@_silgen_name("vertex_gpu_device_kind") func _deviceKind(_ d: UnsafeMutableRawPointer) -> int
-@_silgen_name("vertex_gpu_device_memory") func _deviceMemory(_ d: UnsafeMutableRawPointer) -> int
-@_silgen_name("vertex_gpu_device_wave_size") func _deviceWaveSize(_ d: UnsafeMutableRawPointer) -> int
-@_silgen_name("vertex_gpu_buffer_create") func _bufferCreate(_ d: UnsafeMutableRawPointer, _ bytes: int) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_buffer_release") func _bufferRelease(_ b: UnsafeMutableRawPointer)
-@_silgen_name("vertex_gpu_buffer_contents") func _bufferContents(_ b: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
-@_silgen_name("vertex_gpu_buffer_device") func _bufferDevice(_ b: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
-@_silgen_name("vertex_gpu_buffer_wrap") func _bufferWrap(_ d: UnsafeMutableRawPointer, _ p: UnsafeMutableRawPointer, _ bytes: int) -> UnsafeMutableRawPointer?
-@_silgen_name("vertex_gpu_copy") func _copyBytes(_ dst: UnsafeMutableRawPointer, _ src: UnsafeRawPointer, _ bytes: int)
-@_silgen_name("vertex_gpu_launch_begin") func _launchBegin(_ kernel: UnsafeRawPointer) -> UnsafeMutableRawPointer
-@_silgen_name("vertex_gpu_launch_buffer") func _launchBuffer(_ l: UnsafeMutableRawPointer, _ b: UnsafeMutableRawPointer, _ offset: int)
-@_silgen_name("vertex_gpu_launch_i8") func _launchI8(_ l: UnsafeMutableRawPointer, _ v: int8)
-@_silgen_name("vertex_gpu_launch_i16") func _launchI16(_ l: UnsafeMutableRawPointer, _ v: int16)
-@_silgen_name("vertex_gpu_launch_i32") func _launchI32(_ l: UnsafeMutableRawPointer, _ v: int32)
-@_silgen_name("vertex_gpu_launch_i64") func _launchI64(_ l: UnsafeMutableRawPointer, _ v: int)
-@_silgen_name("vertex_gpu_launch_f32") func _launchF32(_ l: UnsafeMutableRawPointer, _ v: float32)
-@_silgen_name("vertex_gpu_launch_f64") func _launchF64(_ l: UnsafeMutableRawPointer, _ v: float64)
-@_silgen_name("vertex_gpu_launch_device") func _launchDevice(_ l: UnsafeMutableRawPointer, _ d: UnsafeMutableRawPointer)
-@_silgen_name("vertex_gpu_launch_end") func _launchEnd(_ l: UnsafeMutableRawPointer, _ gx: int, _ gy: int, _ gz: int, _ wx: int, _ wy: int, _ wz: int) -> int32
+@_silgen_name("vertex_gpu_device_at") func _deviceAt(i: int) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_gpu_device_kind") func _deviceKind(d: UnsafeMutableRawPointer) -> int
+@_silgen_name("vertex_gpu_device_memory") func _deviceMemory(d: UnsafeMutableRawPointer) -> int
+@_silgen_name("vertex_gpu_device_wave_size") func _deviceWaveSize(d: UnsafeMutableRawPointer) -> int
+@_silgen_name("vertex_gpu_buffer_create") func _bufferCreate(d: UnsafeMutableRawPointer, bytes: int) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_buffer_release") func _bufferRelease(b: UnsafeMutableRawPointer)
+@_silgen_name("vertex_gpu_buffer_contents") func _bufferContents(b: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_gpu_buffer_device") func _bufferDevice(b: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_gpu_buffer_wrap") func _bufferWrap(d: UnsafeMutableRawPointer, p: UnsafeMutableRawPointer, bytes: int) -> UnsafeMutableRawPointer?
+@_silgen_name("vertex_gpu_copy") func _copyBytes(dst: UnsafeMutableRawPointer, src: UnsafeRawPointer, bytes: int)
+@_silgen_name("vertex_gpu_launch_begin") func _launchBegin(kernel: UnsafeRawPointer) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_gpu_launch_buffer") func _launchBuffer(l: UnsafeMutableRawPointer, b: UnsafeMutableRawPointer, offset: int)
+@_silgen_name("vertex_gpu_launch_i8") func _launchI8(l: UnsafeMutableRawPointer, v: int8)
+@_silgen_name("vertex_gpu_launch_i16") func _launchI16(l: UnsafeMutableRawPointer, v: int16)
+@_silgen_name("vertex_gpu_launch_i32") func _launchI32(l: UnsafeMutableRawPointer, v: int32)
+@_silgen_name("vertex_gpu_launch_i64") func _launchI64(l: UnsafeMutableRawPointer, v: int)
+@_silgen_name("vertex_gpu_launch_f32") func _launchF32(l: UnsafeMutableRawPointer, v: float32)
+@_silgen_name("vertex_gpu_launch_f64") func _launchF64(l: UnsafeMutableRawPointer, v: float64)
+@_silgen_name("vertex_gpu_launch_device") func _launchDevice(l: UnsafeMutableRawPointer, d: UnsafeMutableRawPointer)
+@_silgen_name("vertex_gpu_launch_end") func _launchEnd(l: UnsafeMutableRawPointer, gx: int, gy: int, gz: int, wx: int, wy: int, wz: int) -> int32
 
 /// DeviceError is what asking a device for something can fail with.
 public enum DeviceError: Error {
@@ -91,7 +91,7 @@ public final class Device {
     /// would read host memory across the bus every time, so there the
     /// bytes are copied to the device once -- but for another buffer's
     /// memory, which is the device's already and is taken in place.
-    public func Wrap(_ p: UnsafeMutableRawPointer, bytes: int, keeping owner: AnyObject) throws -> Buffer<uint8> {
+    public func Wrap(p: UnsafeMutableRawPointer, bytes: int, keeping owner: AnyObject) throws -> Buffer<uint8> {
         guard let h = _bufferWrap(_h, p, bytes) else { throw DeviceError.noMemory }
         let memory = _Memory(_h: h)
         memory._owner = owner
@@ -107,7 +107,7 @@ public final class Device {
     }
 
     /// Upload is a new buffer holding host's elements.
-    public func Upload<T>(_ host: [T]) async throws -> Buffer<T> {
+    public func Upload<T>(host: [T]) async throws -> Buffer<T> {
         let b = try CreateBuffer(of: T.self, count: host.count)
         try await b.Upload(host)
         return b
@@ -177,7 +177,7 @@ public final class Buffer<T> {
     }
 
     /// Upload copies host's elements into the buffer, which must hold as many.
-    public func Upload(_ host: [T]) async throws {
+    public func Upload(host: [T]) async throws {
         if host.count != count { throw DeviceError.badCount }
         let p = _elements
         // A buffer's elements are plain data -- numbers, and structs of
@@ -222,7 +222,7 @@ public final class Buffer<T> {
     }
 
     /// Fill sets every element to v.
-    public func Fill(_ v: T) async throws {
+    public func Fill(v: T) async throws {
         let p = _elements
         var i = 0
         while i < count {
@@ -274,29 +274,29 @@ public final class _Launch {
         _h = _launchBegin(_kernel)
     }
 
-    public func _buffer<T>(_ b: Buffer<T>) -> _Launch {
+    public func _buffer<T>(b: Buffer<T>) -> _Launch {
         _held.append(b._memory)
         _launchBuffer(_h, b._memory._h, b._offset * MemoryLayout<T>.stride)
         _launchI64(_h, b.count)
         return self
     }
-    public func _int8(_ v: int8) -> _Launch { _launchI8(_h, v); return self }
-    public func _uint8(_ v: uint8) -> _Launch { _launchI8(_h, int8(bitPattern: v)); return self }
-    public func _int16(_ v: int16) -> _Launch { _launchI16(_h, v); return self }
-    public func _uint16(_ v: uint16) -> _Launch { _launchI16(_h, int16(bitPattern: v)); return self }
-    public func _int32(_ v: int32) -> _Launch { _launchI32(_h, v); return self }
-    public func _uint32(_ v: uint32) -> _Launch { _launchI32(_h, int32(bitPattern: v)); return self }
-    public func _int(_ v: int) -> _Launch { _launchI64(_h, v); return self }
-    public func _uint(_ v: uint) -> _Launch { _launchI64(_h, int(bitPattern: v)); return self }
-    public func _int64(_ v: int64) -> _Launch { _launchI64(_h, int(v)); return self }
-    public func _float16(_ v: float16) -> _Launch { _launchI16(_h, int16(bitPattern: v.bitPattern)); return self }
-    public func _bfloat16(_ v: bfloat16) -> _Launch { _launchI16(_h, int16(bitPattern: v.bitPattern)); return self }
+    public func _int8(v: int8) -> _Launch { _launchI8(_h, v); return self }
+    public func _uint8(v: uint8) -> _Launch { _launchI8(_h, int8(bitPattern: v)); return self }
+    public func _int16(v: int16) -> _Launch { _launchI16(_h, v); return self }
+    public func _uint16(v: uint16) -> _Launch { _launchI16(_h, int16(bitPattern: v)); return self }
+    public func _int32(v: int32) -> _Launch { _launchI32(_h, v); return self }
+    public func _uint32(v: uint32) -> _Launch { _launchI32(_h, int32(bitPattern: v)); return self }
+    public func _int(v: int) -> _Launch { _launchI64(_h, v); return self }
+    public func _uint(v: uint) -> _Launch { _launchI64(_h, int(bitPattern: v)); return self }
+    public func _int64(v: int64) -> _Launch { _launchI64(_h, int(v)); return self }
+    public func _float16(v: float16) -> _Launch { _launchI16(_h, int16(bitPattern: v.bitPattern)); return self }
+    public func _bfloat16(v: bfloat16) -> _Launch { _launchI16(_h, int16(bitPattern: v.bitPattern)); return self }
 
     /// _value is the launch step for a parameter whose type is a type
     /// parameter where the launch is written: a generic function launching
     /// a generic kernel. The type is one of the others' by the time the
     /// launch runs.
-    public func _value<T>(_ v: T) -> _Launch {
+    public func _value<T>(v: T) -> _Launch {
         // A struct with no stored properties -- a tag type a kernel is
         // specialized over -- is nothing to pass.
         if MemoryLayout<T>.size == 0 { return self }
@@ -318,17 +318,17 @@ public final class _Launch {
         _launchI64(_h, 0)
         return self
     }
-    public func _uint64(_ v: uint64) -> _Launch { _launchI64(_h, int(bitPattern: uint(v))); return self }
-    public func _float32(_ v: float32) -> _Launch { _launchF32(_h, v); return self }
-    public func _float64(_ v: float64) -> _Launch { _launchF64(_h, v); return self }
-    public func _bool(_ v: bool) -> _Launch { _launchI8(_h, v ? 1 : 0); return self }
+    public func _uint64(v: uint64) -> _Launch { _launchI64(_h, int(bitPattern: uint(v))); return self }
+    public func _float32(v: float32) -> _Launch { _launchF32(_h, v); return self }
+    public func _float64(v: float64) -> _Launch { _launchF64(_h, v); return self }
+    public func _bool(v: bool) -> _Launch { _launchI8(_h, v ? 1 : 0); return self }
 
-    public func _over1(_ x: int) -> _Launch { gx = x; return self }
-    public func _over2(_ g: (int, int)) -> _Launch { gx = g.0; gy = g.1; return self }
-    public func _over3(_ g: (int, int, int)) -> _Launch { gx = g.0; gy = g.1; gz = g.2; return self }
-    public func _group1(_ x: int) -> _Launch { wx = x; return self }
-    public func _group2(_ g: (int, int)) -> _Launch { wx = g.0; wy = g.1; return self }
-    public func _group3(_ g: (int, int, int)) -> _Launch { wx = g.0; wy = g.1; wz = g.2; return self }
+    public func _over1(x: int) -> _Launch { gx = x; return self }
+    public func _over2(g: (int, int)) -> _Launch { gx = g.0; gy = g.1; return self }
+    public func _over3(g: (int, int, int)) -> _Launch { gx = g.0; gy = g.1; gz = g.2; return self }
+    public func _group1(x: int) -> _Launch { wx = x; return self }
+    public func _group2(g: (int, int)) -> _Launch { wx = g.0; wy = g.1; return self }
+    public func _group3(g: (int, int, int)) -> _Launch { wx = g.0; wy = g.1; wz = g.2; return self }
 
     public func _run() async throws {
         if _mismatched { throw DeviceError.badCount }
@@ -349,7 +349,7 @@ public final class _Launch {
     var _outMemory: _Memory? = nil
     var _outDevice: Device? = nil
 
-    public func _mapped<T>(_ b: Buffer<T>) -> _Launch {
+    public func _mapped<T>(b: Buffer<T>) -> _Launch {
         if _count < 0 {
             _count = b.count
             gx = b.count
@@ -360,7 +360,7 @@ public final class _Launch {
         return _buffer(b)
     }
 
-    public func _into<T>(_ b: Buffer<T>) -> _Launch {
+    public func _into<T>(b: Buffer<T>) -> _Launch {
         _count = b.count
         gx = b.count
         return _buffer(b)
@@ -368,7 +368,7 @@ public final class _Launch {
 
     // The output of a Map with no into:, made once the mapped buffers are
     // known -- after them, so a Map's output is the last parameter.
-    func _makeOut(_ stride: int) throws -> _Memory {
+    func _makeOut(stride: int) throws -> _Memory {
         guard let d = _outDevice else { throw DeviceError.badCount }
         guard let h = _bufferCreate(d._h, _count * stride) else { throw DeviceError.noMemory }
         let m = _Memory(_h: h)

@@ -1,7 +1,7 @@
 // A span knows its count; one work-item walks all of it.
 import "gpu"
 
-func total(_ x: gpu.Span<int32>, _ out: gpu.MutableSpan<int32>) kernel {
+func total(x: gpu.Span<int32>, out: gpu.MutableSpan<int32>) kernel {
     var s: int32 = 0
     var i = 0
     while i < x.count {

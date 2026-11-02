@@ -280,7 +280,8 @@ func (c *checker) kernelLaunch(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) t
 		if want == "_" {
 			want = ""
 		}
-		if label(a) != want {
+		// Vertex passes any argument by position, without its label.
+		if label(a) != want && !(label(a) == "" && p.Positional) {
 			if want == "" {
 				c.errorf(a.Pos(), "%s's argument %d has no label", sym.Name(), i+1)
 			} else {
@@ -459,7 +460,8 @@ func (c *checker) kernelMap(e *ast.CallExpr, sym *FuncSymbol, scope *Scope) type
 		if want == "_" {
 			want = ""
 		}
-		if label(a) != want {
+		// Vertex passes any argument by position, without its label.
+		if label(a) != want && !(label(a) == "" && p.Positional) {
 			c.errorf(a.Pos(), "%s's argument %d is labelled '%s:'", sym.Name(), i+1, want)
 			good = false
 			continue

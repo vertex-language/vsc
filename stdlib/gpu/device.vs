@@ -29,39 +29,39 @@ package gpu
 @_silgen_name("vertex_gpu_barrier") public func _barrier()
 @_silgen_name("vertex_gpu_trap") public func _trap() -> Never
 
-@_silgen_name("vertex_gpu_shfl_idx") public func _shflIdx(_ v: uint32, _ lane: int32) -> uint32
-@_silgen_name("vertex_gpu_shfl_up") public func _shflUp(_ v: uint32, _ delta: int32) -> uint32
-@_silgen_name("vertex_gpu_shfl_down") public func _shflDown(_ v: uint32, _ delta: int32) -> uint32
-@_silgen_name("vertex_gpu_shfl_xor") public func _shflXor(_ v: uint32, _ mask: int32) -> uint32
-@_silgen_name("vertex_gpu_readfirstlane") public func _readFirstLane(_ v: uint32) -> uint32
-@_silgen_name("vertex_gpu_ballot") public func _ballot(_ c: bool) -> uint64
-@_silgen_name("vertex_gpu_wave_any") public func _waveAny(_ c: bool) -> bool
-@_silgen_name("vertex_gpu_wave_all") public func _waveAll(_ c: bool) -> bool
+@_silgen_name("vertex_gpu_shfl_idx") public func _shflIdx(v: uint32, lane: int32) -> uint32
+@_silgen_name("vertex_gpu_shfl_up") public func _shflUp(v: uint32, delta: int32) -> uint32
+@_silgen_name("vertex_gpu_shfl_down") public func _shflDown(v: uint32, delta: int32) -> uint32
+@_silgen_name("vertex_gpu_shfl_xor") public func _shflXor(v: uint32, mask: int32) -> uint32
+@_silgen_name("vertex_gpu_readfirstlane") public func _readFirstLane(v: uint32) -> uint32
+@_silgen_name("vertex_gpu_ballot") public func _ballot(c: bool) -> uint64
+@_silgen_name("vertex_gpu_wave_any") public func _waveAny(c: bool) -> bool
+@_silgen_name("vertex_gpu_wave_all") public func _waveAll(c: bool) -> bool
 
 // Workgroup storage: bytes, the same for every work-item of a group.
 // The size must come to a constant once the kernel is inlined.
-@_silgen_name("vertex_gpu_shared") public func _shared(_ bytes: int, _ align: int) -> UnsafeMutableRawPointer
+@_silgen_name("vertex_gpu_shared") public func _shared(bytes: int, align: int) -> UnsafeMutableRawPointer
 
-@_silgen_name("vertex_gpu_atomic_add_i32") public func _atomicAddI32(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_sub_i32") public func _atomicSubI32(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_min_i32") public func _atomicMinI32(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_max_i32") public func _atomicMaxI32(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_and_i32") public func _atomicAndI32(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_or_i32") public func _atomicOrI32(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_xor_i32") public func _atomicXorI32(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_xchg_i32") public func _atomicXchgI32(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_cas_i32") public func _atomicCasI32(_ p: UnsafeMutablePointer<int32>, _ expected: int32, _ new: int32) -> int32
-@_silgen_name("vertex_gpu_atomic_add_u32") public func _atomicAddU32(_ p: UnsafeMutablePointer<uint32>, _ v: uint32) -> uint32
-@_silgen_name("vertex_gpu_atomic_min_u32") public func _atomicMinU32(_ p: UnsafeMutablePointer<uint32>, _ v: uint32) -> uint32
-@_silgen_name("vertex_gpu_atomic_max_u32") public func _atomicMaxU32(_ p: UnsafeMutablePointer<uint32>, _ v: uint32) -> uint32
-@_silgen_name("vertex_gpu_atomic_add_f32") public func _atomicAddF32(_ p: UnsafeMutablePointer<float32>, _ v: float32) -> float32
+@_silgen_name("vertex_gpu_atomic_add_i32") public func _atomicAddI32(p: UnsafeMutablePointer<int32>, v: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_sub_i32") public func _atomicSubI32(p: UnsafeMutablePointer<int32>, v: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_min_i32") public func _atomicMinI32(p: UnsafeMutablePointer<int32>, v: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_max_i32") public func _atomicMaxI32(p: UnsafeMutablePointer<int32>, v: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_and_i32") public func _atomicAndI32(p: UnsafeMutablePointer<int32>, v: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_or_i32") public func _atomicOrI32(p: UnsafeMutablePointer<int32>, v: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_xor_i32") public func _atomicXorI32(p: UnsafeMutablePointer<int32>, v: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_xchg_i32") public func _atomicXchgI32(p: UnsafeMutablePointer<int32>, v: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_cas_i32") public func _atomicCasI32(p: UnsafeMutablePointer<int32>, expected: int32, new: int32) -> int32
+@_silgen_name("vertex_gpu_atomic_add_u32") public func _atomicAddU32(p: UnsafeMutablePointer<uint32>, v: uint32) -> uint32
+@_silgen_name("vertex_gpu_atomic_min_u32") public func _atomicMinU32(p: UnsafeMutablePointer<uint32>, v: uint32) -> uint32
+@_silgen_name("vertex_gpu_atomic_max_u32") public func _atomicMaxU32(p: UnsafeMutablePointer<uint32>, v: uint32) -> uint32
+@_silgen_name("vertex_gpu_atomic_add_f32") public func _atomicAddF32(p: UnsafeMutablePointer<float32>, v: float32) -> float32
 
 // ---- where am I (§6.1) ----
 
 // _n is a device index as an int, zero-extended: an index is never
 // negative, and saying so lets the device compiler keep the arithmetic
 // on it -- and the addresses made from it -- 32 bits wide.
-func _n(_ v: int32) -> int { return int(uint32(bitPattern: v)) }
+func _n(v: int32) -> int { return int(uint32(bitPattern: v)) }
 
 /// Index is this work-item in the whole grid.
 public enum Index {
@@ -113,56 +113,56 @@ public enum Wave {
     /// Size is how wide a wave is: 32 or 64 on a GPU, 1 on the CPU.
     public static var Size: int { return _n(_waveSize()) }
 
-    public static func Shuffle(_ v: int32, from lane: int) -> int32 {
+    public static func Shuffle(v: int32, from lane: int) -> int32 {
         return int32(bitPattern: _shflIdx(uint32(bitPattern: v), int32(lane)))
     }
-    public static func Shuffle(_ v: uint32, from lane: int) -> uint32 {
+    public static func Shuffle(v: uint32, from lane: int) -> uint32 {
         return _shflIdx(v, int32(lane))
     }
-    public static func Shuffle(_ v: float32, from lane: int) -> float32 {
+    public static func Shuffle(v: float32, from lane: int) -> float32 {
         return float32(bitPattern: _shflIdx(v.bitPattern, int32(lane)))
     }
-    public static func ShuffleDown(_ v: int32, by delta: int) -> int32 {
+    public static func ShuffleDown(v: int32, by delta: int) -> int32 {
         return int32(bitPattern: _shflDown(uint32(bitPattern: v), int32(delta)))
     }
-    public static func ShuffleDown(_ v: uint32, by delta: int) -> uint32 {
+    public static func ShuffleDown(v: uint32, by delta: int) -> uint32 {
         return _shflDown(v, int32(delta))
     }
-    public static func ShuffleDown(_ v: float32, by delta: int) -> float32 {
+    public static func ShuffleDown(v: float32, by delta: int) -> float32 {
         return float32(bitPattern: _shflDown(v.bitPattern, int32(delta)))
     }
-    public static func ShuffleUp(_ v: int32, by delta: int) -> int32 {
+    public static func ShuffleUp(v: int32, by delta: int) -> int32 {
         return int32(bitPattern: _shflUp(uint32(bitPattern: v), int32(delta)))
     }
-    public static func ShuffleUp(_ v: float32, by delta: int) -> float32 {
+    public static func ShuffleUp(v: float32, by delta: int) -> float32 {
         return float32(bitPattern: _shflUp(v.bitPattern, int32(delta)))
     }
-    public static func ShuffleXor(_ v: int32, mask: int) -> int32 {
+    public static func ShuffleXor(v: int32, mask: int) -> int32 {
         return int32(bitPattern: _shflXor(uint32(bitPattern: v), int32(mask)))
     }
-    public static func ShuffleXor(_ v: uint32, mask: int) -> uint32 {
+    public static func ShuffleXor(v: uint32, mask: int) -> uint32 {
         return _shflXor(v, int32(mask))
     }
-    public static func ShuffleXor(_ v: float32, mask: int) -> float32 {
+    public static func ShuffleXor(v: float32, mask: int) -> float32 {
         return float32(bitPattern: _shflXor(v.bitPattern, int32(mask)))
     }
 
     /// Any is whether c holds in any lane of the wave.
-    public static func `Any`(_ c: bool) -> bool { return _waveAny(c) }
+    public static func `Any`(c: bool) -> bool { return _waveAny(c) }
     /// All is whether c holds in every lane of the wave.
-    public static func All(_ c: bool) -> bool { return _waveAll(c) }
+    public static func All(c: bool) -> bool { return _waveAll(c) }
     /// Ballot is one bit per lane: set where c holds.
-    public static func Ballot(_ c: bool) -> uint64 { return _ballot(c) }
+    public static func Ballot(c: bool) -> uint64 { return _ballot(c) }
     /// First is the value the wave's first active lane has.
-    public static func First(_ v: int32) -> int32 {
+    public static func First(v: int32) -> int32 {
         return int32(bitPattern: _readFirstLane(uint32(bitPattern: v)))
     }
-    public static func First(_ v: float32) -> float32 {
+    public static func First(v: float32) -> float32 {
         return float32(bitPattern: _readFirstLane(v.bitPattern))
     }
 
     /// Sum is v added across the wave, in every lane.
-    public static func Sum(_ v: float32) -> float32 {
+    public static func Sum(v: float32) -> float32 {
         var s = v
         var m = Size / 2
         while m > 0 {
@@ -171,7 +171,7 @@ public enum Wave {
         }
         return s
     }
-    public static func Sum(_ v: int32) -> int32 {
+    public static func Sum(v: int32) -> int32 {
         var s = v
         var m = Size / 2
         while m > 0 {
@@ -181,7 +181,7 @@ public enum Wave {
         return s
     }
     /// Min is the least v across the wave, in every lane.
-    public static func Min(_ v: float32) -> float32 {
+    public static func Min(v: float32) -> float32 {
         var s = v
         var m = Size / 2
         while m > 0 {
@@ -191,7 +191,7 @@ public enum Wave {
         }
         return s
     }
-    public static func Min(_ v: int32) -> int32 {
+    public static func Min(v: int32) -> int32 {
         var s = v
         var m = Size / 2
         while m > 0 {
@@ -202,7 +202,7 @@ public enum Wave {
         return s
     }
     /// Max is the greatest v across the wave, in every lane.
-    public static func Max(_ v: float32) -> float32 {
+    public static func Max(v: float32) -> float32 {
         var s = v
         var m = Size / 2
         while m > 0 {
@@ -212,7 +212,7 @@ public enum Wave {
         }
         return s
     }
-    public static func Max(_ v: int32) -> int32 {
+    public static func Max(v: int32) -> int32 {
         var s = v
         var m = Size / 2
         while m > 0 {
@@ -227,34 +227,34 @@ public enum Wave {
 /// Atomic is read-modify-write on an element of a span or of shared
 /// storage, returning the value it held before. Device scope.
 public enum Atomic {
-    public static func Add(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32 { return _atomicAddI32(p, v) }
-    public static func Add(_ p: UnsafeMutablePointer<uint32>, _ v: uint32) -> uint32 { return _atomicAddU32(p, v) }
-    public static func Add(_ p: UnsafeMutablePointer<float32>, _ v: float32) -> float32 { return _atomicAddF32(p, v) }
-    public static func Sub(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32 { return _atomicSubI32(p, v) }
-    public static func Min(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32 { return _atomicMinI32(p, v) }
-    public static func Min(_ p: UnsafeMutablePointer<uint32>, _ v: uint32) -> uint32 { return _atomicMinU32(p, v) }
-    public static func Max(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32 { return _atomicMaxI32(p, v) }
-    public static func Max(_ p: UnsafeMutablePointer<uint32>, _ v: uint32) -> uint32 { return _atomicMaxU32(p, v) }
-    public static func And(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32 { return _atomicAndI32(p, v) }
-    public static func Or(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32 { return _atomicOrI32(p, v) }
-    public static func Xor(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32 { return _atomicXorI32(p, v) }
-    public static func Exchange(_ p: UnsafeMutablePointer<int32>, _ v: int32) -> int32 { return _atomicXchgI32(p, v) }
-    public static func CompareExchange(_ p: UnsafeMutablePointer<int32>, expected: int32, desired: int32) -> int32 {
+    public static func Add(p: UnsafeMutablePointer<int32>, v: int32) -> int32 { return _atomicAddI32(p, v) }
+    public static func Add(p: UnsafeMutablePointer<uint32>, v: uint32) -> uint32 { return _atomicAddU32(p, v) }
+    public static func Add(p: UnsafeMutablePointer<float32>, v: float32) -> float32 { return _atomicAddF32(p, v) }
+    public static func Sub(p: UnsafeMutablePointer<int32>, v: int32) -> int32 { return _atomicSubI32(p, v) }
+    public static func Min(p: UnsafeMutablePointer<int32>, v: int32) -> int32 { return _atomicMinI32(p, v) }
+    public static func Min(p: UnsafeMutablePointer<uint32>, v: uint32) -> uint32 { return _atomicMinU32(p, v) }
+    public static func Max(p: UnsafeMutablePointer<int32>, v: int32) -> int32 { return _atomicMaxI32(p, v) }
+    public static func Max(p: UnsafeMutablePointer<uint32>, v: uint32) -> uint32 { return _atomicMaxU32(p, v) }
+    public static func And(p: UnsafeMutablePointer<int32>, v: int32) -> int32 { return _atomicAndI32(p, v) }
+    public static func Or(p: UnsafeMutablePointer<int32>, v: int32) -> int32 { return _atomicOrI32(p, v) }
+    public static func Xor(p: UnsafeMutablePointer<int32>, v: int32) -> int32 { return _atomicXorI32(p, v) }
+    public static func Exchange(p: UnsafeMutablePointer<int32>, v: int32) -> int32 { return _atomicXchgI32(p, v) }
+    public static func CompareExchange(p: UnsafeMutablePointer<int32>, expected: int32, desired: int32) -> int32 {
         return _atomicCasI32(p, expected, desired)
     }
     /// Add of a half is a compare-and-swap on the aligned 32-bit word
     /// that holds it, the sum rounded once: Metal has no 16-bit atomics.
-    public static func Add(_ p: UnsafeMutablePointer<float16>, _ v: float16) -> float16 {
+    public static func Add(p: UnsafeMutablePointer<float16>, v: float16) -> float16 {
         return float16(bitPattern: _atomicAddHalf(uint(bitPattern: p), v.bitPattern, false))
     }
-    public static func Add(_ p: UnsafeMutablePointer<bfloat16>, _ v: bfloat16) -> bfloat16 {
+    public static func Add(p: UnsafeMutablePointer<bfloat16>, v: bfloat16) -> bfloat16 {
         return bfloat16(bitPattern: _atomicAddHalf(uint(bitPattern: p), v.bitPattern, true))
     }
 }
 
 /// _atomicAddHalf adds the half v to the one at address a, a float16 or
 /// a bfloat16 by brain, and returns the bits it held.
-public func _atomicAddHalf(_ a: uint, _ v: uint16, _ brain: bool) -> uint16 {
+public func _atomicAddHalf(a: uint, v: uint16, brain: bool) -> uint16 {
     let word = UnsafeMutablePointer<int32>(bitPattern: a & ~3)!
     let shift = uint32(truncatingIfNeeded: (a & 2) * 8)
     var old = uint32(bitPattern: word.pointee)
@@ -290,7 +290,7 @@ public struct Span<T> {
     }
 
     /// Unchecked is the element at i with no bounds check.
-    public func Unchecked(_ i: int) -> T {
+    public func Unchecked(i: int) -> T {
         return _base[i]
     }
 
@@ -328,17 +328,17 @@ public struct MutableSpan<T> {
     }
 
     /// Address is where the element at i is, for an atomic on it.
-    public func Address(_ i: int) -> UnsafeMutablePointer<T> {
+    public func Address(i: int) -> UnsafeMutablePointer<T> {
         if i < 0 { _trap() }
         if i >= count { _trap() }
         return _base + i
     }
 
-    public func Unchecked(_ i: int) -> T {
+    public func Unchecked(i: int) -> T {
         return _base[i]
     }
 
-    public func SetUnchecked(_ i: int, _ v: T) {
+    public func SetUnchecked(i: int, v: T) {
         _base[i] = v
     }
 
@@ -374,7 +374,7 @@ public struct Shared<T> {
         }
     }
 
-    public func Address(_ i: int) -> UnsafeMutablePointer<T> {
+    public func Address(i: int) -> UnsafeMutablePointer<T> {
         if i < 0 { _trap() }
         if i >= count { _trap() }
         return _base + i

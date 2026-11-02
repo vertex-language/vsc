@@ -90,13 +90,13 @@ func funcNamed(t *testing.T, m *sil.Module, source string) *sil.Func {
 // takes. That is the rule `await` stands for.
 func TestPlanAsyncFindsSuspensions(t *testing.T) {
 	m := silOf(t, `
-func plain(_ n: int) -> int { return n + 1 }
-func inner(_ n: int) async -> int { return n + 1 }
+func plain(n: int) -> int { return n + 1 }
+func inner(n: int) async -> int { return n + 1 }
 
-func none(_ n: int) async -> int { return n + 1 }
-func calls(_ n: int) async -> int { return plain(n) }
-func one(_ n: int) async -> int { return await inner(n) }
-func two(_ n: int) async -> int {
+func none(n: int) async -> int { return n + 1 }
+func calls(n: int) async -> int { return plain(n) }
+func one(n: int) async -> int { return await inner(n) }
+func two(n: int) async -> int {
     let a = await inner(n)
     let b = await inner(a)
     return b
@@ -133,7 +133,7 @@ func two(_ n: int) async -> int {
 // no plan at all, which is what keeps this off every other function in
 // the module.
 func TestPlanAsyncSkipsOrdinaryFunctions(t *testing.T) {
-	m := silOf(t, `func plain(_ n: int) -> int { return n + 1 }`)
+	m := silOf(t, `func plain(n: int) -> int { return n + 1 }`)
 	if p := planOf(t, funcNamed(t, m, "plain")); p != nil {
 		t.Errorf("an ordinary function got a plan: %+v", p)
 	}
@@ -149,13 +149,13 @@ func TestPlanAsyncSkipsOrdinaryFunctions(t *testing.T) {
 // would be bigger than it needs to be forever.
 func TestLiveAcrossSuspension(t *testing.T) {
 	m := silOf(t, `
-func inner(_ n: int) async -> int { return n + 1 }
+func inner(n: int) async -> int { return n + 1 }
 
 // Nothing is wanted after the await.
-func nothingCrosses(_ a: int) async -> int { return await inner(a) }
+func nothingCrosses(a: int) async -> int { return await inner(a) }
 
 // x is wanted after it; d is finished with before it.
-func oneCrosses(_ a: int, _ b: int) async -> int {
+func oneCrosses(a: int, b: int) async -> int {
     let x = a * 2
     let d = b * 3
     let y = await inner(d)
@@ -163,7 +163,7 @@ func oneCrosses(_ a: int, _ b: int) async -> int {
 }
 
 // Two are.
-func twoCross(_ a: int, _ b: int) async -> int {
+func twoCross(a: int, b: int) async -> int {
     let x = a * 2
     let z = b * 7
     let y = await inner(a)
@@ -211,9 +211,9 @@ func twoCross(_ a: int, _ b: int) async -> int {
 // nothing else would catch.
 func TestFrameSlotsDoNotOverlap(t *testing.T) {
 	m := silOf(t, `
-func inner(_ n: int) async -> int { return n + 1 }
+func inner(n: int) async -> int { return n + 1 }
 
-func several(_ a: int, _ b: int, _ c: int) async -> int {
+func several(a: int, b: int, c: int) async -> int {
     let x = a * 2
     let y = b * 3
     let z = c * 5
@@ -257,8 +257,8 @@ func several(_ a: int, _ b: int, _ c: int) async -> int {
 // call's frame and no other.
 func TestCalleeSlotsArePerSuspension(t *testing.T) {
 	m := silOf(t, `
-func inner(_ n: int) async -> int { return n + 1 }
-func twice(_ n: int) async -> int {
+func inner(n: int) async -> int { return n + 1 }
+func twice(n: int) async -> int {
     let a = await inner(n)
     let b = await inner(a)
     return b
@@ -283,8 +283,8 @@ func twice(_ n: int) async -> int {
 // of at least the two header words, aligned so anything may live in it.
 func TestContextIsAtLeastItsHeader(t *testing.T) {
 	m := silOf(t, `
-func inner(_ n: int) async -> int { return n + 1 }
-func one(_ n: int) async -> int { return await inner(n) }
+func inner(n: int) async -> int { return n + 1 }
+func one(n: int) async -> int { return await inner(n) }
 `)
 	p := planOf(t, funcNamed(t, m, "one"))
 	if p.size < int64(stdlib.AsyncContextBytes) {
@@ -306,12 +306,12 @@ func TestSuspensionOnACallThatMayFail(t *testing.T) {
 	m := silOf(t, `
 struct Bad: Error { var code: int }
 
-func inner(_ n: int) async throws -> int {
+func inner(n: int) async throws -> int {
     if n < 0 { throw Bad(code: n) }
     return n + 1
 }
 
-func outer(_ n: int) async throws -> int {
+func outer(n: int) async throws -> int {
     return (try await inner(n)) + 1
 }
 `)
@@ -350,9 +350,9 @@ func outer(_ n: int) async throws -> int {
 // it.
 func TestFrameHoldsWhatTheStackCannot(t *testing.T) {
 	m := silOf(t, `
-func inner(_ n: int) async -> int { return n + 1 }
+func inner(n: int) async -> int { return n + 1 }
 
-func counting(_ n: int) async -> int {
+func counting(n: int) async -> int {
     var total = 0
     var i = 0
     while i < n {
@@ -390,9 +390,9 @@ func counting(_ n: int) async -> int {
 func TestADeclarationHasNoPlan(t *testing.T) {
 	m := silOf(t, `
 @_silgen_name("elsewhere")
-func elsewhere(_ n: int) async -> int
+func elsewhere(n: int) async -> int
 
-func here(_ n: int) async -> int { return await elsewhere(n) }
+func here(n: int) async -> int { return await elsewhere(n) }
 `)
 	for _, f := range m.Funcs() {
 		if !f.IsDeclaration() {

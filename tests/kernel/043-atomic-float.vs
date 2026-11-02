@@ -1,7 +1,7 @@
 // An atomic float add, of values whose sum is exact in any order.
 import "gpu"
 
-func sum(_ x: gpu.Span<float32>, _ out: gpu.MutableSpan<float32>) kernel {
+func sum(x: gpu.Span<float32>, out: gpu.MutableSpan<float32>) kernel {
     _ = gpu.Atomic.Add(out.Address(0), x[gpu.Index.x])
 }
 

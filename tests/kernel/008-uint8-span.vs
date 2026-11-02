@@ -1,7 +1,7 @@
 // Bytes: a span of uint8, one work-item per byte.
 import "gpu"
 
-func invert(_ y: gpu.MutableSpan<uint8>) kernel {
+func invert(y: gpu.MutableSpan<uint8>) kernel {
     let i = gpu.Index.x
     y[i] = 255 - y[i]
 }

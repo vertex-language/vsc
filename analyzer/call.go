@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vertex-language/vsc/ast"
+	"github.com/vertex-language/vsc/parser"
 	"github.com/vertex-language/vsc/token"
 	"github.com/vertex-language/vsc/types"
 )
@@ -424,6 +425,26 @@ func (c *checker) sigFits(sig *types.Signature, args []*ast.CallArg, argTypes []
 	return next == len(args)
 }
 
+// hasImplicitMember reports whether the type t, or what it wraps, has the
+// member an implicit member expression (`.v4`, `.v4(…)`) names; true for
+// any other expression, or where t is not known well enough to say.
+func (c *checker) hasImplicitMember(e ast.Expr, t types.Type) bool {
+	e = unparen(e)
+	if call, ok := e.(*ast.CallExpr); ok {
+		e = unparen(call.Fun)
+	}
+	im, ok := e.(*ast.ImplicitMemberExpr)
+	if !ok || im.Name == nil || t == nil || mentionsTypeParam(t) {
+		return true
+	}
+	if _, isProto := t.Underlying().(*types.Protocol); isProto {
+		return true
+	}
+	t = unwrappedContext(t)
+	name := im.Name.Text(c.file)
+	return c.lookupMember(&types.Metatype{Instance: t}, name) != nil || c.lookupMember(t, name) != nil
+}
+
 // argFitsParam reports whether one argument's type fits a parameter.
 func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) bool {
 	// An inout parameter takes `&x` and nothing else, and `&x` goes to an
@@ -439,6 +460,12 @@ func (c *checker) argFitsParam(arg *ast.CallArg, t types.Type, p *types.Param) b
 				return false
 			}
 		}
+	}
+	// An implicit member, `.v4(ip: …)`, is one only of a type that has
+	// it: in Vertex, `Bind(address: string)` and `Bind(address:
+	// SocketAddress)` are told apart by it, as no `_` tells them apart.
+	if (t == nil || isInvalid(t)) && arg != nil && c.vertexFile() && !c.hasImplicitMember(arg.X, p.Type) {
+		return false
 	}
 	if t == nil || isInvalid(t) || c.assignableTo(t, p.Type) {
 		return true
@@ -765,7 +792,11 @@ func (c *checker) labelFits(arg *ast.CallArg, param *types.Param) bool {
 		want = param.Name
 	}
 	if arg.Label == nil {
-		if want == "" || want == "_" {
+		// In Vertex a parameter written `name: T` may be passed without
+		// its name, by position, as Vertex has no `_` to ask for that. One
+		// with a label of its own (Swift's `contentsOf newElements:`)
+		// still wants it, or overloads that differ by label would blur.
+		if want == "" || want == "_" || param.Positional {
 			return true
 		}
 		if _, ok := unparen(arg.X).(*ast.ClosureExpr); ok && param.Type != nil {
@@ -776,6 +807,46 @@ func (c *checker) labelFits(arg *ast.CallArg, param *types.Param) bool {
 		return false
 	}
 	return arg.Label.Text(c.file) == want
+}
+
+// passesDefault reports whether an argument without a label goes past
+// a defaulted Vertex parameter rather than to it, by position: it does
+// where its type doesn't fit, as `FillPath(p, color)` leaves out
+// `rule: FillRule = .nonZero` between them. An argument typed by where
+// it goes -- a literal, `.member`, a closure -- says nothing, and goes
+// to it.
+func (c *checker) passesDefault(arg *ast.CallArg, p *types.Param, scope *Scope) bool {
+	if arg.Label != nil || !p.Positional || !p.HasDefault || TakesContextType(arg.X) || mentionsTypeParam(p.Type) {
+		return false
+	}
+	// Checked as the parameter's: `c ? 1 : 0` is an int32 where one goes.
+	quiet := len(c.info.Diagnostics)
+	t := c.checkExpr(arg.X, p.Type, scope)
+	c.info.Diagnostics = c.info.Diagnostics[:quiet]
+	if t == nil || isInvalid(t) || mentionsTypeParam(t) {
+		return false
+	}
+	return !c.assignableTo(t, p.Type)
+}
+
+// TakesContextType reports whether an expression's type is the one
+// where it goes, rather than its own: a literal, `.member`, a closure.
+func TakesContextType(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return TakesContextType(x.X)
+	case *ast.PrefixExpr:
+		return TakesContextType(x.X)
+	case *ast.BasicLit, *ast.StringLit, *ast.ArrayLit, *ast.DictLit, *ast.ImplicitMemberExpr, *ast.ClosureExpr:
+		return true
+	}
+	return false
+}
+
+// vertexFile reports whether the file being checked is Vertex, .vs or
+// .vsx, rather than Swift.
+func (c *checker) vertexFile() bool {
+	return c.file != nil && parser.IsVertexFile(c.file.Name())
 }
 
 // labelFitsLax checks label compatibility allowing omitted labels or matching internal names.
@@ -982,7 +1053,7 @@ func (c *checker) checkCallArguments(call *ast.CallExpr, sig *types.Signature, a
 	case isVariadic:
 		params = variadicParams(sig, vi, args, c.file)
 	case len(args) != len(params):
-		params = c.matchByLabel(call, sig.Params, args)
+		params = c.matchByLabel(call, sig.Params, args, scope)
 	}
 
 	for i, arg := range args {
@@ -1105,7 +1176,7 @@ func cStringParam(t types.Type) bool {
 }
 
 // matchByLabel pairs arguments with parameters by label, skipping defaulted parameters.
-func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args []*ast.CallArg) []*types.Param {
+func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args []*ast.CallArg, scope *Scope) []*types.Param {
 	out := make([]*types.Param, 0, len(args))
 	pi := 0
 	for _, arg := range args {
@@ -1113,7 +1184,8 @@ func (c *checker) matchByLabel(call *ast.CallExpr, params []*types.Param, args [
 		// A closure written without a label skips a defaulted parameter
 		// that takes no function, as a trailing closure does in Swift.
 		for pi < len(params) && params[pi].HasDefault &&
-			(!c.labelFits(arg, params[pi]) || closureForNonFunction(arg, params[pi])) {
+			(!c.labelFits(arg, params[pi]) || closureForNonFunction(arg, params[pi]) ||
+				c.passesDefault(arg, params[pi], scope)) {
 			pi++
 		}
 		if pi >= len(params) {
@@ -1219,7 +1291,7 @@ func (c *checker) inferGenericCall(e *ast.CallExpr, sig *types.Signature, args [
 	// `fromByteOffset:` before it.
 	params := sig.Params
 	if _, variadic := variadicIndex(sig); !variadic && e != nil && len(args) != len(params) {
-		params = c.matchByLabel(e, sig.Params, args)
+		params = c.matchByLabel(e, sig.Params, args, scope)
 	}
 	var closures, operators, literals, built []int
 	for i, arg := range args {
@@ -1699,7 +1771,8 @@ func argLabelFits(a *ast.CallArg, p *types.Param, file *token.File) bool {
 		label = ""
 	}
 	if a.Label == nil {
-		return label == ""
+		// In Vertex a `name: T` parameter is passed by position too.
+		return label == "" || p.Positional
 	}
 	return a.Label.Text(file) == label
 }

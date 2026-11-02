@@ -1,7 +1,7 @@
 // int is 64 bits on the device too.
 import "gpu"
 
-func big(_ y: gpu.MutableSpan<int>) kernel {
+func big(y: gpu.MutableSpan<int>) kernel {
     let i = gpu.Index.x
     y[i] = y[i] * 1000000
 }

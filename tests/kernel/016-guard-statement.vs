@@ -1,7 +1,7 @@
 // guard, the early return a grid kernel usually starts with.
 import "gpu"
 
-func square(_ y: gpu.MutableSpan<int32>) kernel {
+func square(y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     guard i < y.count else { return }
     y[i] = y[i] * y[i]

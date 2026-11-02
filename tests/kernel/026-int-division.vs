@@ -1,7 +1,7 @@
 // Integer division and remainder, signed, truncating toward zero.
 import "gpu"
 
-func divs(_ y: gpu.MutableSpan<int32>) kernel {
+func divs(y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     let v = y[i]
     y[i] = v / 4 * 10 + v % 4

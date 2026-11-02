@@ -1,7 +1,7 @@
 // Map over two buffers of one count: element i of each.
 import "gpu"
 
-func add(_ a: int32, _ b: int32) kernel -> int32 {
+func add(a: int32, b: int32) kernel -> int32 {
     return a + b
 }
 

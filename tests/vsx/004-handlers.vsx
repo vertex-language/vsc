@@ -7,8 +7,8 @@ package main
 final class Store {
     var Todos: [string] = []
     var Last = ""
-    func Add(_ t: string) { Todos.append(t) }
-    func Clear(_ e: MouseEvent) { Todos = [] }
+    func Add(t: string) { Todos.append(t) }
+    func Clear(e: MouseEvent) { Todos = [] }
 }
 
 func Form(store: Store) -> Element {

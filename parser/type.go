@@ -349,6 +349,15 @@ func (p *parser) parseParam(defaults bool) *ast.Param {
 	param := &ast.Param{Attrs: p.parseAttrs()}
 
 	switch {
+	case p.at(token.UNDERSCORE) && p.atParamName(1) && p.peek(2) == token.COLON && IsVertexFile(p.f.Name()):
+		// Vertex has no `_` label: any parameter may be passed with its
+		// name or without, so `_ name:` is a parameter name gone wrong.
+		// Read on as if the `_` were not there.
+		p.errHere("expected parameter name, found '_'")
+		p.next()
+		param.Name = p.ident()
+		param.Colon = p.pos()
+		p.next()
 	case p.atParamLabel(0) && p.atParamName(1) && p.peek(2) == token.COLON:
 		param.Label = p.ident()
 		param.Name = p.ident()

@@ -16,13 +16,13 @@ extension int32: Bounded {
     static func Top() -> int32 { return 7 }
 }
 
-func clampScale<T: Bounded>(_ y: gpu.MutableSpan<T>, _ k: T) kernel {
+func clampScale<T: Bounded>(y: gpu.MutableSpan<T>, k: T) kernel {
     let i = gpu.Index.x
     let v = y[i] * k
     y[i] = v > T.Top() ? T.Top() : v
 }
 
-func apply<T: Bounded>(_ b: gpu.Buffer<T>, _ k: T) async throws {
+func apply<T: Bounded>(b: gpu.Buffer<T>, k: T) async throws {
     try await clampScale.Launch(b, k, over: b.count)
 }
 

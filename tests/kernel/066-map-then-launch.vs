@@ -1,11 +1,11 @@
 // A Map's result is a buffer like any other: launched on, mapped again.
 import "gpu"
 
-func plusOne(_ x: int32) kernel -> int32 {
+func plusOne(x: int32) kernel -> int32 {
     return x + 1
 }
 
-func total(_ x: gpu.Span<int32>, _ out: gpu.MutableSpan<int32>) kernel {
+func total(x: gpu.Span<int32>, out: gpu.MutableSpan<int32>) kernel {
     _ = gpu.Atomic.Add(out.Address(0), x[gpu.Index.x])
 }
 

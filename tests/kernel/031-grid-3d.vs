@@ -1,7 +1,7 @@
 // A 3D grid: over: (w, h, d), and gpu.Index.z.
 import "gpu"
 
-func cube(_ y: gpu.MutableSpan<int32>) kernel {
+func cube(y: gpu.MutableSpan<int32>) kernel {
     let i = (gpu.Index.z * 2 + gpu.Index.y) * 2 + gpu.Index.x
     y[i] = int32(gpu.Index.z * 100 + gpu.Index.y * 10 + gpu.Index.x)
 }

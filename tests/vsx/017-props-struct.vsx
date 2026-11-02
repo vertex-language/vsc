@@ -9,7 +9,7 @@ struct ButtonProps: Props {
     var children: Node = nil
 }
 
-func Button(_ props: ButtonProps) -> Element {
+func Button(props: ButtonProps) -> Element {
     return (
         <button className={"btn " + props.kind} disabled={props.disabled}>
             {props.label}{props.children}

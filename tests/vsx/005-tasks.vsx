@@ -23,12 +23,12 @@ final class Store {
         }
     }
 
-    func Add(_ title: string) {
+    func Add(title: string) {
         Todos.append(Todo(ID: nextID, Title: title, Done: false))
         nextID += 1
     }
 
-    func Toggle(_ id: int) {
+    func Toggle(id: int) {
         for i in 0..<Todos.count where Todos[i].ID == id { Todos[i].Done = !Todos[i].Done }
     }
 }

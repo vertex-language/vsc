@@ -1,7 +1,7 @@
 // An atomic add: every work-item counts into one element.
 import "gpu"
 
-func count(_ n: gpu.MutableSpan<int32>) kernel {
+func count(n: gpu.MutableSpan<int32>) kernel {
     _ = gpu.Atomic.Add(n.Address(0), 1)
 }
 

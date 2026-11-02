@@ -1,11 +1,11 @@
 // A tuple returned from a helper and taken apart.
 import "gpu"
 
-func divmod(_ a: int32, _ b: int32) -> (int32, int32) {
+func divmod(a: int32, b: int32) -> (int32, int32) {
     return (a / b, a % b)
 }
 
-func split(_ q: gpu.MutableSpan<int32>, _ r: gpu.MutableSpan<int32>) kernel {
+func split(q: gpu.MutableSpan<int32>, r: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     let (a, b) = divmod(int32(i) * 7, 3)
     q[i] = a

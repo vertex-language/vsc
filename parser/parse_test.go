@@ -142,3 +142,40 @@ func TestQualifiedEnumCasePattern(t *testing.T) {
 		t.Errorf("the unqualified pattern is %T, want an enum case pattern", pats[1])
 	}
 }
+
+// A `_` label is Swift's: a .vs or .vsx file refuses it, a .swift file
+// keeps it.
+func TestUnderscoreLabel(t *testing.T) {
+	const src = "func f(_ x: int, y: int) {}\n"
+	for _, name := range []string{"t.vs", "t.vsx", "t.swift"} {
+		f := token.NewFile(name, []byte(src))
+		file, diags := ParseFile(f, 0)
+		var got []string
+		for _, d := range diags {
+			got = append(got, d.Message)
+		}
+		if name == "t.swift" {
+			if len(got) != 0 {
+				t.Errorf("%s: %v, want no diagnostics", name, got)
+			}
+			continue
+		}
+		if len(got) != 1 || got[0] != "expected parameter name, found '_'" {
+			t.Errorf("%s: %v, want one: expected parameter name, found '_'", name, got)
+		}
+		// Read on as if the `_` were not there.
+		var p *ast.Param
+		ast.Inspect(file, func(n ast.Node) bool {
+			if q, ok := n.(*ast.Param); ok && p == nil {
+				p = q
+			}
+			return p == nil
+		})
+		if p == nil {
+			t.Fatalf("%s: no parameter read", name)
+		}
+		if p.Label != nil || p.Name.Text(f) != "x" {
+			t.Errorf("%s: the first parameter is read with label %v, name %q", name, p.Label, p.Name.Text(f))
+		}
+	}
+}

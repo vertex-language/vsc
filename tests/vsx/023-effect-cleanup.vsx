@@ -23,7 +23,7 @@ func main() -> int32 {
     return 0
 }
 
-func find(_ n: Node, _ id: string) -> Node? {
+func find(n: Node, id: string) -> Node? {
     for (k, v) in n.Attrs where k == "id" && v == id { return n }
     for c in n.Children {
         if let f = find(c, id) { return f }
@@ -31,7 +31,7 @@ func find(_ n: Node, _ id: string) -> Node? {
     return nil
 }
 
-func click(_ page: Node, _ id: string) {
+func click(page: Node, id: string) {
     _ = find(page, id)!.Fire("click")
 }
 // want: subscribe news, plain, unsubscribe news, subscribe news+, unsubscribe news+, subscribe news++

@@ -1,7 +1,7 @@
 // Conversions between integer and float types inside a kernel.
 import "gpu"
 
-func conv(_ x: gpu.Span<float32>, _ y: gpu.MutableSpan<int32>) kernel {
+func conv(x: gpu.Span<float32>, y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     let f = x[i] * 3
     let n = int32(f)

@@ -1,7 +1,7 @@
 // A kernel that does nothing, launched over one work-item.
 import "gpu"
 
-func nothing(_ y: gpu.MutableSpan<int32>) kernel {
+func nothing(y: gpu.MutableSpan<int32>) kernel {
 }
 
 let y = try await gpu.Default().Upload([int32(3)])

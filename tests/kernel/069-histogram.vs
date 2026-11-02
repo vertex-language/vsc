@@ -1,7 +1,7 @@
 // A program: a histogram of bytes, with atomics into shared storage then into the result.
 import "gpu"
 
-func histogram(_ data: gpu.Span<uint8>, _ bins: gpu.MutableSpan<int32>) kernel {
+func histogram(data: gpu.Span<uint8>, bins: gpu.MutableSpan<int32>) kernel {
     let local = gpu.Shared<int32>(count: 4)
     let me = gpu.LocalIndex.x
     if me < 4 {

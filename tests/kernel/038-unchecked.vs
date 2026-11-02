@@ -1,7 +1,7 @@
 // Unchecked reads and writes: no bounds check, for a kernel that proved them.
 import "gpu"
 
-func rev(_ x: gpu.Span<int32>, _ y: gpu.MutableSpan<int32>) kernel {
+func rev(x: gpu.Span<int32>, y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     y.SetUnchecked(i, x.Unchecked(x.count - 1 - i))
 }

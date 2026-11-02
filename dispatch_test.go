@@ -48,7 +48,7 @@ public func Make() -> V { return .o(B()) }
 
 import "m/lib"
 
-public func Guard(_ v: lib.V) -> string {
+public func Guard(v: lib.V) -> string {
     guard case .o(let t) = v, t.C else { return "guard failed" }
     return "guard ok"
 }

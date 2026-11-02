@@ -3,7 +3,7 @@
 // weight file is to a model -- its bytes, read in place.
 import "gpu"
 
-func twice(_ x: gpu.MutableSpan<float32>) kernel { x[gpu.Index.x] = x[gpu.Index.x] * 2 }
+func twice(x: gpu.MutableSpan<float32>) kernel { x[gpu.Index.x] = x[gpu.Index.x] * 2 }
 
 let d = gpu.Default()
 let owner = try await d.Upload([float32](repeating: 1.5, count: 8192))

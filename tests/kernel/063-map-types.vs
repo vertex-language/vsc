@@ -1,11 +1,11 @@
 // Map between element types: bytes in, wider integers and bools out.
 import "gpu"
 
-func widen(_ b: uint8) kernel -> int32 {
+func widen(b: uint8) kernel -> int32 {
     return int32(b) * 1000
 }
 
-func isOdd(_ v: int32) kernel -> bool {
+func isOdd(v: int32) kernel -> bool {
     return v % 2 != 0
 }
 

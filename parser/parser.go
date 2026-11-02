@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/vertex-language/vsc/ast"
 	"github.com/vertex-language/vsc/scanner"
@@ -456,6 +457,12 @@ func (p *parser) tooDeep() bool {
 		p.next()
 	}
 	return true
+}
+
+// IsVertexFile reports whether a source file is Vertex, .vs or .vsx,
+// rather than Swift.
+func IsVertexFile(name string) bool {
+	return strings.HasSuffix(name, ".vs") || IsMarkupFile(name)
 }
 
 // IsMarkupFile reports whether a source file is a .vsx file: Vertex with

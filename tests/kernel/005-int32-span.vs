@@ -1,7 +1,7 @@
 // Reading and writing int32, negative values included.
 import "gpu"
 
-func negate(_ x: gpu.Span<int32>, _ y: gpu.MutableSpan<int32>) kernel {
+func negate(x: gpu.Span<int32>, y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     y[i] = -x[i]
 }

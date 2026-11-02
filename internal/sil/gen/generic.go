@@ -375,7 +375,13 @@ func (g *gen) methodLabelled(t types.Type, name string, want *types.Signature) (
 	// types, where the conformer overloads by type: put(_: Int) beside
 	// put(_: String). A parameter type still naming Self or another
 	// parameter says nothing either way.
-	var byLabel *types.Method
+	//
+	// Where none has its labels, the one of its types: the witness a
+	// conformance found, which matches by type alone -- `Write(data:)` is
+	// io.Writer's `Write(bytes:)` -- as Vertex, without `_`, names its
+	// parameters as it likes.
+	var byLabel, byType *types.Method
+	typedOnly := 0
 	for _, m := range methods {
 		if m == nil || m.Name != name || m.Sig == nil || len(m.Sig.Params) != len(want.Params) {
 			continue
@@ -384,7 +390,6 @@ func (g *gen) methodLabelled(t types.Type, name string, want *types.Signature) (
 		for i, p := range m.Sig.Params {
 			if p.Label != want.Params[i].Label {
 				same = false
-				break
 			}
 			w := g.substituted(want.Params[i].Type)
 			if !mentionsTypeParam(w) && !mentionsTypeParam(p.Type) &&
@@ -393,6 +398,10 @@ func (g *gen) methodLabelled(t types.Type, name string, want *types.Signature) (
 			}
 		}
 		if !same {
+			if typed {
+				byType = m
+				typedOnly++
+			}
 			continue
 		}
 		if typed {
@@ -404,6 +413,9 @@ func (g *gen) methodLabelled(t types.Type, name string, want *types.Signature) (
 	}
 	if byLabel != nil {
 		return owner, byLabel
+	}
+	if typedOnly == 1 {
+		return owner, byType
 	}
 	return nil, nil
 }

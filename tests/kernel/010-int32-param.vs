@@ -1,7 +1,7 @@
 // An int32 passed by value.
 import "gpu"
 
-func offset(_ k: int32, _ y: gpu.MutableSpan<int32>) kernel {
+func offset(k: int32, y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     y[i] = y[i] + k
 }

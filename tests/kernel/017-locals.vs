@@ -1,7 +1,7 @@
 // Local variables, reassigned, and arithmetic across them.
 import "gpu"
 
-func poly(_ y: gpu.MutableSpan<int32>) kernel {
+func poly(y: gpu.MutableSpan<int32>) kernel {
     let i = int32(gpu.Index.x)
     var acc: int32 = 1
     acc = acc * i + 2

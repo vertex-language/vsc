@@ -15,7 +15,7 @@ func Picker<T>(value: T, options: [T], name: (T) -> string) -> Element {
     )
 }
 
-func Show<T>(_ value: T) -> Element {
+func Show<T>(value: T) -> Element {
     return <code>{"\(value)"}</code>
 }
 

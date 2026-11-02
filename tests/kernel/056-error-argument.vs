@@ -1,7 +1,7 @@
 // A launch is typed against the kernel: a buffer of the wrong element is refused.
 import "gpu"
 
-func fill(_ y: gpu.MutableSpan<int32>) kernel {
+func fill(y: gpu.MutableSpan<int32>) kernel {
     y[gpu.Index.x] = 1
 }
 

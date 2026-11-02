@@ -4,7 +4,7 @@
 // zero, and a remainder takes the dividend's sign, as on the host.
 import "gpu"
 
-func ops(_ x: gpu.Span<int>, _ u: gpu.Span<uint32>, _ out: gpu.MutableSpan<int>, _ uout: gpu.MutableSpan<uint32>) kernel {
+func ops(x: gpu.Span<int>, u: gpu.Span<uint32>, out: gpu.MutableSpan<int>, uout: gpu.MutableSpan<uint32>) kernel {
     let i = gpu.Index.x
     let v = x[i]
     out[i * 8 + 0] = v / 8

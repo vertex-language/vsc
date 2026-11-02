@@ -1,7 +1,7 @@
 // An int passed by value, and a labelled parameter.
 import "gpu"
 
-func fill(_ y: gpu.MutableSpan<int>, with v: int) kernel {
+func fill(y: gpu.MutableSpan<int>, with v: int) kernel {
     y[gpu.Index.x] = v
 }
 

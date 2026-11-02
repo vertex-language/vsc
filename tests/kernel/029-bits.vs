@@ -1,7 +1,7 @@
 // Shifts, masks and bitwise operators on uint32.
 import "gpu"
 
-func bits(_ y: gpu.MutableSpan<uint32>) kernel {
+func bits(y: gpu.MutableSpan<uint32>) kernel {
     let i = gpu.Index.x
     let v = y[i]
     y[i] = ((v << 4) | (v >> 28)) ^ 0xFF & ~uint32(0)

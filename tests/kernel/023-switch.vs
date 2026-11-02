@@ -1,7 +1,7 @@
 // switch over an integer, with ranges and a default.
 import "gpu"
 
-func grade(_ y: gpu.MutableSpan<int32>) kernel {
+func grade(y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     switch y[i] {
     case 0:

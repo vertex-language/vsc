@@ -1,7 +1,7 @@
 // A 2D grid: over: (width, height), and gpu.Index.y.
 import "gpu"
 
-func table(_ y: gpu.MutableSpan<int32>, width: int) kernel {
+func table(y: gpu.MutableSpan<int32>, width: int) kernel {
     let x = gpu.Index.x
     let row = gpu.Index.y
     y[row * width + x] = int32(row * 10 + x)

@@ -1,7 +1,7 @@
 // One kernel writing two buffers.
 import "gpu"
 
-func minmax(_ x: gpu.Span<int32>, _ lo: gpu.MutableSpan<int32>, _ hi: gpu.MutableSpan<int32>) kernel {
+func minmax(x: gpu.Span<int32>, lo: gpu.MutableSpan<int32>, hi: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     let a = x[2 * i]
     let b = x[2 * i + 1]

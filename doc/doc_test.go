@@ -46,7 +46,7 @@ public struct Point {
 public func (p: inout Point) Move(by d: float64) { p.X += d }
 
 public func Origin() -> Point { return Point(x: 0) }
-public func Origin(_ at: float64) -> Point { return Point(x: at) }
+public func Origin(at: float64) -> Point { return Point(x: at) }
 
 public protocol Shape {
     /// How big.

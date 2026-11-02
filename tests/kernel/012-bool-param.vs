@@ -1,7 +1,7 @@
 // A bool passed by value chooses what the kernel does.
 import "gpu"
 
-func pick(_ on: bool, _ y: gpu.MutableSpan<int32>) kernel {
+func pick(on: bool, y: gpu.MutableSpan<int32>) kernel {
     y[gpu.Index.x] = on ? 1 : 2
 }
 

@@ -3,7 +3,7 @@
 // 400 KB if each round took storage of its own.
 import "gpu"
 
-func rounds(_ y: gpu.MutableSpan<int32>) kernel {
+func rounds(y: gpu.MutableSpan<int32>) kernel {
     let me = gpu.LocalIndex.x
     var total: int32 = 0
     var r = 0

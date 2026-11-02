@@ -3,7 +3,7 @@
 // and the bytes' own view sees it.
 import "gpu"
 
-func twice(_ x: gpu.MutableSpan<float32>) kernel { x[gpu.Index.x] = x[gpu.Index.x] * 2 }
+func twice(x: gpu.MutableSpan<float32>) kernel { x[gpu.Index.x] = x[gpu.Index.x] * 2 }
 
 let d = gpu.Default()
 var bytes: [uint8] = [0, 0, 0, 0]

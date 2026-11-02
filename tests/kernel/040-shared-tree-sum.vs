@@ -1,7 +1,7 @@
 // A tree reduction in shared storage: halving strides, a barrier each step.
 import "gpu"
 
-func blockSum(_ x: gpu.Span<int32>, _ out: gpu.MutableSpan<int32>) kernel {
+func blockSum(x: gpu.Span<int32>, out: gpu.MutableSpan<int32>) kernel {
     let partial = gpu.Shared<int32>(count: 8)
     let me = gpu.LocalIndex.x
     partial[me] = x[gpu.Index.x]

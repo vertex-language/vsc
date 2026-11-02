@@ -1,7 +1,7 @@
 // Wave.Max and Wave.Min, folded into atomics per wave.
 import "gpu"
 
-func spread(_ x: gpu.Span<int32>, _ out: gpu.MutableSpan<int32>) kernel {
+func spread(x: gpu.Span<int32>, out: gpu.MutableSpan<int32>) kernel {
     let v = x[gpu.Index.x]
     let hi = gpu.Wave.Max(v)
     let lo = gpu.Wave.Min(v)

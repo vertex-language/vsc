@@ -1,7 +1,7 @@
 // gpu.GroupCount: how many workgroups the grid is cut into.
 import "gpu"
 
-func count(_ y: gpu.MutableSpan<int32>) kernel {
+func count(y: gpu.MutableSpan<int32>) kernel {
     y[gpu.Index.x] = int32(gpu.GroupCount.x)
 }
 

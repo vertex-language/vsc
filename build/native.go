@@ -842,10 +842,10 @@ func (g *bindingGen) emit(pkgName string) ([]byte, []byte) {
 		// The thunk's Vertex declaration.
 		var rawParams, cxxParams, vsParams, rawArgs, cxxArgs []string
 		for i, p := range f.params {
-			vsParams = append(vsParams, "_ "+vertexName(p.name)+": "+p.t.vertex)
+			vsParams = append(vsParams, vertexName(p.name)+": "+p.t.vertex)
 			var names []string
 			for j, r := range p.t.raw {
-				rawParams = append(rawParams, fmt.Sprintf("_ a%d_%d: %s", i, j, r))
+				rawParams = append(rawParams, fmt.Sprintf("a%d_%d: %s", i, j, r))
 				n := fmt.Sprintf("a%d_%d", i, j)
 				cxxParams = append(cxxParams, p.t.cxx[j]+" "+n)
 				names = append(names, n)

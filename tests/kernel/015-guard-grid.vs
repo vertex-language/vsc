@@ -1,7 +1,7 @@
 // A grid larger than the data, and the guard that keeps it in bounds.
 import "gpu"
 
-func ones(_ y: gpu.MutableSpan<int32>) kernel {
+func ones(y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     if i >= y.count {
         return

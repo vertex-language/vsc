@@ -4,10 +4,10 @@ import "gpu"
 struct Vec2 {
     var x: float32
     var y: float32
-    func dot(_ o: Vec2) -> float32 { return x * o.x + y * o.y }
+    func dot(o: Vec2) -> float32 { return x * o.x + y * o.y }
 }
 
-func dots(_ out: gpu.MutableSpan<float32>) kernel {
+func dots(out: gpu.MutableSpan<float32>) kernel {
     let i = float32(gpu.Index.x)
     let a = Vec2(x: i, y: 1)
     var b = Vec2(x: 2, y: i)

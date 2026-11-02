@@ -116,6 +116,10 @@ type Param struct {
 	// `@Lines _ body: () -> [String]` -- whose calls a closure written
 	// for it is made of. Nil for most parameters.
 	Builder Type
+	// Positional is a parameter Vertex declared, `name: T`: one an
+	// argument without its label is passed to by position, as Vertex has
+	// no `_` to ask for that.
+	Positional bool
 	// Origin is the parameter this one was substituted from, where it
 	// was: what was recorded about that one -- its default -- is this
 	// one's too.

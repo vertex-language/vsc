@@ -11,7 +11,7 @@ struct CardProps {
     var children: Node = nil
 }
 
-func DataCard(_ props: CardProps) -> Element {
+func DataCard(props: CardProps) -> Element {
     let theme = use(ThemeContext)
     return (
         <article className={"card-" + theme}>

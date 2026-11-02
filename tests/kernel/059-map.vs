@@ -1,7 +1,7 @@
 // An element kernel returns one element, and Map applies it over a buffer.
 import "gpu"
 
-func square(_ x: float32) kernel -> float32 {
+func square(x: float32) kernel -> float32 {
     return x * x
 }
 

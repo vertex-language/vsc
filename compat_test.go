@@ -20,8 +20,8 @@ import (
 // return-type mismatch the source could not fix.
 func TestNilCoalescingNarrowWrapped(t *testing.T) {
 	const src = `
-func pick(_ a: int32?) -> int32 { return a ?? 0 }
-func widen(_ a: int?) -> int { return a ?? 0 }
+func pick(a: int32?) -> int32 { return a ?? 0 }
+func widen(a: int?) -> int { return a ?? 0 }
 `
 	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
 		for _, d := range diags {
@@ -34,7 +34,7 @@ func widen(_ a: int?) -> int { return a ?? 0 }
 // `T? ?? T?` is a T?, not a T.
 func TestNilCoalescingKeepsOptionalForm(t *testing.T) {
 	const src = `
-func pick(_ a: int32?, _ b: int32?) -> int32? { return a ?? b }
+func pick(a: int32?, b: int32?) -> int32? { return a ?? b }
 `
 	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
 		for _, d := range diags {
@@ -47,7 +47,7 @@ func pick(_ a: int32?, _ b: int32?) -> int32? { return a ?? b }
 // diagnostic, not a quietly optional result.
 func TestNilCoalescingMismatch(t *testing.T) {
 	const src = `
-func pick(_ a: int32?, _ b: bool) -> int32 { return a ?? b }
+func pick(a: int32?, b: bool) -> int32 { return a ?? b }
 `
 	_, diags := compile(t, src, vsc.Options{Stop: vsc.Checked})
 	if !vsc.Errors(diags) {
@@ -100,7 +100,7 @@ struct S {
 // reported.
 func TestTopLevelCodeReported(t *testing.T) {
 	helpers := vsc.Source{Name: "helpers.swift", Text: []byte(`
-func side(_ a: int32) -> int32 { return a }
+func side(a: int32) -> int32 { return a }
 
 side(3)
 `)}
@@ -137,7 +137,7 @@ print(n)
 // to report, in its own words, rather than the linker's as an
 // undefined symbol.
 func TestNoEntryPointReported(t *testing.T) {
-	const src = `func add(_ a: int32) -> int32 { return a }`
+	const src = `func add(a: int32) -> int32 { return a }`
 	_, diags := vsc.Compile([]vsc.Source{{Name: "t.vs", Text: []byte(src)}},
 		vsc.Options{Module: "main", Target: ir.AArch64MacOS})
 	if !vsc.Errors(diags) {
@@ -152,7 +152,7 @@ func TestNoEntryPointReported(t *testing.T) {
 // is the program whatever it holds -- declarations alone make one that
 // does nothing, as swiftc builds it.
 func TestSwiftFileIsTheProgram(t *testing.T) {
-	const src = `func add(_ a: Int32) -> Int32 { return a }`
+	const src = `func add(a: Int32) -> Int32 { return a }`
 	if _, diags := compile(t, src, vsc.Options{Module: "main"}); vsc.Errors(diags) {
 		for _, d := range diags {
 			t.Errorf("%s", d)
@@ -164,7 +164,7 @@ func TestSwiftFileIsTheProgram(t *testing.T) {
 // Any other module's main is an ordinary function, and a library need
 // not have one at all.
 func TestLibraryNeedsNoEntryPoint(t *testing.T) {
-	const src = `public func add(_ a: int32) -> int32 { return a }`
+	const src = `public func add(a: int32) -> int32 { return a }`
 	if _, diags := compile(t, src, vsc.Options{Module: "lib"}); vsc.Errors(diags) {
 		for _, d := range diags {
 			t.Errorf("%s", d)
@@ -214,7 +214,7 @@ struct Counter {
     var n: int32
     mutating func bump() { n = n + 1 }
     mutating func bumpTwice() { bump(); bump() }
-    mutating func setTo(_ k: int32) { self.n = k }
+    mutating func setTo(k: int32) { self.n = k }
     func read() -> int32 { return n }
 }
 
@@ -239,7 +239,7 @@ func TestNonMutatingWriteStillRefused(t *testing.T) {
 	const src = `
 struct S {
     var x: int32
-    func bad(_ k: int32) { x = x * k }
+    func bad(k: int32) { x = x * k }
 }
 `
 	if _, diags := compile(t, src, vsc.Options{}); !vsc.Errors(diags) {
@@ -253,7 +253,7 @@ struct S {
 func TestInoutReceiverLowers(t *testing.T) {
 	const src = `
 struct S { var x: int32 }
-func (s: inout S) scale(_ k: int32) { s.x = s.x * k }
+func (s: inout S) scale(k: int32) { s.x = s.x * k }
 
 func use() -> int32 {
     var v = S(x: 7)
@@ -294,11 +294,11 @@ struct S {
 // approximation of it, and a NaN fails it and traps.
 func TestFloatToIntegerConversion(t *testing.T) {
 	const src = `
-func toInt32(_ d: double) -> int32 { return int32(d) }
-func toInt64(_ d: double) -> int64 { return int64(d) }
-func fromFloat(_ f: float) -> int32 { return int32(f) }
-func unsigned(_ d: double) -> uint32 { return uint32(d) }
-func toInt8(_ d: double) -> int8 { return int8(d) }
+func toInt32(d: double) -> int32 { return int32(d) }
+func toInt64(d: double) -> int64 { return int64(d) }
+func fromFloat(f: float) -> int32 { return int32(f) }
+func unsigned(d: double) -> uint32 { return uint32(d) }
+func toInt8(d: double) -> int8 { return int8(d) }
 `
 	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
 		for _, d := range diags {
@@ -317,10 +317,10 @@ func TestPayloadEnumAcrossCalls(t *testing.T) {
 enum Op { case add(int32), scale(int32), neg }
 enum Wide { case box(int32, int32), empty }
 
-func make(_ k: int32) -> Op { return Op.add(k) }
-func roundTrip(_ o: Op) -> Op { return o }
+func make(k: int32) -> Op { return Op.add(k) }
+func roundTrip(o: Op) -> Op { return o }
 
-func apply(_ o: Op, _ n: int32) -> int32 {
+func apply(o: Op, n: int32) -> int32 {
     switch o {
     case .add(let k): return n + k
     case .scale(let k): return n * k
@@ -328,7 +328,7 @@ func apply(_ o: Op, _ n: int32) -> int32 {
     }
 }
 
-func area(_ w: Wide) -> int32 {
+func area(w: Wide) -> int32 {
     switch w {
     case .box(let a, let b): return a * b
     case .empty: return 0
@@ -626,7 +626,7 @@ func use() -> int32 {
 // taking the subject's width.
 func TestRangePattern(t *testing.T) {
 	const src = `
-func grade(_ n: int32) -> int32 {
+func grade(n: int32) -> int32 {
     switch n {
     case 0..<10: return 1
     case 10...20: return 2
@@ -634,7 +634,7 @@ func grade(_ n: int32) -> int32 {
     }
 }
 
-func wide(_ n: int) -> int {
+func wide(n: int) -> int {
     switch n {
     case 1...5: return 2
     default: return 4
@@ -653,7 +653,7 @@ func wide(_ n: int) -> int {
 // condition is read. It was read first.
 func TestCaseLetWhere(t *testing.T) {
 	const src = `
-func classify(_ n: int32) -> int32 {
+func classify(n: int32) -> int32 {
     switch n {
     case let k where k < 0: return -k
     case let k where k > 100: return 100
@@ -673,7 +673,7 @@ func classify(_ n: int32) -> int32 {
 // was refused, and a where clause with it.
 func TestSwitchBindingAndWhere(t *testing.T) {
 	const src = `
-func classify(_ n: int32) -> int32 {
+func classify(n: int32) -> int32 {
     switch n {
     case 0: return 1
     case let k where k < 0: return -k
@@ -684,7 +684,7 @@ func classify(_ n: int32) -> int32 {
     }
 }
 
-func doubleIt(_ n: int32) -> int32 {
+func doubleIt(n: int32) -> int32 {
     switch n {
     case 0: return 0
     case let k: return k * 2
@@ -739,7 +739,7 @@ func use() -> int32 {
 // Passing the whole tuple down made every element an error.
 func TestTuplePattern(t *testing.T) {
 	const src = `
-func pairKind(_ p: (int32, int32)) -> int32 {
+func pairKind(p: (int32, int32)) -> int32 {
     switch p {
     case (0, 0): return 1
     case (let a, 0): return a
@@ -831,8 +831,8 @@ func TestOptionalChainIsOptional(t *testing.T) {
 	const src = `
 struct P { var x: int32 }
 
-func chain(_ p: P?) -> int32? { return p?.x }
-func withDefault(_ p: P?) -> int32 { return p?.x ?? -1 }
+func chain(p: P?) -> int32? { return p?.x }
+func withDefault(p: P?) -> int32 { return p?.x ?? -1 }
 `
 	if _, diags := compile(t, src, vsc.Options{Stop: vsc.Checked}); vsc.Errors(diags) {
 		for _, d := range diags {
@@ -848,7 +848,7 @@ func TestOptionalChainNotAssignableToBare(t *testing.T) {
 	const src = `
 struct P { var x: int32 }
 
-func chain(_ p: P?) -> int32 {
+func chain(p: P?) -> int32 {
     let v: int32 = p?.x
     return v
 }
@@ -870,7 +870,7 @@ func TestInitReturn(t *testing.T) {
 	const src = `
 struct Clamped {
     var n: int32
-    init(_ v: int32) {
+    init(v: int32) {
         self.n = v
         if v > 10 { return }
         self.n = v * 2
@@ -879,7 +879,7 @@ struct Clamped {
 
 final class Counter {
     var n: int32
-    init(_ v: int32) {
+    init(v: int32) {
         self.n = v
         return
     }
@@ -901,7 +901,7 @@ func TestFailableInitChecks(t *testing.T) {
 	const src = `
 struct Even {
     var n: int32
-    init?(_ v: int32) {
+    init?(v: int32) {
         if v % 2 != 0 { return nil }
         self.n = v
     }
@@ -1016,10 +1016,10 @@ func use() -> string { return Name.a.rawValue }
 // case the optional holds.
 func TestForceUnwrapAndNilComparison(t *testing.T) {
 	const src = `
-func force(_ o: int32?) -> int32 { return o! }
-func chained(_ o: int32?) -> int32 { return o! * 2 + o! }
+func force(o: int32?) -> int32 { return o! }
+func chained(o: int32?) -> int32 { return o! * 2 + o! }
 
-func present(_ o: int32?) -> int32 {
+func present(o: int32?) -> int32 {
     let a: int32 = o == nil ? 1 : 0
     let b: int32 = o != nil ? 10 : 0
     let c: int32 = nil == o ? 100 : 0
@@ -1040,9 +1040,9 @@ func TestOptionalChainLowers(t *testing.T) {
 	const src = `
 struct Reading { var value: int32 }
 
-func read(_ r: Reading?) -> int32 { return r?.value ?? -1 }
-func present(_ r: Reading?) -> int32 { return r?.value != nil ? 1 : 0 }
-func forced(_ r: Reading?) -> int32 { return (r?.value)! }
+func read(r: Reading?) -> int32 { return r?.value ?? -1 }
+func present(r: Reading?) -> int32 { return r?.value != nil ? 1 : 0 }
+func forced(r: Reading?) -> int32 { return (r?.value)! }
 `
 	if _, diags := compile(t, src, vsc.Options{}); vsc.Errors(diags) {
 		for _, d := range diags {
@@ -1060,20 +1060,20 @@ func TestWideOptionalPayloads(t *testing.T) {
 struct Point { var x: int32; var y: int32 }
 struct Wide { var a: int32; var b: int32; var c: int32 }
 
-func chained(_ p: Point?) -> int32 { return p?.x ?? -1 }
-func forced(_ p: Point?) -> int32 { return (p!).y }
+func chained(p: Point?) -> int32 { return p?.x ?? -1 }
+func forced(p: Point?) -> int32 { return (p!).y }
 
-func bound(_ p: Point?) -> int32 {
+func bound(p: Point?) -> int32 {
     if let q = p { return q.x + q.y }
     return -2
 }
 
-func defaulted(_ p: Point?, _ f: Point) -> int32 {
+func defaulted(p: Point?, f: Point) -> int32 {
     let r = p ?? f
     return r.x + r.y
 }
 
-func third(_ w: Wide?) -> int32 {
+func third(w: Wide?) -> int32 {
     if let v = w { return v.c }
     return 0
 }

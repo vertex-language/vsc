@@ -4,8 +4,8 @@ package main
 
 var log: [string] = []
 
-func run(_ f: () -> void) { log.append("void"); f() }
-func run(_ f: () -> (() -> void)) { log.append("returns"); f()() }
+func run(f: () -> void) { log.append("void"); f() }
+func run(f: () -> (() -> void)) { log.append("returns"); f()() }
 
 func main() -> int32 {
     var x = 0

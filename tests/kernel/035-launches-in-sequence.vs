@@ -1,7 +1,7 @@
 // Launch after launch on one buffer: each sees what the last wrote.
 import "gpu"
 
-func step(_ y: gpu.MutableSpan<int32>) kernel {
+func step(y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     y[i] = y[i] * 2 + 1
 }

@@ -1,7 +1,7 @@
 // Shared storage and a barrier: a workgroup reverses its own block.
 import "gpu"
 
-func reverseBlocks(_ y: gpu.MutableSpan<int32>) kernel {
+func reverseBlocks(y: gpu.MutableSpan<int32>) kernel {
     let tile = gpu.Shared<int32>(count: 4)
     let me = gpu.LocalIndex.x
     tile[me] = y[gpu.Index.x]

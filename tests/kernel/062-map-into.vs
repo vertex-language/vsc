@@ -1,7 +1,7 @@
 // Map into a buffer that already exists, instead of a new one.
 import "gpu"
 
-func negate(_ x: int) kernel -> int {
+func negate(x: int) kernel -> int {
     return -x
 }
 

@@ -1,7 +1,7 @@
 // Map is for element kernels: a grid kernel returns nothing to map.
 import "gpu"
 
-func fill(_ y: gpu.MutableSpan<int32>) kernel {
+func fill(y: gpu.MutableSpan<int32>) kernel {
     y[gpu.Index.x] = 1
 }
 

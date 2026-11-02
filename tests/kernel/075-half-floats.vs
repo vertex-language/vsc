@@ -4,16 +4,16 @@
 // once where it does not, which gives the same bits.
 import "gpu"
 
-func axpy(_ y: gpu.MutableSpan<float16>, _ x: gpu.Span<float16>, _ a: float16) kernel {
+func axpy(y: gpu.MutableSpan<float16>, x: gpu.Span<float16>, a: float16) kernel {
     let i = gpu.Index.x
     y[i] = a * x[i] + y[i]
 }
 
-func widen(_ x: bfloat16, _ s: float32) kernel -> float32 {
+func widen(x: bfloat16, s: float32) kernel -> float32 {
     return float32(x) * s
 }
 
-func narrow(_ x: float32) kernel -> bfloat16 {
+func narrow(x: float32) kernel -> bfloat16 {
     return bfloat16(x)
 }
 

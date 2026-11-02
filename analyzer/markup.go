@@ -500,9 +500,10 @@ func (c *checker) singlePropsStructParam(e *ast.MarkupElement, params componentP
 	if label == "" {
 		label = p.Name
 	}
-	// If the function parameter is unlabeled (`_ props: CardProps`) or conforms to `Props`
+	// If the function parameter is unlabeled (`_ props: CardProps`, or any
+	// parameter of a Vertex component, which has no `_`) or conforms to `Props`
 	// and the tag didn't pass `props={...}` directly, build the Props struct from the tag attributes.
-	if label != "_" && !types.ConformsToNamed(p.Type, "Props") {
+	if label != "_" && !c.vertexFile() && !types.ConformsToNamed(p.Type, "Props") {
 		return nil, nil, "", false
 	}
 	for _, a := range e.Attrs {

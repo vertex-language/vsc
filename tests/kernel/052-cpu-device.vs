@@ -1,7 +1,7 @@
 // A kernel launched on buffers of the CPU device runs there, whatever the default is.
 import "gpu"
 
-func twice(_ y: gpu.MutableSpan<int32>) kernel {
+func twice(y: gpu.MutableSpan<int32>) kernel {
     let i = gpu.Index.x
     y[i] = y[i] * 2
 }
